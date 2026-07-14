@@ -31,6 +31,22 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_time
     ON chat_messages (channel_slug, created_at);
+
+CREATE TABLE IF NOT EXISTS moments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcaster_user_id INTEGER NOT NULL,
+    channel_slug TEXT NOT NULL,
+    detected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    window_start TEXT NOT NULL,
+    window_end TEXT NOT NULL,
+    message_count INTEGER NOT NULL,
+    baseline_rate REAL NOT NULL,
+    current_rate REAL NOT NULL,
+    score REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_moments_channel_time
+    ON moments (channel_slug, detected_at);
 """
 
 
@@ -74,6 +90,39 @@ def insert_chat_message(
             content,
             emotes_json,
             created_at,
+        ),
+    )
+    conn.commit()
+
+
+def insert_moment(
+    conn: sqlite3.Connection,
+    *,
+    broadcaster_user_id: int,
+    channel_slug: str,
+    window_start: str,
+    window_end: str,
+    message_count: int,
+    baseline_rate: float,
+    current_rate: float,
+    score: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO moments
+            (broadcaster_user_id, channel_slug, window_start, window_end,
+             message_count, baseline_rate, current_rate, score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            broadcaster_user_id,
+            channel_slug,
+            window_start,
+            window_end,
+            message_count,
+            baseline_rate,
+            current_rate,
+            score,
         ),
     )
     conn.commit()

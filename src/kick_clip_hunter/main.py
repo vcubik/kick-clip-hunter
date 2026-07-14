@@ -1,9 +1,11 @@
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from .db import get_connection, insert_chat_message
+from . import detector
+from .db import get_connection, insert_chat_message, insert_moment
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(level=logging.INFO)
@@ -42,18 +44,45 @@ async def kick_webhook(
         content = payload.get("content", "")
         logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
 
+        broadcaster_user_id = broadcaster["user_id"]
+
         conn = get_connection()
         try:
             insert_chat_message(
                 conn,
                 message_id=payload["message_id"],
-                broadcaster_user_id=broadcaster["user_id"],
+                broadcaster_user_id=broadcaster_user_id,
                 channel_slug=channel,
                 sender_username=sender.get("username", ""),
                 content=content,
                 emotes_json=json.dumps(payload.get("emotes", [])),
                 created_at=payload.get("created_at", ""),
             )
+
+            spike = detector.record_message(channel)
+            if spike is not None:
+                window_end = datetime.now(timezone.utc)
+                window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
+                insert_moment(
+                    conn,
+                    broadcaster_user_id=broadcaster_user_id,
+                    channel_slug=channel,
+                    window_start=window_start.isoformat(),
+                    window_end=window_end.isoformat(),
+                    message_count=spike.message_count,
+                    baseline_rate=spike.baseline_rate,
+                    current_rate=spike.current_rate,
+                    score=spike.score,
+                )
+                logger.info(
+                    "MOMENT detected in [%s]: %d messages in %ds (%.2f msg/s vs baseline %.2f msg/s, score=%.2f)",
+                    channel,
+                    spike.message_count,
+                    detector.SHORT_WINDOW_SECONDS,
+                    spike.current_rate,
+                    spike.baseline_rate,
+                    spike.score,
+                )
         finally:
             conn.close()
     else:
