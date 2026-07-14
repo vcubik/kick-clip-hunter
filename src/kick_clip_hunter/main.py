@@ -1,11 +1,14 @@
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from . import detector
+from .config import load_settings
 from .db import get_channel_keywords, get_connection, insert_chat_message, insert_moment
+from .kick_client import get_app_access_token, get_channel_by_slug
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(
@@ -16,16 +19,41 @@ logging.basicConfig(
 logger = logging.getLogger("kick_clip_hunter")
 
 app = FastAPI()
+settings = load_settings()
 
 # Channel keyword sets rarely change (only when re-subscribing), so we cache
 # them per-process instead of hitting the DB on every single chat message.
 _channel_keywords_cache: dict[int, set[str]] = {}
+
+# Stream start times don't need to be looked up on every message - only when
+# a moment fires - and barely change within a single stream, so a short
+# cache keeps us from hammering the channels endpoint.
+_stream_start_cache: dict[str, tuple[datetime | None, float]] = {}
+STREAM_INFO_CACHE_SECONDS = 120
 
 
 def _channel_keywords(conn, broadcaster_user_id: int) -> set[str]:
     if broadcaster_user_id not in _channel_keywords_cache:
         _channel_keywords_cache[broadcaster_user_id] = get_channel_keywords(conn, broadcaster_user_id)
     return _channel_keywords_cache[broadcaster_user_id]
+
+
+async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
+    cached = _stream_start_cache.get(channel_slug)
+    now = time.monotonic()
+    if cached is None or now - cached[1] > STREAM_INFO_CACHE_SECONDS:
+        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+        channel = await get_channel_by_slug(channel_slug, token)
+        stream = channel.get("stream") or {}
+        start_time = None
+        if stream.get("is_live") and stream.get("start_time"):
+            start_time = datetime.fromisoformat(stream["start_time"].replace("Z", "+00:00"))
+        _stream_start_cache[channel_slug] = (start_time, now)
+
+    start_time, _ = _stream_start_cache[channel_slug]
+    if start_time is None:
+        return None
+    return int((datetime.now(timezone.utc) - start_time).total_seconds())
 
 
 @app.get("/health")
@@ -82,6 +110,7 @@ async def kick_webhook(
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
                 reason = ",".join(spike.reasons)
+                stream_elapsed = await _stream_elapsed_seconds(channel)
                 insert_moment(
                     conn,
                     broadcaster_user_id=broadcaster_user_id,
@@ -95,11 +124,14 @@ async def kick_webhook(
                     current_message_rate=spike.current_message_rate,
                     emote_count=spike.emote_count,
                     keyword_hits=spike.keyword_hits,
+                    stream_elapsed_seconds=stream_elapsed,
                 )
+                stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(
-                    "MOMENT detected in [%s] (%s): %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
+                    "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
                     channel,
                     reason,
+                    stream_time,
                     spike.message_count,
                     spike.emote_count,
                     spike.keyword_hits,
