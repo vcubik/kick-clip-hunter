@@ -8,7 +8,11 @@ from . import detector
 from .db import get_channel_keywords, get_connection, insert_chat_message, insert_moment
 from .webhook_security import get_kick_public_key, verify_signature
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger("kick_clip_hunter")
 
 app = FastAPI()

@@ -4,11 +4,18 @@ Usage: python scripts/list_moments.py
 """
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from kick_clip_hunter.db import get_connection
+
+
+def _to_local(iso_timestamp: str) -> str:
+    """Moments are stored in UTC; display them in the system's local time zone."""
+    return datetime.fromisoformat(iso_timestamp).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
 
 if __name__ == "__main__":
     conn = get_connection()
@@ -41,8 +48,8 @@ if __name__ == "__main__":
         keyword_hits,
     ) in rows:
         print(
-            f"[{channel}] {detected_at}  reason={reason}  score={score:.2f}  "
-            f"window=[{window_start} .. {window_end}]  "
+            f"[{channel}] {_to_local(detected_at)}  reason={reason}  score={score:.2f}  "
+            f"window=[{_to_local(window_start)} .. {_to_local(window_end)}]  "
             f"msgs={message_count} ({current_rate:.2f}/s vs baseline {baseline_rate:.2f}/s)  "
             f"emotes={emote_count}  keyword_hits={keyword_hits}"
         )
