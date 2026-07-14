@@ -12,12 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from kick_clip_hunter.config import load_settings
-from kick_clip_hunter.db import add_streamer, get_connection
+from kick_clip_hunter.db import add_streamer, get_connection, replace_channel_keywords
 from kick_clip_hunter.kick_client import (
     get_app_access_token,
     get_channel_by_slug,
     subscribe_chat_messages,
 )
+from kick_clip_hunter.seventv_client import get_channel_emote_names
 
 
 async def main(slug: str) -> None:
@@ -31,9 +32,13 @@ async def main(slug: str) -> None:
     result = await subscribe_chat_messages(broadcaster_id, token)
     print("Subscribed:", result)
 
+    emote_names = await get_channel_emote_names(broadcaster_id)
+    print(f"Fetched {len(emote_names)} 7TV emote name(s) for {slug!r}")
+
     conn = get_connection()
     try:
         add_streamer(conn, broadcaster_id, slug)
+        replace_channel_keywords(conn, broadcaster_id, emote_names)
     finally:
         conn.close()
     print(f"Added {slug!r} to the watchlist.")

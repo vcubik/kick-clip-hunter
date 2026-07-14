@@ -5,13 +5,23 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from . import detector
-from .db import get_connection, insert_chat_message, insert_moment
+from .db import get_channel_keywords, get_connection, insert_chat_message, insert_moment
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kick_clip_hunter")
 
 app = FastAPI()
+
+# Channel keyword sets rarely change (only when re-subscribing), so we cache
+# them per-process instead of hitting the DB on every single chat message.
+_channel_keywords_cache: dict[int, set[str]] = {}
+
+
+def _channel_keywords(conn, broadcaster_user_id: int) -> set[str]:
+    if broadcaster_user_id not in _channel_keywords_cache:
+        _channel_keywords_cache[broadcaster_user_id] = get_channel_keywords(conn, broadcaster_user_id)
+    return _channel_keywords_cache[broadcaster_user_id]
 
 
 @app.get("/health")
@@ -45,9 +55,13 @@ async def kick_webhook(
         logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
 
         broadcaster_user_id = broadcaster["user_id"]
+        emotes = payload.get("emotes", [])
+        emote_count = sum(len(e.get("positions", [])) for e in emotes)
 
         conn = get_connection()
         try:
+            keyword_hit = detector.matches_keyword(content, _channel_keywords(conn, broadcaster_user_id))
+
             insert_chat_message(
                 conn,
                 message_id=payload["message_id"],
@@ -55,32 +69,37 @@ async def kick_webhook(
                 channel_slug=channel,
                 sender_username=sender.get("username", ""),
                 content=content,
-                emotes_json=json.dumps(payload.get("emotes", [])),
+                emotes_json=json.dumps(emotes),
                 created_at=payload.get("created_at", ""),
             )
 
-            spike = detector.record_message(channel)
+            spike = detector.record_message(channel, emote_count=emote_count, keyword_hit=keyword_hit)
             if spike is not None:
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
+                reason = ",".join(spike.reasons)
                 insert_moment(
                     conn,
                     broadcaster_user_id=broadcaster_user_id,
                     channel_slug=channel,
                     window_start=window_start.isoformat(),
                     window_end=window_end.isoformat(),
-                    message_count=spike.message_count,
-                    baseline_rate=spike.baseline_rate,
-                    current_rate=spike.current_rate,
+                    reason=reason,
                     score=spike.score,
+                    message_count=spike.message_count,
+                    baseline_message_rate=spike.baseline_message_rate,
+                    current_message_rate=spike.current_message_rate,
+                    emote_count=spike.emote_count,
+                    keyword_hits=spike.keyword_hits,
                 )
                 logger.info(
-                    "MOMENT detected in [%s]: %d messages in %ds (%.2f msg/s vs baseline %.2f msg/s, score=%.2f)",
+                    "MOMENT detected in [%s] (%s): %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
                     channel,
+                    reason,
                     spike.message_count,
+                    spike.emote_count,
+                    spike.keyword_hits,
                     detector.SHORT_WINDOW_SECONDS,
-                    spike.current_rate,
-                    spike.baseline_rate,
                     spike.score,
                 )
         finally:

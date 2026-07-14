@@ -39,20 +39,37 @@ CREATE TABLE IF NOT EXISTS moments (
     detected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     window_start TEXT NOT NULL,
     window_end TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    score REAL NOT NULL,
     message_count INTEGER NOT NULL,
-    baseline_rate REAL NOT NULL,
-    current_rate REAL NOT NULL,
-    score REAL NOT NULL
+    baseline_message_rate REAL NOT NULL,
+    current_message_rate REAL NOT NULL,
+    emote_count INTEGER NOT NULL,
+    keyword_hits INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_moments_channel_time
     ON moments (channel_slug, detected_at);
+
+CREATE TABLE IF NOT EXISTS channel_keywords (
+    broadcaster_user_id INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    PRIMARY KEY (broadcaster_user_id, keyword)
+);
 """
 
 
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+
+    # The moments table gained columns during M3. It only ever held test
+    # data, so rather than a real migration we just recreate it if it's
+    # still in the old (M2) shape.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if columns and "reason" not in columns:
+        conn.execute("DROP TABLE moments")
+
     conn.executescript(SCHEMA)
     return conn
 
@@ -63,6 +80,22 @@ def add_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) 
         (broadcaster_user_id, slug),
     )
     conn.commit()
+
+
+def replace_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int, keywords: list[str]) -> None:
+    conn.execute("DELETE FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO channel_keywords (broadcaster_user_id, keyword) VALUES (?, ?)",
+        [(broadcaster_user_id, keyword.lower()) for keyword in keywords],
+    )
+    conn.commit()
+
+
+def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> set[str]:
+    rows = conn.execute(
+        "SELECT keyword FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def insert_chat_message(
@@ -102,27 +135,33 @@ def insert_moment(
     channel_slug: str,
     window_start: str,
     window_end: str,
-    message_count: int,
-    baseline_rate: float,
-    current_rate: float,
+    reason: str,
     score: float,
+    message_count: int,
+    baseline_message_rate: float,
+    current_message_rate: float,
+    emote_count: int,
+    keyword_hits: int,
 ) -> None:
     conn.execute(
         """
         INSERT INTO moments
-            (broadcaster_user_id, channel_slug, window_start, window_end,
-             message_count, baseline_rate, current_rate, score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (broadcaster_user_id, channel_slug, window_start, window_end, reason, score,
+             message_count, baseline_message_rate, current_message_rate, emote_count, keyword_hits)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             broadcaster_user_id,
             channel_slug,
             window_start,
             window_end,
-            message_count,
-            baseline_rate,
-            current_rate,
+            reason,
             score,
+            message_count,
+            baseline_message_rate,
+            current_message_rate,
+            emote_count,
+            keyword_hits,
         ),
     )
     conn.commit()
