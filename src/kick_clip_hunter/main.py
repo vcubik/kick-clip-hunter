@@ -1,7 +1,9 @@
+import json
 import logging
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
+from .db import get_connection, insert_chat_message
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(level=logging.INFO)
@@ -34,10 +36,26 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
-        channel = payload.get("broadcaster", {}).get("channel_slug", "?")
-        sender = payload.get("sender", {}).get("username", "?")
+        broadcaster = payload.get("broadcaster", {})
+        sender = payload.get("sender", {})
+        channel = broadcaster.get("channel_slug", "?")
         content = payload.get("content", "")
-        logger.info("[%s] %s: %s", channel, sender, content)
+        logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
+
+        conn = get_connection()
+        try:
+            insert_chat_message(
+                conn,
+                message_id=payload["message_id"],
+                broadcaster_user_id=broadcaster["user_id"],
+                channel_slug=channel,
+                sender_username=sender.get("username", ""),
+                content=content,
+                emotes_json=json.dumps(payload.get("emotes", [])),
+                created_at=payload.get("created_at", ""),
+            )
+        finally:
+            conn.close()
     else:
         logger.info("Received %s event: %s", kick_event_type, payload)
 
