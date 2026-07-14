@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS moments (
     baseline_message_rate REAL NOT NULL,
     current_message_rate REAL NOT NULL,
     emote_count INTEGER NOT NULL,
-    keyword_hits INTEGER NOT NULL
+    keyword_hits INTEGER NOT NULL,
+    stream_elapsed_seconds INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_moments_channel_time
@@ -64,13 +65,19 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
 
     # The moments table gained columns during M3. It only ever held test
-    # data, so rather than a real migration we just recreate it if it's
-    # still in the old (M2) shape.
+    # data at that point, so that migration just recreated the table.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
     if columns and "reason" not in columns:
         conn.execute("DROP TABLE moments")
 
     conn.executescript(SCHEMA)
+
+    # stream_elapsed_seconds was added later, after real moments had already
+    # been captured - add it in place instead of dropping the table.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "stream_elapsed_seconds" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN stream_elapsed_seconds INTEGER")
+
     return conn
 
 
@@ -142,13 +149,15 @@ def insert_moment(
     current_message_rate: float,
     emote_count: int,
     keyword_hits: int,
+    stream_elapsed_seconds: int | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO moments
             (broadcaster_user_id, channel_slug, window_start, window_end, reason, score,
-             message_count, baseline_message_rate, current_message_rate, emote_count, keyword_hits)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             message_count, baseline_message_rate, current_message_rate, emote_count, keyword_hits,
+             stream_elapsed_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             broadcaster_user_id,
@@ -162,6 +171,7 @@ def insert_moment(
             current_message_rate,
             emote_count,
             keyword_hits,
+            stream_elapsed_seconds,
         ),
     )
     conn.commit()
