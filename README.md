@@ -1,39 +1,39 @@
 # kick-clip-hunter
 
-Bot, který sleduje watchlist streamerů na [Kick](https://kick.com) a podle aktivity v chatu
-detekuje potenciálně virální/vtipné momenty. Zachycený moment se nejdřív ukládá jako
-timestamp + odkaz na VOD, s výhledem na automatické stříhání klipů v pozdější fázi.
+A bot that watches a list of [Kick](https://kick.com) streamers and detects potentially
+viral/funny moments based on chat activity. Detected moments are first saved as a
+timestamp + VOD link, with automatic clip cutting planned as a later phase.
 
-## Stav projektu
+## Project status
 
-Rané plánování / M0. Zatím žádný kód, jen založený repozitář.
+Early planning / M0. No code yet, just the repository scaffold.
 
-## Architektura (plán)
+## Architecture (plan)
 
 ```
 Watchlist (streamers)
     -> Kick OAuth app + webhook subscription (chat.message.sent, livestream metadata)
     -> Webhook receiver (FastAPI)
-    -> Detekční engine (rolling window: zpráv/s, frekvence emotů/klíčových slov)
-    -> DB (SQLite): uložené momenty (kanál, čas, VOD odkaz, chat snippet, skóre)
-    -> Dashboard/CLI pro správu watchlistu a přehled momentů
+    -> Detection engine (rolling window: messages/sec, emote/keyword frequency)
+    -> DB (SQLite): stored moments (channel, timestamp, VOD link, chat snippet, score)
+    -> Dashboard/CLI for managing the watchlist and reviewing captured moments
 ```
 
-Fáze 2 (později, volitelně): worker s rolling bufferem streamu (ffmpeg + neoficiální
-`kick.com/api/v2/channels/{slug}` playback URL), který z detekovaného momentu vystřihne
-skutečný video klip.
+Phase 2 (later, optional): a worker that keeps a rolling buffer of the stream (ffmpeg +
+the unofficial `kick.com/api/v2/channels/{slug}` playback URL) and cuts an actual video
+clip out of it when a moment is detected.
 
 ## Stack
 
 - Python
-- FastAPI (webhook receiver, později dashboard)
+- FastAPI (webhook receiver, later dashboard)
 - SQLite
 
 ## Roadmap
 
-- [ ] M0 – registrace Kick dev app, OAuth flow, příjem prvního webhooku
-- [ ] M1 – watchlist streamerů + ukládání příchozích chat zpráv do DB
-- [ ] M2 – detekční heuristika (spike zpráv/s) + ukládání momentů s timestampem
-- [ ] M3 – rozšíření o emote/keyword detekci, ladění prahů
-- [ ] M4 – jednoduchý dashboard pro přehled zachycených momentů
-- [ ] M5 – (volitelné) automatické video klipy přes m3u8 capture
+- [ ] M0 - register Kick dev app, OAuth flow, receive the first webhook
+- [ ] M1 - streamer watchlist + storing incoming chat messages in the DB
+- [ ] M2 - detection heuristic (messages/sec spike) + storing moments with a timestamp
+- [ ] M3 - add emote/keyword detection, tune thresholds
+- [ ] M4 - simple dashboard for reviewing captured moments
+- [ ] M5 - (optional) automatic video clips via m3u8 capture
