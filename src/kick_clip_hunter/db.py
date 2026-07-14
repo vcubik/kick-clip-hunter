@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS moments (
 
 CREATE INDEX IF NOT EXISTS idx_moments_channel_time
     ON moments (channel_slug, detected_at);
+
+CREATE TABLE IF NOT EXISTS channel_keywords (
+    broadcaster_user_id INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    PRIMARY KEY (broadcaster_user_id, keyword)
+);
 """
 
 
@@ -74,6 +80,22 @@ def add_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) 
         (broadcaster_user_id, slug),
     )
     conn.commit()
+
+
+def replace_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int, keywords: list[str]) -> None:
+    conn.execute("DELETE FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO channel_keywords (broadcaster_user_id, keyword) VALUES (?, ?)",
+        [(broadcaster_user_id, keyword.lower()) for keyword in keywords],
+    )
+    conn.commit()
+
+
+def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> set[str]:
+    rows = conn.execute(
+        "SELECT keyword FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def insert_chat_message(

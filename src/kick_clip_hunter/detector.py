@@ -8,10 +8,14 @@ near zero). State is per-process and not persisted - after a restart, a
 channel needs a warm-up period before it can trust its own baseline again
 (see the history-length check below).
 
-The keyword list and thresholds below are a first pass, expected to be
-tuned once we've watched detections against real streams (see roadmap M3).
+Keyword matching is channel-specific: each watched channel's actual 7TV
+emote names (fetched via seventv_client) are used as keywords, plus one
+channel-agnostic pattern for the Czech "xD"/"xDDDD" laugh convention.
+Thresholds are a first pass, expected to be tuned once we've watched
+detections against real streams (see roadmap M3).
 """
 
+import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -28,10 +32,9 @@ MIN_SHORT_WINDOW_EMOTES = 10
 
 MIN_SHORT_WINDOW_KEYWORD_HITS = 3
 
-KEYWORDS = {
-    "kekw", "omg", "wtf", "lul", "lmao", "lmaoo", "pog", "poggers",
-    "no way", "wait what", "clip it", "clip that",
-}
+# Matches the exaggerated "xDDDD" laugh (not plain "xd", which is too
+# common on its own to be a useful signal).
+LAUGH_PATTERN = re.compile(r"xd{2,}", re.IGNORECASE)
 
 _entries: dict[str, deque] = defaultdict(deque)  # each entry: (timestamp, emote_count, keyword_hit)
 _last_moment_at: dict[str, float] = {}
@@ -48,9 +51,11 @@ class Spike:
     keyword_hits: int
 
 
-def matches_keyword(content: str) -> bool:
+def matches_keyword(content: str, channel_keywords: set[str] = frozenset()) -> bool:
+    if LAUGH_PATTERN.search(content):
+        return True
     lowered = content.lower()
-    return any(keyword in lowered for keyword in KEYWORDS)
+    return any(keyword in lowered for keyword in channel_keywords)
 
 
 def record_message(
