@@ -15,8 +15,9 @@ if __name__ == "__main__":
     try:
         rows = conn.execute(
             """
-            SELECT channel_slug, detected_at, window_start, window_end,
-                   message_count, baseline_rate, current_rate, score
+            SELECT channel_slug, detected_at, window_start, window_end, reason, score,
+                   message_count, baseline_message_rate, current_message_rate,
+                   emote_count, keyword_hits
             FROM moments
             ORDER BY detected_at DESC
             """
@@ -26,8 +27,22 @@ if __name__ == "__main__":
 
     if not rows:
         print("No moments detected yet.")
-    for channel, detected_at, window_start, window_end, count, baseline, current, score in rows:
+    for (
+        channel,
+        detected_at,
+        window_start,
+        window_end,
+        reason,
+        score,
+        message_count,
+        baseline_rate,
+        current_rate,
+        emote_count,
+        keyword_hits,
+    ) in rows:
         print(
-            f"[{channel}] {detected_at}  {count} msgs in [{window_start} .. {window_end}]  "
-            f"rate {current:.2f}/s vs baseline {baseline:.2f}/s  score={score:.2f}"
+            f"[{channel}] {detected_at}  reason={reason}  score={score:.2f}  "
+            f"window=[{window_start} .. {window_end}]  "
+            f"msgs={message_count} ({current_rate:.2f}/s vs baseline {baseline_rate:.2f}/s)  "
+            f"emotes={emote_count}  keyword_hits={keyword_hits}"
         )
