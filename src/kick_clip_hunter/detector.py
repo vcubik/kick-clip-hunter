@@ -38,11 +38,14 @@ SHORT_WINDOW_SECONDS = 10
 BASELINE_WINDOW_SECONDS = 300
 COOLDOWN_SECONDS = 60
 
-# Trivial sanity floors - not real business thresholds, just enough
-# occurrences that a rate/ratio is meaningful instead of noise.
-MIN_ABSOLUTE_COUNT = 3
+# Absolute floors. The baseline-relative ratio alone isn't enough on a very
+# quiet channel - a jump from 1 message/10s to 3-4 messages/10s clears a 3x
+# ratio easily but still isn't a real "moment" by volume. These floors make
+# sure there's genuine activity underneath the ratio, not just noise from a
+# tiny baseline.
+MIN_ABSOLUTE_COUNT = 10
 MIN_ABSOLUTE_LAUGHS = 2
-MIN_ABSOLUTE_UNIQUE = 2
+MIN_ABSOLUTE_UNIQUE = 3
 
 MESSAGE_SPIKE_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
@@ -53,7 +56,10 @@ EMOTE_UNIQUE_SENDER_MULTIPLIER = 3.0
 
 LAUGH_MULTIPLIER = 2.0
 LAUGH_UNIQUE_SENDER_MULTIPLIER = 2.0
-LAUGH_SCORE_WEIGHT = 2.0
+# Someone writing "xDDDD" is about as reliable a sign of a funny moment as
+# chat gets - weighted heavily so a laugh-triggered moment's score clearly
+# stands out from message_rate/emotes/emote_mention ones.
+LAUGH_SCORE_WEIGHT = 5.0
 
 EMOTE_MENTION_MULTIPLIER = 4.0
 EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
