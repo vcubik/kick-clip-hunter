@@ -102,7 +102,7 @@ LAUGH_PATTERN = re.compile(r"xd{2,}", re.IGNORECASE)
 # laugh-related. A first pass based on well-known Twitch/7TV emotes (KEKW,
 # KEKWait, LUL, LULW, OMEGALUL, LOL, pepeLaugh, monkaLaugh, ...) - expected
 # to be tuned as we see which emotes actually show up in real streams.
-LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh")
+LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy")
 
 
 def is_laugh_emote_name(emote_name: str) -> bool:
