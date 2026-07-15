@@ -91,7 +91,7 @@ EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
 # emote - both toward the threshold and the final score - reflecting that
 # it's a stronger, more laugh-specific signal, though still weaker than the
 # channel-agnostic xD/xDDDD pattern above.
-EMOTE_MENTION_LAUGH_WEIGHT = 2.5
+EMOTE_MENTION_LAUGH_WEIGHT = 3.5
 EMOTE_MENTION_OTHER_WEIGHT = 1.0
 
 # Matches the exaggerated "xDDDD" laugh (not plain "xd", which is too
