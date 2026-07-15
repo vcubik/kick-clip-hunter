@@ -165,6 +165,7 @@ async def kick_webhook(
             spike = detector.record_message(
                 channel,
                 sender=sender_username,
+                content=content,
                 emote_count=emote_count,
                 is_laugh=is_laugh,
                 is_emote_mention=is_emote_mention,
