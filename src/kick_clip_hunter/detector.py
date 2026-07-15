@@ -5,7 +5,9 @@ fixed absolute numbers - a "boring" low-traffic stream and a busy,
 interactive one both need their own reference point. Four independent
 signals are tracked this way over a rolling window per channel:
 
-- message_rate: overall message volume spike
+- message_rate: overall message volume spike. A weak signal on its own -
+  chat can get busier for all sorts of mundane reasons, not just funny
+  ones - so it's scored well below laugh/laugh-emote (MESSAGE_RATE_SCORE_WEIGHT)
 - emotes: a spike in distinct senders using a native Kick emote (not a raw
   emote-position count - one person stacking several emotes in a message,
   or repeating one across several messages, still only counts as one)
@@ -74,6 +76,11 @@ def _dynamic_min_count(baseline_unique_senders: int) -> int:
 MESSAGE_SPIKE_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 3.0
+# Chat just getting busier is a weak proxy for "something funny happened" -
+# it can spike for all sorts of mundane reasons (an argument, a strategy
+# discussion). Scored well below laugh/laugh-emote signals, which are direct
+# expressions of finding something funny.
+MESSAGE_RATE_SCORE_WEIGHT = 0.5
 
 EMOTE_SPIKE_MULTIPLIER = 3.0
 
@@ -111,11 +118,23 @@ def is_laugh_emote_name(emote_name: str) -> bool:
     return any(pattern in lowered for pattern in LAUGH_EMOTE_NAME_PATTERNS)
 
 
+# Real 7TV emote sets include very short names (e.g. "lo", "re", "xd",
+# "bla") that are meaningless as substrings - they match inside all sorts of
+# ordinary words ("c-LO-vek", "t-RE-ba", "napad-LO") and turn emote_mention
+# into a near-random trigger. Anything shorter than this is dropped instead
+# of being stored as a keyword at all.
+MIN_EMOTE_NAME_LENGTH = 4
+
+
 def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
-    """Maps each 7TV emote name (lowercased, to match classify_message's lookup) to its mention weight."""
+    """Maps each 7TV emote name (lowercased, to match classify_message's lookup) to its mention weight.
+
+    Emote names shorter than MIN_EMOTE_NAME_LENGTH are skipped entirely.
+    """
     return {
         name.lower(): EMOTE_MENTION_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_MENTION_OTHER_WEIGHT
         for name in emote_names
+        if len(name) >= MIN_EMOTE_NAME_LENGTH
     }
 
 
@@ -240,7 +259,7 @@ def record_message(
         and content_ratio >= MESSAGE_UNIQUE_CONTENT_MULTIPLIER
     ):
         reasons.append("message_rate")
-        scores.append(message_ratio)
+        scores.append(message_ratio * MESSAGE_RATE_SCORE_WEIGHT)
 
     # Judged purely by distinct senders, not raw emote-position count: one
     # person stacking several emotes in a single message (or spamming the
