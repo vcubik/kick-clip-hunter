@@ -144,6 +144,7 @@ async def kick_webhook(
         sender_username = sender.get("username", "")
         emotes = payload.get("emotes", [])
         emote_count = sum(len(e.get("positions", [])) for e in emotes)
+        emote_weight = detector.classify_native_emotes(content)
 
         conn = get_connection()
         try:
@@ -168,6 +169,7 @@ async def kick_webhook(
                 sender=sender_username,
                 content=content,
                 emote_count=emote_count,
+                emote_weight=emote_weight,
                 laugh_weight=laugh_weight,
                 mention_weight=mention_weight,
             )

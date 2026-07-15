@@ -107,6 +107,18 @@ EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
 EMOTE_MENTION_LAUGH_WEIGHT = 3.5
 EMOTE_MENTION_OTHER_WEIGHT = 1.0
 
+# Same idea for native Kick emotes (the [emote:id:name] tokens Kick embeds
+# in message content): a genuinely laugh-related emote (emojiLol,
+# collectibleswideomelaugh, KEKW, ...) counts for more than an unrelated one
+# (asmonSmash, beeBobble, resttD, ...) that just happens to be popular.
+EMOTE_LAUGH_WEIGHT = 3.5
+EMOTE_OTHER_WEIGHT = 1.0
+
+# Ratios can blow up when the baseline is a tiny-but-nonzero number (e.g. one
+# incidental "xd" in 5 minutes) - technically correct, not meaningfully
+# informative as a score. Cap it so scores stay on a sane, comparable scale.
+MAX_RATIO_SCORE = 20.0
+
 # Matches the exaggerated "xDDDD" laugh. Word-bounded so it doesn't match
 # inside unrelated words.
 LAUGH_STRONG_PATTERN = re.compile(r"\bxd{2,}\b", re.IGNORECASE)
@@ -124,6 +136,19 @@ LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy")
 def is_laugh_emote_name(emote_name: str) -> bool:
     lowered = emote_name.lower()
     return any(pattern in lowered for pattern in LAUGH_EMOTE_NAME_PATTERNS)
+
+
+# Kick embeds native emotes as "[emote:12345:emojiLol]" tokens directly in
+# the message content.
+NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:\d+:([^\]]+)\]")
+
+
+def classify_native_emotes(content: str) -> float:
+    """Returns the highest emote weight among any native Kick emotes in content, or 0.0 if none."""
+    names = NATIVE_EMOTE_TOKEN_PATTERN.findall(content)
+    if not names:
+        return 0.0
+    return max(EMOTE_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_OTHER_WEIGHT for name in names)
 
 
 # Real 7TV emote sets include very short names (e.g. "lo", "re", "xd",
@@ -146,7 +171,7 @@ def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     }
 
 
-# each entry: (timestamp, sender, normalized_content, emote_count, laugh_weight, mention_weight)
+# each entry: (timestamp, sender, normalized_content, emote_count, emote_weight, laugh_weight, mention_weight)
 _entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
 
@@ -212,13 +237,14 @@ def record_message(
     sender: str,
     content: str = "",
     emote_count: int = 0,
+    emote_weight: float = 0.0,
     laugh_weight: float = 0.0,
     mention_weight: float = 0.0,
     now: float | None = None,
 ) -> Spike | None:
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
-    entries.append((now, sender, content.strip().lower(), emote_count, laugh_weight, mention_weight))
+    entries.append((now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight))
 
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
@@ -240,23 +266,24 @@ def record_message(
     short_unique_senders = len({e[1] for e in short})
     short_unique_contents = len({e[2] for e in short if e[2]})
     short_emote_count = sum(e[3] for e in short)
-    short_emote_unique_senders = len({e[1] for e in short if e[3] > 0})
-    short_laugh_weight = sum(e[4] for e in short)
-    short_laugh_count = sum(1 for e in short if e[4] > 0)
-    short_laugh_unique_senders = len({e[1] for e in short if e[4] > 0})
-    short_mention_weight = sum(e[5] for e in short)
-    short_mention_count = sum(1 for e in short if e[5] > 0)
-    short_mention_unique_senders = len({e[1] for e in short if e[5] > 0})
+    short_emote_weight = sum(e[4] for e in short)
+    short_emote_unique_senders = len({e[1] for e in short if e[4] > 0})
+    short_laugh_weight = sum(e[5] for e in short)
+    short_laugh_count = sum(1 for e in short if e[5] > 0)
+    short_laugh_unique_senders = len({e[1] for e in short if e[5] > 0})
+    short_mention_weight = sum(e[6] for e in short)
+    short_mention_count = sum(1 for e in short if e[6] > 0)
+    short_mention_unique_senders = len({e[1] for e in short if e[6] > 0})
 
     baseline_message_count = len(baseline)
     baseline_unique_senders = len({e[1] for e in baseline})
     baseline_unique_contents = len({e[2] for e in baseline if e[2]})
-    baseline_emote_count = sum(e[3] for e in baseline)
-    baseline_emote_unique_senders = len({e[1] for e in baseline if e[3] > 0})
-    baseline_laugh_weight = sum(e[4] for e in baseline)
-    baseline_laugh_unique_senders = len({e[1] for e in baseline if e[4] > 0})
-    baseline_mention_weight = sum(e[5] for e in baseline)
-    baseline_mention_unique_senders = len({e[1] for e in baseline if e[5] > 0})
+    baseline_emote_weight = sum(e[4] for e in baseline)
+    baseline_emote_unique_senders = len({e[1] for e in baseline if e[4] > 0})
+    baseline_laugh_weight = sum(e[5] for e in baseline)
+    baseline_laugh_unique_senders = len({e[1] for e in baseline if e[5] > 0})
+    baseline_mention_weight = sum(e[6] for e in baseline)
+    baseline_mention_unique_senders = len({e[1] for e in baseline if e[6] > 0})
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
@@ -277,18 +304,26 @@ def record_message(
         and content_ratio >= MESSAGE_UNIQUE_CONTENT_MULTIPLIER
     ):
         reasons.append("message_rate")
-        scores.append(message_ratio * MESSAGE_RATE_SCORE_WEIGHT)
+        scores.append(min(message_ratio, MAX_RATIO_SCORE) * MESSAGE_RATE_SCORE_WEIGHT)
 
-    # Judged purely by distinct senders, not raw emote-position count: one
-    # person stacking several emotes in a single message (or spamming the
-    # same one across several messages) is still just one person, and
-    # shouldn't count more than someone who used exactly one.
+    # Judged by distinct senders (one person stacking several emotes in a
+    # single message, or spamming the same one across several messages,
+    # still only counts as one - classify_native_emotes caps a single
+    # message's contribution to one weight unit) and by a weighted sum that
+    # favors laugh-related emotes (emojiLol, KEKW, ...) over unrelated ones
+    # (asmonSmash, beeBobble, ...) that just happen to be popular.
+    emote_ratio = _spike_ratio(short_emote_weight, baseline_emote_weight, baseline_seconds, dynamic_min_count)
     emote_sender_ratio = _spike_ratio(
         short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
     )
-    if emote_sender_ratio is not None and emote_sender_ratio >= EMOTE_SPIKE_MULTIPLIER:
+    if (
+        emote_ratio is not None
+        and emote_ratio >= EMOTE_SPIKE_MULTIPLIER
+        and emote_sender_ratio is not None
+        and emote_sender_ratio >= EMOTE_SPIKE_MULTIPLIER
+    ):
         reasons.append("emotes")
-        scores.append(emote_sender_ratio)
+        scores.append(min(emote_ratio, MAX_RATIO_SCORE))
 
     # laugh_weight sums LAUGH_STRONG_WEIGHT/_WEAK_WEIGHT per occurrence, so
     # "xddd"+ reaches the threshold - and score - faster than an equal
@@ -304,7 +339,7 @@ def record_message(
         and laugh_sender_ratio >= LAUGH_UNIQUE_SENDER_MULTIPLIER
     ):
         reasons.append("laugh")
-        scores.append(laugh_ratio)
+        scores.append(min(laugh_ratio, MAX_RATIO_SCORE))
 
     # mention_weight sums EMOTE_MENTION_LAUGH_WEIGHT/_OTHER_WEIGHT per
     # occurrence, so laugh-related emotes reach the threshold - and score -
@@ -320,7 +355,7 @@ def record_message(
         and mention_sender_ratio >= EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER
     ):
         reasons.append("emote_mention")
-        scores.append(mention_ratio)
+        scores.append(min(mention_ratio, MAX_RATIO_SCORE))
 
     if not reasons:
         return None
