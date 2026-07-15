@@ -1,7 +1,7 @@
-"""CLI to add a channel to the watchlist: subscribes to its chat.message.sent
-events and records the streamer in the local database.
+"""CLI to refresh a watched channel's 7TV emote keywords without touching
+its Kick event subscription (subscribing again would create a duplicate).
 
-Usage: python scripts/subscribe.py <channel_slug>
+Usage: python scripts/refresh_emotes.py <channel_slug>
 """
 
 import argparse
@@ -12,13 +12,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from kick_clip_hunter.config import load_settings
-from kick_clip_hunter.db import add_streamer, get_connection, replace_channel_keywords
+from kick_clip_hunter.db import get_connection, replace_channel_keywords
 from kick_clip_hunter.detector import EMOTE_MENTION_LAUGH_WEIGHT, classify_emote_names
-from kick_clip_hunter.kick_client import (
-    get_app_access_token,
-    get_channel_by_slug,
-    subscribe_chat_messages,
-)
+from kick_clip_hunter.kick_client import get_app_access_token, get_channel_by_slug
 from kick_clip_hunter.seventv_client import get_channel_emote_names
 
 
@@ -28,10 +24,6 @@ async def main(slug: str) -> None:
 
     channel = await get_channel_by_slug(slug, token)
     broadcaster_id = channel["broadcaster_user_id"]
-    print(f"Found channel {slug!r}: broadcaster_user_id={broadcaster_id}")
-
-    result = await subscribe_chat_messages(broadcaster_id, token)
-    print("Subscribed:", result)
 
     emote_names = await get_channel_emote_names(broadcaster_id)
     keyword_weights = classify_emote_names(emote_names)
@@ -43,11 +35,10 @@ async def main(slug: str) -> None:
 
     conn = get_connection()
     try:
-        add_streamer(conn, broadcaster_id, slug)
         replace_channel_keywords(conn, broadcaster_id, keyword_weights)
     finally:
         conn.close()
-    print(f"Added {slug!r} to the watchlist.")
+    print(f"Refreshed keywords for {slug!r}.")
 
 
 if __name__ == "__main__":

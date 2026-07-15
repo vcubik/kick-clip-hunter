@@ -7,11 +7,15 @@ signals are tracked this way over a rolling window per channel:
 
 - message_rate: overall message volume spike
 - emotes: native Kick emote spike
-- laugh: the Czech "xD"/"xDDDD" laugh convention - a strong, high-precision
-  signal, so it needs a lower multiplier but counts for more in the score
+- laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
+  of a funny moment as chat gets, so it needs a lower multiplier but counts
+  for the most in the score (see LAUGH_SCORE_WEIGHT)
 - emote_mention: a channel's 7TV emote name typed as plain text - noisier
   than laugh (some emote names double as ordinary words), so it needs a
-  higher multiplier to fire
+  higher multiplier to fire. Not all emote mentions are equal: emotes whose
+  name itself signals laughing (KEKW, LUL, OMEGALUL, ...) count for more
+  than other emotes (see EMOTE_MENTION_LAUGH_WEIGHT / _OTHER_WEIGHT) - both
+  for reaching the threshold and for the final score.
 
 Every signal also requires a baseline-relative spike in *distinct
 senders*, not just raw count - Kick doesn't rate-limit a single account,
@@ -64,6 +68,7 @@ def _dynamic_min_count(baseline_unique_senders: int) -> int:
         max(MIN_ABSOLUTE_COUNT_FLOOR, round(baseline_unique_senders * MIN_ABSOLUTE_COUNT_FRACTION)),
     )
 
+
 MESSAGE_SPIKE_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 3.0
@@ -81,11 +86,39 @@ LAUGH_SCORE_WEIGHT = 5.0
 EMOTE_MENTION_MULTIPLIER = 4.0
 EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
 
+# Not all 7TV emote mentions are equally meaningful. An emote whose own name
+# signals laughing (KEKW, LUL, OMEGALUL, ...) counts for more than any other
+# emote - both toward the threshold and the final score - reflecting that
+# it's a stronger, more laugh-specific signal, though still weaker than the
+# channel-agnostic xD/xDDDD pattern above.
+EMOTE_MENTION_LAUGH_WEIGHT = 3.5
+EMOTE_MENTION_OTHER_WEIGHT = 1.0
+
 # Matches the exaggerated "xDDDD" laugh (not plain "xd", which is too
 # common on its own to be a useful signal).
 LAUGH_PATTERN = re.compile(r"xd{2,}", re.IGNORECASE)
 
-# each entry: (timestamp, sender, normalized_content, emote_count, is_laugh, is_emote_mention)
+# Substrings (checked against a lowercased emote name) that mark an emote as
+# laugh-related. A first pass based on well-known Twitch/7TV emotes (KEKW,
+# KEKWait, LUL, LULW, OMEGALUL, LOL, pepeLaugh, monkaLaugh, ...) - expected
+# to be tuned as we see which emotes actually show up in real streams.
+LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy")
+
+
+def is_laugh_emote_name(emote_name: str) -> bool:
+    lowered = emote_name.lower()
+    return any(pattern in lowered for pattern in LAUGH_EMOTE_NAME_PATTERNS)
+
+
+def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
+    """Maps each 7TV emote name (lowercased, to match classify_message's lookup) to its mention weight."""
+    return {
+        name.lower(): EMOTE_MENTION_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_MENTION_OTHER_WEIGHT
+        for name in emote_names
+    }
+
+
+# each entry: (timestamp, sender, normalized_content, emote_count, is_laugh, mention_weight)
 _entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
 
@@ -101,15 +134,24 @@ class Spike:
     keyword_hits: int  # laughs + emote mentions combined, for display/storage
 
 
-def classify_message(content: str, channel_keywords: set[str] = frozenset()) -> tuple[bool, bool]:
-    """Returns (is_laugh, is_emote_mention) for a chat message's text."""
+def classify_message(content: str, channel_keyword_weights: dict[str, float] = {}) -> tuple[bool, float]:
+    """Returns (is_laugh, mention_weight) for a chat message's text.
+
+    mention_weight is 0.0 if no channel keyword matched, otherwise the
+    highest weight among the keywords that did (channel_keyword_weights
+    maps each 7TV emote name to EMOTE_MENTION_LAUGH_WEIGHT or
+    EMOTE_MENTION_OTHER_WEIGHT, set when the channel was subscribed).
+    """
     is_laugh = bool(LAUGH_PATTERN.search(content))
     lowered = content.lower()
-    is_emote_mention = any(keyword in lowered for keyword in channel_keywords)
-    return is_laugh, is_emote_mention
+    matched_weights = [weight for keyword, weight in channel_keyword_weights.items() if keyword in lowered]
+    mention_weight = max(matched_weights) if matched_weights else 0.0
+    return is_laugh, mention_weight
 
 
-def _spike_ratio(short_count: int, baseline_count: int, baseline_seconds: float, min_absolute: int) -> float | None:
+def _spike_ratio(
+    short_count: float, baseline_count: float, baseline_seconds: float, min_absolute: float
+) -> float | None:
     """Ratio of the short-window rate to the baseline rate, or None if short_count is below the sanity floor.
 
     If the signal never happened during the baseline window, there's no rate
@@ -134,12 +176,12 @@ def record_message(
     content: str = "",
     emote_count: int = 0,
     is_laugh: bool = False,
-    is_emote_mention: bool = False,
+    mention_weight: float = 0.0,
     now: float | None = None,
 ) -> Spike | None:
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
-    entries.append((now, sender, content.strip().lower(), emote_count, is_laugh, is_emote_mention))
+    entries.append((now, sender, content.strip().lower(), emote_count, is_laugh, mention_weight))
 
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
@@ -164,8 +206,9 @@ def record_message(
     short_emote_unique_senders = len({e[1] for e in short if e[3] > 0})
     short_laugh_count = sum(1 for e in short if e[4])
     short_laugh_unique_senders = len({e[1] for e in short if e[4]})
-    short_mention_count = sum(1 for e in short if e[5])
-    short_mention_unique_senders = len({e[1] for e in short if e[5]})
+    short_mention_weight = sum(e[5] for e in short)
+    short_mention_count = sum(1 for e in short if e[5] > 0)
+    short_mention_unique_senders = len({e[1] for e in short if e[5] > 0})
 
     baseline_message_count = len(baseline)
     baseline_unique_senders = len({e[1] for e in baseline})
@@ -174,8 +217,8 @@ def record_message(
     baseline_emote_unique_senders = len({e[1] for e in baseline if e[3] > 0})
     baseline_laugh_count = sum(1 for e in baseline if e[4])
     baseline_laugh_unique_senders = len({e[1] for e in baseline if e[4]})
-    baseline_mention_count = sum(1 for e in baseline if e[5])
-    baseline_mention_unique_senders = len({e[1] for e in baseline if e[5]})
+    baseline_mention_weight = sum(e[5] for e in baseline)
+    baseline_mention_unique_senders = len({e[1] for e in baseline if e[5] > 0})
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
@@ -224,7 +267,10 @@ def record_message(
         reasons.append("laugh")
         scores.append(laugh_ratio * LAUGH_SCORE_WEIGHT)
 
-    mention_ratio = _spike_ratio(short_mention_count, baseline_mention_count, baseline_seconds, dynamic_min_count)
+    # mention_weight sums EMOTE_MENTION_LAUGH_WEIGHT/_OTHER_WEIGHT per
+    # occurrence, so laugh-related emotes reach the threshold - and score -
+    # faster than an equal number of other-emote mentions would.
+    mention_ratio = _spike_ratio(short_mention_weight, baseline_mention_weight, baseline_seconds, dynamic_min_count)
     mention_sender_ratio = _spike_ratio(
         short_mention_unique_senders, baseline_mention_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
     )

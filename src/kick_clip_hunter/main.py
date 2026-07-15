@@ -34,9 +34,10 @@ app = FastAPI()
 settings = load_settings()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
-# Channel keyword sets rarely change (only when re-subscribing), so we cache
-# them per-process instead of hitting the DB on every single chat message.
-_channel_keywords_cache: dict[int, set[str]] = {}
+# Channel keyword weights rarely change (only when re-subscribing/refreshing
+# emotes), so we cache them per-process instead of hitting the DB on every
+# single chat message.
+_channel_keywords_cache: dict[int, dict[str, float]] = {}
 
 # Stream start times don't need to be looked up on every message - only when
 # a moment fires - and barely change within a single stream, so a short
@@ -45,7 +46,7 @@ _stream_start_cache: dict[str, tuple[datetime | None, float]] = {}
 STREAM_INFO_CACHE_SECONDS = 120
 
 
-def _channel_keywords(conn, broadcaster_user_id: int) -> set[str]:
+def _channel_keywords(conn, broadcaster_user_id: int) -> dict[str, float]:
     if broadcaster_user_id not in _channel_keywords_cache:
         _channel_keywords_cache[broadcaster_user_id] = get_channel_keywords(conn, broadcaster_user_id)
     return _channel_keywords_cache[broadcaster_user_id]
@@ -146,7 +147,7 @@ async def kick_webhook(
 
         conn = get_connection()
         try:
-            is_laugh, is_emote_mention = detector.classify_message(
+            is_laugh, mention_weight = detector.classify_message(
                 content, _channel_keywords(conn, broadcaster_user_id)
             )
 
@@ -168,7 +169,7 @@ async def kick_webhook(
                 content=content,
                 emote_count=emote_count,
                 is_laugh=is_laugh,
-                is_emote_mention=is_emote_mention,
+                mention_weight=mention_weight,
             )
             if spike is not None:
                 window_end = datetime.now(timezone.utc)
