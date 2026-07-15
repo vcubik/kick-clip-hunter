@@ -140,26 +140,35 @@ async def kick_webhook(
         logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
 
         broadcaster_user_id = broadcaster["user_id"]
+        sender_username = sender.get("username", "")
         emotes = payload.get("emotes", [])
         emote_count = sum(len(e.get("positions", [])) for e in emotes)
 
         conn = get_connection()
         try:
-            keyword_hit = detector.matches_keyword(content, _channel_keywords(conn, broadcaster_user_id))
+            is_laugh, is_emote_mention = detector.classify_message(
+                content, _channel_keywords(conn, broadcaster_user_id)
+            )
 
             insert_chat_message(
                 conn,
                 message_id=payload["message_id"],
                 broadcaster_user_id=broadcaster_user_id,
                 channel_slug=channel,
-                sender_username=sender.get("username", ""),
+                sender_username=sender_username,
                 content=content,
                 emotes_json=json.dumps(emotes),
                 created_at=payload.get("created_at", ""),
                 received_at=datetime.now(timezone.utc).isoformat(),
             )
 
-            spike = detector.record_message(channel, emote_count=emote_count, keyword_hit=keyword_hit)
+            spike = detector.record_message(
+                channel,
+                sender=sender_username,
+                emote_count=emote_count,
+                is_laugh=is_laugh,
+                is_emote_mention=is_emote_mention,
+            )
             if spike is not None:
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)

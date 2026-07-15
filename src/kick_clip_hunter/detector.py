@@ -1,18 +1,27 @@
 """Heuristics for flagging potentially viral moments from chat activity.
 
-Keeps a short in-memory rolling window per channel of (timestamp, emote_count,
-keyword_hit) entries and compares three independent signals - message rate,
-emote rate, and keyword frequency - against the channel's own recent
-baseline (or, for keywords, a flat minimum since their baseline is normally
-near zero). State is per-process and not persisted - after a restart, a
-channel needs a warm-up period before it can trust its own baseline again
-(see the history-length check below).
+Keeps a short in-memory rolling window per channel of per-message entries
+and compares four independent signals against the channel's own recent
+baseline (or, for laugh/emote_mention, a flat minimum since their baseline
+is normally near zero):
 
-Keyword matching is channel-specific: each watched channel's actual 7TV
-emote names (fetched via seventv_client) are used as keywords, plus one
-channel-agnostic pattern for the Czech "xD"/"xDDDD" laugh convention.
-Thresholds are a first pass, expected to be tuned once we've watched
-detections against real streams (see roadmap M3).
+- message_rate: overall message volume spike
+- emotes: native Kick emote spike
+- laugh: the Czech "xD"/"xDDDD" laugh convention - a strong, high-precision
+  signal, so it needs fewer occurrences but counts for more in the score
+- emote_mention: a channel's 7TV emote name typed as plain text - noisier
+  than laugh (some emote names double as ordinary words), so it needs both
+  more occurrences and more distinct people saying it
+
+Every count-based signal also requires a minimum number of *distinct
+senders*, not just raw message count - Kick doesn't rate-limit a single
+account by default, so one person spamming would otherwise look identical
+to a genuine crowd reaction.
+
+State is per-process and not persisted - after a restart, a channel needs
+a warm-up period before it can trust its own baseline again (see the
+history-length check below). Thresholds are a first pass, expected to keep
+being tuned once we've watched detections against real streams.
 """
 
 import re
@@ -26,17 +35,25 @@ COOLDOWN_SECONDS = 60
 
 MESSAGE_SPIKE_MULTIPLIER = 3.0
 MIN_SHORT_WINDOW_MESSAGES = 8
+MIN_UNIQUE_SENDERS_MESSAGE_RATE = 5
 
 EMOTE_SPIKE_MULTIPLIER = 3.0
 MIN_SHORT_WINDOW_EMOTES = 10
+MIN_UNIQUE_SENDERS_EMOTE_RATE = 5
 
-MIN_SHORT_WINDOW_KEYWORD_HITS = 3
+MIN_SHORT_WINDOW_LAUGHS = 2
+MIN_UNIQUE_SENDERS_LAUGH = 2
+LAUGH_SCORE_WEIGHT = 2.0
+
+MIN_SHORT_WINDOW_EMOTE_MENTIONS = 5
+MIN_UNIQUE_SENDERS_EMOTE_MENTION = 5
 
 # Matches the exaggerated "xDDDD" laugh (not plain "xd", which is too
 # common on its own to be a useful signal).
 LAUGH_PATTERN = re.compile(r"xd{2,}", re.IGNORECASE)
 
-_entries: dict[str, deque] = defaultdict(deque)  # each entry: (timestamp, emote_count, keyword_hit)
+# each entry: (timestamp, sender, emote_count, is_laugh, is_emote_mention)
+_entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
 
 
@@ -48,26 +65,29 @@ class Spike:
     baseline_message_rate: float
     current_message_rate: float
     emote_count: int
-    keyword_hits: int
+    keyword_hits: int  # laughs + emote mentions combined, for display/storage
 
 
-def matches_keyword(content: str, channel_keywords: set[str] = frozenset()) -> bool:
-    if LAUGH_PATTERN.search(content):
-        return True
+def classify_message(content: str, channel_keywords: set[str] = frozenset()) -> tuple[bool, bool]:
+    """Returns (is_laugh, is_emote_mention) for a chat message's text."""
+    is_laugh = bool(LAUGH_PATTERN.search(content))
     lowered = content.lower()
-    return any(keyword in lowered for keyword in channel_keywords)
+    is_emote_mention = any(keyword in lowered for keyword in channel_keywords)
+    return is_laugh, is_emote_mention
 
 
 def record_message(
     channel_slug: str,
     *,
+    sender: str,
     emote_count: int = 0,
-    keyword_hit: bool = False,
+    is_laugh: bool = False,
+    is_emote_mention: bool = False,
     now: float | None = None,
 ) -> Spike | None:
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
-    entries.append((now, emote_count, keyword_hit))
+    entries.append((now, sender, emote_count, is_laugh, is_emote_mention))
 
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
@@ -82,13 +102,19 @@ def record_message(
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
     short = [e for e in entries if e[0] >= short_cutoff]
+
     short_message_count = len(short)
-    short_emote_count = sum(e[1] for e in short)
-    short_keyword_hits = sum(1 for e in short if e[2])
+    short_unique_senders = len({e[1] for e in short})
+    short_emote_count = sum(e[2] for e in short)
+    short_emote_unique_senders = len({e[1] for e in short if e[2] > 0})
+    short_laugh_count = sum(1 for e in short if e[3])
+    short_laugh_unique_senders = len({e[1] for e in short if e[3]})
+    short_mention_count = sum(1 for e in short if e[4])
+    short_mention_unique_senders = len({e[1] for e in short if e[4]})
 
     baseline_seconds = history_seconds - SHORT_WINDOW_SECONDS
     baseline_message_count = len(entries) - short_message_count
-    baseline_emote_count = sum(e[1] for e in entries) - short_emote_count
+    baseline_emote_count = sum(e[2] for e in entries) - short_emote_count
     baseline_message_rate = baseline_message_count / baseline_seconds
     baseline_emote_rate = baseline_emote_count / baseline_seconds
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
@@ -99,6 +125,7 @@ def record_message(
 
     if (
         short_message_count >= MIN_SHORT_WINDOW_MESSAGES
+        and short_unique_senders >= MIN_UNIQUE_SENDERS_MESSAGE_RATE
         and current_message_rate >= baseline_message_rate * MESSAGE_SPIKE_MULTIPLIER
     ):
         reasons.append("message_rate")
@@ -106,14 +133,25 @@ def record_message(
 
     if (
         short_emote_count >= MIN_SHORT_WINDOW_EMOTES
+        and short_emote_unique_senders >= MIN_UNIQUE_SENDERS_EMOTE_RATE
         and current_emote_rate >= baseline_emote_rate * EMOTE_SPIKE_MULTIPLIER
     ):
         reasons.append("emotes")
         scores.append(current_emote_rate / baseline_emote_rate if baseline_emote_rate > 0 else current_emote_rate)
 
-    if short_keyword_hits >= MIN_SHORT_WINDOW_KEYWORD_HITS:
-        reasons.append("keywords")
-        scores.append(float(short_keyword_hits))
+    if (
+        short_laugh_count >= MIN_SHORT_WINDOW_LAUGHS
+        and short_laugh_unique_senders >= MIN_UNIQUE_SENDERS_LAUGH
+    ):
+        reasons.append("laugh")
+        scores.append(short_laugh_count * LAUGH_SCORE_WEIGHT)
+
+    if (
+        short_mention_count >= MIN_SHORT_WINDOW_EMOTE_MENTIONS
+        and short_mention_unique_senders >= MIN_UNIQUE_SENDERS_EMOTE_MENTION
+    ):
+        reasons.append("emote_mention")
+        scores.append(float(short_mention_count))
 
     if not reasons:
         return None
@@ -126,5 +164,5 @@ def record_message(
         baseline_message_rate=baseline_message_rate,
         current_message_rate=current_message_rate,
         emote_count=short_emote_count,
-        keyword_hits=short_keyword_hits,
+        keyword_hits=short_laugh_count + short_mention_count,
     )
