@@ -147,7 +147,7 @@ async def kick_webhook(
 
         conn = get_connection()
         try:
-            is_laugh, mention_weight = detector.classify_message(
+            laugh_weight, mention_weight = detector.classify_message(
                 content, _channel_keywords(conn, broadcaster_user_id)
             )
 
@@ -168,7 +168,7 @@ async def kick_webhook(
                 sender=sender_username,
                 content=content,
                 emote_count=emote_count,
-                is_laugh=is_laugh,
+                laugh_weight=laugh_weight,
                 mention_weight=mention_weight,
             )
             if spike is not None:
