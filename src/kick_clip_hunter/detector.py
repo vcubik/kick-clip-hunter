@@ -56,7 +56,10 @@ EMOTE_UNIQUE_SENDER_MULTIPLIER = 3.0
 
 LAUGH_MULTIPLIER = 2.0
 LAUGH_UNIQUE_SENDER_MULTIPLIER = 2.0
-LAUGH_SCORE_WEIGHT = 2.0
+# Someone writing "xDDDD" is about as reliable a sign of a funny moment as
+# chat gets - weighted heavily so a laugh-triggered moment's score clearly
+# stands out from message_rate/emotes/emote_mention ones.
+LAUGH_SCORE_WEIGHT = 5.0
 
 EMOTE_MENTION_MULTIPLIER = 4.0
 EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
