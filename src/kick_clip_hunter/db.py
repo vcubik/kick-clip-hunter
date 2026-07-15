@@ -56,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_moments_channel_time
 CREATE TABLE IF NOT EXISTS channel_keywords (
     broadcaster_user_id INTEGER NOT NULL,
     keyword TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
     PRIMARY KEY (broadcaster_user_id, keyword)
 );
 """
@@ -79,6 +80,10 @@ def get_connection() -> sqlite3.Connection:
     if "stream_elapsed_seconds" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN stream_elapsed_seconds INTEGER")
 
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(channel_keywords)")}
+    if "weight" not in columns:
+        conn.execute("ALTER TABLE channel_keywords ADD COLUMN weight REAL NOT NULL DEFAULT 1.0")
+
     return conn
 
 
@@ -90,20 +95,22 @@ def add_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) 
     conn.commit()
 
 
-def replace_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int, keywords: list[str]) -> None:
+def replace_channel_keywords(
+    conn: sqlite3.Connection, broadcaster_user_id: int, keyword_weights: dict[str, float]
+) -> None:
     conn.execute("DELETE FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
     conn.executemany(
-        "INSERT OR IGNORE INTO channel_keywords (broadcaster_user_id, keyword) VALUES (?, ?)",
-        [(broadcaster_user_id, keyword.lower()) for keyword in keywords],
+        "INSERT OR IGNORE INTO channel_keywords (broadcaster_user_id, keyword, weight) VALUES (?, ?, ?)",
+        [(broadcaster_user_id, keyword.lower(), weight) for keyword, weight in keyword_weights.items()],
     )
     conn.commit()
 
 
-def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> set[str]:
+def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> dict[str, float]:
     rows = conn.execute(
-        "SELECT keyword FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
+        "SELECT keyword, weight FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
     ).fetchall()
-    return {row[0] for row in rows}
+    return {row[0]: row[1] for row in rows}
 
 
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
