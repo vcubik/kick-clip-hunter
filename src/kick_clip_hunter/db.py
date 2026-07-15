@@ -105,6 +105,42 @@ def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> 
     return {row[0] for row in rows}
 
 
+def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    return conn.execute("SELECT slug, broadcaster_user_id, added_at FROM streamers ORDER BY added_at").fetchall()
+
+
+def get_recent_moments(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT channel_slug, detected_at, window_start, window_end, reason, score,
+               message_count, baseline_message_rate, current_message_rate,
+               emote_count, keyword_hits, stream_elapsed_seconds
+        FROM moments
+        ORDER BY detected_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def get_chat_snippet(
+    conn: sqlite3.Connection, channel_slug: str, window_start: str, window_end: str, limit: int = 20
+) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT sender_username, content
+        FROM chat_messages
+        WHERE channel_slug = ? AND received_at BETWEEN ? AND ?
+        ORDER BY received_at
+        LIMIT ?
+        """,
+        (channel_slug, window_start, window_end, limit),
+    ).fetchall()
+
+
 def insert_chat_message(
     conn: sqlite3.Connection,
     *,
@@ -115,12 +151,13 @@ def insert_chat_message(
     content: str,
     emotes_json: str,
     created_at: str,
+    received_at: str,
 ) -> None:
     conn.execute(
         """
         INSERT OR IGNORE INTO chat_messages
-            (message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes, created_at, received_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             message_id,
@@ -130,6 +167,7 @@ def insert_chat_message(
             content,
             emotes_json,
             created_at,
+            received_at,
         ),
     )
     conn.commit()
