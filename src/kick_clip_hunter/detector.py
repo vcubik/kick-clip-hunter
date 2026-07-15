@@ -1,27 +1,32 @@
 """Heuristics for flagging potentially viral moments from chat activity.
 
-Keeps a short in-memory rolling window per channel of per-message entries
-and compares four independent signals against the channel's own recent
-baseline (or, for laugh/emote_mention, a flat minimum since their baseline
-is normally near zero):
+Everything is judged relative to the channel's *own* recent baseline, not
+fixed absolute numbers - a "boring" low-traffic stream and a busy,
+interactive one both need their own reference point. Four independent
+signals are tracked this way over a rolling window per channel:
 
 - message_rate: overall message volume spike
 - emotes: native Kick emote spike
 - laugh: the Czech "xD"/"xDDDD" laugh convention - a strong, high-precision
-  signal, so it needs fewer occurrences but counts for more in the score
+  signal, so it needs a lower multiplier but counts for more in the score
 - emote_mention: a channel's 7TV emote name typed as plain text - noisier
-  than laugh (some emote names double as ordinary words), so it needs both
-  more occurrences and more distinct people saying it
+  than laugh (some emote names double as ordinary words), so it needs a
+  higher multiplier to fire
 
-Every count-based signal also requires a minimum number of *distinct
-senders*, not just raw message count - Kick doesn't rate-limit a single
-account by default, so one person spamming would otherwise look identical
-to a genuine crowd reaction.
+Every signal also requires a baseline-relative spike in *distinct
+senders*, not just raw count - Kick doesn't rate-limit a single account,
+so one person spamming would otherwise look identical to a genuine crowd
+reaction. message_rate additionally requires a baseline-relative spike in
+*distinct message content*: a giveaway-style raid where many different
+real accounts all paste the same non-emote phrase has high sender
+diversity but low content diversity, and shouldn't count. That guard is
+skipped for emotes/laugh/emote_mention, where many people repeating the
+same emote *is* the genuine pattern.
 
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
-history-length check below). Thresholds are a first pass, expected to keep
-being tuned once we've watched detections against real streams.
+history-length check below). Multipliers are a first pass, expected to
+keep being tuned once we've watched detections against real streams.
 """
 
 import re
@@ -33,26 +38,31 @@ SHORT_WINDOW_SECONDS = 10
 BASELINE_WINDOW_SECONDS = 300
 COOLDOWN_SECONDS = 60
 
+# Trivial sanity floors - not real business thresholds, just enough
+# occurrences that a rate/ratio is meaningful instead of noise.
+MIN_ABSOLUTE_COUNT = 3
+MIN_ABSOLUTE_LAUGHS = 2
+MIN_ABSOLUTE_UNIQUE = 2
+
 MESSAGE_SPIKE_MULTIPLIER = 3.0
-MIN_SHORT_WINDOW_MESSAGES = 8
-MIN_UNIQUE_SENDERS_MESSAGE_RATE = 5
+MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
+MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 3.0
 
 EMOTE_SPIKE_MULTIPLIER = 3.0
-MIN_SHORT_WINDOW_EMOTES = 10
-MIN_UNIQUE_SENDERS_EMOTE_RATE = 5
+EMOTE_UNIQUE_SENDER_MULTIPLIER = 3.0
 
-MIN_SHORT_WINDOW_LAUGHS = 2
-MIN_UNIQUE_SENDERS_LAUGH = 2
+LAUGH_MULTIPLIER = 2.0
+LAUGH_UNIQUE_SENDER_MULTIPLIER = 2.0
 LAUGH_SCORE_WEIGHT = 2.0
 
-MIN_SHORT_WINDOW_EMOTE_MENTIONS = 5
-MIN_UNIQUE_SENDERS_EMOTE_MENTION = 5
+EMOTE_MENTION_MULTIPLIER = 4.0
+EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
 
 # Matches the exaggerated "xDDDD" laugh (not plain "xd", which is too
 # common on its own to be a useful signal).
 LAUGH_PATTERN = re.compile(r"xd{2,}", re.IGNORECASE)
 
-# each entry: (timestamp, sender, emote_count, is_laugh, is_emote_mention)
+# each entry: (timestamp, sender, normalized_content, emote_count, is_laugh, is_emote_mention)
 _entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
 
@@ -76,10 +86,29 @@ def classify_message(content: str, channel_keywords: set[str] = frozenset()) -> 
     return is_laugh, is_emote_mention
 
 
+def _spike_ratio(short_count: int, baseline_count: int, baseline_seconds: float, min_absolute: int) -> float | None:
+    """Ratio of the short-window rate to the baseline rate, or None if short_count is below the sanity floor.
+
+    If the signal never happened during the baseline window, there's no rate
+    to divide by - fall back to how many times over the sanity floor the
+    short-window count is, so rare-but-real signals (like laugh) can still
+    fire from a cold baseline instead of being compared against an
+    unreachably small absolute rate.
+    """
+    if short_count < min_absolute:
+        return None
+    baseline_rate = baseline_count / baseline_seconds if baseline_seconds > 0 else 0.0
+    if baseline_rate > 0:
+        current_rate = short_count / SHORT_WINDOW_SECONDS
+        return current_rate / baseline_rate
+    return short_count / min_absolute
+
+
 def record_message(
     channel_slug: str,
     *,
     sender: str,
+    content: str = "",
     emote_count: int = 0,
     is_laugh: bool = False,
     is_emote_mention: bool = False,
@@ -87,7 +116,7 @@ def record_message(
 ) -> Spike | None:
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
-    entries.append((now, sender, emote_count, is_laugh, is_emote_mention))
+    entries.append((now, sender, content.strip().lower(), emote_count, is_laugh, is_emote_mention))
 
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
@@ -102,56 +131,87 @@ def record_message(
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
     short = [e for e in entries if e[0] >= short_cutoff]
+    baseline = [e for e in entries if e[0] < short_cutoff]
+    baseline_seconds = history_seconds - SHORT_WINDOW_SECONDS
 
     short_message_count = len(short)
     short_unique_senders = len({e[1] for e in short})
-    short_emote_count = sum(e[2] for e in short)
-    short_emote_unique_senders = len({e[1] for e in short if e[2] > 0})
-    short_laugh_count = sum(1 for e in short if e[3])
-    short_laugh_unique_senders = len({e[1] for e in short if e[3]})
-    short_mention_count = sum(1 for e in short if e[4])
-    short_mention_unique_senders = len({e[1] for e in short if e[4]})
+    short_unique_contents = len({e[2] for e in short if e[2]})
+    short_emote_count = sum(e[3] for e in short)
+    short_emote_unique_senders = len({e[1] for e in short if e[3] > 0})
+    short_laugh_count = sum(1 for e in short if e[4])
+    short_laugh_unique_senders = len({e[1] for e in short if e[4]})
+    short_mention_count = sum(1 for e in short if e[5])
+    short_mention_unique_senders = len({e[1] for e in short if e[5]})
 
-    baseline_seconds = history_seconds - SHORT_WINDOW_SECONDS
-    baseline_message_count = len(entries) - short_message_count
-    baseline_emote_count = sum(e[2] for e in entries) - short_emote_count
-    baseline_message_rate = baseline_message_count / baseline_seconds
-    baseline_emote_rate = baseline_emote_count / baseline_seconds
+    baseline_message_count = len(baseline)
+    baseline_unique_senders = len({e[1] for e in baseline})
+    baseline_unique_contents = len({e[2] for e in baseline if e[2]})
+    baseline_emote_count = sum(e[3] for e in baseline)
+    baseline_emote_unique_senders = len({e[1] for e in baseline if e[3] > 0})
+    baseline_laugh_count = sum(1 for e in baseline if e[4])
+    baseline_laugh_unique_senders = len({e[1] for e in baseline if e[4]})
+    baseline_mention_count = sum(1 for e in baseline if e[5])
+    baseline_mention_unique_senders = len({e[1] for e in baseline if e[5]})
+
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
-    current_emote_rate = short_emote_count / SHORT_WINDOW_SECONDS
+    baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
 
     reasons = []
     scores = []
 
+    message_ratio = _spike_ratio(short_message_count, baseline_message_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    sender_ratio = _spike_ratio(short_unique_senders, baseline_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
+    content_ratio = _spike_ratio(short_unique_contents, baseline_unique_contents, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
     if (
-        short_message_count >= MIN_SHORT_WINDOW_MESSAGES
-        and short_unique_senders >= MIN_UNIQUE_SENDERS_MESSAGE_RATE
-        and current_message_rate >= baseline_message_rate * MESSAGE_SPIKE_MULTIPLIER
+        message_ratio is not None
+        and message_ratio >= MESSAGE_SPIKE_MULTIPLIER
+        and sender_ratio is not None
+        and sender_ratio >= MESSAGE_UNIQUE_SENDER_MULTIPLIER
+        and content_ratio is not None
+        and content_ratio >= MESSAGE_UNIQUE_CONTENT_MULTIPLIER
     ):
         reasons.append("message_rate")
-        scores.append(current_message_rate / baseline_message_rate if baseline_message_rate > 0 else current_message_rate)
+        scores.append(message_ratio)
 
+    emote_ratio = _spike_ratio(short_emote_count, baseline_emote_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    emote_sender_ratio = _spike_ratio(
+        short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+    )
     if (
-        short_emote_count >= MIN_SHORT_WINDOW_EMOTES
-        and short_emote_unique_senders >= MIN_UNIQUE_SENDERS_EMOTE_RATE
-        and current_emote_rate >= baseline_emote_rate * EMOTE_SPIKE_MULTIPLIER
+        emote_ratio is not None
+        and emote_ratio >= EMOTE_SPIKE_MULTIPLIER
+        and emote_sender_ratio is not None
+        and emote_sender_ratio >= EMOTE_UNIQUE_SENDER_MULTIPLIER
     ):
         reasons.append("emotes")
-        scores.append(current_emote_rate / baseline_emote_rate if baseline_emote_rate > 0 else current_emote_rate)
+        scores.append(emote_ratio)
 
+    laugh_ratio = _spike_ratio(short_laugh_count, baseline_laugh_count, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
+    laugh_sender_ratio = _spike_ratio(
+        short_laugh_unique_senders, baseline_laugh_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+    )
     if (
-        short_laugh_count >= MIN_SHORT_WINDOW_LAUGHS
-        and short_laugh_unique_senders >= MIN_UNIQUE_SENDERS_LAUGH
+        laugh_ratio is not None
+        and laugh_ratio >= LAUGH_MULTIPLIER
+        and laugh_sender_ratio is not None
+        and laugh_sender_ratio >= LAUGH_UNIQUE_SENDER_MULTIPLIER
     ):
         reasons.append("laugh")
-        scores.append(short_laugh_count * LAUGH_SCORE_WEIGHT)
+        scores.append(laugh_ratio * LAUGH_SCORE_WEIGHT)
 
+    mention_ratio = _spike_ratio(short_mention_count, baseline_mention_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    mention_sender_ratio = _spike_ratio(
+        short_mention_unique_senders, baseline_mention_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+    )
     if (
-        short_mention_count >= MIN_SHORT_WINDOW_EMOTE_MENTIONS
-        and short_mention_unique_senders >= MIN_UNIQUE_SENDERS_EMOTE_MENTION
+        mention_ratio is not None
+        and mention_ratio >= EMOTE_MENTION_MULTIPLIER
+        and mention_sender_ratio is not None
+        and mention_sender_ratio >= EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER
     ):
         reasons.append("emote_mention")
-        scores.append(float(short_mention_count))
+        scores.append(mention_ratio)
 
     if not reasons:
         return None
