@@ -6,7 +6,9 @@ interactive one both need their own reference point. Four independent
 signals are tracked this way over a rolling window per channel:
 
 - message_rate: overall message volume spike
-- emotes: native Kick emote spike
+- emotes: a spike in distinct senders using a native Kick emote (not a raw
+  emote-position count - one person stacking several emotes in a message,
+  or repeating one across several messages, still only counts as one)
 - laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
   of a funny moment as chat gets, so it needs a lower multiplier but counts
   for the most in the score (see LAUGH_SCORE_WEIGHT)
@@ -74,7 +76,6 @@ MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 3.0
 
 EMOTE_SPIKE_MULTIPLIER = 3.0
-EMOTE_UNIQUE_SENDER_MULTIPLIER = 3.0
 
 LAUGH_MULTIPLIER = 2.0
 LAUGH_UNIQUE_SENDER_MULTIPLIER = 2.0
@@ -241,18 +242,16 @@ def record_message(
         reasons.append("message_rate")
         scores.append(message_ratio)
 
-    emote_ratio = _spike_ratio(short_emote_count, baseline_emote_count, baseline_seconds, dynamic_min_count)
+    # Judged purely by distinct senders, not raw emote-position count: one
+    # person stacking several emotes in a single message (or spamming the
+    # same one across several messages) is still just one person, and
+    # shouldn't count more than someone who used exactly one.
     emote_sender_ratio = _spike_ratio(
         short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
     )
-    if (
-        emote_ratio is not None
-        and emote_ratio >= EMOTE_SPIKE_MULTIPLIER
-        and emote_sender_ratio is not None
-        and emote_sender_ratio >= EMOTE_UNIQUE_SENDER_MULTIPLIER
-    ):
+    if emote_sender_ratio is not None and emote_sender_ratio >= EMOTE_SPIKE_MULTIPLIER:
         reasons.append("emotes")
-        scores.append(emote_ratio)
+        scores.append(emote_sender_ratio)
 
     laugh_ratio = _spike_ratio(short_laugh_count, baseline_laugh_count, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
     laugh_sender_ratio = _spike_ratio(
