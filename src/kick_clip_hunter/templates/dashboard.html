@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="15">
+<title>Kick Clip Hunter Dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #444; padding-bottom: 0.3rem; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
+  th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid #333; font-size: 0.9rem; }
+  .moment { border: 1px solid #333; border-radius: 6px; padding: 0.8rem 1rem; margin-bottom: 1rem; background: #1a1a1a; }
+  .moment-header { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.9rem; color: #aaa; margin-bottom: 0.5rem; }
+  .moment-header strong { color: #eee; }
+  .reason { color: #7fd; font-weight: bold; }
+  .snippet { margin: 0.5rem 0 0; padding-left: 1rem; border-left: 2px solid #444; font-size: 0.85rem; color: #ccc; }
+  .snippet div { margin: 0.15rem 0; }
+  .snippet .sender { color: #7ad; }
+  .empty { color: #888; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>Kick Clip Hunter Dashboard</h1>
+
+<h2>Watchlist</h2>
+{% if streamers %}
+<table>
+  <tr><th>Channel</th><th>Broadcaster ID</th><th>Added</th></tr>
+  {% for s in streamers %}
+  <tr><td>{{ s.slug }}</td><td>{{ s.broadcaster_user_id }}</td><td>{{ s.added_at_local }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No streamers on the watchlist yet.</p>
+{% endif %}
+
+<h2>Detected moments ({{ moments|length }})</h2>
+{% if moments %}
+  {% for m in moments %}
+  <div class="moment">
+    <div class="moment-header">
+      <span><strong>{{ m.channel_slug }}</strong></span>
+      <span>{{ m.detected_at_local }}</span>
+      <span>stream time: <strong>{{ m.stream_time }}</strong></span>
+      <span class="reason">{{ m.reason }}</span>
+      <span>score: <strong>{{ "%.2f"|format(m.score) }}</strong></span>
+      <span>{{ m.message_count }} msgs ({{ "%.2f"|format(m.current_message_rate) }}/s vs baseline {{ "%.2f"|format(m.baseline_message_rate) }}/s)</span>
+      <span>emotes: {{ m.emote_count }}</span>
+      <span>keyword hits: {{ m.keyword_hits }}</span>
+    </div>
+    {% if m.snippet %}
+    <div class="snippet">
+      {% for msg in m.snippet %}
+      <div><span class="sender">{{ msg.sender_username }}:</span> {{ msg.content }}</div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="snippet empty">No chat messages found in this window.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
+<p class="empty">No moments detected yet.</p>
+{% endif %}
+
+</body>
+</html>
