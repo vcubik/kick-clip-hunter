@@ -43,9 +43,26 @@ COOLDOWN_SECONDS = 60
 # ratio easily but still isn't a real "moment" by volume. These floors make
 # sure there's genuine activity underneath the ratio, not just noise from a
 # tiny baseline.
-MIN_ABSOLUTE_COUNT = 10
+#
+# MIN_ABSOLUTE_COUNT itself isn't fixed - it's a fraction of that channel's
+# own baseline_unique_senders (how many distinct people actually chatted in
+# the last ~5 minutes), clamped to a sane range. A channel where 10 people
+# chat in 5 minutes and one where 300 do need a different bar for what
+# counts as trivially few messages; scaling off Kick's viewer_count was
+# considered and rejected, since bots inflate it and it doesn't reflect who's
+# actually chatting.
+MIN_ABSOLUTE_COUNT_FLOOR = 5
+MIN_ABSOLUTE_COUNT_FRACTION = 0.3
+MIN_ABSOLUTE_COUNT_CEILING = 40
 MIN_ABSOLUTE_LAUGHS = 2
 MIN_ABSOLUTE_UNIQUE = 3
+
+
+def _dynamic_min_count(baseline_unique_senders: int) -> int:
+    return min(
+        MIN_ABSOLUTE_COUNT_CEILING,
+        max(MIN_ABSOLUTE_COUNT_FLOOR, round(baseline_unique_senders * MIN_ABSOLUTE_COUNT_FRACTION)),
+    )
 
 MESSAGE_SPIKE_MULTIPLIER = 3.0
 MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
@@ -162,11 +179,12 @@ def record_message(
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
+    dynamic_min_count = _dynamic_min_count(baseline_unique_senders)
 
     reasons = []
     scores = []
 
-    message_ratio = _spike_ratio(short_message_count, baseline_message_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    message_ratio = _spike_ratio(short_message_count, baseline_message_count, baseline_seconds, dynamic_min_count)
     sender_ratio = _spike_ratio(short_unique_senders, baseline_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
     content_ratio = _spike_ratio(short_unique_contents, baseline_unique_contents, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
     if (
@@ -180,7 +198,7 @@ def record_message(
         reasons.append("message_rate")
         scores.append(message_ratio)
 
-    emote_ratio = _spike_ratio(short_emote_count, baseline_emote_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    emote_ratio = _spike_ratio(short_emote_count, baseline_emote_count, baseline_seconds, dynamic_min_count)
     emote_sender_ratio = _spike_ratio(
         short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
     )
@@ -206,7 +224,7 @@ def record_message(
         reasons.append("laugh")
         scores.append(laugh_ratio * LAUGH_SCORE_WEIGHT)
 
-    mention_ratio = _spike_ratio(short_mention_count, baseline_mention_count, baseline_seconds, MIN_ABSOLUTE_COUNT)
+    mention_ratio = _spike_ratio(short_mention_count, baseline_mention_count, baseline_seconds, dynamic_min_count)
     mention_sender_ratio = _spike_ratio(
         short_mention_unique_senders, baseline_mention_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
     )
