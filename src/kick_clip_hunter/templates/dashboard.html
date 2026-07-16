@@ -8,6 +8,14 @@
     const anyClipPlaying = Array.from(document.querySelectorAll("video")).some(v => !v.paused);
     if (!anyClipPlaying) location.reload();
   }, 15000);
+
+  async function setFeedback(momentId, value, btn) {
+    const newValue = btn.classList.contains("active") ? "" : value;
+    const resp = await fetch(`/moments/${momentId}/feedback?value=${newValue}`, { method: "POST" });
+    if (!resp.ok) return;
+    btn.closest(".feedback").querySelectorAll(".fb-btn").forEach(b => b.classList.remove("active"));
+    if (newValue) btn.classList.add("active");
+  }
 </script>
 <style>
   body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
@@ -23,6 +31,13 @@
   .snippet div { margin: 0.15rem 0; }
   .snippet .sender { color: #7ad; }
   .empty { color: #888; font-style: italic; }
+  .filter-bar { margin-bottom: 1rem; }
+  .filter-bar select { background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.9rem; }
+  .feedback { margin-top: 0.6rem; display: flex; gap: 0.5rem; }
+  .fb-btn { padding: 0.3rem 0.8rem; border-radius: 4px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.85rem; cursor: pointer; }
+  .fb-btn:hover { border-color: #666; }
+  .fb-accept.active { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
+  .fb-reject.active { background: #5c1f1f; border-color: #8b2e2e; color: #fff; }
 </style>
 </head>
 <body>
@@ -41,6 +56,15 @@
 {% endif %}
 
 <h2>Detected moments ({{ moments|length }})</h2>
+<form class="filter-bar" method="get">
+  <label for="channel-filter">Streamer:</label>
+  <select id="channel-filter" name="channel" onchange="this.form.submit()">
+    <option value="" {% if not selected_channel %}selected{% endif %}>All</option>
+    {% for c in channels %}
+    <option value="{{ c }}" {% if c == selected_channel %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+</form>
 {% if moments %}
   {% for m in moments %}
   <div class="moment">
@@ -66,6 +90,10 @@
     {% if m.clip_url %}
     <video class="clip" src="{{ m.clip_url }}" controls preload="none" style="margin-top: 0.6rem; max-width: 100%; border-radius: 4px;"></video>
     {% endif %}
+    <div class="feedback">
+      <button type="button" class="fb-btn fb-accept {% if m.feedback == 'accept' %}active{% endif %}" onclick="setFeedback({{ m.id }}, 'accept', this)">Accept</button>
+      <button type="button" class="fb-btn fb-reject {% if m.feedback == 'reject' %}active{% endif %}" onclick="setFeedback({{ m.id }}, 'reject', this)">Reject</button>
+    </div>
   </div>
   {% endfor %}
 {% else %}

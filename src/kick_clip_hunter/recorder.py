@@ -28,8 +28,14 @@ logger = logging.getLogger("kick_clip_hunter")
 FFMPEG_BIN = "ffmpeg"
 SEGMENT_SECONDS = 10
 BUFFER_RETENTION_SECONDS = 600
-PRE_ROLL_SECONDS = 5
-POST_ROLL_SECONDS = 5
+# Chat reacts to a moment with a lag - the detector's window_start/window_end
+# mark when the *reaction* (message spike) was seen, not when the funny thing
+# actually happened, which is typically a few seconds earlier. So pre-roll is
+# weighted heavier than post-roll: 25 + the 10s detection window + 15 = 50s
+# total, long enough to reliably include the moment itself instead of just
+# its tail end (short clips were cutting the actual moment off).
+PRE_ROLL_SECONDS = 25
+POST_ROLL_SECONDS = 15
 
 RECORDINGS_DIR = Path("data/recordings")
 CLIPS_DIR = Path("data/clips")

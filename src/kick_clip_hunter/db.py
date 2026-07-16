@@ -88,6 +88,10 @@ def get_connection() -> sqlite3.Connection:
     if "clip_path" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN clip_path TEXT")
 
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "feedback" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN feedback TEXT")
+
     return conn
 
 
@@ -122,19 +126,32 @@ def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT slug, broadcaster_user_id, added_at FROM streamers ORDER BY added_at").fetchall()
 
 
-def get_recent_moments(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
+def get_recent_moments(
+    conn: sqlite3.Connection, limit: int = 50, channel_slug: str | None = None
+) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
+    where = "WHERE channel_slug = ?" if channel_slug else ""
+    params = (channel_slug, limit) if channel_slug else (limit,)
     return conn.execute(
-        """
+        f"""
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds, clip_path
+               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, feedback
         FROM moments
+        {where}
         ORDER BY detected_at DESC
         LIMIT ?
         """,
-        (limit,),
+        params,
     ).fetchall()
+
+
+def get_moment_channels(conn: sqlite3.Connection) -> list[str]:
+    """Distinct channels that have at least one moment, for the dashboard filter -
+    covers channels no longer on the watchlist too, so their past moments stay filterable.
+    """
+    conn.row_factory = sqlite3.Row
+    return [row[0] for row in conn.execute("SELECT DISTINCT channel_slug FROM moments ORDER BY channel_slug")]
 
 
 SNIPPET_PADDING_SECONDS = 2
@@ -242,4 +259,9 @@ def insert_moment(
 
 def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path: str) -> None:
     conn.execute("UPDATE moments SET clip_path = ? WHERE id = ?", (clip_path, moment_id))
+    conn.commit()
+
+
+def update_moment_feedback(conn: sqlite3.Connection, moment_id: int, feedback: str | None) -> None:
+    conn.execute("UPDATE moments SET feedback = ? WHERE id = ?", (feedback, moment_id))
     conn.commit()

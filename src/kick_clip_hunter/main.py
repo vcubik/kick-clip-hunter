@@ -17,11 +17,13 @@ from .db import (
     get_channel_keywords,
     get_chat_snippet,
     get_connection,
+    get_moment_channels,
     get_recent_moments,
     get_streamers,
     insert_chat_message,
     insert_moment,
     update_moment_clip_path,
+    update_moment_feedback,
 )
 from .kick_client import get_app_access_token, get_channel_by_slug
 from .kick_stream import StreamUrlError
@@ -135,7 +137,7 @@ async def health():
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+async def dashboard(request: Request, channel: str | None = None):
     conn = get_connection()
     try:
         streamers = [
@@ -147,12 +149,15 @@ async def dashboard(request: Request):
             for row in get_streamers(conn)
         ]
 
+        channels = get_moment_channels(conn)
+
         moments = []
-        for row in get_recent_moments(conn, limit=50):
+        for row in get_recent_moments(conn, limit=50, channel_slug=channel):
             stream_elapsed = row["stream_elapsed_seconds"]
             snippet = get_chat_snippet(conn, row["channel_slug"], row["window_start"], row["window_end"])
             moments.append(
                 {
+                    "id": row["id"],
                     "channel_slug": row["channel_slug"],
                     "detected_at_local": to_local(row["detected_at"]),
                     "stream_time": str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown",
@@ -165,14 +170,30 @@ async def dashboard(request: Request):
                     "keyword_hits": row["keyword_hits"],
                     "snippet": snippet,
                     "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
+                    "feedback": row["feedback"],
                 }
             )
     finally:
         conn.close()
 
     return templates.TemplateResponse(
-        request, "dashboard.html", {"streamers": streamers, "moments": moments}
+        request,
+        "dashboard.html",
+        {"streamers": streamers, "moments": moments, "channels": channels, "selected_channel": channel},
     )
+
+
+@app.post("/moments/{moment_id}/feedback")
+async def set_moment_feedback(moment_id: int, value: str = ""):
+    if value not in ("", "accept", "reject"):
+        raise HTTPException(status_code=400, detail="value must be 'accept', 'reject', or empty to clear")
+
+    conn = get_connection()
+    try:
+        update_moment_feedback(conn, moment_id, value or None)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "feedback": value or None}
 
 
 @app.post("/webhooks/kick")
