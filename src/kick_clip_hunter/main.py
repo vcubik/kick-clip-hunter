@@ -23,7 +23,7 @@ from .db import (
     insert_chat_message,
     insert_moment,
     update_moment_clip_path,
-    update_moment_feedback,
+    update_moment_rating,
 )
 from .kick_client import get_app_access_token, get_channel_by_slug
 from .kick_stream import StreamUrlError
@@ -170,7 +170,7 @@ async def dashboard(request: Request, channel: str | None = None):
                     "keyword_hits": row["keyword_hits"],
                     "snippet": snippet,
                     "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
-                    "feedback": row["feedback"],
+                    "rating": row["rating"],
                 }
             )
     finally:
@@ -183,17 +183,17 @@ async def dashboard(request: Request, channel: str | None = None):
     )
 
 
-@app.post("/moments/{moment_id}/feedback")
-async def set_moment_feedback(moment_id: int, value: str = ""):
-    if value not in ("", "accept", "reject"):
-        raise HTTPException(status_code=400, detail="value must be 'accept', 'reject', or empty to clear")
+@app.post("/moments/{moment_id}/rating")
+async def set_moment_rating(moment_id: int, value: int = 0):
+    if not 0 <= value <= 5:
+        raise HTTPException(status_code=400, detail="value must be 1-5, or 0 to clear")
 
     conn = get_connection()
     try:
-        update_moment_feedback(conn, moment_id, value or None)
+        update_moment_rating(conn, moment_id, value or None)
     finally:
         conn.close()
-    return {"moment_id": moment_id, "feedback": value or None}
+    return {"moment_id": moment_id, "rating": value or None}
 
 
 @app.post("/webhooks/kick")

@@ -88,9 +88,17 @@ def get_connection() -> sqlite3.Connection:
     if "clip_path" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN clip_path TEXT")
 
+    # Started out as a binary accept/reject "feedback" column, replaced before
+    # it ever shipped with a 1-5 "rating" scale (some clips are funny but
+    # unlikely to go viral - that's a real middle ground, not just yes/no).
+    # Renamed in place rather than adding a second column since the old one
+    # never held real data.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
-    if "feedback" not in columns:
-        conn.execute("ALTER TABLE moments ADD COLUMN feedback TEXT")
+    if "rating" not in columns:
+        if "feedback" in columns:
+            conn.execute("ALTER TABLE moments RENAME COLUMN feedback TO rating")
+        else:
+            conn.execute("ALTER TABLE moments ADD COLUMN rating INTEGER")
 
     return conn
 
@@ -136,7 +144,7 @@ def get_recent_moments(
         f"""
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, feedback
+               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating
         FROM moments
         {where}
         ORDER BY detected_at DESC
@@ -262,6 +270,6 @@ def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path:
     conn.commit()
 
 
-def update_moment_feedback(conn: sqlite3.Connection, moment_id: int, feedback: str | None) -> None:
-    conn.execute("UPDATE moments SET feedback = ? WHERE id = ?", (feedback, moment_id))
+def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int | None) -> None:
+    conn.execute("UPDATE moments SET rating = ? WHERE id = ?", (rating, moment_id))
     conn.commit()
