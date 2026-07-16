@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kick-clip-hunter",
+      "runtimeExecutable": "D:\\klipos\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import sys; sys.path.insert(0, 'src'); import uvicorn; uvicorn.run('kick_clip_hunter.main:app', host='0.0.0.0', port=8000)"
+      ],
+      "port": 8000
+    }
+  ]
+}
