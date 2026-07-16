@@ -6,7 +6,9 @@
 <script>
   setInterval(() => {
     const anyClipPlaying = Array.from(document.querySelectorAll("video")).some(v => !v.paused);
-    if (!anyClipPlaying) location.reload();
+    // Don't blow away a note the user is mid-way through typing.
+    const editingNotes = document.activeElement && document.activeElement.classList.contains("notes-input");
+    if (!anyClipPlaying && !editingNotes) location.reload();
   }, 15000);
 
   async function setRating(momentId, value, btn) {
@@ -15,6 +17,18 @@
     if (!resp.ok) return;
     btn.closest(".rating-buttons").querySelectorAll(".rating-btn").forEach(b => b.classList.remove("active"));
     if (newValue) btn.classList.add("active");
+  }
+
+  async function saveNotes(momentId, textarea) {
+    const status = textarea.closest(".notes").querySelector(".notes-status");
+    status.textContent = "saving…";
+    const resp = await fetch(`/moments/${momentId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: textarea.value }),
+    });
+    status.textContent = resp.ok ? "saved ✓" : "save failed";
+    setTimeout(() => { status.textContent = ""; }, 2000);
   }
 </script>
 <style>
@@ -46,6 +60,13 @@
   .rating-btn.active[data-value="4"] { background: #4a7a20; border-color: #6ba832; color: #fff; }
   .rating-btn.active[data-value="5"] { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
   .rating-caption { font-size: 0.75rem; color: #888; margin-top: 0.3rem; }
+  .notes { margin-top: 0.6rem; }
+  .notes-input { width: 100%; box-sizing: border-box; min-height: 3rem; background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.4rem 0.5rem; font: inherit; font-size: 0.85rem; resize: vertical; }
+  .notes-input:focus { border-color: #7ad; outline: none; }
+  .notes-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+  .notes-save { padding: 0.25rem 0.7rem; border-radius: 4px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; }
+  .notes-save:hover { border-color: #666; }
+  .notes-status { font-size: 0.75rem; color: #7d9; }
 </style>
 </head>
 <body>
@@ -114,6 +135,13 @@
         {% endfor %}
       </div>
       <div class="rating-caption">1 = not it at all &middot; 5 = yes, exactly this</div>
+    </div>
+    <div class="notes">
+      <textarea class="notes-input" placeholder="What's good/bad about this moment? (used to tune detector weights)" onblur="saveNotes({{ m.id }}, this)">{{ m.notes }}</textarea>
+      <div class="notes-actions">
+        <button type="button" class="notes-save" onclick="saveNotes({{ m.id }}, this.closest('.notes').querySelector('.notes-input'))">Save note</button>
+        <span class="notes-status"></span>
+      </div>
     </div>
   </div>
   {% endfor %}

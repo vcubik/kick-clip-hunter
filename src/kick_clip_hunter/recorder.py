@@ -31,11 +31,12 @@ BUFFER_RETENTION_SECONDS = 600
 # Chat reacts to a moment with a lag - the detector's window_start/window_end
 # mark when the *reaction* (message spike) was seen, not when the funny thing
 # actually happened, which is typically a few seconds earlier. So pre-roll is
-# weighted heavier than post-roll: 25 + the 10s detection window + 15 = 50s
-# total, long enough to reliably include the moment itself instead of just
-# its tail end (short clips were cutting the actual moment off).
+# weighted heavier than post-roll. Post-roll is generous too, though: the
+# payoff/aftermath of a bit often runs on past the chat spike, and clips were
+# felt to be cut off at the end. 25 + the 10s detection window + 35 = 70s
+# (snapped up to whole 10s buffer segments when the clip is cut).
 PRE_ROLL_SECONDS = 25
-POST_ROLL_SECONDS = 15
+POST_ROLL_SECONDS = 35
 
 RECORDINGS_DIR = Path("data/recordings")
 CLIPS_DIR = Path("data/clips")

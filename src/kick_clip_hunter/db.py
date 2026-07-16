@@ -100,6 +100,13 @@ def get_connection() -> sqlite3.Connection:
         else:
             conn.execute("ALTER TABLE moments ADD COLUMN rating INTEGER")
 
+    # Free-text notes the reviewer writes about what's good/bad in a moment -
+    # the qualitative counterpart to the numeric rating, read back later to
+    # inform detector weight tuning.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "notes" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN notes TEXT")
+
     return conn
 
 
@@ -144,7 +151,7 @@ def get_recent_moments(
         f"""
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating
+               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes
         FROM moments
         {where}
         ORDER BY detected_at DESC
@@ -278,4 +285,9 @@ def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path:
 
 def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int | None) -> None:
     conn.execute("UPDATE moments SET rating = ? WHERE id = ?", (rating, moment_id))
+    conn.commit()
+
+
+def update_moment_notes(conn: sqlite3.Connection, moment_id: int, notes: str | None) -> None:
+    conn.execute("UPDATE moments SET notes = ? WHERE id = ?", (notes, moment_id))
     conn.commit()

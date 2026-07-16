@@ -24,6 +24,7 @@ from .db import (
     insert_chat_message,
     insert_moment,
     update_moment_clip_path,
+    update_moment_notes,
     update_moment_rating,
 )
 from .kick_client import get_app_access_token, get_channel_by_slug
@@ -177,6 +178,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "snippet": snippet,
                     "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
                     "rating": row["rating"],
+                    "notes": row["notes"] or "",
                 }
             )
     finally:
@@ -208,6 +210,19 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     finally:
         conn.close()
     return {"moment_id": moment_id, "rating": value or None}
+
+
+@app.post("/moments/{moment_id}/notes")
+async def set_moment_notes(moment_id: int, request: Request):
+    data = await request.json()
+    notes = (data.get("notes") or "").strip()
+
+    conn = get_connection()
+    try:
+        update_moment_notes(conn, moment_id, notes or None)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "notes": notes or None}
 
 
 @app.post("/webhooks/kick")
