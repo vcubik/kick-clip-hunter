@@ -18,11 +18,13 @@ from .db import (
     get_channel_keywords,
     get_chat_snippet,
     get_connection,
+    get_flag,
     get_moment_channels,
     get_recent_moments,
     get_streamers,
     insert_chat_message,
     insert_moment,
+    set_flag,
     update_moment_clip_path,
     update_moment_notes,
     update_moment_rating,
@@ -50,9 +52,29 @@ def _watchlist_slugs() -> list[str]:
         conn.close()
 
 
+# Runtime on/off switches, toggled from the dashboard and persisted in
+# app_settings so they survive a restart. Held in memory too so the webhook
+# hot path and the recording loop don't hit the DB on every message/tick.
+# Maps the short dashboard name to its stored key.
+SETTING_KEYS = {"chat": "chat_enabled", "recording": "recording_enabled"}
+_flags: dict[str, bool] = {}
+
+
+def _load_flags() -> None:
+    conn = get_connection()
+    try:
+        for key in SETTING_KEYS.values():
+            _flags[key] = get_flag(conn, key, default=True)
+    finally:
+        conn.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(recording_manager.run_forever(_watchlist_slugs))
+    _load_flags()
+    task = asyncio.create_task(
+        recording_manager.run_forever(_watchlist_slugs, lambda: _flags.get("recording_enabled", True))
+    )
     try:
         yield
     finally:
@@ -195,6 +217,8 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "offset": offset,
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
+            "chat_enabled": _flags.get("chat_enabled", True),
+            "recording_enabled": _flags.get("recording_enabled", True),
         },
     )
 
@@ -225,6 +249,23 @@ async def set_moment_notes(moment_id: int, request: Request):
     return {"moment_id": moment_id, "notes": notes or None}
 
 
+@app.post("/settings/{name}")
+async def set_setting(name: str, enabled: int = 1):
+    if name not in SETTING_KEYS:
+        raise HTTPException(status_code=404, detail=f"unknown setting {name!r}")
+    key = SETTING_KEYS[name]
+    value = bool(enabled)
+
+    conn = get_connection()
+    try:
+        set_flag(conn, key, value)
+    finally:
+        conn.close()
+    _flags[key] = value
+    logger.info("setting %s -> %s", key, "on" if value else "off")
+    return {"setting": name, "enabled": value}
+
+
 @app.post("/webhooks/kick")
 async def kick_webhook(
     request: Request,
@@ -244,6 +285,11 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
+        if not _flags.get("chat_enabled", True):
+            # Chat watching paused from the dashboard: drop the message without
+            # storing or running detection, so no new moments pile up.
+            return {"status": "chat watching disabled"}
+
         broadcaster = payload.get("broadcaster", {})
         sender = payload.get("sender", {})
         channel = broadcaster.get("channel_slug", "?")

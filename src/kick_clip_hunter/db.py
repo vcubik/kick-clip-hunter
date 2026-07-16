@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS channel_keywords (
     weight REAL NOT NULL DEFAULT 1.0,
     PRIMARY KEY (broadcaster_user_id, keyword)
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -99,6 +104,23 @@ def get_connection() -> sqlite3.Connection:
             conn.execute("ALTER TABLE moments RENAME COLUMN feedback TO rating")
         else:
             conn.execute("ALTER TABLE moments ADD COLUMN rating INTEGER")
+
+    # The feedback->rating rename kept the old column's TEXT affinity, so
+    # ratings were stored (and compared) as strings - "1" != 1, which silently
+    # broke the dashboard's active-button check after a reload. Rebuild the
+    # column with INTEGER affinity, converting the existing string values. The
+    # UPDATE opens an implicit transaction, so this whole block needs an
+    # explicit commit; the drop-if-exists makes it recover from a half-applied
+    # run rather than tripping over a leftover rating_int column.
+    types = {row[1]: (row[2] or "").upper() for row in conn.execute("PRAGMA table_info(moments)")}
+    if types.get("rating") != "INTEGER":
+        if "rating_int" in types:
+            conn.execute("ALTER TABLE moments DROP COLUMN rating_int")
+        conn.execute("ALTER TABLE moments ADD COLUMN rating_int INTEGER")
+        conn.execute("UPDATE moments SET rating_int = CAST(rating AS INTEGER) WHERE rating IS NOT NULL AND rating != ''")
+        conn.execute("ALTER TABLE moments DROP COLUMN rating")
+        conn.execute("ALTER TABLE moments RENAME COLUMN rating_int TO rating")
+        conn.commit()
 
     # Free-text notes the reviewer writes about what's good/bad in a moment -
     # the qualitative counterpart to the numeric rating, read back later to
@@ -290,4 +312,20 @@ def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int |
 
 def update_moment_notes(conn: sqlite3.Connection, moment_id: int, notes: str | None) -> None:
     conn.execute("UPDATE moments SET notes = ? WHERE id = ?", (notes, moment_id))
+    conn.commit()
+
+
+def get_flag(conn: sqlite3.Connection, key: str, default: bool = True) -> bool:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    return row[0] == "1"
+
+
+def set_flag(conn: sqlite3.Connection, key: str, value: bool) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, "1" if value else "0"),
+    )
     conn.commit()

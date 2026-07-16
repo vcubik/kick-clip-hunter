@@ -48,16 +48,23 @@ def _tick_one(channel_slug: str) -> None:
         logger.info("[%s] stream ended between the is_live check and recording", channel_slug)
 
 
-async def run_forever(get_channel_slugs) -> None:
+async def run_forever(get_channel_slugs, recording_enabled=lambda: True) -> None:
     while True:
-        for slug in get_channel_slugs():
-            try:
-                if await _is_live(slug):
-                    await asyncio.to_thread(_tick_one, slug)
-                elif _get_recorder(slug).is_active:
-                    await asyncio.to_thread(_get_recorder(slug).stop)
-            except Exception:
-                logger.exception("[%s] recording tick failed", slug)
+        if not recording_enabled():
+            # Recording paused from the dashboard: tear down any running
+            # ffmpeg processes and don't touch a browser until it's back on.
+            for recorder in _recorders.values():
+                if recorder.is_active:
+                    await asyncio.to_thread(recorder.stop)
+        else:
+            for slug in get_channel_slugs():
+                try:
+                    if await _is_live(slug):
+                        await asyncio.to_thread(_tick_one, slug)
+                    elif _get_recorder(slug).is_active:
+                        await asyncio.to_thread(_get_recorder(slug).stop)
+                except Exception:
+                    logger.exception("[%s] recording tick failed", slug)
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
 
 
