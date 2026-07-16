@@ -23,6 +23,15 @@ signals are tracked this way over a rolling window per channel:
   than other emotes (see EMOTE_MENTION_LAUGH_WEIGHT / _OTHER_WEIGHT) - both
   for reaching the threshold and for the final score.
 
+Emotes and emote_mention both exclude a third category entirely (weight
+0.0): emote names that signal "dancing/vibing to a song" (catJAM,
+headBang, beeBobble, ...) rather than laughing at something. That pattern
+gets spammed by many distinct senders in near-perfect sync whenever music
+plays, which produces the exact same burst shape the emotes signal is
+looking for - in practice it was the single biggest source of false
+"emotes" moments, so it's excluded outright rather than just downweighted
+(see is_dance_emote_name).
+
 Every signal also requires a baseline-relative spike in *distinct
 senders*, not just raw count - Kick doesn't rate-limit a single account,
 so one person spamming would otherwise look identical to a genuine crowd
@@ -110,7 +119,9 @@ EMOTE_MENTION_OTHER_WEIGHT = 1.0
 # Same idea for native Kick emotes (the [emote:id:name] tokens Kick embeds
 # in message content): a genuinely laugh-related emote (emojiLol,
 # collectibleswideomelaugh, KEKW, ...) counts for more than an unrelated one
-# (asmonSmash, beeBobble, resttD, ...) that just happens to be popular.
+# (asmonSmash, resttD, ...) that just happens to be popular. Dance/music
+# emotes (beeBobble, catJAM, ...) are a third category, excluded entirely -
+# see DANCE_EMOTE_NAME_PATTERNS / _emote_name_weight.
 EMOTE_LAUGH_WEIGHT = 3.5
 EMOTE_OTHER_WEIGHT = 1.0
 
@@ -138,6 +149,30 @@ def is_laugh_emote_name(emote_name: str) -> bool:
     return any(pattern in lowered for pattern in LAUGH_EMOTE_NAME_PATTERNS)
 
 
+# Substrings marking an emote as the "dancing/vibing to music" convention
+# (catJAM, GooseJAM, headBang, beeBobble, EDMusiC, ...) rather than a
+# reaction to something funny. Deliberately narrower than
+# LAUGH_EMOTE_NAME_PATTERNS - each pattern here was picked because it
+# actually showed up spamming chat during a music segment, not as a
+# speculative guess, to keep the false-negative risk (an unrelated emote
+# name that happens to contain "jam") low.
+DANCE_EMOTE_NAME_PATTERNS = ("danc", "bobble", "jam", "headbang", "boogie", "groov", "musi")
+
+
+def is_dance_emote_name(emote_name: str) -> bool:
+    lowered = emote_name.lower()
+    return any(pattern in lowered for pattern in DANCE_EMOTE_NAME_PATTERNS)
+
+
+def _emote_name_weight(emote_name: str) -> float:
+    """Classifies a single emote name as laugh > dance (excluded) > other."""
+    if is_laugh_emote_name(emote_name):
+        return EMOTE_LAUGH_WEIGHT
+    if is_dance_emote_name(emote_name):
+        return 0.0
+    return EMOTE_OTHER_WEIGHT
+
+
 # Kick embeds native emotes as "[emote:12345:emojiLol]" tokens directly in
 # the message content.
 NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:\d+:([^\]]+)\]")
@@ -148,7 +183,7 @@ def classify_native_emotes(content: str) -> float:
     names = NATIVE_EMOTE_TOKEN_PATTERN.findall(content)
     if not names:
         return 0.0
-    return max(EMOTE_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_OTHER_WEIGHT for name in names)
+    return max(_emote_name_weight(name) for name in names)
 
 
 # Real 7TV emote sets include very short names (e.g. "lo", "re", "xd",
@@ -162,12 +197,15 @@ MIN_EMOTE_NAME_LENGTH = 4
 def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     """Maps each 7TV emote name (lowercased, to match classify_message's lookup) to its mention weight.
 
-    Emote names shorter than MIN_EMOTE_NAME_LENGTH are skipped entirely.
+    Emote names shorter than MIN_EMOTE_NAME_LENGTH, and dance/music-hype
+    names (see is_dance_emote_name), are skipped entirely - typing one as
+    plain text is no more a sign of comedy than posting it as a native
+    emote is.
     """
     return {
         name.lower(): EMOTE_MENTION_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_MENTION_OTHER_WEIGHT
         for name in emote_names
-        if len(name) >= MIN_EMOTE_NAME_LENGTH
+        if len(name) >= MIN_EMOTE_NAME_LENGTH and not is_dance_emote_name(name)
     }
 
 
