@@ -84,6 +84,10 @@ def get_connection() -> sqlite3.Connection:
     if "weight" not in columns:
         conn.execute("ALTER TABLE channel_keywords ADD COLUMN weight REAL NOT NULL DEFAULT 1.0")
 
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "clip_path" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN clip_path TEXT")
+
     return conn
 
 
@@ -122,9 +126,9 @@ def get_recent_moments(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite
     conn.row_factory = sqlite3.Row
     return conn.execute(
         """
-        SELECT channel_slug, detected_at, window_start, window_end, reason, score,
+        SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds
+               emote_count, keyword_hits, stream_elapsed_seconds, clip_path
         FROM moments
         ORDER BY detected_at DESC
         LIMIT ?
@@ -208,8 +212,8 @@ def insert_moment(
     emote_count: int,
     keyword_hits: int,
     stream_elapsed_seconds: int | None = None,
-) -> None:
-    conn.execute(
+) -> int:
+    cursor = conn.execute(
         """
         INSERT INTO moments
             (broadcaster_user_id, channel_slug, window_start, window_end, reason, score,
@@ -232,4 +236,10 @@ def insert_moment(
             stream_elapsed_seconds,
         ),
     )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path: str) -> None:
+    conn.execute("UPDATE moments SET clip_path = ? WHERE id = ?", (clip_path, moment_id))
     conn.commit()

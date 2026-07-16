@@ -1,14 +1,17 @@
+import asyncio
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import detector
+from . import detector, recorder, recording_manager
 from .config import load_settings
 from .db import (
     get_channel_keywords,
@@ -18,8 +21,12 @@ from .db import (
     get_streamers,
     insert_chat_message,
     insert_moment,
+    update_moment_clip_path,
 )
 from .kick_client import get_app_access_token, get_channel_by_slug
+from .kick_stream import StreamUrlError
+from .recorder import CLIPS_DIR
+from .recording_manager import RecorderError
 from .timeutil import to_local
 from .webhook_security import get_kick_public_key, verify_signature
 
@@ -30,9 +37,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kick_clip_hunter")
 
-app = FastAPI()
+
+def _watchlist_slugs() -> list[str]:
+    conn = get_connection()
+    try:
+        return [row["slug"] for row in get_streamers(conn)]
+    finally:
+        conn.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(recording_manager.run_forever(_watchlist_slugs))
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 settings = load_settings()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+Path("data/clips").mkdir(parents=True, exist_ok=True)
+app.mount("/clips", StaticFiles(directory="data/clips"), name="clips")
 
 # Channel keyword weights rarely change (only when re-subscribing/refreshing
 # emotes), so we cache them per-process instead of hitting the DB on every
@@ -70,6 +98,37 @@ async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
     return int((datetime.now(timezone.utc) - start_time).total_seconds())
 
 
+async def _create_clip_background(
+    moment_id: int, channel: str, window_start: datetime, window_end: datetime
+) -> None:
+    # The post-roll footage (and the segment covering window_end itself,
+    # which ffmpeg's segment muxer doesn't flush to disk until it rotates to
+    # the next one) doesn't exist yet at the instant a moment is detected -
+    # wait for it to actually be recorded before looking for it, or the clip
+    # comes out truncated right at the exciting part.
+    await asyncio.sleep(recorder.POST_ROLL_SECONDS + recorder.SEGMENT_SECONDS + 2)
+    try:
+        clip_path = await recording_manager.create_clip_for_moment(
+            channel, window_start, window_end, f"moment_{moment_id}.mp4"
+        )
+    except RecorderError:
+        logger.info("[%s] no buffered footage yet for moment %d", channel, moment_id)
+        return
+    except StreamUrlError:
+        logger.info("[%s] moment %d: stream not live, can't fetch fresh URL", channel, moment_id)
+        return
+    except Exception:
+        logger.exception("[%s] clip creation failed for moment %d", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        update_moment_clip_path(conn, moment_id, clip_path.relative_to(CLIPS_DIR).as_posix())
+    finally:
+        conn.close()
+    logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -105,6 +164,7 @@ async def dashboard(request: Request):
                     "emote_count": row["emote_count"],
                     "keyword_hits": row["keyword_hits"],
                     "snippet": snippet,
+                    "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
                 }
             )
     finally:
@@ -178,7 +238,7 @@ async def kick_webhook(
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
                 reason = ",".join(spike.reasons)
                 stream_elapsed = await _stream_elapsed_seconds(channel)
-                insert_moment(
+                moment_id = insert_moment(
                     conn,
                     broadcaster_user_id=broadcaster_user_id,
                     channel_slug=channel,
@@ -192,6 +252,9 @@ async def kick_webhook(
                     emote_count=spike.emote_count,
                     keyword_hits=spike.keyword_hits,
                     stream_elapsed_seconds=stream_elapsed,
+                )
+                asyncio.create_task(
+                    _create_clip_background(moment_id, channel, window_start, window_end)
                 )
                 stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(

@@ -6,9 +6,8 @@ __pycache__/
 venv/
 .env
 
-# DB / local data
-*.db
-*.sqlite3
+# Local data (DB, recordings/clips buffer, browser session/profile)
+/data/
 
 # OS
 .DS_Store
