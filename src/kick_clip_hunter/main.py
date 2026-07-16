@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from . import detector, recorder, recording_manager
 from .config import load_settings
 from .db import (
+    count_moments,
     get_channel_keywords,
     get_chat_snippet,
     get_connection,
@@ -136,8 +137,12 @@ async def health():
     return {"status": "ok"}
 
 
+MOMENTS_PAGE_SIZE = 50
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request, channel: str | None = None):
+async def dashboard(request: Request, channel: str | None = None, offset: int = 0):
+    offset = max(0, offset)
     conn = get_connection()
     try:
         streamers = [
@@ -150,9 +155,10 @@ async def dashboard(request: Request, channel: str | None = None):
         ]
 
         channels = get_moment_channels(conn)
+        total_moments = count_moments(conn, channel_slug=channel)
 
         moments = []
-        for row in get_recent_moments(conn, limit=50, channel_slug=channel):
+        for row in get_recent_moments(conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel):
             stream_elapsed = row["stream_elapsed_seconds"]
             snippet = get_chat_snippet(conn, row["channel_slug"], row["window_start"], row["window_end"])
             moments.append(
@@ -179,7 +185,15 @@ async def dashboard(request: Request, channel: str | None = None):
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"streamers": streamers, "moments": moments, "channels": channels, "selected_channel": channel},
+        {
+            "streamers": streamers,
+            "moments": moments,
+            "channels": channels,
+            "selected_channel": channel,
+            "offset": offset,
+            "page_size": MOMENTS_PAGE_SIZE,
+            "total_moments": total_moments,
+        },
     )
 
 

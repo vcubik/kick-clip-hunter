@@ -135,11 +135,11 @@ def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def get_recent_moments(
-    conn: sqlite3.Connection, limit: int = 50, channel_slug: str | None = None
+    conn: sqlite3.Connection, limit: int = 50, offset: int = 0, channel_slug: str | None = None
 ) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     where = "WHERE channel_slug = ?" if channel_slug else ""
-    params = (channel_slug, limit) if channel_slug else (limit,)
+    params = (channel_slug, limit, offset) if channel_slug else (limit, offset)
     return conn.execute(
         f"""
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
@@ -148,10 +148,16 @@ def get_recent_moments(
         FROM moments
         {where}
         ORDER BY detected_at DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
         params,
     ).fetchall()
+
+
+def count_moments(conn: sqlite3.Connection, channel_slug: str | None = None) -> int:
+    where = "WHERE channel_slug = ?" if channel_slug else ""
+    params = (channel_slug,) if channel_slug else ()
+    return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
 def get_moment_channels(conn: sqlite3.Connection) -> list[str]:
