@@ -91,6 +91,8 @@ Module map (`src/kick_clip_hunter/`):
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
   own internal API under a logged-in account (see "Clip creation")
+- `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU), first
+  step of the moment-judge pipeline in `docs/moment-judge-design.md`
 
 ### Detector design principles (see `detector.py` docstring for the full picture)
 

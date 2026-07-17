@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import detector, recorder, recording_manager
+from . import detector, recorder, recording_manager, transcriber
 from .config import load_settings
 from .db import (
     count_moments,
@@ -29,6 +29,7 @@ from .db import (
     update_moment_clip_path,
     update_moment_notes,
     update_moment_rating,
+    update_moment_transcript,
     update_moment_window_end,
 )
 from .kick_client import (
@@ -210,6 +211,25 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
+    asyncio.create_task(_transcribe_clip_background(moment_id, channel, clip_path))
+
+
+async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
+    # CPU-bound (faster-whisper) - runs off the event loop via to_thread, and
+    # as its own task so a slow transcription never delays the clip being
+    # marked ready on the dashboard.
+    try:
+        transcript = await asyncio.to_thread(transcriber.transcribe_clip, clip_path)
+    except Exception:
+        logger.exception("[%s] transcription failed for moment %d", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        update_moment_transcript(conn, moment_id, transcript)
+    finally:
+        conn.close()
+    logger.info("[%s] transcript saved for moment %d (%d chars)", channel, moment_id, len(transcript))
 
 
 # A detected moment isn't cut into a fixed-length clip right away. Instead it
@@ -330,6 +350,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
                     "rating": row["rating"],
                     "notes": row["notes"] or "",
+                    "transcript": row["transcript"] or "",
                 }
             )
     finally:

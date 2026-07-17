@@ -129,6 +129,13 @@ def get_connection() -> sqlite3.Connection:
     if "notes" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN notes TEXT")
 
+    # Local speech-to-text of the cut clip (see transcriber.py) - filled in
+    # asynchronously after the clip exists, so it's NULL for a while even on
+    # a moment that will eventually have one.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "transcript" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN transcript TEXT")
+
     return conn
 
 
@@ -173,7 +180,8 @@ def get_recent_moments(
         f"""
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes
+               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
+               transcript
         FROM moments
         {where}
         ORDER BY detected_at DESC
@@ -302,6 +310,11 @@ def insert_moment(
 
 def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path: str) -> None:
     conn.execute("UPDATE moments SET clip_path = ? WHERE id = ?", (clip_path, moment_id))
+    conn.commit()
+
+
+def update_moment_transcript(conn: sqlite3.Connection, moment_id: int, transcript: str) -> None:
+    conn.execute("UPDATE moments SET transcript = ? WHERE id = ?", (transcript, moment_id))
     conn.commit()
 
 
