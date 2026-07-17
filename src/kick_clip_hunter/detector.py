@@ -5,9 +5,12 @@ fixed absolute numbers - a "boring" low-traffic stream and a busy,
 interactive one both need their own reference point. Four independent
 signals are tracked this way over a rolling window per channel:
 
-- message_rate: overall message volume spike. A weak signal on its own -
-  chat can get busier for all sorts of mundane reasons, not just funny
-  ones - so it's scored well below laugh/laugh-emote (MESSAGE_RATE_SCORE_WEIGHT)
+- message_rate: overall message volume spike. Too weak to stand on its own -
+  chat gets busier for all sorts of mundane reasons (polls, greetings,
+  arguments, plain spam), and in review a bare message_rate spike was ~94%
+  false positives. It no longer fires a moment by itself: it only contributes
+  (as a small score booster, MESSAGE_RATE_SCORE_WEIGHT) when a laugh/emote
+  signal already fired in the same window.
 - emotes: a spike in distinct senders using a native Kick emote (not a raw
   emote-position count - one person stacking several emotes in a message,
   or repeating one across several messages, still only counts as one)
@@ -84,14 +87,17 @@ def _dynamic_min_count(baseline_unique_senders: int) -> int:
     )
 
 
-MESSAGE_SPIKE_MULTIPLIER = 3.0
-MESSAGE_UNIQUE_SENDER_MULTIPLIER = 3.0
-MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 3.0
-# Chat just getting busier is a weak proxy for "something funny happened" -
-# it can spike for all sorts of mundane reasons (an argument, a strategy
-# discussion). Scored well below laugh/laugh-emote signals, which are direct
-# expressions of finding something funny.
-MESSAGE_RATE_SCORE_WEIGHT = 0.5
+# message_rate never triggers a moment on its own (see record_message), so
+# these thresholds only gate whether it gets folded in as a booster next to a
+# real laugh/emote signal. Kept deliberately high - a busy-chat spike has to
+# be genuinely large to add anything.
+MESSAGE_SPIKE_MULTIPLIER = 4.5
+MESSAGE_UNIQUE_SENDER_MULTIPLIER = 4.0
+MESSAGE_UNIQUE_CONTENT_MULTIPLIER = 4.0
+# Chat just getting busier is a weak proxy for "something funny happened", so
+# even as a booster it contributes only a fraction of a laugh/laugh-emote
+# signal's score.
+MESSAGE_RATE_SCORE_WEIGHT = 0.3
 
 EMOTE_SPIKE_MULTIPLIER = 3.0
 
@@ -129,6 +135,14 @@ EMOTE_OTHER_WEIGHT = 1.0
 # incidental "xd" in 5 minutes) - technically correct, not meaningfully
 # informative as a score. Cap it so scores stay on a sane, comparable scale.
 MAX_RATIO_SCORE = 20.0
+
+# A pure ratio makes a 3-4 message burst off a near-silent baseline score the
+# same 20/20 as a 50-message eruption, which was the "high score, nothing
+# happened" complaint in review. Damp the final score by how much real volume
+# was behind it, reaching full strength around this many messages. This only
+# scales the reported score for ranking/display; it does not change whether a
+# moment fires (that's decided purely by the ratio thresholds above).
+VOLUME_DAMPEN_REFERENCE = 10.0
 
 # Matches the exaggerated "xDDDD" laugh. Word-bounded so it doesn't match
 # inside unrelated words.
@@ -330,19 +344,19 @@ def record_message(
     reasons = []
     scores = []
 
+    # Evaluated up front but held back: message_rate is only folded in below,
+    # and only if a laugh/emote signal also fired (it never stands alone).
     message_ratio = _spike_ratio(short_message_count, baseline_message_count, baseline_seconds, dynamic_min_count)
     sender_ratio = _spike_ratio(short_unique_senders, baseline_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
     content_ratio = _spike_ratio(short_unique_contents, baseline_unique_contents, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
-    if (
+    message_rate_fired = (
         message_ratio is not None
         and message_ratio >= MESSAGE_SPIKE_MULTIPLIER
         and sender_ratio is not None
         and sender_ratio >= MESSAGE_UNIQUE_SENDER_MULTIPLIER
         and content_ratio is not None
         and content_ratio >= MESSAGE_UNIQUE_CONTENT_MULTIPLIER
-    ):
-        reasons.append("message_rate")
-        scores.append(min(message_ratio, MAX_RATIO_SCORE) * MESSAGE_RATE_SCORE_WEIGHT)
+    )
 
     # Judged by distinct senders (one person stacking several emotes in a
     # single message, or spamming the same one across several messages,
@@ -395,13 +409,23 @@ def record_message(
         reasons.append("emote_mention")
         scores.append(min(mention_ratio, MAX_RATIO_SCORE))
 
+    # message_rate rides along only when a real laugh/emote signal already
+    # fired - on its own a volume spike is almost always a false positive.
+    if message_rate_fired and reasons:
+        reasons.insert(0, "message_rate")
+        scores.append(min(message_ratio, MAX_RATIO_SCORE) * MESSAGE_RATE_SCORE_WEIGHT)
+
     if not reasons:
         return None
+
+    # Scale the reported score by how much real volume backed the spike, so a
+    # 3-4 message burst can't present as the same score as a big eruption.
+    volume_factor = min(1.0, short_message_count / VOLUME_DAMPEN_REFERENCE)
 
     _last_moment_at[channel_slug] = now
     return Spike(
         reasons=reasons,
-        score=max(scores),
+        score=max(scores) * volume_factor,
         message_count=short_message_count,
         baseline_message_rate=baseline_message_rate,
         current_message_rate=current_message_rate,
