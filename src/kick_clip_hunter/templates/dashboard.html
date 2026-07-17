@@ -53,6 +53,7 @@
   .snippet { margin: 0.5rem 0 0; padding-left: 1rem; border-left: 2px solid #444; font-size: 0.85rem; color: #ccc; }
   .snippet div { margin: 0.15rem 0; }
   .snippet .sender { color: #7ad; }
+  .snippet-caption { color: #888; font-style: italic; margin-bottom: 0.3rem; }
   .empty { color: #888; font-style: italic; }
   .filter-bar { margin-bottom: 1rem; }
   .filter-bar select { background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.9rem; }
@@ -135,12 +136,13 @@
       <span>stream time: <strong>{{ m.stream_time }}</strong></span>
       <span class="reason">{{ m.reason }}</span>
       <span>score: <strong>{{ "%.2f"|format(m.score) }}</strong></span>
-      <span>{{ m.message_count }} msgs ({{ "%.2f"|format(m.current_message_rate) }}/s vs baseline {{ "%.2f"|format(m.baseline_message_rate) }}/s)</span>
+      <span>{{ m.message_count }} msgs in detection window ({{ "%.2f"|format(m.current_message_rate) }}/s vs baseline {{ "%.2f"|format(m.baseline_message_rate) }}/s)</span>
       <span>emotes: {{ m.emote_count }}</span>
       <span>keyword hits: {{ m.keyword_hits }}</span>
     </div>
     {% if m.snippet %}
     <div class="snippet">
+      <div class="snippet-caption">chat around the moment — wider context than the detection count above (±2s padding, up to 20 msgs)</div>
       {% for msg in m.snippet %}
       <div><span class="sender">{{ msg.sender_username }}:</span> {{ msg.content }}</div>
       {% endfor %}
