@@ -31,7 +31,12 @@ from .db import (
     update_moment_rating,
     update_moment_window_end,
 )
-from .kick_client import get_app_access_token, get_channel_by_slug
+from .kick_client import (
+    get_app_access_token,
+    get_channel_by_slug,
+    get_event_subscriptions,
+    subscribe_chat_messages,
+)
 from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
@@ -71,9 +76,54 @@ def _load_flags() -> None:
         conn.close()
 
 
+async def _ensure_chat_subscriptions() -> None:
+    """Re-subscribe any watchlisted channel that has no chat.message.sent
+    subscription on Kick.
+
+    Kick silently drops event subscriptions to zero every so often with no
+    error - chat just stops arriving for every channel until they're
+    re-subscribed (see CLAUDE.md). Reconciling on every startup makes a
+    restart self-healing instead of needing subscribe.py run by hand. It's
+    check-then-subscribe (only the missing ones) so it never duplicates an
+    existing subscription, and any API failure is logged but never blocks
+    startup.
+    """
+    conn = get_connection()
+    try:
+        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
+    finally:
+        conn.close()
+    if not watch:
+        return
+
+    try:
+        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+        subscribed = {sub.get("broadcaster_user_id") for sub in await get_event_subscriptions(token)}
+    except Exception:
+        logger.exception("could not check chat subscriptions on startup")
+        return
+
+    missing = [(bid, slug) for bid, slug in watch if bid not in subscribed]
+    if not missing:
+        logger.info("chat subscriptions present for all %d watched channels", len(watch))
+        return
+
+    logger.info(
+        "re-subscribing %d channel(s) with no chat subscription: %s",
+        len(missing), ", ".join(slug for _, slug in missing),
+    )
+    for bid, slug in missing:
+        try:
+            await subscribe_chat_messages(bid, token)
+            logger.info("re-subscribed chat for %s", slug)
+        except Exception:
+            logger.exception("failed to re-subscribe chat for %s", slug)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_flags()
+    await _ensure_chat_subscriptions()
     task = asyncio.create_task(
         recording_manager.run_forever(_watchlist_slugs, lambda: _flags.get("recording_enabled", True))
     )

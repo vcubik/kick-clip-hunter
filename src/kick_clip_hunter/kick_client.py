@@ -56,6 +56,16 @@ async def get_channel_by_slug(slug: str, token: str) -> dict:
     return channels[0]
 
 
+async def get_event_subscriptions(token: str) -> list[dict]:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{API_BASE}/events/subscriptions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        return response.json().get("data", [])
+
+
 async def subscribe_chat_messages(broadcaster_user_id: int, token: str) -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.post(
