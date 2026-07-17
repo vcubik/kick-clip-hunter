@@ -18,7 +18,13 @@ from pathlib import Path
 from .config import load_settings
 from .kick_client import get_app_access_token, get_channel_by_slug
 from .kick_stream import StreamUrlError
-from .recorder import ChannelRecorder, RecorderError, extract_clip
+from .recorder import (
+    PRE_ROLL_SECONDS,
+    POST_ROLL_SECONDS,
+    ChannelRecorder,
+    RecorderError,
+    extract_clip,
+)
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -69,10 +75,17 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True) -> None
 
 
 async def create_clip_for_moment(
-    channel_slug: str, window_start: datetime, window_end: datetime, output_name: str
+    channel_slug: str,
+    window_start: datetime,
+    window_end: datetime,
+    output_name: str,
+    post_roll_seconds: int = POST_ROLL_SECONDS,
 ) -> Path:
     recorder = _get_recorder(channel_slug)
-    return await asyncio.to_thread(extract_clip, recorder, window_start, window_end, output_name)
+    return await asyncio.to_thread(
+        extract_clip, recorder, window_start, window_end, output_name,
+        PRE_ROLL_SECONDS, post_roll_seconds,
+    )
 
 
 __all__ = ["run_forever", "create_clip_for_moment", "RecorderError"]

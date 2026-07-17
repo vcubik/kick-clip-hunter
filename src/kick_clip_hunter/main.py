@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from .db import (
     update_moment_clip_path,
     update_moment_notes,
     update_moment_rating,
+    update_moment_window_end,
 )
 from .kick_client import get_app_access_token, get_channel_by_slug
 from .kick_stream import StreamUrlError
@@ -125,17 +127,22 @@ async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
 
 
 async def _create_clip_background(
-    moment_id: int, channel: str, window_start: datetime, window_end: datetime
+    moment_id: int,
+    channel: str,
+    window_start: datetime,
+    window_end: datetime,
+    post_roll_seconds: int = recorder.POST_ROLL_SECONDS,
 ) -> None:
     # The post-roll footage (and the segment covering window_end itself,
     # which ffmpeg's segment muxer doesn't flush to disk until it rotates to
-    # the next one) doesn't exist yet at the instant a moment is detected -
-    # wait for it to actually be recorded before looking for it, or the clip
-    # comes out truncated right at the exciting part.
-    await asyncio.sleep(recorder.POST_ROLL_SECONDS + recorder.SEGMENT_SECONDS + 2)
+    # the next one) doesn't exist yet at the instant a moment closes - wait
+    # for it to actually be recorded before looking for it, or the clip comes
+    # out truncated right at the exciting part.
+    await asyncio.sleep(post_roll_seconds + recorder.SEGMENT_SECONDS + 2)
     try:
         clip_path = await recording_manager.create_clip_for_moment(
-            channel, window_start, window_end, f"moment_{moment_id}.mp4"
+            channel, window_start, window_end, f"moment_{moment_id}.mp4",
+            post_roll_seconds=post_roll_seconds,
         )
     except RecorderError:
         logger.info("[%s] no buffered footage yet for moment %d", channel, moment_id)
@@ -153,6 +160,78 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
+
+
+# A detected moment isn't cut into a fixed-length clip right away. Instead it
+# stays "open" and its end is pushed out for as long as chat keeps reacting
+# (detector.reaction_active), so one clip captures the whole reaction instead
+# of getting chopped off before the payoff - the most common complaint when
+# reviewing clips. The moment closes once the reaction has been quiet for
+# MOMENT_SESSION_QUIET_SECONDS, or after MOMENT_SESSION_MAX_SECONDS as a hard
+# cap, and only then is the clip cut.
+MOMENT_SESSION_POLL_SECONDS = 3
+MOMENT_SESSION_QUIET_SECONDS = 8
+MOMENT_SESSION_MAX_SECONDS = 90
+# The dynamic window already extends over the reaction itself, so the clip
+# needs far less trailing padding than a fixed-window cut would.
+DYNAMIC_POST_ROLL_SECONDS = 10
+
+
+@dataclass
+class _MomentSession:
+    moment_id: int
+    channel: str
+    window_start: datetime
+    trigger_time: datetime
+    window_end: datetime  # pushed out while the reaction continues
+    last_active: datetime  # last time the reaction was still above sustain
+
+
+# One open moment per channel at a time.
+_moment_sessions: dict[str, _MomentSession] = {}
+
+
+def _session_should_close(session: _MomentSession, reaction_is_active: bool, now: datetime) -> bool:
+    """Pure decision for one poll tick: extend the open moment if the reaction
+    is still going, and report whether it's time to close it.
+    """
+    if reaction_is_active:
+        session.last_active = now
+        session.window_end = now
+    if (now - session.trigger_time).total_seconds() >= MOMENT_SESSION_MAX_SECONDS:
+        return True
+    return (now - session.last_active).total_seconds() >= MOMENT_SESSION_QUIET_SECONDS
+
+
+async def _run_moment_session(session: _MomentSession) -> None:
+    try:
+        while True:
+            await asyncio.sleep(MOMENT_SESSION_POLL_SECONDS)
+            now = datetime.now(timezone.utc)
+            if _session_should_close(session, detector.reaction_active(session.channel), now):
+                break
+    finally:
+        # Free the channel as soon as the moment closes (or the task is
+        # cancelled at shutdown) so a fresh reaction can open a new moment
+        # while this one's clip is still being cut.
+        _moment_sessions.pop(session.channel, None)
+
+    conn = get_connection()
+    try:
+        update_moment_window_end(conn, session.moment_id, session.window_end.isoformat())
+    finally:
+        conn.close()
+    logger.info(
+        "[%s] moment %d closed after %.0fs reaction",
+        session.channel, session.moment_id,
+        (session.window_end - session.window_start).total_seconds(),
+    )
+    asyncio.create_task(
+        _create_clip_background(
+            session.moment_id, session.channel, session.window_start, session.window_end,
+            post_roll_seconds=DYNAMIC_POST_ROLL_SECONDS,
+        )
+    )
 
 
 @app.get("/health")
@@ -329,7 +408,12 @@ async def kick_webhook(
                 laugh_weight=laugh_weight,
                 mention_weight=mention_weight,
             )
-            if spike is not None:
+            if spike is not None and channel in _moment_sessions:
+                # A moment is already open for this channel (a re-fire past the
+                # cooldown) - it's the same reaction continuing, so just keep
+                # it alive rather than opening a duplicate.
+                _moment_sessions[channel].last_active = datetime.now(timezone.utc)
+            elif spike is not None:
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
                 reason = ",".join(spike.reasons)
@@ -349,9 +433,18 @@ async def kick_webhook(
                     keyword_hits=spike.keyword_hits,
                     stream_elapsed_seconds=stream_elapsed,
                 )
-                asyncio.create_task(
-                    _create_clip_background(moment_id, channel, window_start, window_end)
+                # Open a moment session: hold it open and extend the clip while
+                # the reaction lasts, then cut one clip covering all of it.
+                session = _MomentSession(
+                    moment_id=moment_id,
+                    channel=channel,
+                    window_start=window_start,
+                    trigger_time=window_end,
+                    window_end=window_end,
+                    last_active=window_end,
                 )
+                _moment_sessions[channel] = session
+                asyncio.create_task(_run_moment_session(session))
                 stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(
                     "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",

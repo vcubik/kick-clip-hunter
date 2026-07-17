@@ -310,6 +310,11 @@ def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int |
     conn.commit()
 
 
+def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_end: str) -> None:
+    conn.execute("UPDATE moments SET window_end = ? WHERE id = ?", (window_end, moment_id))
+    conn.commit()
+
+
 def update_moment_notes(conn: sqlite3.Connection, moment_id: int, notes: str | None) -> None:
     conn.execute("UPDATE moments SET notes = ? WHERE id = ?", (notes, moment_id))
     conn.commit()

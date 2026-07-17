@@ -45,6 +45,12 @@ diversity but low content diversity, and shouldn't count. That guard is
 skipped for emotes/laugh/emote_mention, where many people repeating the
 same emote *is* the genuine pattern.
 
+Detection fires a moment at the first instant a signal crosses threshold,
+but the moment doesn't end there: reaction_active() reports whether the
+reaction is still going (a weaker SUSTAIN_FRACTION bar), which main.py's
+moment session uses to hold the moment open and extend the clip until the
+laughter actually dies down, rather than cutting a fixed length.
+
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
 history-length check below). Multipliers are a first pass, expected to
@@ -59,6 +65,13 @@ from dataclasses import dataclass
 SHORT_WINDOW_SECONDS = 10
 BASELINE_WINDOW_SECONDS = 300
 COOLDOWN_SECONDS = 60
+
+# Once a moment has fired, main.py keeps it "open" and extends the clip while
+# the reaction is still going (see its moment session). "Still going" is a
+# weaker bar than triggering - a laugh/emote signal only has to stay above
+# this fraction of its firing threshold - so the tail of a fading reaction
+# keeps the clip open instead of being cut off mid-laugh.
+SUSTAIN_FRACTION = 0.5
 
 # Absolute floors. The baseline-relative ratio alone isn't enough on a very
 # quiet channel - a jump from 1 message/10s to 3-4 messages/10s clears a 3x
@@ -281,6 +294,43 @@ def _spike_ratio(
         current_rate = short_count / SHORT_WINDOW_SECONDS
         return current_rate / baseline_rate
     return short_count / min_absolute
+
+
+def reaction_active(channel_slug: str, now: float | None = None) -> bool:
+    """Whether the channel's short window still shows a laugh/emote reaction
+    above the (weaker) SUSTAIN_FRACTION bar.
+
+    Read-only: it decides when an already-open moment's reaction has died
+    down, without recording anything, touching the cooldown, or opening a new
+    moment. Uses the same monotonic clock as record_message, so as real time
+    passes with no new messages the short window empties and this goes False.
+    """
+    now = now if now is not None else time.monotonic()
+    entries = _entries.get(channel_slug)
+    if not entries:
+        return False
+
+    short_cutoff = now - SHORT_WINDOW_SECONDS
+    short = [e for e in entries if e[0] >= short_cutoff]
+    if not short:
+        return False
+    baseline = [e for e in entries if e[0] < short_cutoff]
+    baseline_seconds = max(short_cutoff - entries[0][0], 1e-9)
+
+    # (short weight, baseline weight, absolute floor, firing multiplier) for
+    # each reaction signal - emote_weight (e[4]), laugh_weight (e[5]),
+    # mention_weight (e[6]). message_rate is intentionally not a sustain
+    # signal: volume alone shouldn't hold a moment open.
+    signals = (
+        (sum(e[5] for e in short), sum(e[5] for e in baseline), MIN_ABSOLUTE_LAUGHS, LAUGH_MULTIPLIER),
+        (sum(e[4] for e in short), sum(e[4] for e in baseline), MIN_ABSOLUTE_LAUGHS, EMOTE_SPIKE_MULTIPLIER),
+        (sum(e[6] for e in short), sum(e[6] for e in baseline), MIN_ABSOLUTE_LAUGHS, EMOTE_MENTION_MULTIPLIER),
+    )
+    for short_weight, baseline_weight, min_absolute, multiplier in signals:
+        ratio = _spike_ratio(short_weight, baseline_weight, baseline_seconds, min_absolute)
+        if ratio is not None and ratio >= multiplier * SUSTAIN_FRACTION:
+            return True
+    return False
 
 
 def record_message(
