@@ -5,3 +5,4 @@ python-dotenv
 cryptography
 jinja2
 patchright
+faster-whisper
