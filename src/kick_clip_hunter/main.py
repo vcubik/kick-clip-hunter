@@ -15,6 +15,8 @@ from fastapi.templating import Jinja2Templates
 from . import audio_events, detector, frame_encoder, recorder, recording_manager, transcriber
 from .config import load_settings
 from .db import (
+    MOMENT_TYPES,
+    STREAM_TYPES,
     count_moments,
     get_channel_keywords,
     get_chat_snippet,
@@ -31,7 +33,9 @@ from .db import (
     update_moment_frame_embedding,
     update_moment_notes,
     update_moment_rating,
+    update_moment_stream_type,
     update_moment_transcript,
+    update_moment_type,
     update_moment_window_end,
 )
 from .kick_client import (
@@ -394,6 +398,8 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "notes": row["notes"] or "",
                     "transcript": row["transcript"] or "",
                     "audio_events": row["audio_events"] or "",
+                    "stream_type": row["stream_type"],
+                    "moment_type": row["moment_type"],
                 }
             )
     finally:
@@ -412,6 +418,8 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "total_moments": total_moments,
             "chat_enabled": _flags.get("chat_enabled", True),
             "recording_enabled": _flags.get("recording_enabled", True),
+            "stream_types": STREAM_TYPES,
+            "moment_types": MOMENT_TYPES,
         },
     )
 
@@ -427,6 +435,34 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     finally:
         conn.close()
     return {"moment_id": moment_id, "rating": value or None}
+
+
+@app.post("/moments/{moment_id}/stream_type")
+async def set_moment_stream_type(moment_id: int, value: str = ""):
+    valid_values = {v for v, _ in STREAM_TYPES}
+    if value and value not in valid_values:
+        raise HTTPException(status_code=400, detail=f"value must be one of {sorted(valid_values)}, or empty to clear")
+
+    conn = get_connection()
+    try:
+        update_moment_stream_type(conn, moment_id, value or None)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "stream_type": value or None}
+
+
+@app.post("/moments/{moment_id}/moment_type")
+async def set_moment_moment_type(moment_id: int, value: str = ""):
+    valid_values = {v for v, _ in MOMENT_TYPES}
+    if value and value not in valid_values:
+        raise HTTPException(status_code=400, detail=f"value must be one of {sorted(valid_values)}, or empty to clear")
+
+    conn = get_connection()
+    try:
+        update_moment_type(conn, moment_id, value or None)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "moment_type": value or None}
 
 
 @app.post("/moments/{moment_id}/notes")
