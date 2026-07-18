@@ -33,6 +33,7 @@ MOMENT_TYPES = [
     ("music", "Music"),
     ("wholesome", "Wholesome"),
     ("boring", "Boring"),
+    ("awkward", "Awkward"),
     ("other", "Other"),
 ]
 
