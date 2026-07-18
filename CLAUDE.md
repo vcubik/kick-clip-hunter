@@ -115,8 +115,17 @@ Module map (`src/kick_clip_hunter/`):
   transformers, CPU) - 3 uniformly-sampled frames, each kept as its own vector
   (concatenated in the BLOB) rather than averaged into one, so temporal position
   within the clip isn't lost
+- `sound_events.py` — local AudioSet sound-event tags + embedding for a cut clip
+  (PANNs Cnn14, CPU) - broader complement to `audio_events.py`: SenseVoice's ~8-class
+  event vocabulary is a secondary feature of an ASR model and mostly comes back
+  "unknown" on noisy multi-source stream audio (game sound + mic + music at once);
+  PANNs' 527 AudioSet classes are purpose-built for tagging exactly that. On Windows,
+  `panns_inference` downloads its label CSV and model checkpoint via a hardcoded
+  `os.system('wget ...')` call that silently no-ops (no wget binary) - both are
+  pre-downloaded via `urllib` before the library's own logic can run; see the module
+  docstring.
 
-  These three all run as fire-and-forget background tasks right after a clip is saved
+  These four all run as fire-and-forget background tasks right after a clip is saved
   (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
   the `moments` row. None of them judge or score a clip - they're pure local data
   capture for a future learned classifier (detector features + these embeddings/tags,

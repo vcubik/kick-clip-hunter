@@ -1,12 +1,12 @@
-"""Backfill transcript/audio-event tags/frame embedding for any moment that
-has a clip but is missing one or more of them.
+"""Backfill transcript/audio-event tags/frame embedding/sound-event tags for
+any moment that has a clip but is missing one or more of them.
 
 The live pipeline fills these in automatically right after a clip is
 recorded (main.py's _create_clip_background and its transcribe/audio-events/
-frame-encoding siblings), but a manually imported clip (import_clip.py,
-import_clips_dir.py) never goes through that path - it just inserts a
-moment row with clip_path set. This script closes that gap, one moment at a
-time, using the same functions the live pipeline calls.
+frame-encoding/sound-events siblings), but a manually imported clip
+(import_clip.py, import_clips_dir.py) never goes through that path - it
+just inserts a moment row with clip_path set. This script closes that gap,
+one moment at a time, using the same functions the live pipeline calls.
 
 Pure data capture, same as the live pipeline - this doesn't judge or score
 anything, just fills in the same features for manually-imported clips that
@@ -21,12 +21,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kick_clip_hunter import audio_events, frame_encoder, transcriber
+from kick_clip_hunter import audio_events, frame_encoder, sound_events, transcriber
 from kick_clip_hunter.db import (
     get_connection,
     get_moments_missing_taste_data,
     update_moment_audio_events,
     update_moment_frame_embedding,
+    update_moment_sound_embedding,
+    update_moment_sound_events,
     update_moment_transcript,
 )
 from kick_clip_hunter.recorder import CLIPS_DIR
@@ -74,6 +76,17 @@ def main(limit: int | None) -> None:
                         print(f"moment {row['id']}: no frames extracted, skipping")
                 except Exception as e:
                     print(f"moment {row['id']}: frame encoding failed: {e}")
+
+            if row["sound_events"] is None or row["sound_embedding"] is None:
+                try:
+                    tags, embedding = sound_events.tag_sound_events(clip_path)
+                    if row["sound_events"] is None:
+                        update_moment_sound_events(conn, row["id"], tags)
+                    if row["sound_embedding"] is None and embedding:
+                        update_moment_sound_embedding(conn, row["id"], embedding)
+                    print(f"moment {row['id']}: sound events saved: {tags}")
+                except Exception as e:
+                    print(f"moment {row['id']}: sound event tagging failed: {e}")
     finally:
         conn.close()
 
