@@ -35,9 +35,23 @@ logger = logging.getLogger("kick_clip_hunter")
 
 MODEL_ID = "google/siglip2-base-patch16-224"
 FFPROBE_BIN = "ffprobe"
-# Matches the frame count planned for the API judge's "frames mode" in
-# docs/moment-judge-design.md, so the two pipelines stay comparable.
-FRAME_COUNT = 6
+# 3 uniformly-sampled frames (roughly start/middle/end), each kept as its
+# own vector rather than averaged into one - averaging across more frames
+# doesn't add information, it just blurs together whatever happened in each
+# one, which throws away exactly the temporal detail a future classifier
+# might want (e.g. a fail near the end vs. calm throughout).
+FRAME_COUNT = 3
+# Each of the FRAME_COUNT vectors is itself a mean of this many closely-
+# spaced frames - smooths out a single blurry/transitional frame, without
+# reintroducing the earlier problem of averaging across the *whole* clip
+# (each group is a small local window, not spread start-to-end).
+FRAMES_PER_VECTOR = 3
+EMBED_DIM = 768  # SigLIP2 base's pooled-output width; see encode_clip's blob layout
+# Clips include a pre-roll (recorder.PRE_ROLL_SECONDS) before the moment
+# that triggered them - the first several seconds are usually just lead-up,
+# not the interesting part, so sampling starts a bit past the very beginning
+# instead of "wasting" a sample point there.
+SKIP_START_SECONDS = 10
 
 _model = None
 _processor = None
@@ -67,14 +81,21 @@ def _clip_duration_seconds(clip_path: Path) -> float:
 
 
 def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Image]:
-    """Uniformly samples `count` frames across the clip via ffmpeg."""
+    """Uniformly samples `count` frames across the clip via ffmpeg, skipping
+    the first SKIP_START_SECONDS (falls back to sampling the whole clip if
+    it's too short for that to leave anything).
+    """
     duration = _clip_duration_seconds(clip_path)
-    fps = count / duration if duration > 0 else count
+    start = SKIP_START_SECONDS if duration > SKIP_START_SECONDS else 0.0
+    sample_span = duration - start
+    fps = count / sample_span if sample_span > 0 else count
     with tempfile.TemporaryDirectory() as tmp_dir:
         pattern = str(Path(tmp_dir) / "%02d.jpg")
         subprocess.run(
             [
-                FFMPEG_BIN, "-y", "-i", str(clip_path),
+                FFMPEG_BIN, "-y",
+                "-ss", f"{start:.3f}",
+                "-i", str(clip_path),
                 "-vf", f"fps={fps:.6f}",
                 "-frames:v", str(count),
                 pattern,
@@ -89,13 +110,15 @@ def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Ima
 def encode_clip(clip_path: Path) -> bytes:
     """Runs synchronously (CPU-bound) - call via asyncio.to_thread.
 
-    Returns a single float32 embedding (mean-pooled across FRAME_COUNT
-    uniformly-sampled frames, L2-normalized), packed as raw bytes for the
-    moments.frame_embedding BLOB column - or b"" if no frames could be
-    extracted. One vector per clip is a starting point; per-frame storage
-    can replace it later if a classifier wants finer granularity.
+    Returns FRAME_COUNT L2-normalized float32 embeddings, concatenated as
+    raw bytes for the moments.frame_embedding BLOB column - or b"" if no
+    frames could be extracted. Each vector is the mean of FRAMES_PER_VECTOR
+    consecutive sampled frames (a small local window, not the whole clip),
+    so temporal position is still preserved across the FRAME_COUNT groups.
+    There's no separate column for shape: a reader recovers the vector
+    count as len(blob) // (EMBED_DIM * 4) and reshapes to (-1, EMBED_DIM).
     """
-    frames = _extract_frames(clip_path)
+    frames = _extract_frames(clip_path, count=FRAME_COUNT * FRAMES_PER_VECTOR)
     if not frames:
         return b""
     model, processor = _get_model()
@@ -105,6 +128,12 @@ def encode_clip(clip_path: Path) -> bytes:
         # BaseModelOutputWithPooling rather than a bare tensor - the pooled
         # per-image embedding is .pooler_output ([num_frames, hidden_size]).
         features = model.get_image_features(**inputs).pooler_output
-    pooled = features.mean(dim=0)
-    pooled = pooled / pooled.norm()
-    return pooled.numpy().astype(np.float32).tobytes()
+    # Consecutive extracted frames are adjacent in time (ffmpeg's fps filter
+    # samples in order), so reshaping into (FRAME_COUNT, FRAMES_PER_VECTOR,
+    # dim) and averaging the middle axis groups each local window correctly
+    # even when frames.length isn't an exact multiple (partial trailing
+    # group from a short clip - see _extract_frames' -frames:v cap).
+    usable = (features.shape[0] // FRAMES_PER_VECTOR) * FRAMES_PER_VECTOR
+    grouped = features[:usable].reshape(-1, FRAMES_PER_VECTOR, features.shape[-1]).mean(dim=1)
+    normalized = grouped / grouped.norm(dim=-1, keepdim=True)
+    return normalized.numpy().astype(np.float32).tobytes()
