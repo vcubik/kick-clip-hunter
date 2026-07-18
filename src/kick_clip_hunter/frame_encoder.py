@@ -42,6 +42,11 @@ FFPROBE_BIN = "ffprobe"
 # might want (e.g. a fail near the end vs. calm throughout).
 FRAME_COUNT = 3
 EMBED_DIM = 768  # SigLIP2 base's pooled-output width; see encode_clip's blob layout
+# Clips include a pre-roll (recorder.PRE_ROLL_SECONDS) before the moment
+# that triggered them - the first several seconds are usually just lead-up,
+# not the interesting part, so sampling starts a bit past the very beginning
+# instead of "wasting" a sample point there.
+SKIP_START_SECONDS = 10
 
 _model = None
 _processor = None
@@ -71,14 +76,21 @@ def _clip_duration_seconds(clip_path: Path) -> float:
 
 
 def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Image]:
-    """Uniformly samples `count` frames across the clip via ffmpeg."""
+    """Uniformly samples `count` frames across the clip via ffmpeg, skipping
+    the first SKIP_START_SECONDS (falls back to sampling the whole clip if
+    it's too short for that to leave anything).
+    """
     duration = _clip_duration_seconds(clip_path)
-    fps = count / duration if duration > 0 else count
+    start = SKIP_START_SECONDS if duration > SKIP_START_SECONDS else 0.0
+    sample_span = duration - start
+    fps = count / sample_span if sample_span > 0 else count
     with tempfile.TemporaryDirectory() as tmp_dir:
         pattern = str(Path(tmp_dir) / "%02d.jpg")
         subprocess.run(
             [
-                FFMPEG_BIN, "-y", "-i", str(clip_path),
+                FFMPEG_BIN, "-y",
+                "-ss", f"{start:.3f}",
+                "-i", str(clip_path),
                 "-vf", f"fps={fps:.6f}",
                 "-frames:v", str(count),
                 pattern,
