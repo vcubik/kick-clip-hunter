@@ -35,9 +35,13 @@ logger = logging.getLogger("kick_clip_hunter")
 
 MODEL_ID = "google/siglip2-base-patch16-224"
 FFPROBE_BIN = "ffprobe"
-# Matches the frame count planned for the API judge's "frames mode" in
-# docs/moment-judge-design.md, so the two pipelines stay comparable.
-FRAME_COUNT = 6
+# 3 uniformly-sampled frames (roughly start/middle/end), each kept as its
+# own vector rather than averaged into one - averaging across more frames
+# doesn't add information, it just blurs together whatever happened in each
+# one, which throws away exactly the temporal detail a future classifier
+# might want (e.g. a fail near the end vs. calm throughout).
+FRAME_COUNT = 3
+EMBED_DIM = 768  # SigLIP2 base's pooled-output width; see encode_clip's blob layout
 
 _model = None
 _processor = None
@@ -89,11 +93,12 @@ def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Ima
 def encode_clip(clip_path: Path) -> bytes:
     """Runs synchronously (CPU-bound) - call via asyncio.to_thread.
 
-    Returns a single float32 embedding (mean-pooled across FRAME_COUNT
-    uniformly-sampled frames, L2-normalized), packed as raw bytes for the
+    Returns FRAME_COUNT L2-normalized float32 embeddings (one per sampled
+    frame, no pooling), concatenated as raw bytes for the
     moments.frame_embedding BLOB column - or b"" if no frames could be
-    extracted. One vector per clip is a starting point; per-frame storage
-    can replace it later if a classifier wants finer granularity.
+    extracted. There's no separate column for shape: a reader recovers the
+    frame count as len(blob) // (EMBED_DIM * 4) and reshapes to
+    (-1, EMBED_DIM).
     """
     frames = _extract_frames(clip_path)
     if not frames:
@@ -105,6 +110,5 @@ def encode_clip(clip_path: Path) -> bytes:
         # BaseModelOutputWithPooling rather than a bare tensor - the pooled
         # per-image embedding is .pooler_output ([num_frames, hidden_size]).
         features = model.get_image_features(**inputs).pooler_output
-    pooled = features.mean(dim=0)
-    pooled = pooled / pooled.norm()
-    return pooled.numpy().astype(np.float32).tobytes()
+    normalized = features / features.norm(dim=-1, keepdim=True)
+    return normalized.numpy().astype(np.float32).tobytes()

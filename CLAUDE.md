@@ -111,8 +111,10 @@ Module map (`src/kick_clip_hunter/`):
 - `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU)
 - `audio_events.py` — local audio event/emotion tags for a cut clip (SenseVoice via
   funasr, CPU) - language/emotion/non-speech-event tags only, not a second transcript
-- `frame_encoder.py` — local video-frame embedding for a cut clip (SigLIP2 via
-  transformers, CPU) - uniformly-sampled frames, mean-pooled into one vector
+- `frame_encoder.py` — local video-frame embeddings for a cut clip (SigLIP2 via
+  transformers, CPU) - 3 uniformly-sampled frames, each kept as its own vector
+  (concatenated in the BLOB) rather than averaged into one, so temporal position
+  within the clip isn't lost
 
   These three all run as fire-and-forget background tasks right after a clip is saved
   (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
