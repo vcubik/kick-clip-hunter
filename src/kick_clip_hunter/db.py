@@ -11,6 +11,29 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "kick_clip_hunter.db"
 
+# Manual categorization tags set from the dashboard while reviewing a clip -
+# (value, label) pairs so the display text can differ from the stored value
+# without a migration. Free-form TEXT columns, not a DB-level enum, so this
+# list is the only place the vocabulary is enforced (see the /stream_type
+# and /moment_type routes in main.py) - extending it later is just adding a
+# tuple here, no schema change needed.
+STREAM_TYPES = [
+    ("irl", "IRL"),
+    ("gaming", "Gaming"),
+    ("webcam", "Webcam/PC"),
+]
+
+MOMENT_TYPES = [
+    ("funny", "Funny"),
+    ("fail", "Fail"),
+    ("rage", "Rage"),
+    ("good_play", "Good play"),
+    ("hype", "Hype"),
+    ("music", "Music"),
+    ("wholesome", "Wholesome"),
+    ("other", "Other"),
+]
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS streamers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +170,15 @@ def get_connection() -> sqlite3.Connection:
     if "frame_embedding" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN frame_embedding BLOB")
 
+    # Manual categorization tags, set from the dashboard while reviewing a
+    # clip (see STREAM_TYPES/MOMENT_TYPES above) - human-labeled context
+    # distinct from rating (how good) and notes (free text).
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "stream_type" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN stream_type TEXT")
+    if "moment_type" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN moment_type TEXT")
+
     return conn
 
 
@@ -192,7 +224,7 @@ def get_recent_moments(
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
                emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
-               transcript, audio_events
+               transcript, audio_events, stream_type, moment_type
         FROM moments
         {where}
         ORDER BY detected_at DESC
@@ -336,6 +368,16 @@ def update_moment_audio_events(conn: sqlite3.Connection, moment_id: int, audio_e
 
 def update_moment_frame_embedding(conn: sqlite3.Connection, moment_id: int, frame_embedding: bytes) -> None:
     conn.execute("UPDATE moments SET frame_embedding = ? WHERE id = ?", (frame_embedding, moment_id))
+    conn.commit()
+
+
+def update_moment_stream_type(conn: sqlite3.Connection, moment_id: int, stream_type: str | None) -> None:
+    conn.execute("UPDATE moments SET stream_type = ? WHERE id = ?", (stream_type, moment_id))
+    conn.commit()
+
+
+def update_moment_type(conn: sqlite3.Connection, moment_id: int, moment_type: str | None) -> None:
+    conn.execute("UPDATE moments SET moment_type = ? WHERE id = ?", (moment_type, moment_id))
     conn.commit()
 
 
