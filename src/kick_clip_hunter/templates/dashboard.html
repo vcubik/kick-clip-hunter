@@ -161,6 +161,11 @@
     {% elif m.clip_url %}
     <div class="transcript transcript-pending">transcribing…</div>
     {% endif %}
+    {% if m.audio_events %}
+    <div class="transcript"><span class="transcript-label">audio:</span> {{ m.audio_events }}</div>
+    {% elif m.clip_url %}
+    <div class="transcript transcript-pending">detecting audio events…</div>
+    {% endif %}
     <div class="rating">
       <div class="rating-buttons">
         {% for n in range(1, 6) %}
