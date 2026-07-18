@@ -31,6 +31,7 @@ MOMENT_TYPES = [
     ("hype", "Hype"),
     ("music", "Music"),
     ("wholesome", "Wholesome"),
+    ("boring", "Boring"),
     ("other", "Other"),
 ]
 
