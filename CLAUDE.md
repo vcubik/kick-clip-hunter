@@ -55,6 +55,12 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
     can be rated and used as training/reference data. Bypasses live chat detection
     entirely, so it's stored with zeroed-out detector signals (`reason=manual_import`)
     rather than fabricated ones - only the clip file and rating are real.
+  - `import_clips_dir.py <folder> [channel_slug]` — same as `import_clip.py`, but for
+    every video file in a folder at once (`channel_slug` defaults to `unknown`)
+  - `backfill_taste.py [--limit N]` — fills in transcript/audio-event tags/frame
+    embedding for any moment with a clip but missing one or more of them (imports
+    don't go through the live pipeline's background tasks, so they start out missing
+    all three)
 - Dashboard: `GET /dashboard` (auto-refreshes every 15s, skipped while a clip video is
   playing so it doesn't get cut off mid-watch)
 - No automated test suite yet — verification so far has been ad-hoc unit tests written

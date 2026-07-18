@@ -240,6 +240,23 @@ def count_moments(conn: sqlite3.Connection, channel_slug: str | None = None) -> 
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
+def get_moments_missing_taste_data(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Moments with a clip but missing transcript/audio_events/frame_embedding -
+    e.g. imported via import_clip.py/import_clips_dir.py, which don't go
+    through the live pipeline's background tasks. See scripts/backfill_taste.py.
+    """
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT id, channel_slug, clip_path, transcript, audio_events, frame_embedding
+        FROM moments
+        WHERE clip_path IS NOT NULL
+          AND (transcript IS NULL OR audio_events IS NULL OR frame_embedding IS NULL)
+        ORDER BY id
+        """
+    ).fetchall()
+
+
 def get_moment_channels(conn: sqlite3.Connection) -> list[str]:
     """Distinct channels that have at least one moment, for the dashboard filter -
     covers channels no longer on the watchlist too, so their past moments stay filterable.
