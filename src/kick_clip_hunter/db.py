@@ -136,6 +136,17 @@ def get_connection() -> sqlite3.Connection:
     if "transcript" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN transcript TEXT")
 
+    # Local audio event/emotion tags (see audio_events.py) and video frame
+    # embedding (see frame_encoder.py) - same "filled in asynchronously,
+    # NULL until then" story as transcript. Pure data capture for the future
+    # learned-classifier path (docs/moment-judge-design.md); nothing reads
+    # these yet.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "audio_events" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN audio_events TEXT")
+    if "frame_embedding" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN frame_embedding BLOB")
+
     return conn
 
 
@@ -181,7 +192,7 @@ def get_recent_moments(
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
                emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
-               transcript
+               transcript, audio_events
         FROM moments
         {where}
         ORDER BY detected_at DESC
@@ -315,6 +326,16 @@ def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path:
 
 def update_moment_transcript(conn: sqlite3.Connection, moment_id: int, transcript: str) -> None:
     conn.execute("UPDATE moments SET transcript = ? WHERE id = ?", (transcript, moment_id))
+    conn.commit()
+
+
+def update_moment_audio_events(conn: sqlite3.Connection, moment_id: int, audio_events: str) -> None:
+    conn.execute("UPDATE moments SET audio_events = ? WHERE id = ?", (audio_events, moment_id))
+    conn.commit()
+
+
+def update_moment_frame_embedding(conn: sqlite3.Connection, moment_id: int, frame_embedding: bytes) -> None:
+    conn.execute("UPDATE moments SET frame_embedding = ? WHERE id = ?", (frame_embedding, moment_id))
     conn.commit()
 
 

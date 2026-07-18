@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import detector, recorder, recording_manager, transcriber
+from . import audio_events, detector, frame_encoder, recorder, recording_manager, transcriber
 from .config import load_settings
 from .db import (
     count_moments,
@@ -26,7 +26,9 @@ from .db import (
     insert_chat_message,
     insert_moment,
     set_flag,
+    update_moment_audio_events,
     update_moment_clip_path,
+    update_moment_frame_embedding,
     update_moment_notes,
     update_moment_rating,
     update_moment_transcript,
@@ -212,6 +214,8 @@ async def _create_clip_background(
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
     asyncio.create_task(_transcribe_clip_background(moment_id, channel, clip_path))
+    asyncio.create_task(_detect_audio_events_background(moment_id, channel, clip_path))
+    asyncio.create_task(_encode_frames_background(moment_id, channel, clip_path))
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -230,6 +234,44 @@ async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: P
     finally:
         conn.close()
     logger.info("[%s] transcript saved for moment %d (%d chars)", channel, moment_id, len(transcript))
+
+
+async def _detect_audio_events_background(moment_id: int, channel: str, clip_path: Path) -> None:
+    # CPU-bound (SenseVoice via funasr) - same to_thread/own-task treatment
+    # as transcription, and independent of it: one failing never blocks the
+    # other or the clip being marked ready on the dashboard.
+    try:
+        tags = await asyncio.to_thread(audio_events.detect_audio_events, clip_path)
+    except Exception:
+        logger.exception("[%s] audio event detection failed for moment %d", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        update_moment_audio_events(conn, moment_id, tags)
+    finally:
+        conn.close()
+    logger.info("[%s] audio events saved for moment %d: %s", channel, moment_id, tags)
+
+
+async def _encode_frames_background(moment_id: int, channel: str, clip_path: Path) -> None:
+    # CPU-bound (ffmpeg frame extraction + SigLIP2) - same to_thread/own-task
+    # treatment as transcription.
+    try:
+        embedding = await asyncio.to_thread(frame_encoder.encode_clip, clip_path)
+    except Exception:
+        logger.exception("[%s] frame encoding failed for moment %d", channel, moment_id)
+        return
+    if not embedding:
+        logger.info("[%s] no frames extracted for moment %d, skipping", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        update_moment_frame_embedding(conn, moment_id, embedding)
+    finally:
+        conn.close()
+    logger.info("[%s] frame embedding saved for moment %d (%d bytes)", channel, moment_id, len(embedding))
 
 
 # A detected moment isn't cut into a fixed-length clip right away. Instead it
@@ -351,6 +393,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "rating": row["rating"],
                     "notes": row["notes"] or "",
                     "transcript": row["transcript"] or "",
+                    "audio_events": row["audio_events"] or "",
                 }
             )
     finally:

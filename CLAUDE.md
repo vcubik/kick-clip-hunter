@@ -18,7 +18,13 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
 
 ## Setup & running
 
-- Python deps: `pip install -r requirements.txt`
+- Python deps: `pip install -r requirements.txt` - but install a CPU-only
+  PyTorch build first: `pip install torch torchaudio --index-url
+  https://download.pytorch.org/whl/cpu`. `funasr`/`transformers` (audio
+  events, frame embeddings - see below) pull in `torch` as a dependency;
+  without this step first, pip grabs the default CUDA-bundled wheel, which is
+  multiple GB of dead weight on this host's AMD GPU (RX 480 - no practical
+  CUDA/ROCm path on Windows, so everything ML-related here runs on CPU).
 - `ffmpeg` must be a real, full build on PATH (e.g. `winget install Gyan.FFmpeg`) — the
   one Playwright/patchright bundle for their own internal use lacks HTTPS support and
   can't fetch anything
@@ -96,8 +102,19 @@ Module map (`src/kick_clip_hunter/`):
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
   own internal API under a logged-in account (see "Clip creation")
-- `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU), first
-  step of the moment-judge pipeline in `docs/moment-judge-design.md`
+- `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU)
+- `audio_events.py` — local audio event/emotion tags for a cut clip (SenseVoice via
+  funasr, CPU) - language/emotion/non-speech-event tags only, not a second transcript
+- `frame_encoder.py` — local video-frame embedding for a cut clip (SigLIP2 via
+  transformers, CPU) - uniformly-sampled frames, mean-pooled into one vector
+
+  These three all run as fire-and-forget background tasks right after a clip is saved
+  (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
+  the `moments` row. None of them judge or score a clip - they're pure local data
+  capture for a future learned classifier (detector features + these embeddings/tags,
+  no API call at inference), once enough rated moments exist to train one. See the
+  moment-judge design (PR #19, not yet merged) for the fuller picture, including why the
+  actual judging step calls the Claude API instead of running locally.
 
 ### Detector design principles (see `detector.py` docstring for the full picture)
 

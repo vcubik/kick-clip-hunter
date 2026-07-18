@@ -6,3 +6,9 @@ cryptography
 jinja2
 patchright
 faster-whisper
+# funasr/transformers pull in torch as a dependency - install the CPU-only
+# build first (see CLAUDE.md's Setup section) or pip will grab the default
+# CUDA-bundled wheel, which is dead weight on this host's AMD GPU.
+funasr
+transformers
+Pillow
