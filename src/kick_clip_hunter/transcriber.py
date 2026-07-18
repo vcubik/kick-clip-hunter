@@ -17,11 +17,22 @@ task on a 4-core CPU (~5-7x real-time once the model is loaded).
 """
 
 import logging
+import re
 from pathlib import Path
 
 from faster_whisper import WhisperModel
 
 logger = logging.getLogger("kick_clip_hunter")
+
+# Whisper is well known to hallucinate boilerplate subtitle-credit lines
+# ("Titulky vytvořil...", "Přeložil...") on quiet/unclear stretches, for
+# lower-resource languages like Czech where a lot of training data came from
+# amateur-subtitled YouTube videos. Matched per-segment (not the whole
+# transcript) since real speech can surround one hallucinated segment.
+# Extend this list as new hallucinated phrases turn up in real transcripts.
+_HALLUCINATION_RE = re.compile(
+    r"titulky\s+(vytvoř|přelož)|^přelož(il|ila)\b|^titulky\s*[:\-]", re.IGNORECASE
+)
 
 MODEL_SIZE = "large-v3-turbo"
 # Downloaded once (~1.6GB) and cached here rather than in HF's default
@@ -52,10 +63,12 @@ def transcribe_clip(clip_path: Path) -> str:
 
     Returns the clip's speech as a single string, or "" if no speech was
     detected (vad_filter drops silence/music-only stretches rather than
-    hallucinating text over them).
+    hallucinating text over them). Segments matching a known hallucinated
+    boilerplate phrase (see _HALLUCINATION_RE) are dropped individually.
     """
     model = _get_model()
     segments, _info = model.transcribe(
         str(clip_path), language=LANGUAGE, vad_filter=True, beam_size=1
     )
-    return " ".join(segment.text.strip() for segment in segments).strip()
+    texts = (segment.text.strip() for segment in segments)
+    return " ".join(text for text in texts if text and not _HALLUCINATION_RE.search(text)).strip()
