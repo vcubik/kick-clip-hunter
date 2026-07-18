@@ -21,6 +21,7 @@ STREAM_TYPES = [
     ("irl", "IRL"),
     ("gaming", "Gaming"),
     ("webcam", "Webcam/PC"),
+    ("reaction", "Reaction"),
 ]
 
 MOMENT_TYPES = [
