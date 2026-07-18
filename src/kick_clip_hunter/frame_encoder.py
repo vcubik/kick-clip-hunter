@@ -41,6 +41,11 @@ FFPROBE_BIN = "ffprobe"
 # one, which throws away exactly the temporal detail a future classifier
 # might want (e.g. a fail near the end vs. calm throughout).
 FRAME_COUNT = 3
+# Each of the FRAME_COUNT vectors is itself a mean of this many closely-
+# spaced frames - smooths out a single blurry/transitional frame, without
+# reintroducing the earlier problem of averaging across the *whole* clip
+# (each group is a small local window, not spread start-to-end).
+FRAMES_PER_VECTOR = 3
 EMBED_DIM = 768  # SigLIP2 base's pooled-output width; see encode_clip's blob layout
 # Clips include a pre-roll (recorder.PRE_ROLL_SECONDS) before the moment
 # that triggered them - the first several seconds are usually just lead-up,
@@ -105,14 +110,15 @@ def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Ima
 def encode_clip(clip_path: Path) -> bytes:
     """Runs synchronously (CPU-bound) - call via asyncio.to_thread.
 
-    Returns FRAME_COUNT L2-normalized float32 embeddings (one per sampled
-    frame, no pooling), concatenated as raw bytes for the
-    moments.frame_embedding BLOB column - or b"" if no frames could be
-    extracted. There's no separate column for shape: a reader recovers the
-    frame count as len(blob) // (EMBED_DIM * 4) and reshapes to
-    (-1, EMBED_DIM).
+    Returns FRAME_COUNT L2-normalized float32 embeddings, concatenated as
+    raw bytes for the moments.frame_embedding BLOB column - or b"" if no
+    frames could be extracted. Each vector is the mean of FRAMES_PER_VECTOR
+    consecutive sampled frames (a small local window, not the whole clip),
+    so temporal position is still preserved across the FRAME_COUNT groups.
+    There's no separate column for shape: a reader recovers the vector
+    count as len(blob) // (EMBED_DIM * 4) and reshapes to (-1, EMBED_DIM).
     """
-    frames = _extract_frames(clip_path)
+    frames = _extract_frames(clip_path, count=FRAME_COUNT * FRAMES_PER_VECTOR)
     if not frames:
         return b""
     model, processor = _get_model()
@@ -122,5 +128,12 @@ def encode_clip(clip_path: Path) -> bytes:
         # BaseModelOutputWithPooling rather than a bare tensor - the pooled
         # per-image embedding is .pooler_output ([num_frames, hidden_size]).
         features = model.get_image_features(**inputs).pooler_output
-    normalized = features / features.norm(dim=-1, keepdim=True)
+    # Consecutive extracted frames are adjacent in time (ffmpeg's fps filter
+    # samples in order), so reshaping into (FRAME_COUNT, FRAMES_PER_VECTOR,
+    # dim) and averaging the middle axis groups each local window correctly
+    # even when frames.length isn't an exact multiple (partial trailing
+    # group from a short clip - see _extract_frames' -frames:v cap).
+    usable = (features.shape[0] // FRAMES_PER_VECTOR) * FRAMES_PER_VECTOR
+    grouped = features[:usable].reshape(-1, FRAMES_PER_VECTOR, features.shape[-1]).mean(dim=1)
+    normalized = grouped / grouped.norm(dim=-1, keepdim=True)
     return normalized.numpy().astype(np.float32).tobytes()
