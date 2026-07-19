@@ -5,7 +5,10 @@ Each `ChannelRecorder.tick()` call (meant to be driven periodically, e.g.
 every 30s) makes sure an ffmpeg process is copying the channel's live HLS
 stream into timestamped segment files - starting one if there isn't one
 running, or restarting against a freshly fetched URL if the previous
-process died - and prunes segments older than the retention window.
+process died or stalled (see STALL_TIMEOUT_SECONDS - a hung network read
+can leave ffmpeg alive but producing nothing, which plain process-exit
+detection can't catch) - and prunes segments older than the retention
+window.
 
 Segments for one continuous ffmpeg run live under a directory named for that
 run's UTC start time, numbered sequentially (000000.ts, 000001.ts, ...) -
@@ -37,6 +40,14 @@ BUFFER_RETENTION_SECONDS = 600
 # (snapped up to whole 10s buffer segments when the clip is cut).
 PRE_ROLL_SECONDS = 25
 POST_ROLL_SECONDS = 35
+# A stalled network read (e.g. the HLS connection quietly stops delivering
+# data without erroring out) can leave ffmpeg hung indefinitely without it
+# ever exiting - process.poll() alone can't detect this, since it only
+# reports actual termination. If no new segment has landed in this long,
+# the run is presumed stalled and gets restarted anyway. Generous relative
+# to SEGMENT_SECONDS so ordinary jitter (a slow manifest fetch, one missed
+# tick) doesn't trigger a false-positive restart.
+STALL_TIMEOUT_SECONDS = 90
 
 RECORDINGS_DIR = Path("data/recordings")
 CLIPS_DIR = Path("data/clips")
@@ -94,6 +105,18 @@ class ChannelRecorder:
             self._run.process.kill()
         self._run = None
 
+    def _is_stalled(self) -> bool:
+        if self._run is None:
+            return False
+        segments = list(self._run.dir.glob("*.ts"))
+        # No segment yet right after starting isn't stalled - give ffmpeg a
+        # moment to actually connect and write the first one.
+        reference_time = (
+            max(f.stat().st_mtime for f in segments) if segments else self._run.started_at.timestamp()
+        )
+        age = datetime.now(timezone.utc).timestamp() - reference_time
+        return age > STALL_TIMEOUT_SECONDS
+
     def _prune_old_runs(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=BUFFER_RETENTION_SECONDS)
         for run_dir in self._base_dir.iterdir():
@@ -114,10 +137,15 @@ class ChannelRecorder:
         # ffmpeg follows a live HLS source the same way a browser player does
         # (periodically re-fetching the manifest for new segments), so one
         # process keeps working indefinitely on its original URL - no need
-        # to preemptively restart against a fresh one. Only restart if it's
-        # never been started, or has actually died.
-        needs_restart = self._run is None or self._run.process.poll() is not None
+        # to preemptively restart against a fresh one. Restart if it's never
+        # been started, has actually died, or is stalled (see _is_stalled -
+        # a hung read means it's alive but producing nothing).
+        needs_restart = self._run is None or self._run.process.poll() is not None or self._is_stalled()
         if needs_restart:
+            if self._run is not None and self._run.process.poll() is None:
+                logger.warning(
+                    "[%s] recording stalled (no new segment in %ds), restarting", self.channel_slug, STALL_TIMEOUT_SECONDS
+                )
             self._stop_run()
             self._start_run()
         self._prune_old_runs()
