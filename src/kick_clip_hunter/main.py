@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import audio_events, detector, frame_encoder, recorder, recording_manager, transcriber
+from . import audio_events, detector, frame_encoder, recorder, recording_manager, sound_events, transcriber
 from .config import load_settings
 from .db import (
     MOMENT_TYPES,
@@ -33,6 +33,8 @@ from .db import (
     update_moment_frame_embedding,
     update_moment_notes,
     update_moment_rating,
+    update_moment_sound_embedding,
+    update_moment_sound_events,
     update_moment_stream_type,
     update_moment_transcript,
     update_moment_type,
@@ -220,6 +222,7 @@ async def _create_clip_background(
     asyncio.create_task(_transcribe_clip_background(moment_id, channel, clip_path))
     asyncio.create_task(_detect_audio_events_background(moment_id, channel, clip_path))
     asyncio.create_task(_encode_frames_background(moment_id, channel, clip_path))
+    asyncio.create_task(_tag_sound_events_background(moment_id, channel, clip_path))
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -276,6 +279,26 @@ async def _encode_frames_background(moment_id: int, channel: str, clip_path: Pat
     finally:
         conn.close()
     logger.info("[%s] frame embedding saved for moment %d (%d bytes)", channel, moment_id, len(embedding))
+
+
+async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: Path) -> None:
+    # CPU-bound (ffmpeg audio extraction + PANNs) - same to_thread/own-task
+    # treatment as transcription, and independent of audio_events.py's
+    # SenseVoice tagging: one failing never blocks the other.
+    try:
+        tags, embedding = await asyncio.to_thread(sound_events.tag_sound_events, clip_path)
+    except Exception:
+        logger.exception("[%s] sound event tagging failed for moment %d", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        update_moment_sound_events(conn, moment_id, tags)
+        if embedding:
+            update_moment_sound_embedding(conn, moment_id, embedding)
+    finally:
+        conn.close()
+    logger.info("[%s] sound events saved for moment %d: %s", channel, moment_id, tags)
 
 
 # A detected moment isn't cut into a fixed-length clip right away. Instead it

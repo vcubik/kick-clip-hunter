@@ -12,3 +12,4 @@ faster-whisper
 funasr
 transformers
 Pillow
+panns-inference

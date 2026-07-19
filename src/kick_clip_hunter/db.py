@@ -182,6 +182,15 @@ def get_connection() -> sqlite3.Connection:
     if "moment_type" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN moment_type TEXT")
 
+    # Local AudioSet sound-event tags + embedding (see sound_events.py) -
+    # broader complement to audio_events.py's narrow SenseVoice vocabulary.
+    # Same "filled in asynchronously, NULL until then" story as the rest.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "sound_events" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN sound_events TEXT")
+    if "sound_embedding" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN sound_embedding BLOB")
+
     return conn
 
 
@@ -244,17 +253,20 @@ def count_moments(conn: sqlite3.Connection, channel_slug: str | None = None) -> 
 
 
 def get_moments_missing_taste_data(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Moments with a clip but missing transcript/audio_events/frame_embedding -
-    e.g. imported via import_clip.py/import_clips_dir.py, which don't go
-    through the live pipeline's background tasks. See scripts/backfill_taste.py.
+    """Moments with a clip but missing transcript/audio_events/frame_embedding/
+    sound_events/sound_embedding - e.g. imported via import_clip.py/
+    import_clips_dir.py, which don't go through the live pipeline's
+    background tasks. See scripts/backfill_taste.py.
     """
     conn.row_factory = sqlite3.Row
     return conn.execute(
         """
-        SELECT id, channel_slug, clip_path, transcript, audio_events, frame_embedding
+        SELECT id, channel_slug, clip_path, transcript, audio_events, frame_embedding,
+               sound_events, sound_embedding
         FROM moments
         WHERE clip_path IS NOT NULL
-          AND (transcript IS NULL OR audio_events IS NULL OR frame_embedding IS NULL)
+          AND (transcript IS NULL OR audio_events IS NULL OR frame_embedding IS NULL
+               OR sound_events IS NULL OR sound_embedding IS NULL)
         ORDER BY id
         """
     ).fetchall()
@@ -388,6 +400,16 @@ def update_moment_audio_events(conn: sqlite3.Connection, moment_id: int, audio_e
 
 def update_moment_frame_embedding(conn: sqlite3.Connection, moment_id: int, frame_embedding: bytes) -> None:
     conn.execute("UPDATE moments SET frame_embedding = ? WHERE id = ?", (frame_embedding, moment_id))
+    conn.commit()
+
+
+def update_moment_sound_events(conn: sqlite3.Connection, moment_id: int, sound_events: str) -> None:
+    conn.execute("UPDATE moments SET sound_events = ? WHERE id = ?", (sound_events, moment_id))
+    conn.commit()
+
+
+def update_moment_sound_embedding(conn: sqlite3.Connection, moment_id: int, sound_embedding: bytes) -> None:
+    conn.execute("UPDATE moments SET sound_embedding = ? WHERE id = ?", (sound_embedding, moment_id))
     conn.commit()
 
 
