@@ -8,9 +8,10 @@ on the watchlist (see import_clip.py), it's fine for rating/taste-model
 purposes since broadcaster_user_id just falls back to 0.
 
 Reuses import_clip.import_clip() per file - see that script's docstring for
-what an import actually does (bypasses live chat detection, zeroed-out
-detector signals, reason="manual_import"). One DB connection is shared
-across the whole folder rather than reopened per file.
+what an import actually does (moves, not copies, the source file into
+data/clips/; bypasses live chat detection; zeroed-out detector signals,
+reason="manual_import"). One DB connection is shared across the whole
+folder rather than reopened per file.
 
 After importing, run scripts/backfill_taste.py to transcribe + tag + embed
 everything that was just added.

@@ -3,6 +3,9 @@ this pipeline) as a moment, so it can be rated and feed the taste model.
 
 Usage: python scripts/import_clip.py <path-to-mp4> <channel_slug>
 
+The source file is *moved* (not copied) into data/clips/ - it won't exist
+at its original path anymore afterward.
+
 This bypasses live chat detection entirely - there's no real-time chat window
 to measure, so the moment is stored with zeroed-out detector signals
 (reason="manual_import", score=0, etc.) rather than fabricated ones. The taste
@@ -28,10 +31,12 @@ from kick_clip_hunter.recorder import CLIPS_DIR
 
 
 def import_clip(conn: sqlite3.Connection, source: Path, channel_slug: str) -> tuple[int, str]:
-    """Copies `source` into data/clips/<channel_slug>/ and inserts a moment
-    for it. Shared by this script's CLI and import_clips_dir.py - callers
-    manage the connection so a directory import can reuse one across files.
-    Returns (moment_id, clip_path relative to CLIPS_DIR).
+    """Moves `source` into data/clips/<channel_slug>/ and inserts a moment
+    for it - the source file is gone from its original location afterward
+    (shutil.move, not copy2; storage adds up fast, see CLAUDE.md). Shared by
+    this script's CLI and import_clips_dir.py - callers manage the
+    connection so a directory import can reuse one across files. Returns
+    (moment_id, clip_path relative to CLIPS_DIR).
     """
     broadcaster_user_id = 0
     for row in get_streamers(conn):
@@ -43,7 +48,7 @@ def import_clip(conn: sqlite3.Connection, source: Path, channel_slug: str) -> tu
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_name = f"manual_{datetime.now(timezone.utc):%Y%m%dT%H%M%S}_{source.name}"
     dest_path = dest_dir / dest_name
-    shutil.copy2(source, dest_path)
+    shutil.move(source, dest_path)
 
     now = datetime.now(timezone.utc).isoformat()
     moment_id = insert_moment(
