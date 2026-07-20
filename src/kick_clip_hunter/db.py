@@ -236,7 +236,7 @@ def get_recent_moments(
         SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
                message_count, baseline_message_rate, current_message_rate,
                emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
-               transcript, audio_events, stream_type, moment_type
+               transcript, audio_events, sound_events, stream_type, moment_type
         FROM moments
         {where}
         ORDER BY detected_at DESC

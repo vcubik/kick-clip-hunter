@@ -421,6 +421,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "notes": row["notes"] or "",
                     "transcript": row["transcript"] or "",
                     "audio_events": row["audio_events"] or "",
+                    "sound_events": row["sound_events"] or "",
                     "stream_type": row["stream_type"],
                     "moment_type": row["moment_type"],
                 }
