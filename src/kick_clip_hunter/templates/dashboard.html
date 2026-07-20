@@ -182,6 +182,11 @@
     {% elif m.clip_url %}
     <div class="transcript transcript-pending">detecting audio events…</div>
     {% endif %}
+    {% if m.sound_events %}
+    <div class="transcript"><span class="transcript-label">sound:</span> {{ m.sound_events }}</div>
+    {% elif m.clip_url %}
+    <div class="transcript transcript-pending">tagging sound events…</div>
+    {% endif %}
     <div class="tags">
       <div class="tag-group">
         <span class="tag-group-label">stream:</span>
