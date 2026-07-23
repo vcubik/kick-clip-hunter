@@ -19,11 +19,13 @@ elsewhere (detector.py, db.py).
 """
 
 import logging
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .hls_proxy import HlsProxy
 from .kick_stream import get_live_stream_url
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -64,6 +66,8 @@ class _Run:
     started_at: datetime
     dir: Path
     process: subprocess.Popen
+    log_file: object
+    proxy: HlsProxy
 
 
 class ChannelRecorder:
@@ -74,25 +78,28 @@ class ChannelRecorder:
         self._run: _Run | None = None
 
     def _start_run(self) -> None:
-        url = get_live_stream_url(self.channel_slug)
+        master_url = get_live_stream_url(self.channel_slug)
         started_at = datetime.now(timezone.utc)
         run_dir = self._base_dir / started_at.strftime(_TIME_FORMAT)
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        # ffmpeg can't fetch master_url directly - see hls_proxy.py for why.
+        proxy = HlsProxy(master_url)
+        ffmpeg_log = open(run_dir / "ffmpeg.log", "wb")
         process = subprocess.Popen(
             [
                 FFMPEG_BIN, "-y",
-                "-i", url,
+                "-i", proxy.url,
                 "-c", "copy",
                 "-f", "segment",
                 "-segment_time", str(SEGMENT_SECONDS),
                 "-reset_timestamps", "1",
                 str(run_dir / "%06d.ts"),
             ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=ffmpeg_log,
+            stderr=subprocess.STDOUT,
         )
-        self._run = _Run(started_at=started_at, dir=run_dir, process=process)
+        self._run = _Run(started_at=started_at, dir=run_dir, process=process, log_file=ffmpeg_log, proxy=proxy)
         logger.info("[%s] recording started -> %s", self.channel_slug, run_dir)
 
     def _stop_run(self) -> None:
@@ -103,6 +110,8 @@ class ChannelRecorder:
             self._run.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self._run.process.kill()
+        self._run.log_file.close()
+        self._run.proxy.stop()
         self._run = None
 
     def _is_stalled(self) -> bool:
@@ -129,9 +138,14 @@ class ChannelRecorder:
             segment_count = sum(1 for _ in run_dir.glob("*.ts"))
             run_ends = run_started + timedelta(seconds=segment_count * SEGMENT_SECONDS)
             if run_ends < cutoff:
-                for f in run_dir.glob("*.ts"):
-                    f.unlink(missing_ok=True)
-                run_dir.rmdir()
+                try:
+                    shutil.rmtree(run_dir)
+                except OSError:
+                    # A file inside can be transiently locked (e.g. antivirus
+                    # scanning a just-written segment) - skip it and let the
+                    # next tick's prune retry, rather than losing the rest of
+                    # this run's pruning over one stuck directory.
+                    logger.warning("[%s] could not prune old run %s, will retry next tick", self.channel_slug, run_dir)
 
     def tick(self) -> None:
         # ffmpeg follows a live HLS source the same way a browser player does
