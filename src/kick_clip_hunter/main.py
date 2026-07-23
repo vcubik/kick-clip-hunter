@@ -309,7 +309,14 @@ async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: 
 # MOMENT_SESSION_QUIET_SECONDS, or after MOMENT_SESSION_MAX_SECONDS as a hard
 # cap, and only then is the clip cut.
 MOMENT_SESSION_POLL_SECONDS = 3
-MOMENT_SESSION_QUIET_SECONDS = 8
+# 8s was too tight - a normal lull in chat (reading, catching a breath)
+# regularly closed the session early, and a fresh burst soon after opened a
+# brand new moment with its own 25s pre-roll reaching back into the first
+# clip's tail, producing two overlapping clips instead of one continuous
+# one. 20s gives real reactions more room to breathe without merging
+# genuinely separate moments (MOMENT_SESSION_MAX_SECONDS still caps how far
+# any single session can run).
+MOMENT_SESSION_QUIET_SECONDS = 20
 MOMENT_SESSION_MAX_SECONDS = 90
 # The dynamic window already extends over the reaction itself, so the clip
 # needs far less trailing padding than a fixed-window cut would.
