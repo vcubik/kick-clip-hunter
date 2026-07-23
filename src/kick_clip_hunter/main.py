@@ -59,6 +59,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kick_clip_hunter")
 
+# hls_proxy.py polls each live channel's variant playlist via httpx every few
+# seconds (normal HLS reload cadence) - at INFO level httpx logs the full
+# request line per call, and these playlist URLs run thousands of characters,
+# so left alone this drowns out the app's own log within seconds of startup.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def _watchlist_slugs() -> list[str]:
     conn = get_connection()
