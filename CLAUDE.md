@@ -102,6 +102,11 @@ Module map (`src/kick_clip_hunter/`):
 - `templates/dashboard.html` — the dashboard's Jinja2 template
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
+- `hls_proxy.py` — tiny local HTTP server that stands in for the captured HLS URL when
+  handing it to ffmpeg: the URL's signed token is long enough that ffmpeg's own hardcoded
+  ~4096-byte URL limit truncates it (silently corrupting the token, causing a 400) - the
+  proxy fetches the real master/variant playlists itself (`httpx`, no such limit) and
+  hands ffmpeg a short local one instead. See the module docstring for the full story.
 - `recorder.py` — per-channel ffmpeg recording into a rolling segment buffer, plus
   `extract_clip()` to cut a clip from it
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
