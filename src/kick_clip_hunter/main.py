@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -53,6 +54,7 @@ from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .timeutil import to_local
+from .watchlist import add_channel_to_watchlist
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(
@@ -547,6 +549,31 @@ async def set_setting(name: str, enabled: int = 1):
     _flags[key] = value
     logger.info("setting %s -> %s", key, "on" if value else "off")
     return {"setting": name, "enabled": value}
+
+
+@app.post("/channels")
+async def add_channel(slug: str):
+    slug = slug.strip()
+    if not slug:
+        raise HTTPException(status_code=400, detail="slug must not be empty")
+    try:
+        result = await add_channel_to_watchlist(slug)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            # Kick's API returns 400, not an empty result, for an unknown slug.
+            raise HTTPException(status_code=404, detail=f"no such Kick channel: {slug!r}")
+        logger.exception("failed to add %s to the watchlist", slug)
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
+    except Exception:
+        logger.exception("failed to add %s to the watchlist", slug)
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
+    logger.info(
+        "added %s to the watchlist (broadcaster_user_id=%s, %d emote keyword(s))",
+        slug, result["broadcaster_user_id"], result["emote_count"],
+    )
+    return result
 
 
 @app.post("/channels/{slug}/tracking")
