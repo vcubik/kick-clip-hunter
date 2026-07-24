@@ -1,12 +1,14 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,10 +26,13 @@ from .db import (
     get_flag,
     get_moment_channels,
     get_recent_moments,
+    get_streamer_by_slug,
+    get_streamer_tracking_enabled,
     get_streamers,
     insert_chat_message,
     insert_moment,
     set_flag,
+    set_streamer_tracking,
     update_moment_audio_events,
     update_moment_clip_path,
     update_moment_frame_embedding,
@@ -50,6 +55,7 @@ from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .timeutil import to_local
+from .watchlist import add_channel_to_watchlist
 from .webhook_security import get_kick_public_key, verify_signature
 
 logging.basicConfig(
@@ -74,12 +80,57 @@ def _watchlist_slugs() -> list[str]:
         conn.close()
 
 
-# Runtime on/off switches, toggled from the dashboard and persisted in
-# app_settings so they survive a restart. Held in memory too so the webhook
+def _is_channel_tracked(slug: str) -> bool:
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        return bool(row["tracking_enabled"]) if row else False
+    finally:
+        conn.close()
+
+
+# Runtime on/off switch, toggled from the dashboard and persisted in
+# app_settings so it survives a restart. Held in memory too so the webhook
 # hot path and the recording loop don't hit the DB on every message/tick.
-# Maps the short dashboard name to its stored key.
-SETTING_KEYS = {"chat": "chat_enabled", "recording": "recording_enabled"}
+# Chat watching and recording used to be two separate toggles, but neither
+# one is useful without the other (a moment needs both a chat spike and
+# buffered footage to turn into a clip), so they're one switch now. Maps the
+# short dashboard name to its stored key.
+SETTING_KEYS = {"watching": "watching_enabled"}
 _flags: dict[str, bool] = {}
+
+# Graceful shutdown, triggered from the dashboard: stop taking in new chat
+# messages immediately (so no new moment starts once this is set), but keep
+# the recording loop running as normal - an already-open moment session still
+# needs live footage for its post-roll, and the background tasks it eventually
+# spawns (clip cut, transcript, audio/frame/sound tagging) still need to run
+# to completion. _background_tasks tracks all of that chained work; the
+# process only actually exits once it (and any open moment session) is empty.
+_shutdown_requested = False
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+SHUTDOWN_POLL_SECONDS = 5
+
+
+async def _shutdown_when_idle() -> None:
+    while _moment_sessions or _background_tasks:
+        await asyncio.sleep(SHUTDOWN_POLL_SECONDS)
+    logger.info("all in-flight moments finished - stopping recorders and exiting")
+    await recording_manager.stop_all()
+    # A plain process exit (rather than raising/returning) so this actually
+    # ends the app regardless of what else the event loop is doing - signals
+    # aren't a reliable way to ask a Windows process to shut down gracefully,
+    # so this relies on having already stopped every ffmpeg child ourselves
+    # above instead of leaving that to cleanup handlers that may not run.
+    os._exit(0)
 
 
 def _load_flags() -> None:
@@ -140,7 +191,9 @@ async def lifespan(app: FastAPI):
     _load_flags()
     await _ensure_chat_subscriptions()
     task = asyncio.create_task(
-        recording_manager.run_forever(_watchlist_slugs, lambda: _flags.get("recording_enabled", True))
+        recording_manager.run_forever(
+            _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
+        )
     )
     try:
         yield
@@ -225,10 +278,10 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
-    asyncio.create_task(_transcribe_clip_background(moment_id, channel, clip_path))
-    asyncio.create_task(_detect_audio_events_background(moment_id, channel, clip_path))
-    asyncio.create_task(_encode_frames_background(moment_id, channel, clip_path))
-    asyncio.create_task(_tag_sound_events_background(moment_id, channel, clip_path))
+    _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
+    _track_task(_detect_audio_events_background(moment_id, channel, clip_path))
+    _track_task(_encode_frames_background(moment_id, channel, clip_path))
+    _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -378,7 +431,7 @@ async def _run_moment_session(session: _MomentSession) -> None:
         session.channel, session.moment_id,
         (session.window_end - session.window_start).total_seconds(),
     )
-    asyncio.create_task(
+    _track_task(
         _create_clip_background(
             session.moment_id, session.channel, session.window_start, session.window_end,
             post_roll_seconds=DYNAMIC_POST_ROLL_SECONDS,
@@ -404,6 +457,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                 "slug": row["slug"],
                 "broadcaster_user_id": row["broadcaster_user_id"],
                 "added_at_local": to_local(row["added_at"]),
+                "tracking_enabled": bool(row["tracking_enabled"]),
             }
             for row in get_streamers(conn)
         ]
@@ -453,8 +507,9 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "offset": offset,
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
-            "chat_enabled": _flags.get("chat_enabled", True),
-            "recording_enabled": _flags.get("recording_enabled", True),
+            "watching_enabled": _flags.get("watching_enabled", True),
+            "shutdown_requested": _shutdown_requested,
+            "pending_work_count": len(_moment_sessions) + len(_background_tasks),
             "stream_types": STREAM_TYPES,
             "moment_types": MOMENT_TYPES,
         },
@@ -532,6 +587,61 @@ async def set_setting(name: str, enabled: int = 1):
     return {"setting": name, "enabled": value}
 
 
+@app.post("/shutdown")
+async def shutdown():
+    global _shutdown_requested
+    pending = len(_moment_sessions) + len(_background_tasks)
+    if _shutdown_requested:
+        return {"status": "already shutting down", "pending_work_count": pending}
+    _shutdown_requested = True
+    logger.info(
+        "shutdown requested from dashboard - watching stopped, waiting on %d pending item(s) before exiting",
+        pending,
+    )
+    asyncio.create_task(_shutdown_when_idle())
+    return {"status": "shutting down", "pending_work_count": pending}
+
+
+@app.post("/channels")
+async def add_channel(slug: str):
+    slug = slug.strip()
+    if not slug:
+        raise HTTPException(status_code=400, detail="slug must not be empty")
+    try:
+        result = await add_channel_to_watchlist(slug)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            # Kick's API returns 400, not an empty result, for an unknown slug.
+            raise HTTPException(status_code=404, detail=f"no such Kick channel: {slug!r}")
+        logger.exception("failed to add %s to the watchlist", slug)
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
+    except Exception:
+        logger.exception("failed to add %s to the watchlist", slug)
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
+    logger.info(
+        "added %s to the watchlist (broadcaster_user_id=%s, %d emote keyword(s))",
+        slug, result["broadcaster_user_id"], result["emote_count"],
+    )
+    return result
+
+
+@app.post("/channels/{slug}/tracking")
+async def set_channel_tracking(slug: str, enabled: int = 1):
+    value = bool(enabled)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        set_streamer_tracking(conn, row["broadcaster_user_id"], value)
+    finally:
+        conn.close()
+    logger.info("tracking for %s -> %s", slug, "on" if value else "off")
+    return {"slug": slug, "tracking_enabled": value}
+
+
 @app.post("/webhooks/kick")
 async def kick_webhook(
     request: Request,
@@ -551,17 +661,16 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
-        if not _flags.get("chat_enabled", True):
-            # Chat watching paused from the dashboard: drop the message without
-            # storing or running detection, so no new moments pile up.
-            return {"status": "chat watching disabled"}
+        if not _flags.get("watching_enabled", True) or _shutdown_requested:
+            # Watching paused (or a shutdown is in progress) - drop the
+            # message without storing or running detection, so no new
+            # moments pile up.
+            return {"status": "watching disabled"}
 
         broadcaster = payload.get("broadcaster", {})
         sender = payload.get("sender", {})
         channel = broadcaster.get("channel_slug", "?")
         content = payload.get("content", "")
-        logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
-
         broadcaster_user_id = broadcaster["user_id"]
         sender_username = sender.get("username", "")
         emotes = payload.get("emotes", [])
@@ -570,6 +679,12 @@ async def kick_webhook(
 
         conn = get_connection()
         try:
+            if not get_streamer_tracking_enabled(conn, broadcaster_user_id):
+                # Tracking paused for this one channel - same drop as the
+                # global pause, scoped to it.
+                return {"status": "channel tracking disabled"}
+
+            logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
             laugh_weight, mention_weight = detector.classify_message(
                 content, _channel_keywords(conn, broadcaster_user_id)
             )
@@ -631,7 +746,11 @@ async def kick_webhook(
                     last_active=window_end,
                 )
                 _moment_sessions[channel] = session
-                asyncio.create_task(_run_moment_session(session))
+                # Tracked (not just held via _moment_sessions) so there's no
+                # gap between the session closing and its clip-cut task
+                # existing - both would otherwise look "idle" to
+                # _shutdown_when_idle for the moment in between.
+                _track_task(_run_moment_session(session))
                 stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(
                     "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",

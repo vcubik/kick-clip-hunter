@@ -191,6 +191,13 @@ def get_connection() -> sqlite3.Connection:
     if "sound_embedding" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN sound_embedding BLOB")
 
+    # Per-channel pause switch, independent of the global watching toggle -
+    # lets one noisy/offline channel be paused without touching the rest of
+    # the watchlist. Defaults to on so existing rows keep behaving as before.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(streamers)")}
+    if "tracking_enabled" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN tracking_enabled INTEGER NOT NULL DEFAULT 1")
+
     return conn
 
 
@@ -222,7 +229,31 @@ def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> 
 
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
-    return conn.execute("SELECT slug, broadcaster_user_id, added_at FROM streamers ORDER BY added_at").fetchall()
+    return conn.execute(
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled FROM streamers ORDER BY added_at"
+    ).fetchall()
+
+
+def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        "SELECT broadcaster_user_id, tracking_enabled FROM streamers WHERE slug = ?", (slug,)
+    ).fetchone()
+
+
+def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id: int) -> bool:
+    row = conn.execute(
+        "SELECT tracking_enabled FROM streamers WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
+    ).fetchone()
+    return bool(row[0]) if row else True
+
+
+def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+    conn.execute(
+        "UPDATE streamers SET tracking_enabled = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, broadcaster_user_id),
+    )
+    conn.commit()
 
 
 def get_recent_moments(

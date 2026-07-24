@@ -47,6 +47,39 @@
     btn.classList.toggle("on", enabled === 1);
     btn.querySelector(".toggle-state").textContent = enabled ? "ON" : "OFF";
   }
+
+  async function toggleChannelTracking(slug, btn) {
+    const enabled = btn.dataset.enabled === "1" ? 0 : 1;
+    const resp = await fetch(`/channels/${encodeURIComponent(slug)}/tracking?enabled=${enabled}`, { method: "POST" });
+    if (!resp.ok) return;
+    btn.dataset.enabled = String(enabled);
+    btn.classList.toggle("on", enabled === 1);
+    btn.querySelector(".toggle-state").textContent = enabled ? "ON" : "OFF";
+  }
+
+  async function requestShutdown(btn) {
+    if (!confirm("Stop watching and shut down once any in-flight moment finishes?")) return;
+    btn.disabled = true;
+    btn.textContent = "Shutting down…";
+    await fetch("/shutdown", { method: "POST" });
+    location.reload();
+  }
+
+  async function addChannel(event) {
+    event.preventDefault();
+    const input = document.getElementById("add-channel-slug");
+    const status = document.getElementById("add-channel-status");
+    const slug = input.value.trim();
+    if (!slug) return;
+    status.textContent = "adding…";
+    const resp = await fetch(`/channels?slug=${encodeURIComponent(slug)}`, { method: "POST" });
+    if (resp.ok) {
+      location.reload();
+      return;
+    }
+    const body = await resp.json().catch(() => ({}));
+    status.textContent = body.detail || "failed to add channel";
+  }
 </script>
 <style>
   body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
@@ -101,31 +134,61 @@
   .toggle:hover { border-color: #a05555; }
   .toggle.on { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
   .toggle .toggle-state { font-weight: bold; }
+  .toggle.small { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+  .add-channel { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.5rem; }
+  .add-channel input { background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.9rem; }
+  .add-channel button { padding: 0.35rem 0.8rem; border-radius: 4px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.9rem; cursor: pointer; }
+  .add-channel button:hover { border-color: #666; }
+  .add-channel-status { font-size: 0.8rem; color: #e2a5a5; }
+  .shutdown-btn { padding: 0.4rem 0.9rem; border-radius: 999px; border: 1px solid #555; background: #222; color: #ccc; font-size: 0.9rem; cursor: pointer; }
+  .shutdown-btn:hover { border-color: #888; }
+  .shutdown-banner { padding: 0.6rem 1rem; margin-bottom: 1rem; border-radius: 6px; border: 1px solid #7a3a3a; background: #2a1c1c; color: #e2a5a5; font-size: 0.9rem; }
 </style>
 </head>
 <body>
 <h1>Kick Clip Hunter Dashboard</h1>
 
+{% if shutdown_requested %}
+<div class="shutdown-banner">
+  Shutting down - waiting for {{ pending_work_count }} in-flight item(s) to finish (clips, transcripts, tagging)...
+</div>
+{% endif %}
+
 <div class="toggles">
-  <button type="button" class="toggle {% if chat_enabled %}on{% endif %}" data-enabled="{{ 1 if chat_enabled else 0 }}" onclick="toggleSetting('chat', this)">
-    Chat watching: <span class="toggle-state">{{ 'ON' if chat_enabled else 'OFF' }}</span>
+  <button type="button" class="toggle {% if watching_enabled %}on{% endif %}" data-enabled="{{ 1 if watching_enabled else 0 }}" onclick="toggleSetting('watching', this)" {% if shutdown_requested %}disabled{% endif %}>
+    Watching: <span class="toggle-state">{{ 'ON' if watching_enabled else 'OFF' }}</span>
   </button>
-  <button type="button" class="toggle {% if recording_enabled %}on{% endif %}" data-enabled="{{ 1 if recording_enabled else 0 }}" onclick="toggleSetting('recording', this)">
-    Recording: <span class="toggle-state">{{ 'ON' if recording_enabled else 'OFF' }}</span>
+  <button type="button" class="shutdown-btn" onclick="requestShutdown(this)" {% if shutdown_requested %}disabled{% endif %}>
+    {% if shutdown_requested %}Shutting down…{% else %}Shut down app{% endif %}
   </button>
 </div>
 
 <h2>Watchlist</h2>
 {% if streamers %}
 <table>
-  <tr><th>Channel</th><th>Broadcaster ID</th><th>Added</th></tr>
+  <tr><th>Channel</th><th>Broadcaster ID</th><th>Added</th><th>Tracking</th></tr>
   {% for s in streamers %}
-  <tr><td>{{ s.slug }}</td><td>{{ s.broadcaster_user_id }}</td><td>{{ s.added_at_local }}</td></tr>
+  <tr>
+    <td>{{ s.slug }}</td>
+    <td>{{ s.broadcaster_user_id }}</td>
+    <td>{{ s.added_at_local }}</td>
+    <td>
+      <button type="button" class="toggle small {% if s.tracking_enabled %}on{% endif %}" data-enabled="{{ 1 if s.tracking_enabled else 0 }}" onclick="toggleChannelTracking('{{ s.slug }}', this)">
+        <span class="toggle-state">{{ 'ON' if s.tracking_enabled else 'OFF' }}</span>
+      </button>
+    </td>
+  </tr>
   {% endfor %}
 </table>
 {% else %}
 <p class="empty">No streamers on the watchlist yet.</p>
 {% endif %}
+
+<form class="add-channel" onsubmit="addChannel(event)">
+  <input type="text" id="add-channel-slug" placeholder="Kick channel slug" autocomplete="off">
+  <button type="submit">Add to watchlist</button>
+  <span id="add-channel-status" class="add-channel-status"></span>
+</form>
 
 <h2>Detected moments ({{ total_moments }})</h2>
 <form class="filter-bar" method="get">
