@@ -24,10 +24,13 @@ from .db import (
     get_flag,
     get_moment_channels,
     get_recent_moments,
+    get_streamer_by_slug,
+    get_streamer_tracking_enabled,
     get_streamers,
     insert_chat_message,
     insert_moment,
     set_flag,
+    set_streamer_tracking,
     update_moment_audio_events,
     update_moment_clip_path,
     update_moment_frame_embedding,
@@ -74,11 +77,23 @@ def _watchlist_slugs() -> list[str]:
         conn.close()
 
 
-# Runtime on/off switches, toggled from the dashboard and persisted in
-# app_settings so they survive a restart. Held in memory too so the webhook
+def _is_channel_tracked(slug: str) -> bool:
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        return bool(row["tracking_enabled"]) if row else False
+    finally:
+        conn.close()
+
+
+# Runtime on/off switch, toggled from the dashboard and persisted in
+# app_settings so it survives a restart. Held in memory too so the webhook
 # hot path and the recording loop don't hit the DB on every message/tick.
-# Maps the short dashboard name to its stored key.
-SETTING_KEYS = {"chat": "chat_enabled", "recording": "recording_enabled"}
+# Chat watching and recording used to be two separate toggles, but neither
+# one is useful without the other (a moment needs both a chat spike and
+# buffered footage to turn into a clip), so they're one switch now. Maps the
+# short dashboard name to its stored key.
+SETTING_KEYS = {"watching": "watching_enabled"}
 _flags: dict[str, bool] = {}
 
 
@@ -140,7 +155,9 @@ async def lifespan(app: FastAPI):
     _load_flags()
     await _ensure_chat_subscriptions()
     task = asyncio.create_task(
-        recording_manager.run_forever(_watchlist_slugs, lambda: _flags.get("recording_enabled", True))
+        recording_manager.run_forever(
+            _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
+        )
     )
     try:
         yield
@@ -404,6 +421,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                 "slug": row["slug"],
                 "broadcaster_user_id": row["broadcaster_user_id"],
                 "added_at_local": to_local(row["added_at"]),
+                "tracking_enabled": bool(row["tracking_enabled"]),
             }
             for row in get_streamers(conn)
         ]
@@ -453,8 +471,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "offset": offset,
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
-            "chat_enabled": _flags.get("chat_enabled", True),
-            "recording_enabled": _flags.get("recording_enabled", True),
+            "watching_enabled": _flags.get("watching_enabled", True),
             "stream_types": STREAM_TYPES,
             "moment_types": MOMENT_TYPES,
         },
@@ -532,6 +549,21 @@ async def set_setting(name: str, enabled: int = 1):
     return {"setting": name, "enabled": value}
 
 
+@app.post("/channels/{slug}/tracking")
+async def set_channel_tracking(slug: str, enabled: int = 1):
+    value = bool(enabled)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        set_streamer_tracking(conn, row["broadcaster_user_id"], value)
+    finally:
+        conn.close()
+    logger.info("tracking for %s -> %s", slug, "on" if value else "off")
+    return {"slug": slug, "tracking_enabled": value}
+
+
 @app.post("/webhooks/kick")
 async def kick_webhook(
     request: Request,
@@ -551,17 +583,15 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
-        if not _flags.get("chat_enabled", True):
-            # Chat watching paused from the dashboard: drop the message without
+        if not _flags.get("watching_enabled", True):
+            # Watching paused from the dashboard: drop the message without
             # storing or running detection, so no new moments pile up.
-            return {"status": "chat watching disabled"}
+            return {"status": "watching disabled"}
 
         broadcaster = payload.get("broadcaster", {})
         sender = payload.get("sender", {})
         channel = broadcaster.get("channel_slug", "?")
         content = payload.get("content", "")
-        logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
-
         broadcaster_user_id = broadcaster["user_id"]
         sender_username = sender.get("username", "")
         emotes = payload.get("emotes", [])
@@ -570,6 +600,12 @@ async def kick_webhook(
 
         conn = get_connection()
         try:
+            if not get_streamer_tracking_enabled(conn, broadcaster_user_id):
+                # Tracking paused for this one channel - same drop as the
+                # global pause, scoped to it.
+                return {"status": "channel tracking disabled"}
+
+            logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
             laugh_weight, mention_weight = detector.classify_message(
                 content, _channel_keywords(conn, broadcaster_user_id)
             )

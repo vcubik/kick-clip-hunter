@@ -47,6 +47,15 @@
     btn.classList.toggle("on", enabled === 1);
     btn.querySelector(".toggle-state").textContent = enabled ? "ON" : "OFF";
   }
+
+  async function toggleChannelTracking(slug, btn) {
+    const enabled = btn.dataset.enabled === "1" ? 0 : 1;
+    const resp = await fetch(`/channels/${encodeURIComponent(slug)}/tracking?enabled=${enabled}`, { method: "POST" });
+    if (!resp.ok) return;
+    btn.dataset.enabled = String(enabled);
+    btn.classList.toggle("on", enabled === 1);
+    btn.querySelector(".toggle-state").textContent = enabled ? "ON" : "OFF";
+  }
 </script>
 <style>
   body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
@@ -101,26 +110,33 @@
   .toggle:hover { border-color: #a05555; }
   .toggle.on { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
   .toggle .toggle-state { font-weight: bold; }
+  .toggle.small { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
 </style>
 </head>
 <body>
 <h1>Kick Clip Hunter Dashboard</h1>
 
 <div class="toggles">
-  <button type="button" class="toggle {% if chat_enabled %}on{% endif %}" data-enabled="{{ 1 if chat_enabled else 0 }}" onclick="toggleSetting('chat', this)">
-    Chat watching: <span class="toggle-state">{{ 'ON' if chat_enabled else 'OFF' }}</span>
-  </button>
-  <button type="button" class="toggle {% if recording_enabled %}on{% endif %}" data-enabled="{{ 1 if recording_enabled else 0 }}" onclick="toggleSetting('recording', this)">
-    Recording: <span class="toggle-state">{{ 'ON' if recording_enabled else 'OFF' }}</span>
+  <button type="button" class="toggle {% if watching_enabled %}on{% endif %}" data-enabled="{{ 1 if watching_enabled else 0 }}" onclick="toggleSetting('watching', this)">
+    Watching: <span class="toggle-state">{{ 'ON' if watching_enabled else 'OFF' }}</span>
   </button>
 </div>
 
 <h2>Watchlist</h2>
 {% if streamers %}
 <table>
-  <tr><th>Channel</th><th>Broadcaster ID</th><th>Added</th></tr>
+  <tr><th>Channel</th><th>Broadcaster ID</th><th>Added</th><th>Tracking</th></tr>
   {% for s in streamers %}
-  <tr><td>{{ s.slug }}</td><td>{{ s.broadcaster_user_id }}</td><td>{{ s.added_at_local }}</td></tr>
+  <tr>
+    <td>{{ s.slug }}</td>
+    <td>{{ s.broadcaster_user_id }}</td>
+    <td>{{ s.added_at_local }}</td>
+    <td>
+      <button type="button" class="toggle small {% if s.tracking_enabled %}on{% endif %}" data-enabled="{{ 1 if s.tracking_enabled else 0 }}" onclick="toggleChannelTracking('{{ s.slug }}', this)">
+        <span class="toggle-state">{{ 'ON' if s.tracking_enabled else 'OFF' }}</span>
+      </button>
+    </td>
+  </tr>
   {% endfor %}
 </table>
 {% else %}

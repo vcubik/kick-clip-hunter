@@ -54,7 +54,7 @@ def _tick_one(channel_slug: str) -> None:
         logger.info("[%s] stream ended between the is_live check and recording", channel_slug)
 
 
-async def run_forever(get_channel_slugs, recording_enabled=lambda: True) -> None:
+async def run_forever(get_channel_slugs, recording_enabled=lambda: True, is_channel_tracked=lambda slug: True) -> None:
     while True:
         if not recording_enabled():
             # Recording paused from the dashboard: tear down any running
@@ -65,6 +65,12 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True) -> None
         else:
             for slug in get_channel_slugs():
                 try:
+                    if not is_channel_tracked(slug):
+                        # Tracking paused for this one channel - same
+                        # teardown as the global pause, scoped to it.
+                        if _get_recorder(slug).is_active:
+                            await asyncio.to_thread(_get_recorder(slug).stop)
+                        continue
                     if await _is_live(slug):
                         await asyncio.to_thread(_tick_one, slug)
                     elif _get_recorder(slug).is_active:
