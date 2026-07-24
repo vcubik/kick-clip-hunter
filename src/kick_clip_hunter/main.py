@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -97,6 +98,39 @@ def _is_channel_tracked(slug: str) -> bool:
 # short dashboard name to its stored key.
 SETTING_KEYS = {"watching": "watching_enabled"}
 _flags: dict[str, bool] = {}
+
+# Graceful shutdown, triggered from the dashboard: stop taking in new chat
+# messages immediately (so no new moment starts once this is set), but keep
+# the recording loop running as normal - an already-open moment session still
+# needs live footage for its post-roll, and the background tasks it eventually
+# spawns (clip cut, transcript, audio/frame/sound tagging) still need to run
+# to completion. _background_tasks tracks all of that chained work; the
+# process only actually exits once it (and any open moment session) is empty.
+_shutdown_requested = False
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+SHUTDOWN_POLL_SECONDS = 5
+
+
+async def _shutdown_when_idle() -> None:
+    while _moment_sessions or _background_tasks:
+        await asyncio.sleep(SHUTDOWN_POLL_SECONDS)
+    logger.info("all in-flight moments finished - stopping recorders and exiting")
+    await recording_manager.stop_all()
+    # A plain process exit (rather than raising/returning) so this actually
+    # ends the app regardless of what else the event loop is doing - signals
+    # aren't a reliable way to ask a Windows process to shut down gracefully,
+    # so this relies on having already stopped every ffmpeg child ourselves
+    # above instead of leaving that to cleanup handlers that may not run.
+    os._exit(0)
 
 
 def _load_flags() -> None:
@@ -244,10 +278,10 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
-    asyncio.create_task(_transcribe_clip_background(moment_id, channel, clip_path))
-    asyncio.create_task(_detect_audio_events_background(moment_id, channel, clip_path))
-    asyncio.create_task(_encode_frames_background(moment_id, channel, clip_path))
-    asyncio.create_task(_tag_sound_events_background(moment_id, channel, clip_path))
+    _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
+    _track_task(_detect_audio_events_background(moment_id, channel, clip_path))
+    _track_task(_encode_frames_background(moment_id, channel, clip_path))
+    _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -397,7 +431,7 @@ async def _run_moment_session(session: _MomentSession) -> None:
         session.channel, session.moment_id,
         (session.window_end - session.window_start).total_seconds(),
     )
-    asyncio.create_task(
+    _track_task(
         _create_clip_background(
             session.moment_id, session.channel, session.window_start, session.window_end,
             post_roll_seconds=DYNAMIC_POST_ROLL_SECONDS,
@@ -474,6 +508,8 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
             "watching_enabled": _flags.get("watching_enabled", True),
+            "shutdown_requested": _shutdown_requested,
+            "pending_work_count": len(_moment_sessions) + len(_background_tasks),
             "stream_types": STREAM_TYPES,
             "moment_types": MOMENT_TYPES,
         },
@@ -551,6 +587,21 @@ async def set_setting(name: str, enabled: int = 1):
     return {"setting": name, "enabled": value}
 
 
+@app.post("/shutdown")
+async def shutdown():
+    global _shutdown_requested
+    pending = len(_moment_sessions) + len(_background_tasks)
+    if _shutdown_requested:
+        return {"status": "already shutting down", "pending_work_count": pending}
+    _shutdown_requested = True
+    logger.info(
+        "shutdown requested from dashboard - watching stopped, waiting on %d pending item(s) before exiting",
+        pending,
+    )
+    asyncio.create_task(_shutdown_when_idle())
+    return {"status": "shutting down", "pending_work_count": pending}
+
+
 @app.post("/channels")
 async def add_channel(slug: str):
     slug = slug.strip()
@@ -610,9 +661,10 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
-        if not _flags.get("watching_enabled", True):
-            # Watching paused from the dashboard: drop the message without
-            # storing or running detection, so no new moments pile up.
+        if not _flags.get("watching_enabled", True) or _shutdown_requested:
+            # Watching paused (or a shutdown is in progress) - drop the
+            # message without storing or running detection, so no new
+            # moments pile up.
             return {"status": "watching disabled"}
 
         broadcaster = payload.get("broadcaster", {})
@@ -694,7 +746,11 @@ async def kick_webhook(
                     last_active=window_end,
                 )
                 _moment_sessions[channel] = session
-                asyncio.create_task(_run_moment_session(session))
+                # Tracked (not just held via _moment_sessions) so there's no
+                # gap between the session closing and its clip-cut task
+                # existing - both would otherwise look "idle" to
+                # _shutdown_when_idle for the moment in between.
+                _track_task(_run_moment_session(session))
                 stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(
                     "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",

@@ -80,6 +80,16 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True, is_chan
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
 
 
+async def stop_all() -> None:
+    """Stop every active recorder's ffmpeg process (and its HLS proxy) -
+    used on app shutdown so nothing is left running as an orphaned process
+    once the app itself exits.
+    """
+    for recorder in _recorders.values():
+        if recorder.is_active:
+            await asyncio.to_thread(recorder.stop)
+
+
 async def create_clip_for_moment(
     channel_slug: str,
     window_start: datetime,

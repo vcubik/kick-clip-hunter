@@ -57,6 +57,14 @@
     btn.querySelector(".toggle-state").textContent = enabled ? "ON" : "OFF";
   }
 
+  async function requestShutdown(btn) {
+    if (!confirm("Stop watching and shut down once any in-flight moment finishes?")) return;
+    btn.disabled = true;
+    btn.textContent = "Shutting down…";
+    await fetch("/shutdown", { method: "POST" });
+    location.reload();
+  }
+
   async function addChannel(event) {
     event.preventDefault();
     const input = document.getElementById("add-channel-slug");
@@ -132,14 +140,26 @@
   .add-channel button { padding: 0.35rem 0.8rem; border-radius: 4px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.9rem; cursor: pointer; }
   .add-channel button:hover { border-color: #666; }
   .add-channel-status { font-size: 0.8rem; color: #e2a5a5; }
+  .shutdown-btn { padding: 0.4rem 0.9rem; border-radius: 999px; border: 1px solid #555; background: #222; color: #ccc; font-size: 0.9rem; cursor: pointer; }
+  .shutdown-btn:hover { border-color: #888; }
+  .shutdown-banner { padding: 0.6rem 1rem; margin-bottom: 1rem; border-radius: 6px; border: 1px solid #7a3a3a; background: #2a1c1c; color: #e2a5a5; font-size: 0.9rem; }
 </style>
 </head>
 <body>
 <h1>Kick Clip Hunter Dashboard</h1>
 
+{% if shutdown_requested %}
+<div class="shutdown-banner">
+  Shutting down - waiting for {{ pending_work_count }} in-flight item(s) to finish (clips, transcripts, tagging)...
+</div>
+{% endif %}
+
 <div class="toggles">
-  <button type="button" class="toggle {% if watching_enabled %}on{% endif %}" data-enabled="{{ 1 if watching_enabled else 0 }}" onclick="toggleSetting('watching', this)">
+  <button type="button" class="toggle {% if watching_enabled %}on{% endif %}" data-enabled="{{ 1 if watching_enabled else 0 }}" onclick="toggleSetting('watching', this)" {% if shutdown_requested %}disabled{% endif %}>
     Watching: <span class="toggle-state">{{ 'ON' if watching_enabled else 'OFF' }}</span>
+  </button>
+  <button type="button" class="shutdown-btn" onclick="requestShutdown(this)" {% if shutdown_requested %}disabled{% endif %}>
+    {% if shutdown_requested %}Shutting down…{% else %}Shut down app{% endif %}
   </button>
 </div>
 
