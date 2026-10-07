@@ -140,7 +140,9 @@ Module map (`src/kick_clip_hunter/`):
 
   These four all run as fire-and-forget background tasks right after a clip is saved
   (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
-  the `moments` row. None of them judge or score a clip - they're pure local data
+  the `moments` row. Each has its own on/off switch on the dashboard ("Per-clip
+  analysis", persisted in `app_settings`); all four default to off since they cost CPU
+  time on every clip, and `backfill_taste.py` can fill in whatever was skipped later. None of them judge or score a clip - they're pure local data
   capture for a future learned classifier (detector features + these embeddings/tags,
   no API call at inference), once enough rated moments exist to train one. See the
   moment-judge design (PR #19, not yet merged) for the fuller picture, including why the
