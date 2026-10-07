@@ -119,7 +119,7 @@ SETTING_DEFAULTS = {
     "watching_enabled": True,
     "transcript_enabled": False,
     "audio_events_enabled": False,
-    "frames_enabled": True,
+    "frames_enabled": False,
     "sound_events_enabled": False,
 }
 _flags: dict[str, bool] = {}
