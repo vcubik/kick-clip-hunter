@@ -15,10 +15,12 @@ web dashboard. The detection heuristic is still being actively tuned against rea
 2. Create a Kick app at [kick.com/settings/developer](https://kick.com/settings/developer)
    (needs 2FA enabled on your account), enable webhooks on it.
 3. Copy `.env.example` to `.env` and fill in `KICK_CLIENT_ID` / `KICK_CLIENT_SECRET`.
-4. For local development, expose your machine with a tunnel (e.g.
-   [cloudflared](https://github.com/cloudflare/cloudflared)) and set that URL + `/webhooks/kick`
-   as the app's webhook URL. The tunnel URL changes every restart, so this needs
-   re-doing each time.
+4. For local development, expose the webhook route with a tunnel and set that URL +
+   `/webhooks/kick` as the app's webhook URL. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
+   gives a stable URL for free, so this only needs doing once:
+   `tailscale funnel --bg --set-path /webhooks/kick http://127.0.0.1:8000/webhooks/kick`.
+   ([cloudflared](https://github.com/cloudflare/cloudflared) quick tunnels also work, but
+   their URL changes every restart.)
 
 ## Usage
 
