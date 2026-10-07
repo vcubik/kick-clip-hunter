@@ -38,8 +38,16 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   (`--no-access-log` avoids interleaving uvicorn's own request log with the app's
   channel-tagged log lines)
 - Local dev needs a public HTTPS tunnel, since Kick pushes webhooks rather than being
-  polled (e.g. `cloudflared tunnel --url http://localhost:8000`). The tunnel URL changes
-  every restart — update it in the Kick app's webhook settings each time.
+  polled. This host uses Tailscale Funnel, which gives a stable
+  `https://<machine>.<tailnet>.ts.net` URL for free (no domain needed), so the Kick
+  app's webhook URL only has to be set once. One-time setup:
+  `tailscale funnel --bg --set-path /webhooks/kick http://127.0.0.1:8000/webhooks/kick`
+  — `--bg` persists it across reboots, and `--set-path` exposes only the webhook route
+  (the dashboard stays off the public internet). `tailscale funnel status` shows the URL.
+  On Windows the Tailscale tray app has to be running: without it the backend sits in
+  `NoState` ("Tailscale is starting") and every CLI command silently does nothing.
+  A quick `cloudflared tunnel --url http://localhost:8000` also works as a fallback, but
+  its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
   - `subscribe.py <slug>` — add a channel to the watchlist (subscribes to `chat.message.sent`
     on Kick's side, fetches and stores its 7TV emote keywords)
