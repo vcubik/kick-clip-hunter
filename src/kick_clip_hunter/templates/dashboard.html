@@ -135,6 +135,8 @@
   .toggle.on { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
   .toggle .toggle-state { font-weight: bold; }
   .toggle.small { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+  .toggles.analysis { align-items: center; margin-top: -1rem; }
+  .toggles-label { font-size: 0.85rem; color: #999; }
   .add-channel { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.5rem; }
   .add-channel input { background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.9rem; }
   .add-channel button { padding: 0.35rem 0.8rem; border-radius: 4px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.9rem; cursor: pointer; }
@@ -161,6 +163,15 @@
   <button type="button" class="shutdown-btn" onclick="requestShutdown(this)" {% if shutdown_requested %}disabled{% endif %}>
     {% if shutdown_requested %}Shutting down…{% else %}Shut down app{% endif %}
   </button>
+</div>
+
+<div class="toggles analysis">
+  <span class="toggles-label">Per-clip analysis:</span>
+  {% for name, label, enabled in analysis_settings %}
+  <button type="button" class="toggle small {% if enabled %}on{% endif %}" data-enabled="{{ 1 if enabled else 0 }}" onclick="toggleSetting('{{ name }}', this)">
+    {{ label }}: <span class="toggle-state">{{ 'ON' if enabled else 'OFF' }}</span>
+  </button>
+  {% endfor %}
 </div>
 
 <h2>Watchlist</h2>

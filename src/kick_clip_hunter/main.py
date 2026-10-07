@@ -96,7 +96,32 @@ def _is_channel_tracked(slug: str) -> bool:
 # one is useful without the other (a moment needs both a chat spike and
 # buffered footage to turn into a clip), so they're one switch now. Maps the
 # short dashboard name to its stored key.
-SETTING_KEYS = {"watching": "watching_enabled"}
+SETTING_KEYS = {
+    "watching": "watching_enabled",
+    "transcript": "transcript_enabled",
+    "audio_events": "audio_events_enabled",
+    "frames": "frames_enabled",
+    "sound_events": "sound_events_enabled",
+}
+# The per-clip analysis steps (everything but "watching") are pure data
+# capture for a future classifier, and each one costs real CPU time on every
+# single clip. They're individually switchable so that cost is only paid
+# while that data is actually wanted; backfill_taste.py can fill in whatever
+# was skipped later. (dashboard name, button label) in display order.
+ANALYSIS_SETTINGS = [
+    ("transcript", "Transcript"),
+    ("audio_events", "Audio events"),
+    ("sound_events", "Sound events"),
+    ("frames", "Frame embeddings"),
+]
+# Used until a setting is first toggled from the dashboard.
+SETTING_DEFAULTS = {
+    "watching_enabled": True,
+    "transcript_enabled": False,
+    "audio_events_enabled": False,
+    "frames_enabled": True,
+    "sound_events_enabled": False,
+}
 _flags: dict[str, bool] = {}
 
 # Graceful shutdown, triggered from the dashboard: stop taking in new chat
@@ -137,7 +162,7 @@ def _load_flags() -> None:
     conn = get_connection()
     try:
         for key in SETTING_KEYS.values():
-            _flags[key] = get_flag(conn, key, default=True)
+            _flags[key] = get_flag(conn, key, default=SETTING_DEFAULTS[key])
     finally:
         conn.close()
 
@@ -278,10 +303,14 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
-    _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
-    _track_task(_detect_audio_events_background(moment_id, channel, clip_path))
-    _track_task(_encode_frames_background(moment_id, channel, clip_path))
-    _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
+    if _flags.get("transcript_enabled"):
+        _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
+    if _flags.get("audio_events_enabled"):
+        _track_task(_detect_audio_events_background(moment_id, channel, clip_path))
+    if _flags.get("frames_enabled"):
+        _track_task(_encode_frames_background(moment_id, channel, clip_path))
+    if _flags.get("sound_events_enabled"):
+        _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -508,6 +537,10 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
             "watching_enabled": _flags.get("watching_enabled", True),
+            "analysis_settings": [
+                (name, label, _flags.get(SETTING_KEYS[name], False))
+                for name, label in ANALYSIS_SETTINGS
+            ],
             "shutdown_requested": _shutdown_requested,
             "pending_work_count": len(_moment_sessions) + len(_background_tasks),
             "stream_types": STREAM_TYPES,
