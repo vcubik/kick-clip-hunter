@@ -89,8 +89,8 @@ Watchlist (streamers)
     -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords
-    -> recording_manager ticks a ChannelRecorder per live watched channel (ffmpeg
-       segmenting a real HLS URL into a rolling buffer) -> a detected moment cuts a
+    -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
+       the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
        clip from that buffer, path stored back on the moment
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
        watchlist and moments
@@ -110,13 +110,14 @@ Module map (`src/kick_clip_hunter/`):
 - `templates/dashboard.html` — the dashboard's Jinja2 template
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
-- `hls_proxy.py` — tiny local HTTP server that stands in for the captured HLS URL when
-  handing it to ffmpeg: the URL's signed token is long enough that ffmpeg's own hardcoded
-  ~4096-byte URL limit truncates it (silently corrupting the token, causing a 400) - the
-  proxy fetches the real master/variant playlists itself (`httpx`, no such limit) and
-  hands ffmpeg a short local one instead. See the module docstring for the full story.
-- `recorder.py` — per-channel ffmpeg recording into a rolling segment buffer, plus
-  `extract_clip()` to cut a clip from it
+- `recorder.py` — per-channel recording into a rolling segment buffer, plus
+  `extract_clip()` to cut a clip from it. A thread per channel polls the live playlist
+  (`httpx`) and saves each source MPEG-TS segment untouched, named by its
+  program-date-time; ffmpeg is only used to remux the joined segments into the clip.
+  It deliberately isn't a long-running `ffmpeg -c copy`: a server-side stitched ad
+  changes the stream layout mid-broadcast, which left ffmpeg alive but recording
+  garbage for hours. See the module docstring for the full story, including how clips
+  handle a discontinuity and the `PLAYBACK_DELAY_SECONDS` clock shift.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
@@ -179,9 +180,12 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   detection checks for) gets through, and only in headed mode — headless still gets
   blocked even with valid cookies. This means every stream-URL fetch briefly opens a
   real visible browser window; there's no way around that on this stack.
-- Once you have the real URL, ffmpeg follows it like any HLS client (periodic manifest
-  re-fetch) indefinitely — no need to refresh preemptively, only restart if the process
-  actually dies.
+- Once you have the real URL, the recorder follows it like any HLS client (periodic
+  playlist re-fetch) indefinitely — no need to refresh preemptively, only restart if it
+  dies or stalls. Playlists are Twitch/IVS-style: 2-4s MPEG-TS segments, each with an
+  `EXT-X-PROGRAM-DATE-TIME` and an `EXTINF` title of `live`. How ad breaks are marked
+  isn't confirmed yet — the recorder logs every discontinuity and saves the raw playlist
+  to `data/hls_debug/` so that can be worked out from a real one.
 - This is a deliberate choice to evade kick.com's anti-automation measures, done with
   the user's explicit sign-off that it's a ToS gray area which may stop working at any
   time.

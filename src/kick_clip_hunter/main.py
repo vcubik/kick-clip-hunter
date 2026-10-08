@@ -65,7 +65,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kick_clip_hunter")
 
-# hls_proxy.py polls each live channel's variant playlist via httpx every few
+# recorder.py polls each live channel's variant playlist via httpx every few
 # seconds (normal HLS reload cadence) - at INFO level httpx logs the full
 # request line per call, and these playlist URLs run thousands of characters,
 # so left alone this drowns out the app's own log within seconds of startup.
@@ -153,7 +153,7 @@ async def _shutdown_when_idle() -> None:
     # A plain process exit (rather than raising/returning) so this actually
     # ends the app regardless of what else the event loop is doing - signals
     # aren't a reliable way to ask a Windows process to shut down gracefully,
-    # so this relies on having already stopped every ffmpeg child ourselves
+    # so this relies on having already stopped every recorder ourselves
     # above instead of leaving that to cleanup handlers that may not run.
     os._exit(0)
 
@@ -276,12 +276,10 @@ async def _create_clip_background(
     window_end: datetime,
     post_roll_seconds: int = recorder.POST_ROLL_SECONDS,
 ) -> None:
-    # The post-roll footage (and the segment covering window_end itself,
-    # which ffmpeg's segment muxer doesn't flush to disk until it rotates to
-    # the next one) doesn't exist yet at the instant a moment closes - wait
-    # for it to actually be recorded before looking for it, or the clip comes
-    # out truncated right at the exciting part.
-    await asyncio.sleep(post_roll_seconds + recorder.SEGMENT_SECONDS + 2)
+    # The post-roll footage doesn't exist yet at the instant a moment closes
+    # - wait for it to actually be published and downloaded before looking
+    # for it, or the clip comes out truncated right at the exciting part.
+    await asyncio.sleep(post_roll_seconds + recorder.CLIP_SETTLE_SECONDS)
     try:
         clip_path = await recording_manager.create_clip_for_moment(
             channel, window_start, window_end, f"moment_{moment_id}.mp4",
