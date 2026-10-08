@@ -232,9 +232,21 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - Once you have the real URL, the recorder follows it like any HLS client (periodic
   playlist re-fetch) indefinitely — no need to refresh preemptively, only restart if it
   dies or stalls. Playlists are Twitch/IVS-style: 2-4s MPEG-TS segments, each with an
-  `EXT-X-PROGRAM-DATE-TIME` and an `EXTINF` title of `live`. How ad breaks are marked
-  isn't confirmed yet — the recorder logs every discontinuity and saves the raw playlist
-  to `data/hls_debug/` so that can be worked out from a real one.
+  `EXT-X-PROGRAM-DATE-TIME` and an `EXTINF` title of `live`.
+- Ad breaks (seen in the Slots & Casino category: a 30s mid-roll every 30 minutes) are
+  stitched into the live playlist server-side and *replace* the broadcast for their
+  length - the stream's own segments for that stretch are never listed. They are marked
+  by `EXT-X-DATERANGE` tags (`live-video-net-stream-source` naming the ad instead of
+  `live`, plus `live-video-net-stitched-ad-break-start`/`-end`), a discontinuity on
+  either side and the ad's id as the segment title. The recorder stores them as an ad
+  group, logs every discontinuity and saves the raw playlist to `data/hls_debug/`.
+- What was really on stream during an ad is only in the broadcast's VOD, which Kick
+  writes as the stream goes along (12.5s segments, same program clock, roughly 15-25s
+  behind live) and serves from `stream.kick.com` to a plain HTTP client. Its URL comes
+  from `/api/v2/channels/{slug}/videos` (Cloudflare-protected, so it is fetched inside
+  the browser session that captures the live URL). A clip or context clip whose window
+  touches an ad is cut from the VOD instead, so it comes out up to ~25s longer than
+  usual (whole VOD segments); a channel with VODs turned off still gets the ad.
 - This is a deliberate choice to evade kick.com's anti-automation measures, done with
   the user's explicit sign-off that it's a ToS gray area which may stop working at any
   time.

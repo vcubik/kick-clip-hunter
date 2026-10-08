@@ -270,3 +270,26 @@ class TestPruning:
 
         assert locked.exists()
         assert not deletable.exists()
+
+
+class TestAdGroups:
+    def test_a_group_recorded_during_an_ad_is_recognisable(self, rec):
+        add_segment(rec, at(0), group="1-0")
+        add_segment(rec, at(2), group="1-1" + recorder.AD_GROUP_SUFFIX)
+
+        assert [segment.is_ad for segment in rec._stored_segments()] == [False, True]
+
+    def test_an_ad_is_never_preferred_to_real_footage_however_long_it_is(self, rec):
+        fill(rec, 0, 4, group="1-0")
+        fill(rec, 4, 30, group="1-1" + recorder.AD_GROUP_SUFFIX)
+        segments = rec.segments_overlapping(at(1), at(30))
+
+        chosen = recorder._best_group(segments, at(1), at(30))
+
+        assert {segment.group for segment in chosen} == {"1-0"}
+
+    def test_an_ad_is_still_better_than_nothing(self, rec):
+        fill(rec, 0, 10, group="1-0" + recorder.AD_GROUP_SUFFIX)
+        segments = rec.segments_overlapping(at(2), at(8))
+
+        assert recorder._best_group(segments, at(2), at(8)) == segments

@@ -169,6 +169,29 @@ class TestBreaksInTheStream:
         assert groups(rec) == ["0"] * 4 + ["1"] * 2 + ["2"] * 3
         assert stored_data(rec)[-3:] == [b"back-1", b"back-2", b"back-3"]
 
+    def test_segments_from_a_source_other_than_the_broadcast_are_stored_as_an_ad(self, hls, recording):
+        def source(name: str) -> str:
+            return (
+                f'#EXT-X-DATERANGE:ID="{name}",CLASS="{recorder.STREAM_SOURCE_CLASS}",'
+                f'{recorder.STREAM_SOURCE_ATTRIBUTE}="{name}"'
+            )
+
+        timeline = [
+            *fake_segments(3),
+            Segment(b"ad-1", title="creative", discontinuity=True, tags=(source("creative"),)),
+            Segment(b"ad-2", title="creative"),
+            Segment(b"back-1", discontinuity=True, tags=(source(recorder.LIVE_STREAM_SOURCE),)),
+            Segment(b"back-2"),
+        ]
+        server = hls(timeline, published=3, window=len(timeline))
+        rec = recording.of(server)
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 7)
+
+        assert [segment.is_ad for segment in rec._stored_segments()] == [False] * 3 + [True] * 2 + [False] * 2
+
     def test_a_change_of_segment_title_alone_starts_a_new_group(self, hls, recording):
         timeline = fake_segments(6)
         for segment in timeline[3:]:
@@ -345,7 +368,7 @@ class TestFailures:
             raise StreamUrlError(f"No live stream URL captured for {slug!r} - is it live?")
 
         rec = recorder.ChannelRecorder("offline_channel")
-        monkeypatch.setattr(recorder, "get_live_stream_url", not_live)
+        monkeypatch.setattr(recorder, "get_stream_urls", not_live)
 
         with pytest.raises(StreamUrlError):
             rec.tick()

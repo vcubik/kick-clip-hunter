@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, recorder
+from kick_clip_hunter.kick_stream import StreamUrls
 from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
@@ -52,12 +53,17 @@ class Recording:
         # one would have been a browser window against the real site.
         self.url_requests: list[str] = []
 
-    def of(self, server: FakeHlsServer, channel: str = "some_channel") -> ChannelRecorder:
-        def stream_url(slug: str) -> str:
-            self.url_requests.append(slug)
-            return server.master_url
+    def of(
+        self, server: FakeHlsServer, channel: str = "some_channel", vod: FakeHlsServer | None = None
+    ) -> ChannelRecorder:
+        """`vod` is a second fake stream standing in for the broadcast's own
+        recording; without one the channel has no VOD."""
 
-        self._monkeypatch.setattr(recorder, "get_live_stream_url", stream_url)
+        def stream_urls(slug: str) -> StreamUrls:
+            self.url_requests.append(slug)
+            return StreamUrls(live=server.master_url, vod=vod.master_url if vod else None)
+
+        self._monkeypatch.setattr(recorder, "get_stream_urls", stream_urls)
         channel_recorder = ChannelRecorder(channel)
         self._recorders.append(channel_recorder)
         return channel_recorder

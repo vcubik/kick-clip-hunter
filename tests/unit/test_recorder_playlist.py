@@ -225,3 +225,45 @@ class TestVariantPlaylist:
 
         assert len(parsed.segments) == 3
         assert parsed.segments[0].started_at == utc(2026, 10, 8, 12, 26, 32, 89000)
+
+
+class TestAdSegments:
+    """A stitched ad is announced by a stream-source date range naming
+    something other than the broadcast; it lasts until the next one."""
+
+    @staticmethod
+    def source(name: str) -> str:
+        return (
+            f'#EXT-X-DATERANGE:ID="source-{name}",CLASS="live-video-net-stream-source",'
+            f'X-NET-LIVE-VIDEO-STREAM-SOURCE="{name}"'
+        )
+
+    def ads(self, *lines: str) -> list[bool]:
+        return [segment.ad for segment in recorder._parse_playlist(playlist(*lines), VARIANT_URL).segments]
+
+    def test_segments_of_the_broadcast_are_not_ads(self):
+        flags = self.ads(self.source("live"), "#EXTINF:4.167,live", "a.ts", "#EXTINF:4.167,live", "b.ts")
+
+        assert flags == [False, False]
+
+    def test_segments_after_another_source_is_announced_are_ads_until_the_broadcast_is_back(self):
+        flags = self.ads(
+            self.source("live"),
+            "#EXTINF:4.167,live",
+            "before.ts",
+            self.source("1ac39748-2160"),
+            "#EXT-X-DISCONTINUITY",
+            "#EXTINF:2.000,1ac39748-2160",
+            "ad-1.ts",
+            "#EXTINF:2.000,1ac39748-2160",
+            "ad-2.ts",
+            self.source("live"),
+            "#EXT-X-DISCONTINUITY",
+            "#EXTINF:4.167,live",
+            "after.ts",
+        )
+
+        assert flags == [False, True, True, False]
+
+    def test_a_playlist_that_names_no_source_has_no_ads(self):
+        assert [segment.ad for segment in recorder._parse_playlist(VARIANT, VARIANT_URL).segments] == [False] * 3

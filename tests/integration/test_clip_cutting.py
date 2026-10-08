@@ -7,7 +7,9 @@ about a clip's length or playability is made on a file ffmpeg really produced.
 
 from __future__ import annotations
 
+import logging
 import subprocess
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,7 +17,9 @@ import pytest
 
 from kick_clip_hunter import recorder
 from kick_clip_hunter.recorder import ChannelRecorder, RecorderError
+from tests.support.hls import Segment
 from tests.support.media import decodes_cleanly, probe
+from tests.support.waiting import wait_until
 
 pytestmark = pytest.mark.ffmpeg
 
@@ -203,3 +207,160 @@ class TestContextClips:
     def test_without_the_clips_own_footage_there_is_no_context_either(self, rec):
         with pytest.raises(RecorderError):
             recorder.extract_context_clips(rec, chat_time(500), chat_time(505), "moment_7.mp4", 0, 0)
+
+
+class TestAdReplacedFromTheVod:
+    """A stitched ad replaces ten seconds of the live stream; the broadcast's
+    own recording (served by a second fake stream, in five-second segments on
+    the same clock) still has what was really on."""
+
+    AD = range(15, 25)
+
+    @pytest.fixture
+    def start(self) -> datetime:
+        # Recent, so that starting the recording doesn't prune the buffer.
+        # On a whole second, so segment boundaries survive the buffer's
+        # millisecond file names exactly.
+        return datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=60)
+
+    @pytest.fixture
+    def live(self, hls, ts_segments, start):
+        def source(name: str) -> tuple[str, ...]:
+            return (
+                f'#EXT-X-DATERANGE:ID="{name}",CLASS="{recorder.STREAM_SOURCE_CLASS}",'
+                f'{recorder.STREAM_SOURCE_ATTRIBUTE}="{name}"',
+            )
+
+        timeline = [Segment(path.read_bytes(), duration=1.0) for path in ts_segments]
+        for index in self.AD:
+            # The ad's own footage: the first seconds of the test pattern.
+            timeline[index] = Segment(ts_segments[index - self.AD.start].read_bytes(), duration=1.0, title="creative")
+        timeline[self.AD.start].discontinuity = True
+        timeline[self.AD.start].tags = source("creative")
+        timeline[self.AD.stop].discontinuity = True
+        timeline[self.AD.stop].tags = source(recorder.LIVE_STREAM_SOURCE)
+        return hls(timeline, published=len(timeline), window=len(timeline), stream_start=start)
+
+    @pytest.fixture
+    def vod_timeline(self, ts_segments) -> list[Segment]:
+        return [
+            Segment(b"".join(path.read_bytes() for path in ts_segments[first : first + 5]), duration=5.0)
+            for first in range(0, 40, 5)
+        ]
+
+    @pytest.fixture
+    def vod(self, hls, vod_timeline, start):
+        return hls(vod_timeline, published=len(vod_timeline), window=len(vod_timeline), stream_start=start)
+
+    @pytest.fixture(autouse=True)
+    def fast(self, monkeypatch):
+        monkeypatch.setattr(recorder, "INITIAL_SEGMENTS", 40)
+        monkeypatch.setattr(recorder, "VOD_POLL_SECONDS", 0.01)
+
+    def recorded(self, recording, live, vod=None) -> ChannelRecorder:
+        rec = recording.of(live, vod=vod)
+        rec.tick()
+        wait_until(lambda: len(rec._stored_segments()) == 40, "the whole stream being recorded")
+        return rec
+
+    def clip(self, rec, start, first: float, last: float, name: str = "moment_3.mp4") -> Path:
+        def chat(seconds: float) -> datetime:
+            return start + timedelta(seconds=seconds + DELAY)
+
+        return recorder.extract_clip(rec, chat(first), chat(last), name, 0, 0)
+
+    def test_a_clip_through_an_ad_is_cut_from_the_vod_instead(self, recording, live, vod, start):
+        rec = self.recorded(recording, live, vod)
+
+        clip = self.clip(rec, start, 12, 28)
+
+        # The VOD segments covering 12s..28s: 10-15, 15-20, 20-25, 25-30.
+        assert probe(clip)["duration"] == pytest.approx(20, abs=TOLERANCE)
+        assert decodes_cleanly(clip)
+
+    def test_only_the_vod_segments_the_window_needs_are_downloaded(self, recording, live, vod, start):
+        rec = self.recorded(recording, live, vod)
+
+        self.clip(rec, start, 12, 28)
+
+        assert vod.segment_requests() == [2, 3, 4, 5]
+
+    def test_vod_segments_already_in_the_buffer_are_not_downloaded_again(self, recording, live, vod, start):
+        rec = self.recorded(recording, live, vod)
+
+        self.clip(rec, start, 12, 28)
+        self.clip(rec, start, 12, 28, "again.mp4")
+
+        assert vod.segment_requests() == [2, 3, 4, 5]
+
+    def test_a_clip_clear_of_the_ad_never_touches_the_vod(self, recording, live, vod, start):
+        rec = self.recorded(recording, live, vod)
+
+        clip = self.clip(rec, start, 2, 8)
+
+        assert vod.requests == []
+        assert probe(clip)["duration"] == pytest.approx(8, abs=TOLERANCE)  # seconds 1-9, live
+
+    def test_the_lead_up_to_a_moment_right_after_an_ad_comes_from_the_vod(
+        self, recording, live, vod, start, monkeypatch
+    ):
+        monkeypatch.setattr(recorder, "CONTEXT_BEFORE_SECONDS", 6)
+        monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", 4)
+        rec = self.recorded(recording, live, vod)
+
+        def chat(seconds: float) -> datetime:
+            return start + timedelta(seconds=seconds + DELAY)
+
+        # The clip is live footage 26s..34s; the six seconds before it are
+        # almost all ad in the live recording.
+        context = recorder.extract_context_clips(rec, chat(27), chat(33), "moment_4.mp4", 0, 0)
+
+        assert vod.segment_requests() == [3, 4, 5]
+        assert probe(context["before"])["duration"] == pytest.approx(5, abs=TOLERANCE)  # VOD segment 20-25
+        assert decodes_cleanly(context["before"])
+
+    def test_waits_for_the_vod_to_catch_up_with_the_end_of_the_window(self, recording, live, hls, vod_timeline, start):
+        vod = hls(vod_timeline, published=5, window=len(vod_timeline), stream_start=start)  # reaches 25s
+        rec = self.recorded(recording, live, vod)
+
+        def catch_up() -> None:
+            wait_until(lambda: vod.requests.count("/variant/high.m3u8") >= 2, "the VOD playlist being re-read")
+            vod.publish_all()
+
+        publisher = threading.Thread(target=catch_up)
+        publisher.start()
+        clip = self.clip(rec, start, 12, 28)
+        publisher.join()
+
+        assert probe(clip)["duration"] == pytest.approx(20, abs=TOLERANCE)
+
+    def test_a_vod_that_never_catches_up_is_used_as_far_as_it_goes(
+        self, recording, live, hls, vod_timeline, start, monkeypatch
+    ):
+        monkeypatch.setattr(recorder, "VOD_WAIT_SECONDS", 0)
+        vod = hls(vod_timeline, published=5, window=len(vod_timeline), stream_start=start)  # reaches 25s
+        rec = self.recorded(recording, live, vod)
+
+        clip = self.clip(rec, start, 12, 28)
+
+        assert probe(clip)["duration"] == pytest.approx(15, abs=TOLERANCE)  # VOD 10s..25s
+
+    def test_a_channel_without_a_vod_still_gets_a_clip(self, recording, live, start):
+        rec = self.recorded(recording, live)
+
+        clip = self.clip(rec, start, 12, 28)
+
+        # No way round the ad: the longer stretch of real footage either
+        # side of it (25s..29s) is all there is.
+        assert probe(clip)["duration"] == pytest.approx(4, abs=TOLERANCE)
+        assert decodes_cleanly(clip)
+
+    def test_a_vod_that_cannot_be_fetched_still_leaves_a_clip(self, recording, live, vod, start, caplog):
+        vod.fail_next["/master.m3u8"] = [503]
+        rec = self.recorded(recording, live, vod)
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            clip = self.clip(rec, start, 12, 28)
+
+        assert probe(clip)["duration"] == pytest.approx(4, abs=TOLERANCE)
+        assert any("VOD backfill failed" in record.getMessage() for record in caplog.records)
