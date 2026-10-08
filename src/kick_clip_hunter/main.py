@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import time
 from contextlib import asynccontextmanager
@@ -14,7 +15,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import audio_events, detector, frame_encoder, recorder, recording_manager, sound_events, transcriber
+from . import (
+    audio_events,
+    detector,
+    frame_encoder,
+    recorder,
+    recording_manager,
+    sound_events,
+    transcriber,
+    win_console,
+)
 from .config import load_settings
 from .db import (
     MOMENT_TYPES,
@@ -58,12 +68,38 @@ from .timeutil import to_local
 from .watchlist import add_channel_to_watchlist
 from .webhook_security import get_kick_public_key, verify_signature
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+LOG_FILE = Path("data/logs/kick_clip_hunter.log")
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUPS = 10
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 logger = logging.getLogger("kick_clip_hunter")
+
+
+def _add_log_file() -> None:
+    # The console is the only place the log otherwise goes, and its
+    # scrollback is gone the moment the window closes or the app restarts -
+    # which is exactly when it's needed to work out what went wrong. Capped
+    # by rotation (chat logging is chatty) rather than growing forever.
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUPS, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
+    logging.getLogger().addHandler(handler)
+    # Under uvicorn its loggers don't propagate to the root logger, so its
+    # startup lines and unhandled-exception tracebacks need the handler
+    # directly.
+    uvicorn_logger = logging.getLogger("uvicorn")
+    if not uvicorn_logger.propagate:
+        uvicorn_logger.addHandler(handler)
+
+
+_add_log_file()
+if win_console.disable_quick_edit():
+    logger.info("console QuickEdit mode disabled so a click in the window can't pause the app")
 
 # recorder.py polls each live channel's variant playlist via httpx every few
 # seconds (normal HLS reload cadence) - at INFO level httpx logs the full
