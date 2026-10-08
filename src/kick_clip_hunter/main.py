@@ -98,6 +98,23 @@ def _add_log_file() -> None:
         uvicorn_logger.addHandler(handler)
 
 
+class _DropConnectionResetNoise(logging.Filter):
+    """Drops asyncio's "Exception in callback ... _call_connection_lost"
+    tracebacks for ConnectionResetError.
+
+    On Windows the proactor event loop logs one whenever the other side
+    (here: Kick's webhook sender, via the tunnel) closes a connection before
+    the server's own shutdown of that socket runs. Nothing is lost - the
+    request was already handled - but it's a 7-line ERROR several times an
+    hour that buries real errors in the log.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        error = record.exc_info[1] if record.exc_info else None
+        return not (isinstance(error, ConnectionResetError) and "_call_connection_lost" in record.getMessage())
+
+
+logging.getLogger("asyncio").addFilter(_DropConnectionResetNoise())
 _add_log_file()
 if win_console.disable_quick_edit():
     logger.info("console QuickEdit mode disabled so a click in the window can't pause the app")
