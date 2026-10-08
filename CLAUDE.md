@@ -18,7 +18,8 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
 
 ## Setup & running
 
-- Python deps: `pip install -r requirements.txt` - but install a CPU-only
+- Python deps: `pip install -r requirements.txt` (the whole application: it pulls in
+  `requirements-core.txt`, the service without the ML stack) - but install a CPU-only
   PyTorch build first: `pip install torch torchaudio --index-url
   https://download.pytorch.org/whl/cpu`. `funasr`/`transformers` (audio
   events, frame embeddings - see below) pull in `torch` as a dependency;
@@ -65,6 +66,13 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
     rather than fabricated ones - only the clip file and rating are real.
   - `import_clips_dir.py <folder> [channel_slug]` — same as `import_clip.py`, but for
     every video file in a folder at once (`channel_slug` defaults to `unknown`)
+  - `check.py [pytest args]` — lint, test formatting and the test suite with coverage, i.e.
+    exactly what CI runs; the one command before opening a PR
+  - `replay_chat.py <slug> [--since ISO] [--until ISO] [--set NAME=VALUE ...]` — replays a
+    channel's stored chat through the detector on the messages' own clock and reports how
+    many moments would have fired and how long their clips would have been, optionally
+    with detector constants overridden for comparison. The way to check a threshold change
+    against a real stream before running it live; read-only.
   - `backfill_taste.py [--limit N]` — fills in transcript/audio-event tags/frame
     embedding for any moment with a clip but missing one or more of them (imports
     don't go through the live pipeline's background tasks, so they start out missing
@@ -76,9 +84,8 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
 - Dashboard: `GET /dashboard`. It never reloads on its own; the Refresh button at the top
   reloads it and shows how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`)
-- No automated test suite yet — verification so far has been ad-hoc unit tests written
-  inline during development (rolling-window detector logic, signature verification, etc.),
-  not committed as a pytest suite.
+- Tests: `pip install -r requirements-dev.txt`, then `python -m pytest` (with the project's
+  virtual environment: `.venv\Scripts\python.exe -m pytest`). See "Testing" below.
 
 ## Language convention
 
@@ -177,6 +184,33 @@ Module map (`src/kick_clip_hunter/`):
 - Moments should be *rare*. A low detection rate is success, not a bug — don't loosen
   thresholds just because a channel goes a long time without one.
 
+## Testing
+
+[docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
+run what, the manual live checklist). What matters when changing code:
+
+- `python -m pytest` runs everything (700+ tests, well under a minute); `python
+  scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
+  (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
+  Linux, and fails under 90 % coverage. Run `check.py` before opening a PR.
+- The suite is hermetic by construction (`tests/conftest.py`): it runs in a throwaway working
+  directory with its own database per test, and any attempt to reach a non-loopback host,
+  launch a browser or exit the process fails the test. It is safe to run while the live
+  server is running from the same checkout - but don't *edit* production files in place for
+  experiments while it is (a restart would pick them up); use a copy.
+- A behaviour change comes with a test that would fail without it; a bug gets a failing test
+  first. Fake at the boundary (`tests/support/`: `FakeKickApi`, `FakeHlsServer`,
+  `WebhookSigner`, `ChatSim`, the `service` fixture) rather than patching the service's own
+  functions, and never `sleep` - pass the clock in or use `wait_until`.
+- Detector tests are written against `detector.py`'s constants, not their current values, so
+  retuning a threshold doesn't break them. If a tuning change does fail a test, it changed a
+  rule, not a number - check that was intended.
+- `tests/` is kept formatter-clean (`python -m ruff format tests`); application code is only
+  linted.
+- Not covered, and why: the browser-driven parts (`kick_stream.py`, `clip_creator.create_clip`,
+  the login script) and actually running the ML models. After touching those or the code next
+  to them, go through the live checklist in docs/testing.md.
+
 ## Clip creation
 
 Two independent, unrelated paths exist. Both required real reverse-engineering because
@@ -240,6 +274,7 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 
 - Every change goes on its own feature branch with a PR — don't push straight to
   `master`, and don't merge without an explicit go-ahead from the user.
+- Tests and lint pass before a PR is opened, and its CI run is green before it is merged.
 - Squash-merge, then delete the branch (local and remote) and sync `master`.
 - Don't hardcode the current watchlist's specific streamer names in PR descriptions or
   test plans — the watchlist changes constantly, so describe test coverage generically.
