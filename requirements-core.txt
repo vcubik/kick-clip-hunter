@@ -1,0 +1,9 @@
+# Everything the service needs to run with per-clip analysis switched off
+# (its default): webhook receiver, detector, recorder, dashboard.
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+cryptography
+jinja2
+patchright

@@ -19,8 +19,8 @@ from .config import load_settings
 from .kick_client import get_app_access_token, get_channel_by_slug
 from .kick_stream import StreamUrlError
 from .recorder import (
-    PRE_ROLL_SECONDS,
     POST_ROLL_SECONDS,
+    PRE_ROLL_SECONDS,
     ChannelRecorder,
     RecorderError,
     extract_clip,
@@ -118,4 +118,4 @@ async def create_context_clips_for_moment(
     )
 
 
-__all__ = ["run_forever", "create_clip_for_moment", "create_context_clips_for_moment", "RecorderError"]
+__all__ = ["RecorderError", "create_clip_for_moment", "create_context_clips_for_moment", "run_forever"]

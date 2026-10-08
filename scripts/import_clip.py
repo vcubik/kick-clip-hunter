@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kick_clip_hunter.db import get_streamers, insert_moment, get_connection
+from kick_clip_hunter.db import get_connection, get_streamers, insert_moment
 from kick_clip_hunter.recorder import CLIPS_DIR
 
 

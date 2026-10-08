@@ -143,7 +143,9 @@ def get_connection() -> sqlite3.Connection:
         if "rating_int" in types:
             conn.execute("ALTER TABLE moments DROP COLUMN rating_int")
         conn.execute("ALTER TABLE moments ADD COLUMN rating_int INTEGER")
-        conn.execute("UPDATE moments SET rating_int = CAST(rating AS INTEGER) WHERE rating IS NOT NULL AND rating != ''")
+        conn.execute(
+            "UPDATE moments SET rating_int = CAST(rating AS INTEGER) WHERE rating IS NOT NULL AND rating != ''"
+        )
         conn.execute("ALTER TABLE moments DROP COLUMN rating")
         conn.execute("ALTER TABLE moments RENAME COLUMN rating_int TO rating")
         conn.commit()

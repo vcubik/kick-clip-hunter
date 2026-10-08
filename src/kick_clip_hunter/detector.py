@@ -295,7 +295,7 @@ class Spike:
     keyword_hits: int  # laughs + emote mentions combined, for display/storage
 
 
-def classify_message(content: str, channel_keyword_weights: dict[str, float] = {}) -> tuple[float, float]:
+def classify_message(content: str, channel_keyword_weights: dict[str, float] | None = None) -> tuple[float, float]:
     """Returns (laugh_weight, mention_weight) for a chat message's text.
 
     laugh_weight is 0.0 (no match), LAUGH_WEAK_WEIGHT (bare "xd"), or
@@ -314,7 +314,7 @@ def classify_message(content: str, channel_keyword_weights: dict[str, float] = {
         laugh_weight = 0.0
 
     lowered = content.lower()
-    matched_weights = [weight for keyword, weight in channel_keyword_weights.items() if keyword in lowered]
+    matched_weights = [weight for keyword, weight in (channel_keyword_weights or {}).items() if keyword in lowered]
     mention_weight = max(matched_weights) if matched_weights else 0.0
     return laugh_weight, mention_weight
 

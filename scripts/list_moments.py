@@ -31,6 +31,7 @@ if __name__ == "__main__":
             f"[{row['channel_slug']}] {to_local(row['detected_at'])}  stream_time={stream_time}  "
             f"reason={row['reason']}  score={row['score']:.2f}  "
             f"window=[{to_local(row['window_start'])} .. {to_local(row['window_end'])}]  "
-            f"msgs={row['message_count']} ({row['current_message_rate']:.2f}/s vs baseline {row['baseline_message_rate']:.2f}/s)  "
+            f"msgs={row['message_count']} "
+            f"({row['current_message_rate']:.2f}/s vs baseline {row['baseline_message_rate']:.2f}/s)  "
             f"emotes={row['emote_count']}  keyword_hits={row['keyword_hits']}"
         )
