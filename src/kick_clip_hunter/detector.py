@@ -266,6 +266,19 @@ def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     }
 
 
+# Chat's answer to a streamer's yes/no question is a wall of bare "1"s and
+# "2"s. That's a poll, not a reaction: it says nothing about whether
+# something funny happened, yet it floods the window with messages from many
+# distinct senders - inflating message_rate now and, once it slides into the
+# baseline, the chat-size figures the other thresholds scale from. These
+# messages are ignored by the detector entirely.
+VOTE_MESSAGES = frozenset({"1", "2"})
+
+
+def is_vote_message(content: str) -> bool:
+    return content.strip() in VOTE_MESSAGES
+
+
 # each entry: (timestamp, sender, normalized_content, emote_count, emote_weight, laugh_weight, mention_weight)
 _entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
@@ -426,6 +439,9 @@ def record_message(
     mention_weight: float = 0.0,
     now: float | None = None,
 ) -> Spike | None:
+    if is_vote_message(content):
+        return None
+
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
     entries.append((now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight))
