@@ -49,6 +49,14 @@ POST_ROLL_SECONDS = 35
 # the run is presumed stalled and gets restarted anyway. Generous relative
 # to SEGMENT_SECONDS so ordinary jitter (a slow manifest fetch, one missed
 # tick) doesn't trigger a false-positive restart.
+#
+# "Landed" means a new segment *file* appeared, not that the newest one is
+# still being written to: after a timestamp discontinuity in the source (seen
+# live when the HLS playlist switched to new stream indices mid-broadcast)
+# ffmpeg kept running and kept appending to one segment for hours without
+# ever rotating to the next. That file's mtime stays fresh the whole time,
+# but nothing usable is being recorded - segment times are derived from the
+# index, so every clip cut after that point finds no footage.
 STALL_TIMEOUT_SECONDS = 90
 
 RECORDINGS_DIR = Path("data/recordings")
@@ -68,6 +76,10 @@ class _Run:
     process: subprocess.Popen
     log_file: object
     proxy: HlsProxy
+    # Highest segment index seen so far and when it last went up - see
+    # STALL_TIMEOUT_SECONDS for why progress is tracked this way.
+    last_segment_index: int = -1
+    last_progress_at: datetime | None = None
 
 
 class ChannelRecorder:
@@ -117,14 +129,15 @@ class ChannelRecorder:
     def _is_stalled(self) -> bool:
         if self._run is None:
             return False
-        segments = list(self._run.dir.glob("*.ts"))
+        now = datetime.now(timezone.utc)
+        newest_index = max((int(f.stem) for f in self._run.dir.glob("*.ts")), default=-1)
+        if newest_index > self._run.last_segment_index:
+            self._run.last_segment_index = newest_index
+            self._run.last_progress_at = now
         # No segment yet right after starting isn't stalled - give ffmpeg a
         # moment to actually connect and write the first one.
-        reference_time = (
-            max(f.stat().st_mtime for f in segments) if segments else self._run.started_at.timestamp()
-        )
-        age = datetime.now(timezone.utc).timestamp() - reference_time
-        return age > STALL_TIMEOUT_SECONDS
+        reference_time = self._run.last_progress_at or self._run.started_at
+        return (now - reference_time).total_seconds() > STALL_TIMEOUT_SECONDS
 
     def _prune_old_runs(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=BUFFER_RETENTION_SECONDS)
