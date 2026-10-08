@@ -283,6 +283,10 @@ def count_moments(conn: sqlite3.Connection, channel_slug: str | None = None) -> 
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
+def count_moments_with_clip(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM moments WHERE clip_path IS NOT NULL").fetchone()[0]
+
+
 def get_moments_missing_taste_data(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Moments with a clip but missing transcript/audio_events/frame_embedding/
     sound_events/sound_embedding - e.g. imported via import_clip.py/

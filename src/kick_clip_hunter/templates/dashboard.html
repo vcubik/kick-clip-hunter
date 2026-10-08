@@ -4,12 +4,28 @@
 <meta charset="utf-8">
 <title>Kick Clip Hunter Dashboard</title>
 <script>
-  setInterval(() => {
-    const anyClipPlaying = Array.from(document.querySelectorAll("video")).some(v => !v.paused);
-    // Don't blow away a note the user is mid-way through typing.
-    const editingNotes = document.activeElement && document.activeElement.classList.contains("notes-input");
-    if (!anyClipPlaying && !editingNotes) location.reload();
-  }, 15000);
+  // The page never reloads on its own (that kept interrupting whatever was
+  // being watched or typed). Instead it quietly asks the server how many
+  // moments and clips exist and shows what's new on the Refresh button.
+  async function checkForNew() {
+    const btn = document.getElementById("refresh-btn");
+    let status;
+    try {
+      const resp = await fetch("/moments/status");
+      if (!resp.ok) return;
+      status = await resp.json();
+    } catch (e) {
+      return;  // server restarting or down - keep whatever the button says
+    }
+    const newMoments = status.moments - Number(btn.dataset.moments);
+    const newClips = status.clips - Number(btn.dataset.clips);
+    const parts = [];
+    if (newMoments > 0) parts.push(`${newMoments} new moment${newMoments === 1 ? "" : "s"}`);
+    if (newClips > 0) parts.push(`${newClips} new clip${newClips === 1 ? "" : "s"}`);
+    btn.classList.toggle("has-new", parts.length > 0);
+    btn.querySelector(".refresh-status").textContent = parts.length ? ` - ${parts.join(", ")}` : "";
+  }
+  setInterval(checkForNew, 30000);
 
   async function setRating(momentId, value, btn) {
     const newValue = btn.classList.contains("active") ? 0 : value;
@@ -138,6 +154,9 @@
   .toggle.on { background: #1f5c33; border-color: #2e8b4f; color: #fff; }
   .toggle .toggle-state { font-weight: bold; }
   .toggle.small { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+  .refresh-btn { padding: 0.4rem 0.9rem; border-radius: 999px; border: 1px solid #444; background: #1a1a1a; color: #ccc; font-size: 0.9rem; cursor: pointer; }
+  .refresh-btn:hover { border-color: #666; }
+  .refresh-btn.has-new { background: #1d3f66; border-color: #3a78b8; color: #fff; }
   .toggles.analysis { align-items: center; margin-top: -1rem; }
   .toggles-label { font-size: 0.85rem; color: #999; }
   .add-channel { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.5rem; }
@@ -160,6 +179,9 @@
 {% endif %}
 
 <div class="toggles">
+  <button type="button" id="refresh-btn" class="refresh-btn" data-moments="{{ moment_status.moments }}" data-clips="{{ moment_status.clips }}" onclick="location.reload()">
+    Refresh<span class="refresh-status"></span>
+  </button>
   <button type="button" class="toggle {% if watching_enabled %}on{% endif %}" data-enabled="{{ 1 if watching_enabled else 0 }}" onclick="toggleSetting('watching', this)" {% if shutdown_requested %}disabled{% endif %}>
     Watching: <span class="toggle-state">{{ 'ON' if watching_enabled else 'OFF' }}</span>
   </button>
