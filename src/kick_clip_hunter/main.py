@@ -337,6 +337,9 @@ async def _create_clip_background(
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
+    _track_task(
+        _save_context_clips_background(moment_id, channel, window_start, window_end, clip_path.name, post_roll_seconds)
+    )
     if _flags.get("transcript_enabled"):
         _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
     if _flags.get("audio_events_enabled"):
@@ -345,6 +348,28 @@ async def _create_clip_background(
         _track_task(_encode_frames_background(moment_id, channel, clip_path))
     if _flags.get("sound_events_enabled"):
         _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
+
+
+async def _save_context_clips_background(
+    moment_id: int,
+    channel: str,
+    window_start: datetime,
+    window_end: datetime,
+    clip_name: str,
+    post_roll_seconds: int,
+) -> None:
+    # The clip itself is kept short; what led up to it and what followed are
+    # saved as separate files next to it. The "after" part hasn't been
+    # broadcast yet when the clip is cut, so wait for it.
+    await asyncio.sleep(recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS)
+    try:
+        saved = await recording_manager.create_context_clips_for_moment(
+            channel, window_start, window_end, clip_name, post_roll_seconds=post_roll_seconds
+        )
+    except Exception:
+        logger.exception("[%s] context clips failed for moment %d", channel, moment_id)
+        return
+    logger.info("[%s] context clips saved for moment %d: %s", channel, moment_id, ", ".join(sorted(saved)) or "none")
 
 
 async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
@@ -423,23 +448,26 @@ async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: 
     logger.info("[%s] sound events saved for moment %d: %s", channel, moment_id, tags)
 
 
-# A detected moment isn't cut into a fixed-length clip right away. Instead it
-# stays "open" and its end is pushed out for as long as chat keeps reacting
-# (detector.reaction_active), so one clip captures the whole reaction instead
-# of getting chopped off before the payoff - the most common complaint when
-# reviewing clips. The moment closes once the reaction has been quiet for
-# MOMENT_SESSION_QUIET_SECONDS, or after MOMENT_SESSION_MAX_SECONDS as a hard
-# cap, and only then is the clip cut.
+# A detected moment isn't cut into a clip right away. It stays "open" for a
+# short while, and if new people keep piling into the reaction after it fired
+# (detector.reaction_active) its end is pushed out, so a reaction that really
+# does keep going gets one clip covering all of it. Most moments don't earn
+# that and close at their base length (pre-roll + trigger window + post-roll,
+# about 35s) once MOMENT_SESSION_QUIET_SECONDS pass; MOMENT_SESSION_MAX_SECONDS
+# is the hard cap either way. Only then is the clip cut.
 MOMENT_SESSION_POLL_SECONDS = 3
 # 8s was too tight - a normal lull in chat (reading, catching a breath)
 # regularly closed the session early, and a fresh burst soon after opened a
 # brand new moment with its own 25s pre-roll reaching back into the first
 # clip's tail, producing two overlapping clips instead of one continuous
-# one. 20s gives real reactions more room to breathe without merging
-# genuinely separate moments (MOMENT_SESSION_MAX_SECONDS still caps how far
-# any single session can run).
-MOMENT_SESSION_QUIET_SECONDS = 20
-MOMENT_SESSION_MAX_SECONDS = 90
+# one. 20s fixed that but, together with a weak sustain bar, left most clips
+# running to the cap at around two minutes. 12s is the middle ground now
+# that staying "active" takes a fresh crowd-sized reaction (see
+# detector.reaction_active) rather than one straggler.
+MOMENT_SESSION_QUIET_SECONDS = 12
+# Hard cap on how long a moment stays open: with the trigger window, pre-roll
+# and post-roll around it, the longest possible clip is about 95s.
+MOMENT_SESSION_MAX_SECONDS = 60
 # The dynamic window already extends over the reaction itself, so the clip
 # needs far less trailing padding than a fixed-window cut would.
 DYNAMIC_POST_ROLL_SECONDS = 10
@@ -453,6 +481,9 @@ class _MomentSession:
     trigger_time: datetime
     window_end: datetime  # pushed out while the reaction continues
     last_active: datetime  # last time the reaction was still above sustain
+    # When the moment fired on the detector's (monotonic) clock - only
+    # reactions newer than this can extend it.
+    triggered_at: float
 
 
 # One open moment per channel at a time.
@@ -476,7 +507,8 @@ async def _run_moment_session(session: _MomentSession) -> None:
         while True:
             await asyncio.sleep(MOMENT_SESSION_POLL_SECONDS)
             now = datetime.now(timezone.utc)
-            if _session_should_close(session, detector.reaction_active(session.channel), now):
+            still_reacting = detector.reaction_active(session.channel, since=session.triggered_at)
+            if _session_should_close(session, still_reacting, now):
                 break
     finally:
         # Free the channel as soon as the moment closes (or the task is
@@ -508,6 +540,18 @@ async def health():
 
 
 MOMENTS_PAGE_SIZE = 50
+
+
+def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
+    """URLs of whichever before/after context clips exist next to a clip."""
+    if not clip_path:
+        return {}
+    folder = Path(clip_path).parent
+    return {
+        side: f"/clips/{(folder / name).as_posix()}"
+        for side, name in recorder.context_clip_names(Path(clip_path).name).items()
+        if (CLIPS_DIR / folder / name).exists()
+    }
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -547,6 +591,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "keyword_hits": row["keyword_hits"],
                     "snippet": snippet,
                     "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
+                    "context_urls": _context_clip_urls(row["clip_path"]),
                     "rating": row["rating"],
                     "notes": row["notes"] or "",
                     "transcript": row["transcript"] or "",
@@ -811,6 +856,7 @@ async def kick_webhook(
                     trigger_time=window_end,
                     window_end=window_end,
                     last_active=window_end,
+                    triggered_at=time.monotonic(),
                 )
                 _moment_sessions[channel] = session
                 # Tracked (not just held via _moment_sessions) so there's no
