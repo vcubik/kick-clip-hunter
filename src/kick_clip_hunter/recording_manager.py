@@ -58,7 +58,7 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True, is_chan
     while True:
         if not recording_enabled():
             # Recording paused from the dashboard: tear down any running
-            # ffmpeg processes and don't touch a browser until it's back on.
+            # recorders and don't touch a browser until it's back on.
             for recorder in _recorders.values():
                 if recorder.is_active:
                     await asyncio.to_thread(recorder.stop)
@@ -81,9 +81,8 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True, is_chan
 
 
 async def stop_all() -> None:
-    """Stop every active recorder's ffmpeg process (and its HLS proxy) -
-    used on app shutdown so nothing is left running as an orphaned process
-    once the app itself exits.
+    """Stop every active recorder - used on app shutdown so no download is
+    cut off mid-segment when the app itself exits.
     """
     for recorder in _recorders.values():
         if recorder.is_active:
