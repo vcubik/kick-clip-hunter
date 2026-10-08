@@ -38,7 +38,9 @@ looking for - in practice it was the single biggest source of false
 Every signal also requires a baseline-relative spike in *distinct
 senders*, not just raw count - Kick doesn't rate-limit a single account,
 so one person spamming would otherwise look identical to a genuine crowd
-reaction. message_rate additionally requires a baseline-relative spike in
+reaction. For the reaction signals that sender count also has to reach a
+floor that grows with how many people are chatting (see
+MIN_REACTION_UNIQUE_FRACTION). message_rate additionally requires a baseline-relative spike in
 *distinct message content*: a giveaway-style raid where many different
 real accounts all paste the same non-emote phrase has high sender
 diversity but low content diversity, and shouldn't count. That guard is
@@ -70,8 +72,13 @@ COOLDOWN_SECONDS = 60
 # the reaction is still going (see its moment session). "Still going" is a
 # weaker bar than triggering - a laugh/emote signal only has to stay above
 # this fraction of its firing threshold - so the tail of a fading reaction
-# keeps the clip open instead of being cut off mid-laugh.
-SUSTAIN_FRACTION = 0.5
+# keeps the clip open instead of being cut off mid-laugh. Not much weaker,
+# though: at 0.5 the tail outlasted the actual moment and most clips ran
+# close to the session's hard cap.
+SUSTAIN_FRACTION = 0.75
+# ...and at least this many distinct people still reacting, however small the
+# channel.
+MIN_SUSTAIN_UNIQUE = 2
 
 # Absolute floors. The baseline-relative ratio alone isn't enough on a very
 # quiet channel - a jump from 1 message/10s to 3-4 messages/10s clears a 3x
@@ -91,12 +98,30 @@ MIN_ABSOLUTE_COUNT_FRACTION = 0.3
 MIN_ABSOLUTE_COUNT_CEILING = 40
 MIN_ABSOLUTE_LAUGHS = 2
 MIN_ABSOLUTE_UNIQUE = 3
+# How many *distinct* people have to be reacting (laughing / posting the
+# emote) in the short window scales with the channel the same way: 3 people
+# typing "xd" within 10 seconds is a crowd reaction in a chat of 20, and
+# background noise in a chat of 100+ - replaying a busy channel's chat, a
+# fixed floor of 3 was what let through a moment every ~5 minutes, half of
+# them never more than 5 laughs deep. The ratio thresholds don't catch this:
+# laughs are rare enough in the baseline that almost any small cluster clears
+# them. On that replay (~80 distinct chatters per 5 minutes) this fraction
+# cut 13 moments/hour to about 4; 0.10 gave ~5/hour and 0.15 ~2.5/hour.
+MIN_REACTION_UNIQUE_FRACTION = 0.125
+MIN_REACTION_UNIQUE_CEILING = 12
 
 
 def _dynamic_min_count(baseline_unique_senders: int) -> int:
     return min(
         MIN_ABSOLUTE_COUNT_CEILING,
         max(MIN_ABSOLUTE_COUNT_FLOOR, round(baseline_unique_senders * MIN_ABSOLUTE_COUNT_FRACTION)),
+    )
+
+
+def _dynamic_min_reaction_unique(baseline_unique_senders: int) -> int:
+    return min(
+        MIN_REACTION_UNIQUE_CEILING,
+        max(MIN_ABSOLUTE_UNIQUE, round(baseline_unique_senders * MIN_REACTION_UNIQUE_FRACTION)),
     )
 
 
@@ -317,17 +342,30 @@ def reaction_active(channel_slug: str, now: float | None = None) -> bool:
     baseline = [e for e in entries if e[0] < short_cutoff]
     baseline_seconds = max(short_cutoff - entries[0][0], 1e-9)
 
-    # (short weight, baseline weight, absolute floor, firing multiplier) for
-    # each reaction signal - emote_weight (e[4]), laugh_weight (e[5]),
-    # mention_weight (e[6]). message_rate is intentionally not a sustain
-    # signal: volume alone shouldn't hold a moment open.
-    signals = (
-        (sum(e[5] for e in short), sum(e[5] for e in baseline), MIN_ABSOLUTE_LAUGHS, LAUGH_MULTIPLIER),
-        (sum(e[4] for e in short), sum(e[4] for e in baseline), MIN_ABSOLUTE_LAUGHS, EMOTE_SPIKE_MULTIPLIER),
-        (sum(e[6] for e in short), sum(e[6] for e in baseline), MIN_ABSOLUTE_LAUGHS, EMOTE_MENTION_MULTIPLIER),
+    # The same crowd-size floor as firing, scaled down like the ratio is:
+    # without it a single straggler typing "xd" every so often was enough to
+    # hold a moment open to its hard cap, which is where the routinely
+    # two-minute clips came from.
+    min_unique = max(
+        MIN_SUSTAIN_UNIQUE,
+        round(_dynamic_min_reaction_unique(len({e[1] for e in baseline})) * SUSTAIN_FRACTION),
     )
-    for short_weight, baseline_weight, min_absolute, multiplier in signals:
-        ratio = _spike_ratio(short_weight, baseline_weight, baseline_seconds, min_absolute)
+
+    # (entry index, absolute floor, firing multiplier) for each reaction
+    # signal - emote_weight (4), laugh_weight (5), mention_weight (6).
+    # message_rate is intentionally not a sustain signal: volume alone
+    # shouldn't hold a moment open.
+    signals = (
+        (5, MIN_ABSOLUTE_LAUGHS, LAUGH_MULTIPLIER),
+        (4, MIN_ABSOLUTE_LAUGHS, EMOTE_SPIKE_MULTIPLIER),
+        (6, MIN_ABSOLUTE_LAUGHS, EMOTE_MENTION_MULTIPLIER),
+    )
+    for index, min_absolute, multiplier in signals:
+        if len({e[1] for e in short if e[index] > 0}) < min_unique:
+            continue
+        ratio = _spike_ratio(
+            sum(e[index] for e in short), sum(e[index] for e in baseline), baseline_seconds, min_absolute
+        )
         if ratio is not None and ratio >= multiplier * SUSTAIN_FRACTION:
             return True
     return False
@@ -390,6 +428,7 @@ def record_message(
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
     dynamic_min_count = _dynamic_min_count(baseline_unique_senders)
+    min_reaction_unique = _dynamic_min_reaction_unique(baseline_unique_senders)
 
     reasons = []
     scores = []
@@ -423,6 +462,7 @@ def record_message(
         and emote_ratio >= EMOTE_SPIKE_MULTIPLIER
         and emote_sender_ratio is not None
         and emote_sender_ratio >= EMOTE_SPIKE_MULTIPLIER
+        and short_emote_unique_senders >= min_reaction_unique
     ):
         reasons.append("emotes")
         scores.append(min(emote_ratio, MAX_RATIO_SCORE))
@@ -439,6 +479,7 @@ def record_message(
         and laugh_ratio >= LAUGH_MULTIPLIER
         and laugh_sender_ratio is not None
         and laugh_sender_ratio >= LAUGH_UNIQUE_SENDER_MULTIPLIER
+        and short_laugh_unique_senders >= min_reaction_unique
     ):
         reasons.append("laugh")
         scores.append(min(laugh_ratio, MAX_RATIO_SCORE))
@@ -455,6 +496,7 @@ def record_message(
         and mention_ratio >= EMOTE_MENTION_MULTIPLIER
         and mention_sender_ratio is not None
         and mention_sender_ratio >= EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER
+        and short_mention_unique_senders >= min_reaction_unique
     ):
         reasons.append("emote_mention")
         scores.append(min(mention_ratio, MAX_RATIO_SCORE))

@@ -435,11 +435,14 @@ MOMENT_SESSION_POLL_SECONDS = 3
 # regularly closed the session early, and a fresh burst soon after opened a
 # brand new moment with its own 25s pre-roll reaching back into the first
 # clip's tail, producing two overlapping clips instead of one continuous
-# one. 20s gives real reactions more room to breathe without merging
-# genuinely separate moments (MOMENT_SESSION_MAX_SECONDS still caps how far
-# any single session can run).
-MOMENT_SESSION_QUIET_SECONDS = 20
-MOMENT_SESSION_MAX_SECONDS = 90
+# one. 20s fixed that but, together with a weak sustain bar, left most clips
+# running to the cap at around two minutes. 12s is the middle ground now
+# that staying "active" takes several people still reacting (see
+# detector.reaction_active) rather than one straggler.
+MOMENT_SESSION_QUIET_SECONDS = 12
+# Hard cap on how long a moment stays open: with the trigger window, pre-roll
+# and post-roll around it, the longest possible clip is about 90s.
+MOMENT_SESSION_MAX_SECONDS = 45
 # The dynamic window already extends over the reaction itself, so the clip
 # needs far less trailing padding than a fixed-window cut would.
 DYNAMIC_POST_ROLL_SECONDS = 10
