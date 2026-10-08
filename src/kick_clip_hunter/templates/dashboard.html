@@ -286,17 +286,17 @@
     {% endif %}
     {% if m.transcript %}
     <div class="transcript"><span class="transcript-label">transcript:</span> {{ m.transcript }}</div>
-    {% elif m.clip_url %}
+    {% elif "transcript" in m.pending %}
     <div class="transcript transcript-pending">transcribing…</div>
     {% endif %}
     {% if m.audio_events %}
     <div class="transcript"><span class="transcript-label">audio:</span> {{ m.audio_events }}</div>
-    {% elif m.clip_url %}
+    {% elif "audio_events" in m.pending %}
     <div class="transcript transcript-pending">detecting audio events…</div>
     {% endif %}
     {% if m.sound_events %}
     <div class="transcript"><span class="transcript-label">sound:</span> {{ m.sound_events }}</div>
-    {% elif m.clip_url %}
+    {% elif "sound_events" in m.pending %}
     <div class="transcript transcript-pending">tagging sound events…</div>
     {% endif %}
     <div class="tags">

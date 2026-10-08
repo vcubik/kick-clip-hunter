@@ -1,5 +1,6 @@
 """CLI to add a channel to the watchlist: subscribes to its chat.message.sent
-events and records the streamer in the local database.
+events (unless it already is subscribed) and records the streamer in the
+local database. Safe to run again for a channel that is already watched.
 
 Usage: python scripts/subscribe.py <channel_slug>
 """

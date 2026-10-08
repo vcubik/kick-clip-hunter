@@ -204,6 +204,36 @@ class TestAddingToTheWatchlist:
 
         assert self.stored() == ([], {})
 
+    async def test_a_7tv_outage_leaves_nothing_behind_on_kicks_side(self, kick_api):
+        # Subscribing used to come first: the add failed, but the
+        # subscription it had already created stayed.
+        kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
+        kick_api.failures["7tv.io"] = 503
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert kick_api.subscribed == []
+        assert self.stored() == ([], {})
+
+    async def test_a_channel_that_is_already_subscribed_is_not_subscribed_again(self, kick_api):
+        kick_api.add_channel("some_channel", 4242)
+
+        await watchlist.add_channel_to_watchlist("some_channel")
+        await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert kick_api.subscribed == [4242]
+        assert len(kick_api.calls("POST", "/events/subscriptions")) == 1
+
+    async def test_a_watched_channel_whose_subscription_kick_dropped_is_subscribed_again(self, kick_api):
+        kick_api.add_channel("some_channel", 4242)
+        await watchlist.add_channel_to_watchlist("some_channel")
+        kick_api.subscribed.clear()  # what Kick does every so often
+
+        await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert kick_api.subscribed == [4242]
+
     async def test_adding_again_refreshes_the_keywords(self, kick_api):
         channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
         await watchlist.add_channel_to_watchlist("some_channel")

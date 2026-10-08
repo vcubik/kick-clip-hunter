@@ -1,5 +1,5 @@
 """CLI to refresh a watched channel's 7TV emote keywords without touching
-its Kick event subscription (subscribing again would create a duplicate).
+its Kick event subscription at all.
 
 Usage: python scripts/refresh_emotes.py <channel_slug>
 """

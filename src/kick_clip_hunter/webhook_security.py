@@ -6,6 +6,7 @@ their public key once and cache it.
 """
 
 import base64
+import binascii
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -35,7 +36,13 @@ def verify_signature(
     public_key, message_id: str, timestamp: str, body: bytes, signature_b64: str
 ) -> bool:
     signed_payload = f"{message_id}.{timestamp}.".encode() + body
-    signature = base64.b64decode(signature_b64)
+    try:
+        signature = base64.b64decode(signature_b64)
+    except (binascii.Error, ValueError):
+        # Not even base64, so certainly not from Kick. Anyone can POST to the
+        # webhook URL; garbage in this header must be a rejection like any
+        # other bad signature, not an unhandled exception and a traceback.
+        return False
     try:
         public_key.verify(signature, signed_payload, padding.PKCS1v15(), hashes.SHA256())
         return True

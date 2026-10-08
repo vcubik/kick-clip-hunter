@@ -50,11 +50,11 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   A quick `cloudflared tunnel --url http://localhost:8000` also works as a fallback, but
   its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
-  - `subscribe.py <slug>` — add a channel to the watchlist (subscribes to `chat.message.sent`
-    on Kick's side, fetches and stores its 7TV emote keywords)
+  - `subscribe.py <slug>` — add a channel to the watchlist (fetches and stores its 7TV emote
+    keywords, and subscribes to `chat.message.sent` on Kick's side unless a subscription is
+    already there - so re-running it is safe and repairs a dropped subscription)
   - `refresh_emotes.py <slug>` — re-fetch and re-classify an already-watched channel's 7TV
-    emotes without touching its Kick subscription (re-running `subscribe.py` would create a
-    duplicate subscription)
+    emotes without talking to Kick's subscription API at all
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
   - `create_clip.py <slug>` — manually publish an official Kick clip for a channel's
@@ -264,9 +264,9 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - Event subscriptions (`chat.message.sent`) have, more than once, silently gone back to
   zero on Kick's side with no error or warning — the app token still works fine, chat
   messages just stop arriving entirely for every watched channel. There's no known
-  trigger; the fix is just re-running `subscribe.py <slug>` for each watchlisted channel
-  (safe — it's idempotent about the DB side, and there's nothing to "duplicate" once the
-  old subscription is already gone). If moments stop appearing and the dashboard's
+  trigger; a server restart re-subscribes whatever is missing on its own, and so does
+  re-running `subscribe.py <slug>` for a channel (both check what Kick still has first, so
+  nothing is ever subscribed twice). If moments stop appearing and the dashboard's
   watchlist looks right, check `GET events/subscriptions` on the official API before
   assuming the detector or webhook receiver broke.
 

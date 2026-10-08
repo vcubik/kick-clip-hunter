@@ -299,6 +299,14 @@ class TestWatchlistCommands:
             "sadge": detector.EMOTE_MENTION_OTHER_WEIGHT,
         }
 
+    def test_subscribing_twice_is_harmless(self, kick_api, capsys):
+        kick_api.add_channel("new_channel", 4242)
+
+        asyncio.run(subscribe.main("new_channel"))
+        asyncio.run(subscribe.main("new_channel"))
+
+        assert kick_api.subscribed == [4242]
+
     def test_refreshing_emotes_replaces_the_keywords_without_subscribing_again(self, kick_api, capsys):
         # Subscribing a second time would create a duplicate on Kick's side.
         channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
