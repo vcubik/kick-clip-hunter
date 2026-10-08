@@ -99,6 +99,9 @@
   .transcript-label { color: #7ad; font-weight: bold; }
   .transcript-pending { color: #888; font-style: italic; }
   .clip { display: block; margin-top: 0.6rem; width: 100%; max-width: 420px; border-radius: 4px; }
+  .context { margin-top: 0.4rem; font-size: 0.8rem; color: #999; }
+  .context summary { cursor: pointer; }
+  .context-label { margin-top: 0.5rem; }
   .tags { margin-top: 0.6rem; display: flex; gap: 1.2rem; flex-wrap: wrap; }
   .tag-group { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .tag-group-label { font-size: 0.75rem; color: #888; }
@@ -245,6 +248,19 @@
     {% endif %}
     {% if m.clip_url %}
     <video class="clip" src="{{ m.clip_url }}" controls preload="none"></video>
+    {% endif %}
+    {% if m.context_urls %}
+    <details class="context">
+      <summary>context: {% if m.context_urls.before %}30s before{% endif %}{% if m.context_urls.before and m.context_urls.after %} / {% endif %}{% if m.context_urls.after %}60s after{% endif %}</summary>
+      {% if m.context_urls.before %}
+      <div class="context-label">before the clip</div>
+      <video class="clip" src="{{ m.context_urls.before }}" controls preload="none"></video>
+      {% endif %}
+      {% if m.context_urls.after %}
+      <div class="context-label">after the clip</div>
+      <video class="clip" src="{{ m.context_urls.after }}" controls preload="none"></video>
+      {% endif %}
+    </details>
     {% endif %}
     {% if m.transcript %}
     <div class="transcript"><span class="transcript-label">transcript:</span> {{ m.transcript }}</div>

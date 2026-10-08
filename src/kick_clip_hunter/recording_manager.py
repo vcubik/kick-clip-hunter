@@ -24,6 +24,7 @@ from .recorder import (
     ChannelRecorder,
     RecorderError,
     extract_clip,
+    extract_context_clips,
 )
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -103,4 +104,18 @@ async def create_clip_for_moment(
     )
 
 
-__all__ = ["run_forever", "create_clip_for_moment", "RecorderError"]
+async def create_context_clips_for_moment(
+    channel_slug: str,
+    window_start: datetime,
+    window_end: datetime,
+    clip_name: str,
+    post_roll_seconds: int = POST_ROLL_SECONDS,
+) -> dict[str, Path]:
+    recorder = _get_recorder(channel_slug)
+    return await asyncio.to_thread(
+        extract_context_clips, recorder, window_start, window_end, clip_name,
+        PRE_ROLL_SECONDS, post_roll_seconds,
+    )
+
+
+__all__ = ["run_forever", "create_clip_for_moment", "create_context_clips_for_moment", "RecorderError"]

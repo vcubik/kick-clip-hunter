@@ -53,9 +53,15 @@ BUFFER_RETENTION_SECONDS = 600
 # actually happened, which is typically a few seconds earlier. So pre-roll is
 # weighted heavier than post-roll. Post-roll is generous too, though: the
 # payoff/aftermath of a bit often runs on past the chat spike, and clips were
-# felt to be cut off at the end.
-PRE_ROLL_SECONDS = 25
+# felt to be cut off at the end. Pre-roll used to be 25s; it's shorter now
+# that the footage either side of a clip is kept next to it as separate
+# context clips (see extract_context_clips) instead of being baked in.
+PRE_ROLL_SECONDS = 15
 POST_ROLL_SECONDS = 35
+# Footage saved next to each clip rather than in it, so the clip itself can
+# stay short without losing the lead-up or the aftermath.
+CONTEXT_BEFORE_SECONDS = 30
+CONTEXT_AFTER_SECONDS = 60
 # Segment times are the stream's own program clock, i.e. when a frame was
 # broadcast - viewers (and so chat) see it some seconds later, after the
 # player's buffer. Clip windows are shifted this much earlier to line the two
@@ -407,21 +413,18 @@ def _best_group(segments: list[_StoredSegment], start: datetime, end: datetime) 
     return [s for s in segments if s.group == best]
 
 
-def extract_clip(
-    recorder: ChannelRecorder,
-    start: datetime,
-    end: datetime,
-    output_name: str,
-    pre_roll_seconds: int = PRE_ROLL_SECONDS,
-    post_roll_seconds: int = POST_ROLL_SECONDS,
-) -> Path:
+def _clip_segments(
+    recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: int, post_roll_seconds: int
+) -> list[_StoredSegment]:
     clip_start = start - timedelta(seconds=pre_roll_seconds + PLAYBACK_DELAY_SECONDS)
     clip_end = end + timedelta(seconds=post_roll_seconds - PLAYBACK_DELAY_SECONDS)
     segments = recorder.segments_overlapping(clip_start, clip_end)
     if not segments:
         raise RecorderError(f"No buffered segments cover {start} - {end} for {recorder.channel_slug!r}")
-    segments = _best_group(segments, clip_start, clip_end)
+    return _best_group(segments, clip_start, clip_end)
 
+
+def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], output_name: str) -> Path:
     out_dir = CLIPS_DIR / recorder.channel_slug
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / output_name
@@ -449,3 +452,55 @@ def extract_clip(
         joined.unlink(missing_ok=True)
 
     return output_path
+
+
+def extract_clip(
+    recorder: ChannelRecorder,
+    start: datetime,
+    end: datetime,
+    output_name: str,
+    pre_roll_seconds: int = PRE_ROLL_SECONDS,
+    post_roll_seconds: int = POST_ROLL_SECONDS,
+) -> Path:
+    return _write_clip(recorder, _clip_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds), output_name)
+
+
+def context_clip_names(clip_name: str) -> dict[str, str]:
+    stem = Path(clip_name).stem
+    return {"before": f"{stem}_before.mp4", "after": f"{stem}_after.mp4"}
+
+
+def extract_context_clips(
+    recorder: ChannelRecorder,
+    start: datetime,
+    end: datetime,
+    clip_name: str,
+    pre_roll_seconds: int = PRE_ROLL_SECONDS,
+    post_roll_seconds: int = POST_ROLL_SECONDS,
+) -> dict[str, Path]:
+    """Cut the footage right before and right after a moment's clip into
+    their own files next to it (`<clip>_before.mp4`, `<clip>_after.mp4`).
+
+    Takes the same arguments the clip itself was cut with, so the context
+    lines up exactly with the clip's first and last segment - played back to
+    back, before + clip + after is one continuous stretch. Whichever side has
+    no usable footage is simply left out of the result.
+    """
+    clip = _clip_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)
+    clip_start, clip_end = clip[0].started_at, clip[-1].ended_at
+    windows = {
+        "before": (clip_start - timedelta(seconds=CONTEXT_BEFORE_SECONDS), clip_start),
+        "after": (clip_end, clip_end + timedelta(seconds=CONTEXT_AFTER_SECONDS)),
+    }
+    names = context_clip_names(clip_name)
+    saved: dict[str, Path] = {}
+    for side, (window_start, window_end) in windows.items():
+        # Only segments that lie (by their midpoint) inside the window, so
+        # nothing from the clip itself is repeated.
+        segments = [
+            s for s in recorder.segments_overlapping(window_start, window_end)
+            if window_start <= s.started_at + timedelta(seconds=s.duration / 2) < window_end
+        ]
+        if segments:
+            saved[side] = _write_clip(recorder, _best_group(segments, window_start, window_end), names[side])
+    return saved

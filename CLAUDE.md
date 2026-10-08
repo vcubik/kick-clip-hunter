@@ -122,6 +122,9 @@ Module map (`src/kick_clip_hunter/`):
   changes the stream layout mid-broadcast, which left ffmpeg alive but recording
   garbage for hours. See the module docstring for the full story, including how clips
   handle a discontinuity and the `PLAYBACK_DELAY_SECONDS` clock shift.
+  A moment's clip is kept short (about 35s unless the reaction keeps drawing in new
+  people); the 30s before and 60s after it are saved next to it as
+  `moment_<id>_before.mp4` / `_after.mp4` and shown on the dashboard under "context".
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's

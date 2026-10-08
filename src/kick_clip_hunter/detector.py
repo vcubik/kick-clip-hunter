@@ -48,10 +48,11 @@ skipped for emotes/laugh/emote_mention, where many people repeating the
 same emote *is* the genuine pattern.
 
 Detection fires a moment at the first instant a signal crosses threshold,
-but the moment doesn't end there: reaction_active() reports whether the
-reaction is still going (a weaker SUSTAIN_FRACTION bar), which main.py's
-moment session uses to hold the moment open and extend the clip until the
-laughter actually dies down, rather than cutting a fixed length.
+but the moment doesn't have to end there: reaction_active() reports whether
+new people are still piling into the reaction after that instant (see
+SUSTAIN_FRACTION), which main.py's moment session uses to hold the moment
+open and extend the clip for as long as that's true. Most moments don't
+qualify and get a short fixed-length clip.
 
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
@@ -69,13 +70,15 @@ BASELINE_WINDOW_SECONDS = 300
 COOLDOWN_SECONDS = 60
 
 # Once a moment has fired, main.py keeps it "open" and extends the clip while
-# the reaction is still going (see its moment session). "Still going" is a
-# weaker bar than triggering - a laugh/emote signal only has to stay above
-# this fraction of its firing threshold - so the tail of a fading reaction
-# keeps the clip open instead of being cut off mid-laugh. Not much weaker,
-# though: at 0.5 the tail outlasted the actual moment and most clips ran
-# close to the session's hard cap.
-SUSTAIN_FRACTION = 0.75
+# the reaction is still going (see its moment session). "Still going" is
+# judged against this fraction of the firing threshold, counting only people
+# who reacted *after* the moment fired (see reaction_active). It used to be a
+# deliberately weaker bar (0.5) so a fading tail kept the clip open, but in
+# practice that extended nearly every clip to the session's hard cap. At 1.0
+# an extension has to be earned: the reaction after the trigger must be big
+# enough to have fired a moment on its own. On a replayed day of chat that
+# left over half the moments at their base length and extended the rest.
+SUSTAIN_FRACTION = 1.0
 # ...and at least this many distinct people still reacting, however small the
 # channel.
 MIN_SUSTAIN_UNIQUE = 2
@@ -106,8 +109,8 @@ MIN_ABSOLUTE_UNIQUE = 3
 # them never more than 5 laughs deep. The ratio thresholds don't catch this:
 # laughs are rare enough in the baseline that almost any small cluster clears
 # them. On that replay (~80 distinct chatters per 5 minutes) this fraction
-# cut 13 moments/hour to about 4; 0.10 gave ~5/hour and 0.15 ~2.5/hour.
-MIN_REACTION_UNIQUE_FRACTION = 0.125
+# cut 13 moments/hour to about 5; 0.125 gave ~4/hour and 0.15 ~2.5/hour.
+MIN_REACTION_UNIQUE_FRACTION = 0.10
 MIN_REACTION_UNIQUE_CEILING = 12
 
 
@@ -321,9 +324,16 @@ def _spike_ratio(
     return short_count / min_absolute
 
 
-def reaction_active(channel_slug: str, now: float | None = None) -> bool:
+def reaction_active(channel_slug: str, now: float | None = None, since: float | None = None) -> bool:
     """Whether the channel's short window still shows a laugh/emote reaction
-    above the (weaker) SUSTAIN_FRACTION bar.
+    at SUSTAIN_FRACTION of the firing bar.
+
+    `since` (same monotonic clock) limits that to messages newer than it.
+    A moment session passes the instant its moment fired: the laughs that
+    fired it sit in the short window for another 10 seconds, so without this
+    every moment looked "still active" for a while with nobody new reacting,
+    and every clip got extended. Only a reaction that keeps drawing in new
+    people after the trigger counts as still going.
 
     Read-only: it decides when an already-open moment's reaction has died
     down, without recording anything, touching the cooldown, or opening a new
@@ -336,7 +346,8 @@ def reaction_active(channel_slug: str, now: float | None = None) -> bool:
         return False
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
-    short = [e for e in entries if e[0] >= short_cutoff]
+    short_start = short_cutoff if since is None else max(short_cutoff, since)
+    short = [e for e in entries if e[0] >= short_start and e[0] > (since if since is not None else -1.0)]
     if not short:
         return False
     baseline = [e for e in entries if e[0] < short_cutoff]
