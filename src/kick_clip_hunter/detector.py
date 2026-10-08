@@ -96,7 +96,9 @@ MIN_SUSTAIN_UNIQUE = 2
 # counts as trivially few messages; scaling off Kick's viewer_count was
 # considered and rejected, since bots inflate it and it doesn't reflect who's
 # actually chatting.
-MIN_ABSOLUTE_COUNT_FLOOR = 5
+# The floor was 5 until a moment fired on a chat of 18 from three people
+# posting one emote each (one of them a laugh emote: 1 + 3.5 + 1 = 5.5).
+MIN_ABSOLUTE_COUNT_FLOOR = 6
 MIN_ABSOLUTE_COUNT_FRACTION = 0.3
 MIN_ABSOLUTE_COUNT_CEILING = 40
 MIN_ABSOLUTE_LAUGHS = 2
