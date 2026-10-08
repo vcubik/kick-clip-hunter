@@ -15,3 +15,11 @@ Thumbs.db
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Test and lint artefacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

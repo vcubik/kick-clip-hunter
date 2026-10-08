@@ -1,0 +1,80 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 05:17 UTC. The application's dependencies are not pinned, so a
+    # weekly run is what notices a new FastAPI / httpx / ffmpeg release
+    # breaking something while nobody was changing the code.
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff (the version pinned in requirements-dev.txt)
+        run: python -m pip install "$(grep -E '^ruff' requirements-dev.txt | cut -d' ' -f1)"
+      - name: Lint
+        run: ruff check .
+      - name: Check test formatting
+        run: ruff format --check tests
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is what the service runs on; Linux keeps it portable.
+        os: [windows-latest, ubuntu-latest]
+    env:
+      # The clip-cutting tests skip themselves on a machine without ffmpeg.
+      # Here a missing ffmpeg is a broken setup and must fail instead.
+      REQUIRE_FFMPEG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --no-progress -y
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run the test suite
+        run: python -m pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: Coverage summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f .coverage ]; then
+            python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.xml
+          if-no-files-found: ignore
