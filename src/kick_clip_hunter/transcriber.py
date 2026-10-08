@@ -16,11 +16,17 @@ an option here) at a size and speed that comfortably runs as a background
 task on a 4-core CPU (~5-7x real-time once the model is loaded).
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from faster_whisper import WhisperModel
+from .ml_loading import HEAVY_IMPORT_LOCK
+
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -49,12 +55,17 @@ _model: WhisperModel | None = None
 
 def _get_model() -> WhisperModel:
     global _model
-    if _model is None:
-        MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-        logger.info("loading whisper model %r (first use only)...", MODEL_SIZE)
-        _model = WhisperModel(
-            MODEL_SIZE, device="cpu", compute_type="int8", download_root=str(MODEL_DOWNLOAD_ROOT)
-        )
+    with HEAVY_IMPORT_LOCK:
+        if _model is None:
+            # Imported on first use rather than at module level - see
+            # ml_loading.py.
+            from faster_whisper import WhisperModel
+
+            MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+            logger.info("loading whisper model %r (first use only)...", MODEL_SIZE)
+            _model = WhisperModel(
+                MODEL_SIZE, device="cpu", compute_type="int8", download_root=str(MODEL_DOWNLOAD_ROOT)
+            )
     return _model
 
 

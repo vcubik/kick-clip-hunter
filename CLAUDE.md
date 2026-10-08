@@ -147,6 +147,13 @@ Module map (`src/kick_clip_hunter/`):
   pre-downloaded via `urllib` before the library's own logic can run; see the module
   docstring.
 
+- `ml_loading.py` - one lock shared by the four analysis modules above. Their libraries
+  (faster-whisper, funasr, transformers/torch, panns_inference) are imported, and their
+  models loaded, the first time a result is actually asked for, not at startup: importing
+  them takes anywhere from ten seconds to a couple of minutes and every analysis step is
+  off by default. The lock keeps those first imports/loads one at a time even though they
+  now happen on worker threads.
+
   These four all run as fire-and-forget background tasks right after a clip is saved
   (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
   the `moments` row. Each has its own on/off switch on the dashboard ("Per-clip
