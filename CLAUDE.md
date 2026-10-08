@@ -69,6 +69,10 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
     embedding for any moment with a clip but missing one or more of them (imports
     don't go through the live pipeline's background tasks, so they start out missing
     all three)
+- Logs: the server logs to the console and to `data/logs/kick_clip_hunter.log` (rotated,
+  10 x 10 MB) - check the file first when something went wrong while unattended. On
+  startup it also turns off the console's QuickEdit mode (`win_console.py`), which
+  otherwise freezes the whole app whenever someone clicks in the terminal window.
 - Dashboard: `GET /dashboard` (auto-refreshes every 15s, skipped while a clip video is
   playing so it doesn't get cut off mid-watch)
 - No automated test suite yet — verification so far has been ad-hoc unit tests written
