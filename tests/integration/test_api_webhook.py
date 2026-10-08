@@ -45,6 +45,15 @@ class TestSignatureCheck:
         assert response.status_code == 401
         assert service.chat_log() == []
 
+    @pytest.mark.parametrize("garbage", ["abc", "not base64 at all!!!"])
+    async def test_a_garbage_signature_header_is_rejected_rather_than_crashing_the_request(self, service, garbage):
+        payload = chat_payload(CHANNEL, 1, "mallory", "xDDD")
+
+        response = await service.deliver(payload, **{"Kick-Event-Signature": garbage})
+
+        assert response.status_code == 401
+        assert service.chat_log() == []
+
     @pytest.mark.parametrize("header", ["Kick-Event-Message-Id", "Kick-Event-Message-Timestamp"])
     async def test_a_signature_is_bound_to_its_message_id_and_timestamp(self, service, header):
         # Both are part of what Kick signs, so a captured signature can't be
@@ -119,6 +128,33 @@ class TestChatMessages:
 
         assert first.status_code == second.status_code == 200
         assert service.chat_log() == [(CHANNEL, "alice", "hello")]
+
+    async def test_a_redelivered_message_is_counted_once_by_the_detector(self, service):
+        # Kick redelivers what it didn't see acknowledged in time - which is
+        # when the service is busiest. A retry must not look like more chat.
+        payload = chat_payload(CHANNEL, 1, "alice", "xDDD")
+
+        await service.deliver(payload)
+        again = await service.deliver(payload)
+
+        assert again.status_code == 200
+        assert again.json() == {"status": "duplicate"}
+        assert len(detector._entries[CHANNEL]) == 1
+
+    async def test_a_storm_of_redeliveries_cannot_pass_for_a_crowd(self, service):
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL)
+        few = detector.MIN_ABSOLUTE_UNIQUE - 1
+        payloads = [chat_payload(CHANNEL, service.user_id(CHANNEL), f"fan{n}", "xDDD") for n in range(few)]
+
+        for _ in range(30):
+            for payload in payloads:
+                await service.deliver(payload)
+
+        assert service.moments() == []
+        assert (
+            len([entry for entry in detector._entries[CHANNEL] if entry[5] > 0 and entry[1].startswith("fan")]) == few
+        )
 
     async def test_messages_of_several_channels_are_kept_apart(self, service):
         await service.chat("channel_a", "alice", "one")

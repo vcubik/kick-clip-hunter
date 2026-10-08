@@ -8,7 +8,7 @@ usernames come from arbitrary Kick users and are shown on this page.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -177,6 +177,59 @@ class TestMomentList:
         assert "tak to bylo neco" in card.text
         assert "cs, HAPPY, Laughter" in card.text
         assert "Laughter:0.80" in card.text
+
+
+class TestAnalysisInProgress:
+    """A missing result is only shown as "on its way" while it can be."""
+
+    PLACEHOLDERS = ("transcribing…", "detecting audio events…", "tagging sound events…")
+
+    def fresh_clip(self, **columns) -> None:
+        add_moment(detected_at=datetime.now(timezone.utc), clip_path="some_channel/moment_1.mp4", **columns)
+
+    async def shown(self, service) -> list[str]:
+        (card,) = moment_cards(await dashboard(service))
+        return [placeholder for placeholder in self.PLACEHOLDERS if placeholder in card.text]
+
+    async def test_nothing_is_in_progress_while_analysis_is_switched_off(self, service):
+        # The default - and before this was fixed, every clip said
+        # "transcribing..." forever.
+        self.fresh_clip()
+
+        assert await self.shown(service) == []
+
+    async def test_a_fresh_clip_shows_exactly_the_steps_that_are_switched_on(self, service):
+        await service.client.post("/settings/transcript?enabled=1")
+        await service.client.post("/settings/sound_events?enabled=1")
+        self.fresh_clip()
+
+        assert await self.shown(service) == ["transcribing…", "tagging sound events…"]
+
+    async def test_a_result_that_has_arrived_replaces_its_placeholder(self, service):
+        await service.client.post("/settings/transcript?enabled=1")
+        self.fresh_clip(transcript="to je konec")
+
+        (card,) = moment_cards(await dashboard(service))
+        assert "to je konec" in card.text and "transcribing…" not in card.text
+
+    async def test_an_empty_result_means_done_not_pending(self, service):
+        await service.client.post("/settings/transcript?enabled=1")
+        self.fresh_clip(transcript="")
+
+        assert await self.shown(service) == []
+
+    async def test_an_old_clip_without_a_result_is_not_pending_forever(self, service):
+        await service.client.post("/settings/transcript?enabled=1")
+        long_ago = datetime.now(timezone.utc) - timedelta(seconds=service.main.ANALYSIS_PENDING_SECONDS + 60)
+        add_moment(detected_at=long_ago, clip_path="some_channel/moment_1.mp4")
+
+        assert await self.shown(service) == []
+
+    async def test_a_moment_without_a_clip_has_nothing_to_analyse(self, service):
+        await service.client.post("/settings/transcript?enabled=1")
+        add_moment(detected_at=datetime.now(timezone.utc))
+
+        assert await self.shown(service) == []
 
 
 class TestClips:

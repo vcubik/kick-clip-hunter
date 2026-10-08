@@ -566,6 +566,33 @@ async def health():
 MOMENTS_PAGE_SIZE = 50
 
 
+# How long after detection a missing analysis result is still shown as "in
+# progress". Cutting the clip and running a step on it takes a minute or two;
+# anything older without a result was either never analysed or failed.
+ANALYSIS_PENDING_SECONDS = 600
+
+
+def _pending_analysis(row) -> set[str]:
+    """Which analysis results the dashboard should show as still on their way.
+
+    Only a step that is switched on, for a clip recent enough that the step
+    can actually be running, with nothing stored yet (an empty result means
+    "done, found nothing"). The page used to show "transcribing..." on every
+    clip without a transcript - which, with analysis off by default, was
+    every clip, forever.
+    """
+    if not row["clip_path"]:
+        return set()
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(row["detected_at"]).astimezone(timezone.utc)
+    if age.total_seconds() > ANALYSIS_PENDING_SECONDS:
+        return set()
+    return {
+        name
+        for name in ("transcript", "audio_events", "sound_events")
+        if row[name] is None and _flags.get(SETTING_KEYS[name], False)
+    }
+
+
 def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
     """URLs of whichever before/after context clips exist next to a clip."""
     if not clip_path:
@@ -622,6 +649,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
                     "transcript": row["transcript"] or "",
                     "audio_events": row["audio_events"] or "",
                     "sound_events": row["sound_events"] or "",
+                    "pending": _pending_analysis(row),
                     "stream_type": row["stream_type"],
                     "moment_type": row["moment_type"],
                 }
@@ -842,7 +870,7 @@ async def kick_webhook(
                 content, _channel_keywords(conn, broadcaster_user_id)
             )
 
-            insert_chat_message(
+            is_new = insert_chat_message(
                 conn,
                 message_id=payload["message_id"],
                 broadcaster_user_id=broadcaster_user_id,
@@ -853,6 +881,13 @@ async def kick_webhook(
                 created_at=payload.get("created_at", ""),
                 received_at=datetime.now(timezone.utc).isoformat(),
             )
+            if not is_new:
+                # Kick delivers a webhook again when it doesn't see it
+                # acknowledged in time - i.e. exactly when this service is
+                # struggling. The message is already stored and counted;
+                # feeding it to the detector a second time would inflate the
+                # very burst it is trying to measure.
+                return {"status": "duplicate"}
 
             spike = detector.record_message(
                 channel,
@@ -872,7 +907,14 @@ async def kick_webhook(
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
                 reason = ",".join(spike.reasons)
-                stream_elapsed = await _stream_elapsed_seconds(channel)
+                try:
+                    stream_elapsed = await _stream_elapsed_seconds(channel)
+                except Exception:
+                    # Stream time is a label on the dashboard. The detector
+                    # has already started its cooldown, so a moment dropped
+                    # here because Kick's API hiccuped would simply be gone.
+                    logger.warning("[%s] could not look up the stream's start time", channel, exc_info=True)
+                    stream_elapsed = None
                 moment_id = insert_moment(
                     conn,
                     broadcaster_user_id=broadcaster_user_id,

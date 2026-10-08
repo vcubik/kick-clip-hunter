@@ -96,6 +96,36 @@ class TestDetection:
         (moment,) = service.moments()
         assert moment["stream_elapsed_seconds"] is None
 
+    async def test_a_moment_is_kept_even_if_kick_cannot_be_asked_when_the_stream_started(self, service, caplog):
+        # The lookup only labels the moment. The detector's cooldown has
+        # already started by then, so a moment dropped here would be gone.
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL)
+        service.api.failures["/channels"] = 503
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            await service.crowd_laughs(CHANNEL)  # every delivery is answered with a 200
+
+        (moment,) = service.moments()
+        assert moment["reason"] == "laugh"
+        assert moment["stream_elapsed_seconds"] is None
+        assert any("could not look up the stream's start time" in r.getMessage() for r in caplog.records)
+
+    async def test_the_lookup_is_tried_again_for_the_next_moment(self, service, monkeypatch):
+        monkeypatch.setattr(detector, "COOLDOWN_SECONDS", 0)
+        service.watch(CHANNEL, live_for_seconds=1200)
+        service.warm_up(CHANNEL)
+        service.api.failures["/channels"] = 503
+        await service.crowd_laughs(CHANNEL, people=crowd_needed())
+        await service.settle()
+
+        service.api.failures.clear()
+        await service.chat(CHANNEL, "latecomer", "xDDD")
+
+        first, second = service.moments()
+        assert first["stream_elapsed_seconds"] is None
+        assert second["stream_elapsed_seconds"] == pytest.approx(1200, abs=5)
+
     async def test_the_stream_start_is_looked_up_once_and_cached(self, service):
         service.watch(CHANNEL)
 

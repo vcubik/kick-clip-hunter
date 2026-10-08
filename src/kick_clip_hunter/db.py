@@ -356,8 +356,10 @@ def insert_chat_message(
     emotes_json: str,
     created_at: str,
     received_at: str,
-) -> None:
-    conn.execute(
+) -> bool:
+    """Stores a chat message. Returns False if a message with this id was
+    already stored (a redelivered webhook), in which case nothing changes."""
+    cursor = conn.execute(
         """
         INSERT OR IGNORE INTO chat_messages
             (message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes, created_at, received_at)
@@ -375,6 +377,7 @@ def insert_chat_message(
         ),
     )
     conn.commit()
+    return cursor.rowcount == 1
 
 
 def insert_moment(

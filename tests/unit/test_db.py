@@ -327,6 +327,24 @@ class TestChannelKeywords:
 
 
 class TestChatMessages:
+    def test_storing_reports_whether_the_message_was_new(self, conn):
+        def store(message_id: str) -> bool:
+            return db.insert_chat_message(
+                conn,
+                message_id=message_id,
+                broadcaster_user_id=1,
+                channel_slug="some_channel",
+                sender_username="alice",
+                content="hello",
+                emotes_json="[]",
+                created_at=T0.isoformat(),
+                received_at=T0.isoformat(),
+            )
+
+        assert store("m-1") is True
+        assert store("m-1") is False
+        assert store("m-2") is True
+
     def test_a_message_is_stored_once_however_often_it_is_delivered(self, conn):
         store_chat(conn, "some_channel", "alice", "first delivery", T0, message_id="m-1")
         store_chat(conn, "some_channel", "alice", "retried delivery", T0, message_id="m-1")

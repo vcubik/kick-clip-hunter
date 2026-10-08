@@ -66,6 +66,11 @@ class TestVerifySignature:
 
         assert verify_signature(signer.public_key, MESSAGE_ID, TIMESTAMP, BODY, too_short) is False
 
+    @pytest.mark.parametrize("garbage", ["abc", "not base64 at all!!!", "a" * 345])
+    def test_a_header_that_is_not_even_base64_is_just_another_bad_signature(self, signer, garbage):
+        # The webhook URL is public; anything can arrive in this header.
+        assert verify_signature(signer.public_key, MESSAGE_ID, TIMESTAMP, BODY, garbage) is False
+
     def test_signs_the_raw_bytes_not_a_reencoding_of_them(self, signer):
         body = '{"content":"příliš žluťoučký kůň 🐴"}'.encode()
         signature = signer.sign(MESSAGE_ID, TIMESTAMP, body)
