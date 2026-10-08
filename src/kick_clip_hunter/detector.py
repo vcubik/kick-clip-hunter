@@ -304,6 +304,37 @@ def classify_message(content: str, channel_keyword_weights: dict[str, float] = {
     return laugh_weight, mention_weight
 
 
+def _reaction_weight(entries: list, index: int) -> float:
+    """Total weight of one reaction signal (entry field `index`) across
+    entries, counting each sender at most once per SHORT_WINDOW_SECONDS.
+
+    Kick doesn't rate-limit an account, so one person pasting the same emote
+    or "xd" five times in a row would otherwise carry five people's worth of
+    weight - which, together with two other chatters, was enough to clear the
+    weight threshold and the distinct-sender floor at once. Only a sender's
+    strongest message in each window-sized slice of time counts, so the
+    short window and the (much longer) baseline are measured the same way.
+    """
+    strongest: dict[tuple[str, int], float] = {}
+    for entry in entries:
+        weight = entry[index]
+        if weight > 0:
+            key = (entry[1], int(entry[0] // SHORT_WINDOW_SECONDS))
+            if weight > strongest.get(key, 0.0):
+                strongest[key] = weight
+    return sum(strongest.values())
+
+
+def _short_reaction_weight(entries: list, index: int) -> float:
+    """Same, for the short window itself: it is one slice, wherever it
+    happens to fall, so each sender counts exactly once."""
+    strongest: dict[str, float] = {}
+    for entry in entries:
+        if entry[index] > strongest.get(entry[1], 0.0):
+            strongest[entry[1]] = entry[index]
+    return sum(strongest.values())
+
+
 def _spike_ratio(
     short_count: float, baseline_count: float, baseline_seconds: float, min_absolute: float
 ) -> float | None:
@@ -375,7 +406,7 @@ def reaction_active(channel_slug: str, now: float | None = None, since: float | 
         if len({e[1] for e in short if e[index] > 0}) < min_unique:
             continue
         ratio = _spike_ratio(
-            sum(e[index] for e in short), sum(e[index] for e in baseline), baseline_seconds, min_absolute
+            _short_reaction_weight(short, index), _reaction_weight(baseline, index), baseline_seconds, min_absolute
         )
         if ratio is not None and ratio >= multiplier * SUSTAIN_FRACTION:
             return True
@@ -417,23 +448,23 @@ def record_message(
     short_unique_senders = len({e[1] for e in short})
     short_unique_contents = len({e[2] for e in short if e[2]})
     short_emote_count = sum(e[3] for e in short)
-    short_emote_weight = sum(e[4] for e in short)
+    short_emote_weight = _short_reaction_weight(short, 4)
     short_emote_unique_senders = len({e[1] for e in short if e[4] > 0})
-    short_laugh_weight = sum(e[5] for e in short)
+    short_laugh_weight = _short_reaction_weight(short, 5)
     short_laugh_count = sum(1 for e in short if e[5] > 0)
     short_laugh_unique_senders = len({e[1] for e in short if e[5] > 0})
-    short_mention_weight = sum(e[6] for e in short)
+    short_mention_weight = _short_reaction_weight(short, 6)
     short_mention_count = sum(1 for e in short if e[6] > 0)
     short_mention_unique_senders = len({e[1] for e in short if e[6] > 0})
 
     baseline_message_count = len(baseline)
     baseline_unique_senders = len({e[1] for e in baseline})
     baseline_unique_contents = len({e[2] for e in baseline if e[2]})
-    baseline_emote_weight = sum(e[4] for e in baseline)
+    baseline_emote_weight = _reaction_weight(baseline, 4)
     baseline_emote_unique_senders = len({e[1] for e in baseline if e[4] > 0})
-    baseline_laugh_weight = sum(e[5] for e in baseline)
+    baseline_laugh_weight = _reaction_weight(baseline, 5)
     baseline_laugh_unique_senders = len({e[1] for e in baseline if e[5] > 0})
-    baseline_mention_weight = sum(e[6] for e in baseline)
+    baseline_mention_weight = _reaction_weight(baseline, 6)
     baseline_mention_unique_senders = len({e[1] for e in baseline if e[6] > 0})
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
@@ -458,12 +489,12 @@ def record_message(
         and content_ratio >= MESSAGE_UNIQUE_CONTENT_MULTIPLIER
     )
 
-    # Judged by distinct senders (one person stacking several emotes in a
-    # single message, or spamming the same one across several messages,
-    # still only counts as one - classify_native_emotes caps a single
-    # message's contribution to one weight unit) and by a weighted sum that
-    # favors laugh-related emotes (emojiLol, KEKW, ...) over unrelated ones
-    # (asmonSmash, beeBobble, ...) that just happen to be popular.
+    # Judged by distinct senders and by a weighted sum that favors
+    # laugh-related emotes (emojiLol, KEKW, ...) over unrelated ones
+    # (asmonSmash, beeBobble, ...) that just happen to be popular. One person
+    # stacking several emotes in a single message, or spamming the same one
+    # across several messages, only counts once in both (see
+    # classify_native_emotes and _reaction_weight).
     emote_ratio = _spike_ratio(short_emote_weight, baseline_emote_weight, baseline_seconds, dynamic_min_count)
     emote_sender_ratio = _spike_ratio(
         short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
@@ -478,9 +509,9 @@ def record_message(
         reasons.append("emotes")
         scores.append(min(emote_ratio, MAX_RATIO_SCORE))
 
-    # laugh_weight sums LAUGH_STRONG_WEIGHT/_WEAK_WEIGHT per occurrence, so
-    # "xddd"+ reaches the threshold - and score - faster than an equal
-    # number of bare "xd"s would.
+    # laugh_weight sums LAUGH_STRONG_WEIGHT/_WEAK_WEIGHT per laughing
+    # sender, so "xddd"+ reaches the threshold - and score - faster than an
+    # equal number of bare "xd"s would.
     laugh_ratio = _spike_ratio(short_laugh_weight, baseline_laugh_weight, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
     laugh_sender_ratio = _spike_ratio(
         short_laugh_unique_senders, baseline_laugh_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
@@ -496,7 +527,7 @@ def record_message(
         scores.append(min(laugh_ratio, MAX_RATIO_SCORE))
 
     # mention_weight sums EMOTE_MENTION_LAUGH_WEIGHT/_OTHER_WEIGHT per
-    # occurrence, so laugh-related emotes reach the threshold - and score -
+    # mentioning sender, so laugh-related emotes reach the threshold - and score -
     # faster than an equal number of other-emote mentions would.
     mention_ratio = _spike_ratio(short_mention_weight, baseline_mention_weight, baseline_seconds, dynamic_min_count)
     mention_sender_ratio = _spike_ratio(
