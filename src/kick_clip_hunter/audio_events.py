@@ -16,19 +16,28 @@ Runs entirely on CPU - see moment-judge-design.md for why (no usable local
 GPU accelerator on this host: AMD RX 480, no practical CUDA/ROCm on Windows).
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .ml_loading import HEAVY_IMPORT_LOCK
+
+if TYPE_CHECKING:
+    from funasr import AutoModel
 
 # Downloaded once (~900MB) and cached here rather than in HF's default
 # ~/.cache, which lives on the small system drive on this machine (same
 # reasoning as transcriber.py's MODEL_DOWNLOAD_ROOT). Must be set before
-# funasr/huggingface_hub touch the default cache location on import.
+# funasr/huggingface_hub touch the default cache location on import. Those
+# imports are deferred to first use (see _get_model), but this line still
+# runs as soon as this module is imported - i.e. at startup, before any of
+# them - so the cache location is the same as when they were imported here.
 MODEL_DOWNLOAD_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "sensevoice_models"
 os.environ.setdefault("HF_HOME", str(MODEL_DOWNLOAD_ROOT))
-
-from funasr import AutoModel  # noqa: E402 - must follow the HF_HOME setdefault above
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -48,17 +57,22 @@ _model: AutoModel | None = None
 
 def _get_model() -> AutoModel:
     global _model
-    if _model is None:
-        MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-        logger.info("loading SenseVoice model %r (first use only)...", MODEL_ID)
-        _model = AutoModel(
-            model=MODEL_ID,
-            vad_model="fsmn-vad",
-            vad_kwargs={"max_single_segment_time": 30000},
-            device="cpu",
-            hub="hf",
-            disable_update=True,
-        )
+    with HEAVY_IMPORT_LOCK:
+        if _model is None:
+            # Imported on first use rather than at module level - see
+            # ml_loading.py.
+            from funasr import AutoModel
+
+            MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+            logger.info("loading SenseVoice model %r (first use only)...", MODEL_ID)
+            _model = AutoModel(
+                model=MODEL_ID,
+                vad_model="fsmn-vad",
+                vad_kwargs={"max_single_segment_time": 30000},
+                device="cpu",
+                hub="hf",
+                disable_update=True,
+            )
     return _model
 
 

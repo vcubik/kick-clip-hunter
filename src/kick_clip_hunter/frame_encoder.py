@@ -11,25 +11,29 @@ GPU accelerator on this host). A handful of frames per clip through a base-
 size SigLIP2 keeps this fast enough as a background task even on CPU.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .ml_loading import HEAVY_IMPORT_LOCK
+from .recorder import FFMPEG_BIN
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 # Downloaded once and cached here rather than in HF's default ~/.cache, which
 # lives on the small system drive on this machine (same reasoning as
 # transcriber.py's MODEL_DOWNLOAD_ROOT). Must be set before transformers/
-# huggingface_hub touch the default cache location on import.
+# huggingface_hub touch the default cache location on import. Those imports
+# are deferred to first use (see _get_model), but this line still runs as
+# soon as this module is imported, before any of them.
 MODEL_DOWNLOAD_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "siglip2_models"
 os.environ.setdefault("HF_HOME", str(MODEL_DOWNLOAD_ROOT))
-
-import numpy as np
-import torch
-from PIL import Image
-from transformers import AutoModel, AutoProcessor  # noqa: E402 - must follow HF_HOME setdefault above
-
-from .recorder import FFMPEG_BIN
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -59,11 +63,16 @@ _processor = None
 
 def _get_model():
     global _model, _processor
-    if _model is None:
-        MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-        logger.info("loading SigLIP2 model %r (first use only)...", MODEL_ID)
-        _model = AutoModel.from_pretrained(MODEL_ID).eval()
-        _processor = AutoProcessor.from_pretrained(MODEL_ID)
+    with HEAVY_IMPORT_LOCK:
+        if _model is None:
+            # Imported on first use rather than at module level - see
+            # ml_loading.py.
+            from transformers import AutoModel, AutoProcessor
+
+            MODEL_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+            logger.info("loading SigLIP2 model %r (first use only)...", MODEL_ID)
+            _model = AutoModel.from_pretrained(MODEL_ID).eval()
+            _processor = AutoProcessor.from_pretrained(MODEL_ID)
     return _model, _processor
 
 
@@ -85,6 +94,9 @@ def _extract_frames(clip_path: Path, count: int = FRAME_COUNT) -> list[Image.Ima
     the first SKIP_START_SECONDS (falls back to sampling the whole clip if
     it's too short for that to leave anything).
     """
+    with HEAVY_IMPORT_LOCK:
+        from PIL import Image
+
     duration = _clip_duration_seconds(clip_path)
     start = SKIP_START_SECONDS if duration > SKIP_START_SECONDS else 0.0
     sample_span = duration - start
@@ -122,6 +134,10 @@ def encode_clip(clip_path: Path) -> bytes:
     if not frames:
         return b""
     model, processor = _get_model()
+    with HEAVY_IMPORT_LOCK:
+        import numpy as np
+        import torch
+
     inputs = processor(images=frames, return_tensors="pt")
     with torch.no_grad():
         # This transformers version's get_image_features() returns the full
