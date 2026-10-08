@@ -1,5 +1,7 @@
 # kick-clip-hunter
 
+[![tests](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml/badge.svg)](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml)
+
 A bot that watches a list of [Kick](https://kick.com) streamers and detects potentially
 viral/funny moments based on chat activity. Detected moments are saved as a timestamp +
 stream-elapsed offset + chat snippet; automatic clip cutting is planned as a later phase.
@@ -44,6 +46,18 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 - `list_moments.py` - list detected moments
 
 View the dashboard at `http://localhost:8000/dashboard` (use its Refresh button to load new moments).
+
+## Testing
+
+```
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+More than 700 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
+no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
+every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
+what, and the short manual checklist for the parts that only exist against the real Kick.
 
 ## Architecture
 
