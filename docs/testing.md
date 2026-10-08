@@ -229,7 +229,7 @@ Some things only exist against the real Kick, and faking them would only test th
 
 | Not covered by the suite | Why |
 |---|---|
-| `kick_stream.get_live_stream_url`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser through kick.com's bot protection. |
+| `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser through kick.com's bot protection. |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. |
@@ -252,8 +252,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    sticks.
 7. **Try one analysis step.** Turn `Transcript` on; the next clip gets a transcript (the first one
    takes longer while the model loads). Turn it off again.
-8. **If the stream runs an ad:** the log shows `stream discontinuity`, a playlist is saved under
-   `data/hls_debug/`, and segments keep arriving afterwards.
+8. **If the stream runs an ad:** the log shows `stream discontinuity` with `ad=True`, a playlist
+   is saved under `data/hls_debug/`, and segments keep arriving afterwards. The recording's start
+   line says whether a VOD was found; if it was, a moment right after the ad logs `footage from
+   the VOD used` and neither its clip nor its "before" context shows the ad.
 9. **Shut down from the dashboard.** A banner shows how much work is still in flight; the process
    exits on its own once that is done, and not before.
 
@@ -313,7 +315,7 @@ than whatever the thresholds currently are. Retuning a number should not break a
 |---|---|
 | `SKIPPED ... ffmpeg/ffprobe not found on PATH` | Install a full ffmpeg build (see `CLAUDE.md`). |
 | `test tried to reach api.kick.com:443 - the suite must stay offline` | The code under test called Kick without the `kick_api` (or `service`) fixture in place. |
-| `a browser launch was attempted` | Something reached `get_live_stream_url` or `create_clip` unreplaced; use the `recording` fixture. |
+| `a browser launch was attempted` | Something reached `get_stream_urls` or `create_clip` unreplaced; use the `recording` fixture. |
 | `os._exit(0) was called` | The shutdown path ran in a test that didn't ask for `process_exits`. |
 | A run hangs | After 120 seconds pytest prints every thread's stack (`faulthandler_timeout`); the test at the bottom of the main thread's stack is the one. |
 | A test about "after the trigger" fails only on Windows | `time.monotonic()` ticks every ~16 ms there, so two things done back to back can share a timestamp; see `Service.clock_tick`. |

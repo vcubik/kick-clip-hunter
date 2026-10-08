@@ -28,6 +28,21 @@ playlist's own EXT-X-PROGRAM-DATE-TIME (UTC, like the timestamps in
 detector.py and db.py). `group` identifies a stretch of segments that are
 safe to join byte-for-byte - it changes on every restart, playlist
 discontinuity, segment-title change or gap.
+
+Ads. In some categories Kick stitches a mid-roll ad into the live playlist
+every so often, *replacing* the broadcast for its length rather than delaying
+it: the playlist announces a stream source other than "live" (an
+EXT-X-DATERANGE of class `live-video-net-stream-source`), lists the ad's
+segments, then switches back, and the broadcast's own segments for that
+stretch are never listed. Those ad segments are saved like any others, in a
+group marked as an ad. What was actually on stream meanwhile is only in the
+stream's own recording (its VOD), which Kick publishes as the broadcast goes
+along, ad-free, in longer segments carrying the same program clock. So when a
+clip's window touches an ad, the matching VOD segments are downloaded into
+the buffer as one more group (see `backfill_from_vod`); covering the whole
+window, that group is then the one the clip is cut from. If the channel keeps
+no VOD, or it can't be fetched, the clip is cut from the live segments as
+before - ad included.
 """
 
 import logging
@@ -35,6 +50,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,7 +58,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from .kick_stream import get_live_stream_url
+from .kick_stream import get_stream_urls
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -84,6 +100,20 @@ SEGMENT_TIMEOUT_SECONDS = 20
 # A fresh run starts this many segments back from the live edge rather than
 # downloading the playlist's whole window.
 INITIAL_SEGMENTS = 3
+# The date-range class announcing where the segments that follow come from,
+# and the source name that means the broadcast itself rather than an ad.
+STREAM_SOURCE_CLASS = "live-video-net-stream-source"
+STREAM_SOURCE_ATTRIBUTE = "X-NET-LIVE-VIDEO-STREAM-SOURCE"
+LIVE_STREAM_SOURCE = "live"
+# Group-name suffix of ad segments, and the group of segments taken from the
+# stream's VOD to stand in for them.
+AD_GROUP_SUFFIX = "-ad"
+VOD_GROUP = "vod"
+# The VOD trails the live stream by a segment or two (about 12s each). A clip
+# whose window ends later than the VOD reaches waits up to this long for it
+# to catch up, re-reading its playlist this often.
+VOD_WAIT_SECONDS = 45
+VOD_POLL_SECONDS = 3
 # Raw playlists saved at each discontinuity, for working out how ad breaks
 # are marked. Capped per channel.
 DEBUG_PLAYLIST_DIR = Path("data/hls_debug")
@@ -108,6 +138,7 @@ class _PlaylistSegment:
     title: str
     started_at: datetime | None
     discontinuity: bool
+    ad: bool = False
 
 
 @dataclass
@@ -128,11 +159,17 @@ class _StoredSegment:
     def ended_at(self) -> datetime:
         return self.started_at + timedelta(seconds=self.duration)
 
+    @property
+    def is_ad(self) -> bool:
+        return self.group.endswith(AD_GROUP_SUFFIX)
+
 
 @dataclass
 class _Run:
     started_at: datetime
     variant_url: str
+    vod_url: str | None = None
+    vod_variant_url: str | None = None
     thread: threading.Thread | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     last_progress_at: datetime | None = None
@@ -167,6 +204,7 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
     duration, title = 0.0, ""
     program_time: datetime | None = None
     discontinuity = False
+    stream_source = LIVE_STREAM_SOURCE
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
@@ -181,13 +219,17 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
         elif line == "#EXT-X-DISCONTINUITY":
             discontinuity = True
         elif line.startswith("#EXT-X-DATERANGE:"):
-            classes.add(_attributes(line).get("CLASS", ""))
+            attributes = _attributes(line)
+            classes.add(attributes.get("CLASS", ""))
+            if attributes.get("CLASS") == STREAM_SOURCE_CLASS:
+                stream_source = attributes.get(STREAM_SOURCE_ATTRIBUTE, LIVE_STREAM_SOURCE)
         elif line == "#EXT-X-ENDLIST":
             ended = True
         elif line and not line.startswith("#"):
             segments.append(
                 _PlaylistSegment(
-                    sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity
+                    sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity,
+                    ad=stream_source != LIVE_STREAM_SOURCE,
                 )
             )
             sequence += 1
@@ -198,6 +240,10 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
     return _Playlist(segments, ended, classes - {""})
 
 
+def _segment_name(started_at: datetime, duration: float, group: str) -> str:
+    return f"{int(started_at.timestamp() * 1000)}_{int(duration * 1000)}_{group}.ts"
+
+
 class ChannelRecorder:
     def __init__(self, channel_slug: str):
         self.channel_slug = channel_slug
@@ -206,17 +252,21 @@ class ChannelRecorder:
         self._run: _Run | None = None
 
     def _start_run(self) -> None:
-        master_url = get_live_stream_url(self.channel_slug)
-        response = httpx.get(master_url, timeout=PLAYLIST_TIMEOUT_SECONDS)
+        urls = get_stream_urls(self.channel_slug)
+        response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
         response.raise_for_status()
         run = _Run(
             started_at=datetime.now(timezone.utc),
-            variant_url=_pick_variant(response.text, master_url),
+            variant_url=_pick_variant(response.text, urls.live),
+            vod_url=urls.vod,
         )
         run.thread = threading.Thread(target=self._record, args=(run,), daemon=True)
         self._run = run
         run.thread.start()
-        logger.info("[%s] recording started -> %s", self.channel_slug, self._base_dir)
+        logger.info(
+            "[%s] recording started -> %s (VOD %s)",
+            self.channel_slug, self._base_dir, "found" if urls.vod else "not available",
+        )
 
     def _stop_run(self) -> None:
         if self._run is None:
@@ -272,8 +322,8 @@ class ChannelRecorder:
                 if segment.discontinuity or title_changed or gap:
                     group += 1
                     logger.info(
-                        "[%s] stream discontinuity (tag=%s, title %r -> %r, gap=%s) - possible ad break",
-                        self.channel_slug, segment.discontinuity, last_title, segment.title, gap,
+                        "[%s] stream discontinuity (tag=%s, title %r -> %r, gap=%s, ad=%s)",
+                        self.channel_slug, segment.discontinuity, last_title, segment.title, gap, segment.ad,
                     )
                     self._save_debug_playlist(response.text)
                 started_at = segment.started_at or last_end or (
@@ -281,7 +331,8 @@ class ChannelRecorder:
                 )
                 last_sequence, last_title = segment.sequence, segment.title
                 last_end = started_at + timedelta(seconds=segment.duration)
-                if self._download(client, segment, started_at, f"{run_id}-{group}"):
+                group_name = f"{run_id}-{group}{AD_GROUP_SUFFIX if segment.ad else ''}"
+                if self._download(client, segment, started_at, group_name):
                     run.last_progress_at = datetime.now(timezone.utc)
                 else:
                     # The next segment can't be joined straight onto the one
@@ -294,7 +345,7 @@ class ChannelRecorder:
             run.stop_event.wait(PLAYLIST_POLL_SECONDS)
 
     def _download(self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str) -> bool:
-        name = f"{int(started_at.timestamp() * 1000)}_{int(segment.duration * 1000)}_{group}.ts"
+        name = _segment_name(started_at, segment.duration, group)
         for attempt in (1, 2):
             try:
                 response = client.get(segment.url)
@@ -400,20 +451,68 @@ class ChannelRecorder:
         """All buffered segments whose time range overlaps [start, end], in order."""
         return [s for s in self._stored_segments() if s.ended_at >= start and s.started_at <= end]
 
+    def backfill_from_vod(self, start: datetime, end: datetime) -> bool:
+        """Download the stream's own recording of [start, end] into the buffer,
+        as the VOD group. Returns whether any of it is there afterwards.
+
+        Blocks while the VOD hasn't reached `end` yet (see VOD_WAIT_SECONDS).
+        """
+        run = self._run
+        if run is None or run.vod_url is None:
+            return False
+        have = {segment.path.name for segment in self._stored_segments() if segment.group == VOD_GROUP}
+        deadline = time.monotonic() + VOD_WAIT_SECONDS
+        try:
+            with httpx.Client(timeout=SEGMENT_TIMEOUT_SECONDS) as client:
+                if run.vod_variant_url is None:
+                    response = client.get(run.vod_url, timeout=PLAYLIST_TIMEOUT_SECONDS)
+                    response.raise_for_status()
+                    run.vod_variant_url = _pick_variant(response.text, run.vod_url)
+                while True:
+                    response = client.get(run.vod_variant_url, timeout=PLAYLIST_TIMEOUT_SECONDS)
+                    response.raise_for_status()
+                    timed = [s for s in _parse_playlist(response.text, run.vod_variant_url).segments if s.started_at]
+                    reached = bool(timed) and timed[-1].started_at + timedelta(seconds=timed[-1].duration) >= end
+                    if reached or time.monotonic() >= deadline or run.stop_event.wait(VOD_POLL_SECONDS):
+                        break
+                for segment in timed:
+                    if segment.started_at > end or segment.started_at + timedelta(seconds=segment.duration) < start:
+                        continue
+                    if _segment_name(segment.started_at, segment.duration, VOD_GROUP) in have:
+                        continue
+                    self._download(client, segment, segment.started_at, VOD_GROUP)
+        except (httpx.HTTPError, RecorderError) as exc:
+            logger.warning("[%s] VOD backfill failed: %s", self.channel_slug, type(exc).__name__)
+        found = any(segment.group == VOD_GROUP for segment in self.segments_overlapping(start, end))
+        logger.info(
+            "[%s] ad in clip window - footage from the VOD %s", self.channel_slug, "used" if found else "not available"
+        )
+        return found
+
 
 def _best_group(segments: list[_StoredSegment], start: datetime, end: datetime) -> list[_StoredSegment]:
     """The segments of whichever group covers the most of [start, end].
 
     Segments from different groups can't be reliably joined into one clip
     (the stream layout may differ on either side of the boundary), so a
-    window straddling one keeps only its longer side.
+    window straddling one keeps only its longer side. An ad is the exception:
+    it is only chosen when there is nothing else, however long it is.
     """
     coverage: dict[str, float] = {}
     for segment in segments:
         overlap = (min(segment.ended_at, end) - max(segment.started_at, start)).total_seconds()
         coverage[segment.group] = coverage.get(segment.group, 0.0) + max(overlap, 0.0)
-    best = max(coverage, key=coverage.get)
+    best = max(coverage, key=lambda group: (not group.endswith(AD_GROUP_SUFFIX), coverage[group]))
     return [s for s in segments if s.group == best]
+
+
+def _window_segments(recorder: ChannelRecorder, start: datetime, end: datetime) -> list[_StoredSegment]:
+    """Buffered segments overlapping [start, end] - joined, if an ad is among
+    them, by the VOD's footage of the same stretch."""
+    segments = recorder.segments_overlapping(start, end)
+    if any(s.is_ad for s in segments) and recorder.backfill_from_vod(start, end):
+        segments = recorder.segments_overlapping(start, end)
+    return segments
 
 
 def _clip_segments(
@@ -421,7 +520,7 @@ def _clip_segments(
 ) -> list[_StoredSegment]:
     clip_start = start - timedelta(seconds=pre_roll_seconds + PLAYBACK_DELAY_SECONDS)
     clip_end = end + timedelta(seconds=post_roll_seconds - PLAYBACK_DELAY_SECONDS)
-    segments = recorder.segments_overlapping(clip_start, clip_end)
+    segments = _window_segments(recorder, clip_start, clip_end)
     if not segments:
         raise RecorderError(f"No buffered segments cover {start} - {end} for {recorder.channel_slug!r}")
     return _best_group(segments, clip_start, clip_end)
@@ -501,7 +600,7 @@ def extract_context_clips(
         # Only segments that lie (by their midpoint) inside the window, so
         # nothing from the clip itself is repeated.
         segments = [
-            s for s in recorder.segments_overlapping(window_start, window_end)
+            s for s in _window_segments(recorder, window_start, window_end)
             if window_start <= s.started_at + timedelta(seconds=s.duration / 2) < window_end
         ]
         if segments:
