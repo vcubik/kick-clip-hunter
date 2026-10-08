@@ -73,8 +73,9 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   10 x 10 MB) - check the file first when something went wrong while unattended. On
   startup it also turns off the console's QuickEdit mode (`win_console.py`), which
   otherwise freezes the whole app whenever someone clicks in the terminal window.
-- Dashboard: `GET /dashboard` (auto-refreshes every 15s, skipped while a clip video is
-  playing so it doesn't get cut off mid-watch)
+- Dashboard: `GET /dashboard`. It never reloads on its own; the Refresh button at the top
+  reloads it and shows how many new moments/clips have arrived since the page was loaded
+  (polled from `GET /moments/status`)
 - No automated test suite yet — verification so far has been ad-hoc unit tests written
   inline during development (rolling-window detector logic, signature verification, etc.),
   not committed as a pytest suite.

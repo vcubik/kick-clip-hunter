@@ -43,7 +43,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 - `list_watchlist.py` - list the current watchlist
 - `list_moments.py` - list detected moments
 
-View the dashboard at `http://localhost:8000/dashboard` (auto-refreshes every 15s).
+View the dashboard at `http://localhost:8000/dashboard` (use its Refresh button to load new moments).
 
 ## Architecture
 

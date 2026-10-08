@@ -30,6 +30,7 @@ from .db import (
     MOMENT_TYPES,
     STREAM_TYPES,
     count_moments,
+    count_moments_with_clip,
     get_channel_keywords,
     get_chat_snippet,
     get_connection,
@@ -527,6 +528,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
 
         channels = get_moment_channels(conn)
         total_moments = count_moments(conn, channel_slug=channel)
+        moment_status = _moment_status(conn)
 
         moments = []
         for row in get_recent_moments(conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel):
@@ -570,6 +572,7 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "offset": offset,
             "page_size": MOMENTS_PAGE_SIZE,
             "total_moments": total_moments,
+            "moment_status": moment_status,
             "watching_enabled": _flags.get("watching_enabled", True),
             "analysis_settings": [
                 (name, label, _flags.get(SETTING_KEYS[name], False))
@@ -581,6 +584,21 @@ async def dashboard(request: Request, channel: str | None = None, offset: int = 
             "moment_types": MOMENT_TYPES,
         },
     )
+
+
+def _moment_status(conn) -> dict[str, int]:
+    return {"moments": count_moments(conn), "clips": count_moments_with_clip(conn)}
+
+
+@app.get("/moments/status")
+async def moments_status():
+    """Totals the dashboard polls to tell whether anything new has arrived
+    since it was loaded, without reloading the page."""
+    conn = get_connection()
+    try:
+        return _moment_status(conn)
+    finally:
+        conn.close()
 
 
 @app.post("/moments/{moment_id}/rating")
