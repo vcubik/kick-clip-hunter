@@ -1,0 +1,62 @@
+# Tooling configuration only - the project is run from a checkout, not
+# installed as a package (see README.md).
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# src/ for the application package, scripts/ so the CLI helpers can be
+# imported and tested like any other module.
+pythonpath = ["src", "scripts"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+markers = [
+    "integration: several modules together, or real local I/O (an HTTP server on 127.0.0.1, threads, the ASGI app)",
+    "e2e: the whole pipeline, from a signed webhook to a clip on the dashboard",
+    "ffmpeg: needs the ffmpeg and ffprobe binaries on PATH (skipped when they are missing)",
+]
+# Any warning is a failure: it is either a deprecation to act on or a
+# resource (a task, a thread, a file) that a test did not clean up.
+filterwarnings = [
+    "error",
+]
+# A test that hangs dumps every thread's stack after this many seconds
+# instead of sitting there silently - several tests involve threads.
+faulthandler_timeout = 120
+
+[tool.coverage.run]
+source = ["src/kick_clip_hunter"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+# Measured coverage is in the mid-nineties; what is left is code that needs
+# a real browser or a multi-gigabyte model (see docs/testing.md). The floor
+# sits below that so an ordinary change doesn't trip it, but a module added
+# without tests does.
+fail_under = 90
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "scripts", "."]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import order
+    "B",   # bugbear: likely bugs and design problems
+    "UP",  # outdated syntax for the supported Python version
+    "RUF", # ruff's own checks (dangling asyncio tasks, unused noqa, ...)
+]
+ignore = [
+    "UP017", # `timezone.utc` is used consistently throughout; `datetime.UTC` is the same object
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kick_clip_hunter", "tests"]

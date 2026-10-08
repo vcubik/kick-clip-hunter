@@ -1,10 +1,10 @@
-fastapi
-uvicorn[standard]
-httpx
-python-dotenv
-cryptography
-jinja2
-patchright
+# The whole application. `pip install -r requirements.txt` as before; the
+# core service's dependencies live in requirements-core.txt so the test
+# suite (requirements-dev.txt) can install them without the ML stack below.
+-r requirements-core.txt
+
+# Per-clip analysis - off by default, loaded on first use (see the "Per-clip
+# analysis" switches on the dashboard and ml_loading.py).
 faster-whisper
 # funasr/transformers pull in torch as a dependency - install the CPU-only
 # build first (see CLAUDE.md's Setup section) or pip will grab the default

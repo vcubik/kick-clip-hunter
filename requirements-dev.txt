@@ -1,0 +1,16 @@
+# Test suite and linting - see docs/testing.md.
+#
+# Deliberately *not* the ML stack from requirements.txt: the suite never
+# runs a real model (each library is replaced by a stand-in under its import
+# name), which is what keeps a CI run to a couple of minutes instead of a
+# multi-gigabyte install.
+-r requirements-core.txt
+
+pytest
+pytest-cov
+anyio   # its pytest plugin runs the async tests (already a FastAPI dependency)
+numpy   # analysis-wrapper tests push model-shaped arrays through the tagging code
+Pillow  # frame extraction is tested against real images
+# Pinned, unlike everything else: a new release can add lint rules or change
+# formatting, and CI should only go red for something in this repository.
+ruff==0.16.10
