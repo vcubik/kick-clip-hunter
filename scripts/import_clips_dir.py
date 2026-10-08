@@ -23,8 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from import_clip import import_clip  # noqa: E402 - same scripts/ dir, needs sys.path above first
-
+# import_clip.py lives next to this script, whose own folder is on sys.path.
+from import_clip import import_clip
 from kick_clip_hunter.db import get_connection
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts"}

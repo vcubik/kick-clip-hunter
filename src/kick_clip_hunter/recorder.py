@@ -186,7 +186,9 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
             ended = True
         elif line and not line.startswith("#"):
             segments.append(
-                _PlaylistSegment(sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity)
+                _PlaylistSegment(
+                    sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity
+                )
             )
             sequence += 1
             # A date-time tag applies to the one segment after it; carry it
@@ -380,7 +382,8 @@ class ChannelRecorder:
         if self._run is None or died or self._is_stalled():
             if self._run is not None and not died:
                 logger.warning(
-                    "[%s] recording stalled (no new segment in %ds), restarting", self.channel_slug, STALL_TIMEOUT_SECONDS
+                    "[%s] recording stalled (no new segment in %ds), restarting",
+                    self.channel_slug, STALL_TIMEOUT_SECONDS,
                 )
             self._stop_run()
             self._start_run()
