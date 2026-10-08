@@ -187,6 +187,12 @@ _flags: dict[str, bool] = {}
 # process only actually exits once it (and any open moment session) is empty.
 _shutdown_requested = False
 _background_tasks: set[asyncio.Task] = set()
+# The event loop only holds a weak reference to a task, so one that nothing
+# else refers to can be garbage-collected before it finishes - which, for the
+# task that waits for in-flight work and then exits, would leave a "shutting
+# down" service running forever. It deliberately isn't in _background_tasks:
+# it is the thing waiting for that set to empty.
+_shutdown_task: asyncio.Task | None = None
 
 
 def _track_task(coro) -> asyncio.Task:
@@ -736,7 +742,7 @@ async def set_setting(name: str, enabled: int = 1):
 
 @app.post("/shutdown")
 async def shutdown():
-    global _shutdown_requested
+    global _shutdown_requested, _shutdown_task
     pending = len(_moment_sessions) + len(_background_tasks)
     if _shutdown_requested:
         return {"status": "already shutting down", "pending_work_count": pending}
@@ -745,7 +751,7 @@ async def shutdown():
         "shutdown requested from dashboard - watching stopped, waiting on %d pending item(s) before exiting",
         pending,
     )
-    asyncio.create_task(_shutdown_when_idle())
+    _shutdown_task = asyncio.create_task(_shutdown_when_idle())
     return {"status": "shutting down", "pending_work_count": pending}
 
 
@@ -757,16 +763,16 @@ async def add_channel(slug: str):
     try:
         result = await add_channel_to_watchlist(slug)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 400:
             # Kick's API returns 400, not an empty result, for an unknown slug.
-            raise HTTPException(status_code=404, detail=f"no such Kick channel: {slug!r}")
+            raise HTTPException(status_code=404, detail=f"no such Kick channel: {slug!r}") from e
         logger.exception("failed to add %s to the watchlist", slug)
-        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
-    except Exception:
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log") from e
+    except Exception as e:
         logger.exception("failed to add %s to the watchlist", slug)
-        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log")
+        raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log") from e
     logger.info(
         "added %s to the watchlist (broadcaster_user_id=%s, %d emote keyword(s))",
         slug, result["broadcaster_user_id"], result["emote_count"],
@@ -901,7 +907,8 @@ async def kick_webhook(
                 _track_task(_run_moment_session(session))
                 stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
                 logger.info(
-                    "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
+                    "MOMENT detected in [%s] (%s) at stream time %s: "
+                    "%d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
                     channel,
                     reason,
                     stream_time,
