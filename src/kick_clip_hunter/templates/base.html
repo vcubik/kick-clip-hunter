@@ -1,0 +1,35 @@
+{#- The frame every dashboard page shares: the bar across the top with the
+    two pages, what the service is doing right now and the switch that pauses
+    it, and the banner that takes over once a shutdown has been asked for. -#}
+{%- from "_macros.html" import switch -%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} - Clip Hunter</title>
+<link rel="stylesheet" href="/static/dashboard.css?v={{ asset_version }}">
+<script src="/static/dashboard.js?v={{ asset_version }}" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">Clip Hunter</div>
+  <nav class="bar-nav" aria-label="Pages">
+    <a href="/dashboard"{% if nav == "review" %} aria-current="page"{% endif %}>Review</a>
+    <a href="/dashboard/channels"{% if nav == "channels" %} aria-current="page"{% endif %}>Channels</a>
+  </nav>
+  <div class="bar-state">
+    <span class="ch-lamp{% if recording %} ch-lamp-rec{% endif %}">{{ "Recording" if recording else "Not recording" }}</span>
+    <span class="bar-meta">{{ channel_count_words }}</span>
+    <span class="bar-switch">
+      <span aria-hidden="true">Watching</span>
+      {{ switch("Watching", "/settings/watching", watching_enabled, disabled=shutdown_requested) }}
+    </span>
+  </div>
+</header>
+{% if shutdown_requested %}
+<div class="ch-banner ch-banner-halt" role="status"><span><b>Shutting down.</b> {{ shutdown_words }}</span></div>
+{% endif %}
+{% block main %}{% endblock %}
+</body>
+</html>

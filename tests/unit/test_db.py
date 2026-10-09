@@ -439,6 +439,78 @@ class TestMoments:
             "m2"
         ]
 
+    def test_moments_detected_at_the_same_instant_come_in_a_fixed_order(self, conn):
+        # Paging through a list must not show one of them twice and skip the
+        # other; the later one stored counts as the newer.
+        for reason in ["first", "second", "third"]:
+            moment_id = store_moment(conn, reason=reason)
+            conn.execute("UPDATE moments SET detected_at = ? WHERE id = ?", ("2026-01-01T12:00:00Z", moment_id))
+        conn.commit()
+
+        assert [row["reason"] for row in db.get_recent_moments(conn)] == ["third", "second", "first"]
+        pages = [db.get_recent_moments(conn, limit=1, offset=offset)[0]["reason"] for offset in range(3)]
+        assert pages == ["third", "second", "first"]
+
+    def rated(self, conn, ratings: dict[str, int | None]) -> None:
+        """One moment per entry, named by its reason, in the order given."""
+        for second, (reason, rating) in enumerate(ratings.items()):
+            channel = "channel_b" if reason.startswith("b_") else "channel_a"
+            moment_id = store_moment(conn, channel=channel, reason=reason)
+            conn.execute("UPDATE moments SET detected_at = ? WHERE id = ?", (f"2026-01-01T12:00:0{second}Z", moment_id))
+            db.update_moment_rating(conn, moment_id, rating)
+
+    def test_the_list_can_be_narrowed_to_what_is_not_rated_yet(self, conn):
+        self.rated(conn, {"unrated": None, "poor": 1, "good": 5, "b_unrated": None})
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, unrated=True)] == ["b_unrated", "unrated"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, channel_slug="channel_a", unrated=True)] == [
+            "unrated"
+        ]
+
+    def test_or_to_what_was_rated_at_least_so_high(self, conn):
+        self.rated(conn, {"unrated": None, "one": 1, "three": 3, "four": 4, "b_five": 5})
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, min_rating=4)] == ["b_five", "four"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, min_rating=1)] == [
+            "b_five",
+            "four",
+            "three",
+            "one",
+        ]
+        assert [row["reason"] for row in db.get_recent_moments(conn, channel_slug="channel_a", min_rating=4)] == [
+            "four"
+        ]
+
+    def test_a_narrowed_list_is_paged_like_the_full_one(self, conn):
+        self.rated(conn, {"a": None, "rated": 2, "b": None, "c": None})
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, limit=2, unrated=True)] == ["c", "b"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, limit=2, offset=2, unrated=True)] == ["a"]
+
+    def test_counts_follow_the_same_narrowing(self, conn):
+        self.rated(conn, {"unrated": None, "one": 1, "four": 4, "b_five": 5, "b_unrated": None})
+
+        assert db.count_moments(conn) == 5
+        assert db.count_moments(conn, unrated=True) == 2
+        assert db.count_moments(conn, min_rating=4) == 2
+        assert db.count_moments(conn, channel_slug="channel_a", unrated=True) == 1
+        assert db.count_moments(conn, channel_slug="channel_a", min_rating=4) == 1
+        assert db.count_moments(conn, channel_slug="nobody", unrated=True) == 0
+
+    def test_one_moment_can_be_fetched_by_its_id(self, conn):
+        store_moment(conn, reason="first")
+        second = store_moment(conn, channel="channel_b", reason="second")
+        db.update_moment_rating(conn, second, 4)
+
+        row = db.get_moment(conn, second)
+
+        assert (row["id"], row["channel_slug"], row["reason"], row["rating"]) == (second, "channel_b", "second", 4)
+        # The same columns the list hands out, so the two can be shown alike.
+        assert row.keys() == db.get_recent_moments(conn)[0].keys()
+
+    def test_a_moment_that_does_not_exist_is_none(self, conn):
+        assert db.get_moment(conn, 999) is None
+
     def test_counts(self, conn):
         store_moment(conn, channel="channel_a")
         with_clip = store_moment(conn, channel="channel_a")

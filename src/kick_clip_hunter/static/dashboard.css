@@ -1,0 +1,333 @@
+/* Clip Hunter dashboard.
+
+   One stylesheet for both pages: the design tokens first - every colour,
+   size and space below is one of them - then the components, then the layout
+   of the pages.
+
+   The rules the tokens are used by:
+   - The tool is grey and flat. No shadows, no gradients, no cards; a 1px
+     `line` separates panes and `quiet` hairlines separate rows.
+   - One colour, one meaning. `lit` is something you set, `sunk` is where you
+     are, `rec` is the recording lamp. Nothing is coloured for decoration,
+     and a problem is stated in words, not in red.
+   - Hierarchy comes from weight and from the typeface's width, not from
+     size, capitals or dimmer greys: text is `text` or `text-2`, nothing
+     fainter is readable on `field`. */
+
+@font-face {
+  font-family: Archivo;
+  src: url("fonts/Archivo-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* The neutral greys the tool is built from. */
+  --field: #585858;       /* what everything is laid out on */
+  --quiet: #4D4D4D;       /* resting fills, hairlines between rows */
+  --inset: #434343;       /* what is typed or pressed into; the top bar */
+  --line: #3A3A3A;        /* between panes, around inputs */
+  --sunk: #2B2B2B;        /* where you are */
+  --raise: #6E6E6E;       /* buttons that act */
+  --lit: #EDEDED;         /* what you set; the one primary button of a view */
+  --on-lit: #1E1E1E;
+  --text: #F4F4F4;
+  --text-2: #DADADA;      /* secondary text; the dimmest that passes contrast */
+  --placeholder: #C8C8C8;
+  --veil: #0000001A;      /* laid over a fill on hover, twice when pressed */
+  --rec: #FF4A3D;         /* the dot of a recording lamp, nothing else */
+  --video: #000000;
+
+  /* Chat usernames; a name always gets the same one. */
+  --nick-1: #FFC2D2;
+  --nick-2: #9AD8FF;
+  --nick-3: #9CE8C2;
+  --nick-4: #DCCBFF;
+  --nick-5: #FFC7A1;
+  --nick-6: #8FE3E3;
+
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-36: 36px;
+  --space-48: 48px;
+
+  --radius-control: 2px;  /* controls only; panes, rows and the clip are square */
+  --radius-dot: 50%;
+
+  --h-compact: 28px;
+  --h-tab: 32px;
+  --h-control: 36px;
+  --h-row: 40px;
+  --h-bar: 48px;
+  --w-queue: 320px;
+  --w-chat: 340px;
+
+  /* One family; its width axis carries role. */
+  --font-sans: Archivo, "Segoe UI", system-ui, sans-serif;
+  --width-brand: 118%;    /* the product name only */
+  --width-text: 100%;     /* everything that is read */
+  --width-compact: 90%;   /* words on controls, meta, times, headings */
+  --width-counter: 75%;   /* the stream-time counter only */
+
+  /* Everything on the review page except the picture: the top bar and what
+     sits above and below the clip. The clip is sized so that all of it fits
+     one screen without scrolling. */
+  --stage-rest: 384px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  margin: 0;
+  background: var(--field);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-stretch: var(--width-text);
+  scrollbar-color: var(--raise) transparent;
+}
+h1, h2, p, dl, dd { margin: 0; }
+button, select, input, textarea { font: inherit; }
+button { cursor: pointer; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--lit); outline-offset: 2px; }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Type styles that are not tied to one component. */
+.brand { font-size: 16px; line-height: 20px; font-weight: 750; font-stretch: var(--width-brand); letter-spacing: 0.01em; }
+.counter { font-size: 36px; line-height: 36px; font-weight: 650; font-stretch: var(--width-counter); }
+.heading { font-size: 28px; line-height: 32px; font-weight: 700; font-stretch: var(--width-compact); }
+.title { font-size: 21px; line-height: 24px; font-weight: 700; }
+.lead { max-width: 60ch; font-size: 16px; line-height: 24px; }
+
+/* ---- Components ---------------------------------------------------- */
+
+.ch-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.ch-cap { font-size: 12px; line-height: 16px; color: var(--text-2); }
+.ch-meta { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
+.status-line { min-height: 16px; margin-top: var(--space-4); font-size: 13px; line-height: 16px; }
+
+/* Button: `raise` for whatever acts, `lit` for the one action a view is
+   waiting for, `quiet` for paging and backing out. */
+.ch-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); height: var(--h-control); padding: 0 var(--space-12); border: 0; border-radius: var(--radius-control); background-color: var(--raise); color: var(--text); font-size: 14px; font-weight: 600; white-space: nowrap; text-decoration: none; }
+.ch-btn-primary, .ch-btn[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); }
+.ch-btn-quiet { background-color: var(--quiet); font-weight: 500; }
+.ch-btn-compact { height: var(--h-compact); font-size: 13px; }
+.ch-btn-icon { width: var(--h-control); padding: 0; }
+.ch-btn:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.ch-btn:active { background-image: linear-gradient(var(--veil), var(--veil)), linear-gradient(var(--veil), var(--veil)); }
+.ch-btn:disabled { opacity: 0.45; cursor: not-allowed; background-image: none; }
+
+/* Switch: two halves, the lit one is the state. */
+.ch-switch { display: inline-flex; gap: var(--space-2); }
+.ch-switch button { height: var(--h-compact); padding: 0 10px; border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; font-weight: 500; font-stretch: var(--width-compact); }
+.ch-switch button[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); font-weight: 700; }
+.ch-switch button:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.ch-switch button:disabled { opacity: 0.45; cursor: not-allowed; background-image: none; }
+
+/* Tabs: where you are - `sunk` with a `lit` edge along the bottom. */
+.ch-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--space-2); }
+.ch-tab { display: flex; align-items: center; justify-content: center; gap: var(--space-4); height: var(--h-tab); padding: 2px var(--space-8) 0; border-bottom: 2px solid transparent; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; font-weight: 500; font-stretch: var(--width-compact); white-space: nowrap; text-decoration: none; }
+.ch-tab[aria-current="true"] { background-color: var(--sunk); border-bottom-color: var(--lit); font-weight: 700; }
+.ch-tab:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+
+/* Tag: what you set. One per group; the chosen one is lit. */
+.ch-tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.ch-tags > span { width: 56px; font-size: 13px; color: var(--text-2); }
+.ch-tag { height: var(--h-compact); padding: 0 10px; border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; font-weight: 500; font-stretch: var(--width-compact); }
+.ch-tag[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); font-weight: 700; }
+.ch-tag:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+
+/* Rating keys, lit up to the chosen one so the row reads as a level, and
+   the same rating as a meter in a queue row. */
+.ch-keys { display: inline-flex; gap: var(--space-2); }
+.ch-key { width: 44px; height: var(--h-control); border: 0; border-radius: var(--radius-control); background-color: var(--inset); color: var(--text); font-size: 16px; font-weight: 700; }
+.ch-key.is-lit { background-color: var(--lit); color: var(--on-lit); }
+.ch-key:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.ch-meter { display: inline-flex; gap: 1px; }
+.ch-meter i { width: 5px; height: 12px; background: var(--inset); }
+.ch-meter i.is-lit { background: var(--lit); }
+
+/* Lamp: a dot and a word in a `sunk` housing. The word is never left out. */
+.ch-lamp { display: inline-flex; align-items: center; gap: var(--space-8); height: var(--h-compact); padding: 0 10px; border-radius: var(--radius-control); background: var(--sunk); font-size: 13px; white-space: nowrap; }
+.ch-lamp::before { content: ""; width: 8px; height: 8px; border-radius: var(--radius-dot); background: var(--raise); }
+.ch-lamp-rec::before { background: var(--rec); }
+
+/* Fields */
+.ch-input { height: var(--h-control); padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); color: var(--text); font-size: 13px; }
+.ch-input::placeholder { color: var(--placeholder); opacity: 1; }
+.ch-select { height: var(--h-tab); padding: 0 var(--space-8); border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); color: var(--text); font-size: 13px; }
+
+/* Queue rows, grouped under the stream they came from. An unrated row is
+   bold; the open one is `sunk` with a `lit` edge on the left. */
+.ch-group { display: flex; align-items: baseline; gap: var(--space-8); padding: var(--space-12) var(--space-12) 6px; font-size: 14px; line-height: 20px; font-weight: 400; }
+.ch-group b { font-weight: 700; }
+.ch-group span { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
+.ch-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
+.ch-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.ch-row:focus-visible, .ch-tab:focus-visible, .bar-nav a:focus-visible { outline-offset: -2px; }
+.ch-row[aria-current="true"] { background-color: var(--sunk); border-left-color: var(--lit); }
+.ch-row .ch-time { font-size: 14px; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; }
+.ch-row .ch-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-row.is-unrated .ch-time, .ch-row.is-unrated .ch-what { font-weight: 700; }
+.ch-row[aria-current="true"] .ch-meter i:not(.is-lit) { background: var(--quiet); }
+
+/* Chat: the username in its colour, then what was said. The space between
+   them is a real one, so the margin only tops it up. */
+.ch-chat { padding: 1px 0 1px var(--space-8); border-left: 2px solid transparent; overflow-wrap: anywhere; }
+.ch-chat b { margin-right: var(--space-2); font-weight: 700; }
+.ch-nick-1 { color: var(--nick-1); }
+.ch-nick-2 { color: var(--nick-2); }
+.ch-nick-3 { color: var(--nick-3); }
+.ch-nick-4 { color: var(--nick-4); }
+.ch-nick-5 { color: var(--nick-5); }
+.ch-nick-6 { color: var(--nick-6); }
+/* A native emote, for now by its name. */
+.ch-emote-name { margin: 0 1px; font-weight: 600; font-stretch: var(--width-compact); }
+
+/* Transport: the one row under the clip. */
+.ch-transport { display: flex; align-items: center; gap: var(--space-12); height: var(--h-control); margin-top: var(--space-4); }
+.ch-transport .play { width: 44px; }
+.ch-transport .icon-pause, .ch-transport .is-playing .icon-play { display: none; }
+.ch-transport .is-playing .icon-pause { display: block; }
+.ch-transport .ch-btn-compact.ch-btn-icon { width: var(--h-control); }
+.ch-now { font-size: 16px; font-weight: 600; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ch-of { font-weight: 400; color: var(--text-2); }
+.ch-gap { flex: 1 1 0; }
+
+/* Banner: one sentence about the whole page. In the queue it offers what is
+   new; under the top bar, on `sunk`, it says the service is going down. */
+.ch-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); padding: var(--space-8) var(--space-12); background: var(--quiet); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 13px; line-height: 16px; }
+.ch-banner-halt { flex: none; justify-content: flex-start; padding: 10px var(--space-16); background: var(--sunk); border: 0; font-size: 14px; line-height: 20px; }
+.ch-banner-halt b { font-weight: 700; }
+
+.ch-keys-hint { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-12); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.ch-keys-hint span { display: inline-flex; align-items: center; gap: 5px; }
+kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); color: var(--text); font: inherit; font-size: 11px; }
+
+/* ---- The bar across the top ---------------------------------------- */
+
+.bar { flex: none; display: flex; align-items: center; gap: var(--space-24); height: var(--h-bar); padding: 0 var(--space-16); background: var(--inset); border-bottom: 1px solid var(--sunk); }
+.bar-nav { align-self: stretch; display: flex; gap: var(--space-2); }
+.bar-nav a { display: flex; align-items: center; padding: 2px var(--space-12) 0; border-bottom: 2px solid transparent; font-weight: 500; font-stretch: var(--width-compact); text-decoration: none; }
+.bar-nav a:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.bar-nav a[aria-current] { background-color: var(--sunk); border-bottom-color: var(--lit); font-weight: 700; }
+.bar-state { display: flex; align-items: center; gap: var(--space-16); margin-left: auto; }
+.bar-meta { font-stretch: var(--width-compact); color: var(--text-2); white-space: nowrap; }
+.bar-switch { display: flex; align-items: center; gap: var(--space-8); font-stretch: var(--width-compact); }
+
+/* ---- Review: the queue, the open moment, its chat ------------------ */
+
+.review { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
+
+.queue { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.queue-head { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-12); }
+.queue-filter { display: flex; gap: var(--space-8); }
+.queue-filter .ch-select { flex: 1 1 0; min-width: 0; }
+.queue-list { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+.queue-empty { padding: var(--space-12); border-top: 1px solid var(--quiet); font-weight: 700; }
+.queue-pages { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; color: var(--text-2); }
+.queue-pages span { margin-right: auto; }
+.queue .ch-keys-hint { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); }
+
+.open { display: grid; min-width: 0; min-height: 0; }
+.moment { display: grid; grid-template-columns: minmax(0, 1fr) var(--w-chat); min-height: 0; }
+
+/* The stage column is as wide as its clip, and the clip as tall as leaves
+   room for the rest. */
+.stage { display: flex; justify-content: center; min-width: 0; min-height: 0; overflow-y: auto; padding: var(--space-16) var(--space-24); }
+.stage-in { width: 100%; max-width: max(520px, calc((100vh - var(--stage-rest)) * 16 / 9)); }
+
+.moment-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-16); margin-bottom: var(--space-12); }
+.moment-when { font-size: 13px; line-height: 16px; color: var(--text-2); }
+.moment-clock { display: flex; align-items: baseline; gap: var(--space-8); font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.moment-clock .counter { color: var(--text); }
+
+/* The clip sits straight on the field: square, a 1px `sunk` edge, black
+   behind a picture that is not 16:9. */
+.player { aspect-ratio: 16 / 9; background: var(--video); border: 1px solid var(--sunk); }
+.player video { display: block; width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
+.no-clip { padding: var(--space-24) 0; border-top: 1px solid var(--quiet); border-bottom: 1px solid var(--quiet); }
+
+/* Where the clip is and how far it can go: the played part is lit. */
+.seek { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: var(--space-16); margin: var(--space-4) 0 0; background: transparent; cursor: pointer; --played: 0%; }
+.seek::-webkit-slider-runnable-track { height: var(--space-4); background: linear-gradient(to right, var(--lit) var(--played), var(--inset) var(--played)); }
+.seek::-webkit-slider-thumb { -webkit-appearance: none; width: var(--space-2); height: 14px; margin-top: -5px; border: 0; border-radius: 0; background: var(--lit); }
+.seek::-moz-range-track { height: var(--space-4); background: var(--inset); }
+.seek::-moz-range-progress { height: var(--space-4); background: var(--lit); }
+.seek::-moz-range-thumb { width: var(--space-2); height: 14px; border: 0; border-radius: 0; background: var(--lit); }
+
+.footage { grid-auto-columns: auto; }
+.footage .ch-tab { height: var(--h-compact); padding-left: 10px; padding-right: 10px; }
+
+.moment-summary { max-width: 80ch; margin-top: var(--space-12); }
+.verdict { display: flex; align-items: flex-start; gap: var(--space-12); margin-top: var(--space-12); }
+.verdict .ch-cap { display: flex; align-items: center; height: var(--h-control); white-space: nowrap; }
+.note { flex: 1 1 0; min-width: 0; height: var(--h-control); max-height: 116px; padding: 7px 10px; line-height: 20px; resize: none; }
+.verdict + .status-line { margin-bottom: var(--space-4); }
+.ch-tags + .ch-tags { margin-top: var(--space-8); }
+
+/* What the per-clip analysis found, when it has run. */
+.analysis { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; }
+.analysis dt { font-stretch: var(--width-compact); color: var(--text-2); }
+.analysis dd { overflow-wrap: anywhere; }
+
+.chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+.chat-head { display: flex; align-items: baseline; gap: var(--space-8); padding: var(--space-12) var(--space-12) var(--space-8); }
+.chat-head h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
+.chat-head span { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
+.chat-lines { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 0 var(--space-12) var(--space-12) var(--space-2); }
+.chat-empty { padding-left: 10px; color: var(--text-2); }
+
+/* A page that is a statement: nothing new, nothing yet. */
+.statement { min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
+.statement .lead { margin-top: var(--space-8); }
+.statement .ch-btn { margin-top: var(--space-24); }
+
+/* ---- Channels ------------------------------------------------------ */
+
+.channels { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
+.channels-in { display: flex; flex-direction: column; gap: var(--space-36); max-width: 760px; }
+.channels .title { margin-bottom: var(--space-12); }
+.section-lead { max-width: 60ch; margin-bottom: var(--space-12); }
+
+.watchlist { width: 100%; border-collapse: collapse; }
+.watchlist th, .watchlist td { padding: 0 var(--space-16) 0 0; text-align: left; }
+.watchlist th { height: var(--h-compact); font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
+.watchlist td { height: var(--h-row); border-top: 1px solid var(--quiet); }
+.watchlist td:first-child { font-weight: 700; }
+.watchlist th:last-child, .watchlist td:last-child { width: 1%; padding-right: 0; white-space: nowrap; }
+.add-channel { margin-top: var(--space-16); }
+.add-channel .ch-input { width: 220px; }
+
+.settings { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--space-8) var(--space-12); }
+
+/* ---- Narrow windows: the panes stack and the page scrolls ---------- */
+
+@media (max-width: 1100px) {
+  body { height: auto; min-height: 100vh; }
+  .bar { flex-wrap: wrap; row-gap: var(--space-8); height: auto; padding-top: var(--space-8); padding-bottom: var(--space-8); }
+  .bar-nav a { min-height: var(--h-tab); }
+  .review, .moment { display: block; }
+  .queue { border-right: 0; border-bottom: 1px solid var(--line); }
+  .queue-list, .chat-lines { flex: none; max-height: 340px; }
+  .stage { overflow: visible; padding: var(--space-16); }
+  .stage-in { max-width: none; }
+  .verdict { flex-wrap: wrap; }
+  .note { flex-basis: 100%; }
+  .chat { border-left: 0; border-top: 1px solid var(--line); }
+  .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
+}

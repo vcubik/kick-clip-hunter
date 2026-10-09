@@ -62,6 +62,15 @@ class TestLocalTime:
 
         assert later - earlier == timedelta(hours=1)
 
+    def test_the_local_time_is_also_there_as_a_time_not_only_as_text(self):
+        moment = datetime(2026, 3, 1, 20, 15, 30, tzinfo=timezone.utc)
+
+        local = timeutil.to_local_datetime("2026-03-01T20:15:30Z")
+
+        assert local == moment
+        assert local.utcoffset() == moment.astimezone().utcoffset()
+        assert local.strftime(self.FORMAT) == timeutil.to_local("2026-03-01T20:15:30Z")
+
 
 class FakeConsole:
     """Stands in for kernel32's console functions."""

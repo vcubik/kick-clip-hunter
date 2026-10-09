@@ -101,14 +101,18 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert probe(before)["duration"] == pytest.approx(CONTEXT_BEFORE, abs=0.5)
     assert probe(after)["duration"] == pytest.approx(CONTEXT_AFTER, abs=0.5)
 
-    # The dashboard shows the moment with its chat, its clip and its context.
+    # The dashboard has the moment waiting in its queue and open beside it,
+    # with its chat, its clip and the footage around it.
     page = parse((await service.client.get("/dashboard")).text)
-    (card,) = page.find("div", class_="moment")
-    assert CHANNEL in card.one("div", class_="moment-header").text
-    assert "fan0: xDDD" in card.one("div", class_="snippet").text
-    assert [video.attrs["src"] for video in card.find("video")] == [
-        f"/clips/{CHANNEL}/{clip_name}",
+    (row,) = page.find("a", class_="ch-row")
+    assert row.attrs["data-moment"] == str(moment["id"])
+    article = page.one("article", class_="moment")
+    assert article.one("h1").text == CHANNEL
+    assert "fan0 xDDD" in [line.text for line in article.find("p", class_="ch-chat")]
+    assert article.one("video").attrs["src"] == f"/clips/{CHANNEL}/{clip_name}"
+    assert [link.attrs["href"] for link in article.find("a", data_footage=True)] == [
         f"/clips/{CHANNEL}/moment_{moment['id']}_before.mp4",
+        f"/clips/{CHANNEL}/{clip_name}",
         f"/clips/{CHANNEL}/moment_{moment['id']}_after.mp4",
     ]
     assert (await service.client.get("/moments/status")).json() == {"moments": 1, "clips": 1}
@@ -118,13 +122,14 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert served.status_code == 200
     assert served.content == clip.read_bytes()
 
-    # And the reviewer can rate it, which the next page load reflects.
+    # And the reviewer can rate it, which the next page load reflects: it
+    # has left the queue of what is still to rate, and shows its rating.
     await service.client.post(f"/moments/{moment['id']}/rating?value=5")
     page = parse((await service.client.get("/dashboard")).text)
-    active = [
-        b.text for b in page.one("div", class_="moment").find("button", class_="rating-btn") if "active" in b.classes
-    ]
-    assert active == ["5"]
+    assert page.find("a", class_="ch-row") == []
+    page = parse((await service.client.get("/dashboard", params={"show": "best"})).text)
+    chosen = page.one("article", class_="moment").find("button", class_="ch-key", aria_pressed="true")
+    assert [key.text for key in chosen] == ["5"]
 
 
 async def test_a_break_in_the_stream_right_before_the_reaction_still_yields_a_playable_clip(
@@ -160,7 +165,7 @@ async def test_without_a_recording_the_moment_is_still_detected_and_shown(servic
     (moment,) = service.moments()
     assert moment["clip_path"] is None
     page = parse((await service.client.get("/dashboard")).text)
-    (card,) = page.find("div", class_="moment")
-    assert card.find("video") == []
-    assert "fan0: xDDD" in card.text
+    article = page.one("article", class_="moment")
+    assert article.find("video") == []
+    assert "fan0 xDDD" in [line.text for line in article.find("p", class_="ch-chat")]
     assert (await service.client.get("/moments/status")).json() == {"moments": 1, "clips": 0}

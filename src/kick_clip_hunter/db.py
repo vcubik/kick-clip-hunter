@@ -257,30 +257,69 @@ def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, en
     conn.commit()
 
 
+# What the dashboard and the scripts read of a moment.
+_MOMENT_COLUMNS = """
+    id, channel_slug, detected_at, window_start, window_end, reason, score,
+    message_count, baseline_message_rate, current_message_rate,
+    emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
+    transcript, audio_events, sound_events, stream_type, moment_type
+"""
+
+
+def _moment_filter(channel_slug: str | None, unrated: bool, min_rating: int | None) -> tuple[str, list]:
+    """The WHERE clause (empty when nothing is filtered) and its parameters
+    for the ways the dashboard narrows the list of moments down."""
+    conditions: list[str] = []
+    params: list = []
+    if channel_slug:
+        conditions.append("channel_slug = ?")
+        params.append(channel_slug)
+    if unrated:
+        conditions.append("rating IS NULL")
+    if min_rating is not None:
+        conditions.append("rating >= ?")
+        params.append(min_rating)
+    return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
+
+
 def get_recent_moments(
-    conn: sqlite3.Connection, limit: int = 50, offset: int = 0, channel_slug: str | None = None
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    offset: int = 0,
+    channel_slug: str | None = None,
+    *,
+    unrated: bool = False,
+    min_rating: int | None = None,
 ) -> list[sqlite3.Row]:
+    """Moments newest first, optionally only one channel's, only the ones
+    not rated yet, or only those rated `min_rating` or higher."""
     conn.row_factory = sqlite3.Row
-    where = "WHERE channel_slug = ?" if channel_slug else ""
-    params = (channel_slug, limit, offset) if channel_slug else (limit, offset)
+    where, params = _moment_filter(channel_slug, unrated, min_rating)
     return conn.execute(
         f"""
-        SELECT id, channel_slug, detected_at, window_start, window_end, reason, score,
-               message_count, baseline_message_rate, current_message_rate,
-               emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
-               transcript, audio_events, sound_events, stream_type, moment_type
+        SELECT {_MOMENT_COLUMNS}
         FROM moments
         {where}
-        ORDER BY detected_at DESC
+        ORDER BY detected_at DESC, id DESC
         LIMIT ? OFFSET ?
         """,
-        params,
+        (*params, limit, offset),
     ).fetchall()
 
 
-def count_moments(conn: sqlite3.Connection, channel_slug: str | None = None) -> int:
-    where = "WHERE channel_slug = ?" if channel_slug else ""
-    params = (channel_slug,) if channel_slug else ()
+def get_moment(conn: sqlite3.Connection, moment_id: int) -> sqlite3.Row | None:
+    conn.row_factory = sqlite3.Row
+    return conn.execute(f"SELECT {_MOMENT_COLUMNS} FROM moments WHERE id = ?", (moment_id,)).fetchone()
+
+
+def count_moments(
+    conn: sqlite3.Connection,
+    channel_slug: str | None = None,
+    *,
+    unrated: bool = False,
+    min_rating: int | None = None,
+) -> int:
+    where, params = _moment_filter(channel_slug, unrated, min_rating)
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
