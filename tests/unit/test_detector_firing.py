@@ -281,6 +281,16 @@ class TestCooldown:
         assert chat.burst(people(8, prefix="latecomer"), LAUGH) is not None
         assert len(chat.moments) == 2
 
+    def test_a_channel_with_no_moment_yet_is_not_in_cooldown_whatever_the_clock_reads(self):
+        # The detector's clock is monotonic time, which starts near zero when
+        # the machine boots: a service started right after a boot must not
+        # treat "no moment yet" as "a moment at time zero".
+        chat = ChatSim(now=-detector.BASELINE_WINDOW_SECONDS)
+        chat.warm_up()
+        assert abs(chat.now) < detector.COOLDOWN_SECONDS
+
+        assert chat.burst(people(30), LAUGH) is not None
+
     def test_cooldown_and_history_are_per_channel(self):
         # Two channels living through the same five minutes.
         first = warm_chat(channel="first")

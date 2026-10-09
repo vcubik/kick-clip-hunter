@@ -22,8 +22,7 @@ def native_emote(name: str, emote_id: int = 1) -> str:
 @dataclass
 class ChatSim:
     channel: str = "test_channel"
-    # Any start works as long as it is further from zero than the cooldown:
-    # the detector treats "no moment yet" as a moment at time 0.
+    # An arbitrary reading of a monotonic clock; nothing depends on its value.
     now: float = 100_000.0
     # 7TV emote names of the channel -> mention weight, as stored per channel.
     keywords: dict[str, float] = field(default_factory=dict)
