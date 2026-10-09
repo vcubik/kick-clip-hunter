@@ -3,7 +3,8 @@
 The interesting part is self-healing: Kick has more than once silently
 dropped every chat subscription, after which no chat arrives for any channel
 until each one is re-subscribed. Startup reconciles the watchlist against
-what Kick actually has, so a restart is enough to recover.
+what Kick actually has, and the running service repeats that check every few
+minutes, so it recovers without a restart.
 """
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ class TestSubscriptionReconciliation:
         with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
             await service.main._ensure_chat_subscriptions()  # must not raise
 
-        assert any("could not check chat subscriptions on startup" in r.getMessage() for r in caplog.records)
+        assert any("could not check chat subscriptions" in r.getMessage() for r in caplog.records)
 
     async def test_a_token_failure_does_not_stop_it_either(self, service, caplog):
         service.watch("lost_one", subscribed=False)
@@ -96,7 +97,7 @@ class TestSubscriptionReconciliation:
             await service.main._ensure_chat_subscriptions()
 
         assert subscribe_requests(service.api) == []
-        assert any("could not check chat subscriptions on startup" in r.getMessage() for r in caplog.records)
+        assert any("could not check chat subscriptions" in r.getMessage() for r in caplog.records)
 
     async def test_one_channel_failing_does_not_keep_the_others_from_being_re_subscribed(self, service, caplog):
         first = service.watch("first", subscribed=False)
@@ -189,3 +190,56 @@ class TestWatchlistViews:
             await service.chat("channel_a", "alice", f"KEKW {number}")
 
         assert reads == [user_id]
+
+
+class TestPeriodicSubscriptionCheck:
+    """The same reconciliation, repeated while the service runs."""
+
+    @pytest.fixture
+    async def checking(self, service):
+        task = asyncio.create_task(service.main._keep_chat_subscriptions())
+        yield service
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def test_subscriptions_kick_drops_while_running_come_back(self, checking):
+        ids = [checking.watch(slug) for slug in ("channel_a", "channel_b")]
+        checking.api.subscribed.clear()
+
+        await async_wait_until(
+            lambda: sorted(checking.api.subscribed) == sorted(ids), "the dropped subscriptions being restored"
+        )
+
+    async def test_it_keeps_checking_after_a_drop_was_repaired(self, checking):
+        user_id = checking.watch("channel_a")
+        for _ in range(2):
+            checking.api.subscribed.clear()
+            await async_wait_until(lambda: checking.api.subscribed == [user_id], "the subscription being restored")
+
+        assert subscribe_requests(checking.api) == [user_id, user_id]
+
+    async def test_a_check_that_finds_nothing_missing_stays_out_of_the_log(self, checking, caplog):
+        checking.watch("channel_a")
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await async_wait_until(
+                lambda: len(checking.api.calls("GET", "/events/subscriptions")) >= 2, "two periodic checks"
+            )
+
+        assert not any("chat subscriptions" in r.getMessage() for r in caplog.records)
+
+    async def test_a_failed_check_does_not_end_the_checking(self, checking, monkeypatch):
+        user_id = checking.watch("channel_a")
+        real_check = checking.main._ensure_chat_subscriptions
+        attempts = []
+
+        async def fails_once(**kwargs):
+            attempts.append(kwargs)
+            if len(attempts) == 1:
+                raise RuntimeError("unexpected")
+            await real_check(**kwargs)
+
+        monkeypatch.setattr(checking.main, "_ensure_chat_subscriptions", fails_once)
+        checking.api.subscribed.clear()
+
+        await async_wait_until(lambda: checking.api.subscribed == [user_id], "the check after the failed one")
