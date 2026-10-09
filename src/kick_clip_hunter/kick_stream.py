@@ -4,9 +4,8 @@ The playback_url embedded in a channel page's server-rendered HTML fails
 AWS IVS signature verification when used directly (confirmed by testing) -
 only the URL the page's own player actually requests, once it's loaded and
 initialized, works. Capturing that live network request requires a headed
-`patchright` browser (headless gets blocked by kick.com's Cloudflare
-protection even with a valid login) using the persisted session from
-kick_session.py.
+`patchright` browser (the page does not load reliably in a headless one)
+using the persisted session from kick_session.py.
 
 While that browser is open it also looks up the stream's own recording (its
 VOD), which Kick writes as the broadcast goes along and serves from a host a
@@ -38,8 +37,8 @@ class StreamUrls:
 
 
 def _vod_url(page, channel_slug: str) -> str | None:
-    # Fetched from inside the page: the endpoint is behind the same
-    # Cloudflare protection as the site itself.
+    # Fetched from inside the page: like the site itself, the endpoint
+    # isn't reachable with a plain HTTP client.
     try:
         videos = page.evaluate(
             "slug => fetch(`/api/v2/channels/${slug}/videos`).then(r => (r.ok ? r.json() : []))",

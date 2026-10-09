@@ -9,15 +9,9 @@ requires being logged in as a real Kick account, so we persist a browser
 storage state (cookies + local storage) captured via a one-time interactive
 login rather than ever handling the account's credentials ourselves.
 
-Plain Playwright/Selenium automation gets blocked outright by kick.com's
-Cloudflare protection regardless of the browser profile used - testing
-showed even a real, everyday Chrome profile got blocked once driven by
-vanilla Playwright, while the same site worked fine through non-CDP-based
-automation. scripts/kick_login.py therefore uses `patchright` (a Playwright
-fork that patches the specific CDP leaks bot-detection checks for) instead of
-`playwright` - this is a deliberate choice to evade kick.com's anti-automation
-measures, done with the user's explicit knowledge that it's a ToS gray area
-that may stop working at any time.
+The session lives in a real, visible browser window driven through
+`patchright` (a Playwright-compatible library): kick.com's pages only load
+reliably in a headed browser, not for a plain HTTP client or a headless one.
 """
 
 from pathlib import Path

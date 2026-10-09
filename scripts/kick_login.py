@@ -1,10 +1,7 @@
 """Interactive one-time login to capture a Kick browser session.
 
-Uses `patchright` (not plain `playwright`) to drive the browser: kick.com's
-Cloudflare protection blocked vanilla Playwright automation outright, even
-with a real, everyday Chrome profile. patchright patches the specific CDP
-leaks that kind of bot detection checks for. This is a deliberate choice to
-evade kick.com's anti-automation measures - see kick_session.py's docstring.
+Drives a real, visible browser window through `patchright` - see
+kick_session.py's docstring.
 
 Log in yourself in the window that opens (this script never sees your
 password) - it polls the page and saves automatically once it detects you're

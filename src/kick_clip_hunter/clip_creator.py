@@ -2,10 +2,9 @@
 
 Driven through a headed `patchright` browser using the persisted login
 session in data/kick_browser_profile (see kick_session.py and
-scripts/kick_login.py for how that session is captured). Headless mode gets
-blocked by kick.com's Cloudflare protection even with valid login cookies -
-only a headed, visible browser window passes, so every call briefly opens
-one against the target channel's page.
+scripts/kick_login.py for how that session is captured). The site's pages
+only load reliably in a headed, visible browser window, so every call
+briefly opens one against the target channel's page.
 
 The actual clip creation is a two-step call the website's own JS makes,
 reverse-engineered by watching real "Create Clip" clicks in DevTools:
