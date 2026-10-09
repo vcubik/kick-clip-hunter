@@ -454,7 +454,8 @@ def record_message(
     if history_seconds < BASELINE_WINDOW_SECONDS - SHORT_WINDOW_SECONDS:
         return None  # not enough history yet to trust a baseline
 
-    if now - _last_moment_at.get(channel_slug, 0.0) < COOLDOWN_SECONDS:
+    last_moment_at = _last_moment_at.get(channel_slug)
+    if last_moment_at is not None and now - last_moment_at < COOLDOWN_SECONDS:
         return None
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
