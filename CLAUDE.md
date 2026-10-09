@@ -276,9 +276,10 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - Event subscriptions (`chat.message.sent`) have, more than once, silently gone back to
   zero on Kick's side with no error or warning — the app token still works fine, chat
   messages just stop arriving entirely for every watched channel. There's no known
-  trigger; a server restart re-subscribes whatever is missing on its own, and so does
-  re-running `subscribe.py <slug>` for a channel (both check what Kick still has first, so
-  nothing is ever subscribed twice). If moments stop appearing and the dashboard's
+  trigger; the running server re-checks every 10 minutes and re-subscribes whatever is
+  missing (logged as a warning), as does a restart or re-running `subscribe.py <slug>`
+  for a channel (all of them check what Kick still has first, so nothing is ever
+  subscribed twice). If moments stop appearing and the dashboard's
   watchlist looks right, check `GET events/subscriptions` on the official API before
   assuming the detector or webhook receiver broke.
 

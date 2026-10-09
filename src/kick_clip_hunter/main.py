@@ -227,17 +227,23 @@ def _load_flags() -> None:
         conn.close()
 
 
-async def _ensure_chat_subscriptions() -> None:
+# How often the running service re-checks that Kick still has every watched
+# channel's chat subscription.
+SUBSCRIPTION_CHECK_SECONDS = 600
+
+
+async def _ensure_chat_subscriptions(report_all_present: bool = True) -> None:
     """Re-subscribe any watchlisted channel that has no chat.message.sent
     subscription on Kick.
 
     Kick silently drops event subscriptions to zero every so often with no
     error - chat just stops arriving for every channel until they're
-    re-subscribed (see CLAUDE.md). Reconciling on every startup makes a
-    restart self-healing instead of needing subscribe.py run by hand. It's
-    check-then-subscribe (only the missing ones) so it never duplicates an
-    existing subscription, and any API failure is logged but never blocks
-    startup.
+    re-subscribed (see CLAUDE.md). Reconciling on startup, and then every
+    SUBSCRIPTION_CHECK_SECONDS while running, makes that self-healing instead
+    of needing a restart or subscribe.py run by hand. It's check-then-subscribe
+    (only the missing ones) so it never duplicates an existing subscription,
+    and any API failure is logged but never blocks startup or stops the
+    periodic check.
     """
     conn = get_connection()
     try:
@@ -251,15 +257,16 @@ async def _ensure_chat_subscriptions() -> None:
         token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
         subscribed = {sub.get("broadcaster_user_id") for sub in await get_event_subscriptions(token)}
     except Exception:
-        logger.exception("could not check chat subscriptions on startup")
+        logger.exception("could not check chat subscriptions")
         return
 
     missing = [(bid, slug) for bid, slug in watch if bid not in subscribed]
     if not missing:
-        logger.info("chat subscriptions present for all %d watched channels", len(watch))
+        if report_all_present:
+            logger.info("chat subscriptions present for all %d watched channels", len(watch))
         return
 
-    logger.info(
+    logger.warning(
         "re-subscribing %d channel(s) with no chat subscription: %s",
         len(missing), ", ".join(slug for _, slug in missing),
     )
@@ -271,19 +278,34 @@ async def _ensure_chat_subscriptions() -> None:
             logger.exception("failed to re-subscribe chat for %s", slug)
 
 
+async def _keep_chat_subscriptions() -> None:
+    """The periodic half of _ensure_chat_subscriptions: quiet while nothing
+    is missing, so the log only shows the checks that found something."""
+    while True:
+        await asyncio.sleep(SUBSCRIPTION_CHECK_SECONDS)
+        try:
+            await _ensure_chat_subscriptions(report_all_present=False)
+        except Exception:
+            logger.exception("periodic chat subscription check failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_flags()
     await _ensure_chat_subscriptions()
-    task = asyncio.create_task(
-        recording_manager.run_forever(
-            _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
-        )
-    )
+    tasks = [
+        asyncio.create_task(
+            recording_manager.run_forever(
+                _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
+            )
+        ),
+        asyncio.create_task(_keep_chat_subscriptions()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
+        for task in tasks:
+            task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
