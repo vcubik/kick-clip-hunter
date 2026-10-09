@@ -167,9 +167,7 @@ Module map (`src/kick_clip_hunter/`):
   analysis", persisted in `app_settings`); all four default to off since they cost CPU
   time on every clip, and `backfill_taste.py` can fill in whatever was skipped later. None of them judge or score a clip - they're pure local data
   capture for a future learned classifier (detector features + these embeddings/tags,
-  no API call at inference), once enough rated moments exist to train one. See the
-  moment-judge design (PR #19, not yet merged) for the fuller picture, including why the
-  actual judging step calls the Claude API instead of running locally.
+  no API call at inference), once enough rated moments exist to train one.
 
 ### Detector design principles (see `detector.py` docstring for the full picture)
 

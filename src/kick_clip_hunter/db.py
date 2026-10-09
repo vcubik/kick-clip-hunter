@@ -166,9 +166,8 @@ def get_connection() -> sqlite3.Connection:
 
     # Local audio event/emotion tags (see audio_events.py) and video frame
     # embedding (see frame_encoder.py) - same "filled in asynchronously,
-    # NULL until then" story as transcript. Pure data capture for the future
-    # learned-classifier path (docs/moment-judge-design.md); nothing reads
-    # these yet.
+    # NULL until then" story as transcript. Pure data capture for a future
+    # learned classifier; nothing reads these yet.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
     if "audio_events" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN audio_events TEXT")

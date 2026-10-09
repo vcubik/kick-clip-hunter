@@ -6,14 +6,14 @@ language/emotion/event tags are kept. Actual speech-to-text stays whisper's
 job, since that's the model tuned and verified for Czech quality.
 
 Second local encoder in the "lightweight local encoder -> embedding/tags ->
-stored on the moment" pattern described in docs/moment-judge-design.md's
-learned-classifier path; see frame_encoder.py for the video counterpart.
+stored on the moment" pattern that feeds a future learned classifier; see
+frame_encoder.py for the video counterpart.
 Like transcription, this is pure data capture for now - nothing here judges
 or scores a clip, that's later work once enough rated data exists to check
 which tags actually correlate with a good moment.
 
-Runs entirely on CPU - see moment-judge-design.md for why (no usable local
-GPU accelerator on this host: AMD RX 480, no practical CUDA/ROCm on Windows).
+Runs entirely on CPU (no usable local GPU accelerator on this host: AMD
+RX 480, no practical CUDA/ROCm on Windows).
 """
 
 from __future__ import annotations

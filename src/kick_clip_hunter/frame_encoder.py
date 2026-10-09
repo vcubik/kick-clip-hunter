@@ -1,14 +1,14 @@
 """Local video-frame embedding for cut clips, via SigLIP2.
 
 Video-side encoder in the "lightweight local encoder -> embedding -> stored
-on the moment" pattern described in docs/moment-judge-design.md's
-learned-classifier path; see audio_events.py for the audio counterpart. Pure
-data capture for now - nothing here judges or scores a clip, that's later
-work once enough rated data exists to train against.
+on the moment" pattern that feeds a future learned classifier; see
+audio_events.py for the audio counterpart. Pure data capture for now -
+nothing here judges or scores a clip, that's later work once enough rated
+data exists to train against.
 
-Runs entirely on CPU - see moment-judge-design.md for why (no usable local
-GPU accelerator on this host). A handful of frames per clip through a base-
-size SigLIP2 keeps this fast enough as a background task even on CPU.
+Runs entirely on CPU (no usable local GPU accelerator on this host). A
+handful of frames per clip through a base-size SigLIP2 keeps this fast
+enough as a background task even on CPU.
 """
 
 from __future__ import annotations

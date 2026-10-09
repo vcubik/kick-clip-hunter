@@ -17,8 +17,7 @@ vocabulary can't.
 Pure data capture, same as the other two encoders - nothing here judges or
 scores a clip, that's later work once enough rated data exists.
 
-Runs entirely on CPU - see moment-judge-design.md for why (no usable local
-GPU accelerator on this host).
+Runs entirely on CPU (no usable local GPU accelerator on this host).
 
 Windows quirk: panns_inference fetches its label list and model checkpoint
 via a hardcoded `os.system('wget ...')` call. There's no wget on Windows,
