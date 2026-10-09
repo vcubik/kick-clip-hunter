@@ -223,12 +223,10 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   used directly (fails AWS IVS signature verification) — only the URL the page's own
   player actually requests, once fully loaded, is valid. Capturing that live request is
   what `kick_stream.py` does.
-- kick.com's Cloudflare protection blocks plain HTTP clients (httpx/curl) *and* plain
-  Playwright/Selenium automation outright — even headed, even with a real logged-in
-  Chrome profile. Only `patchright` (a Playwright fork patching the CDP leaks bot
-  detection checks for) gets through, and only in headed mode — headless still gets
-  blocked even with valid cookies. This means every stream-URL fetch briefly opens a
-  real visible browser window; there's no way around that on this stack.
+- kick.com's pages can't be fetched with a plain HTTP client (httpx/curl) and don't
+  load reliably under plain Playwright/Selenium or in headless mode. The project drives
+  a headed browser through `patchright`, so every stream-URL fetch briefly opens a real
+  visible browser window; there's no way around that on this stack.
 - Once you have the real URL, the recorder follows it like any HLS client (periodic
   playlist re-fetch) indefinitely — no need to refresh preemptively, only restart if it
   dies or stalls. Playlists are Twitch/IVS-style: 2-4s MPEG-TS segments, each with an
@@ -243,13 +241,10 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - What was really on stream during an ad is only in the broadcast's VOD, which Kick
   writes as the stream goes along (12.5s segments, same program clock, roughly 15-25s
   behind live) and serves from `stream.kick.com` to a plain HTTP client. Its URL comes
-  from `/api/v2/channels/{slug}/videos` (Cloudflare-protected, so it is fetched inside
-  the browser session that captures the live URL). A clip or context clip whose window
+  from `/api/v2/channels/{slug}/videos` (not reachable with a plain HTTP client, so it
+  is fetched inside the browser session that captures the live URL). A clip or context clip whose window
   touches an ad is cut from the VOD instead, so it comes out up to ~25s longer than
   usual (whole VOD segments); a channel with VODs turned off still gets the ad.
-- This is a deliberate choice to evade kick.com's anti-automation measures, done with
-  the user's explicit sign-off that it's a ToS gray area which may stop working at any
-  time.
 
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`

@@ -1,7 +1,7 @@
 """Background management of one ChannelRecorder per watched channel.
 
 Before doing anything that touches a browser, each tick checks is_live via
-the official (Cloudflare-free) Kick public API - the cheap, no-browser way
+the official Kick public API - the cheap, no-browser way
 to answer "is there any point recording this channel right now." Only a
 channel confirmed live gets its recorder ticked, which is what actually
 launches the headed patchright browser to (re)fetch the stream URL. Without
