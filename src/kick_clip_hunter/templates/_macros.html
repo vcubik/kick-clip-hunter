@@ -1,0 +1,15 @@
+{#- A switch is two halves, Off and On; the lit half is the state. The script
+    posts the half that was pressed to `url`. -#}
+{% macro switch(label, url, enabled, disabled=false) -%}
+<span class="ch-switch" role="group" aria-label="{{ label }}" data-switch="{{ url }}">
+  <button type="button" aria-pressed="{{ 'false' if enabled else 'true' }}" data-enabled="0"{% if disabled %} disabled{% endif %}>Off</button>
+  <button type="button" aria-pressed="{{ 'true' if enabled else 'false' }}" data-enabled="1"{% if disabled %} disabled{% endif %}>On</button>
+</span>
+{%- endmacro %}
+
+{#- A rating as five small segments, the way a queue row shows it. -#}
+{% macro meter(rating, words) -%}
+<span class="ch-meter" role="img" aria-label="{{ words }}">
+  {%- for n in range(1, 6) %}<i{% if rating and n <= rating %} class="is-lit"{% endif %}></i>{% endfor -%}
+</span>
+{%- endmacro %}

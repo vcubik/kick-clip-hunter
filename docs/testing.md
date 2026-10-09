@@ -138,12 +138,15 @@ each model exactly once even when first used from several threads at the same mo
 raw output turned into what gets stored (hallucinated subtitle credits dropped, tags de-duplicated,
 top labels above the confidence floor)?
 
-**8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`
-Does the page render from an empty database and from a full one; are moments, chat snippets, clips
-and context shown correctly, paged and filtered? Is everything a Kick user can type - chat, usernames
-- escaped? Does the clip route refuse to serve files outside the clip directory? Do rating, tags and
-notes validate and persist; do the switches survive a restart; does shutdown wait for work in flight
-and stop recorders before exiting?
+**8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`,
+`unit/test_dashboard_view.py`
+Do the pages render from an empty database and from a full one? Does the review queue hold the right
+moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
+the right one open, with its chat, clip and context footage? Does an empty queue say what the service
+is doing? Is everything a Kick user can type - chat, usernames, emote names - escaped? Do the file
+routes refuse to serve anything outside their directories? Are dates, counts and detector reasons
+worded as intended? Do rating, tags and notes validate and persist; do the switches survive a
+restart; does shutdown wait for work in flight and stop recorders before exiting?
 
 **9. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
 `unit/test_scripts.py`, `unit/test_replay_chat.py`
@@ -232,6 +235,7 @@ Some things only exist against the real Kick, and faking them would only test th
 | `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser through kick.com's bot protection. |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
+| `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. |
 
 Run this on a live channel after changing any of the above, or the code right next to it:
@@ -239,25 +243,28 @@ Run this on a live channel after changing any of the above, or the code right ne
 1. **Start the server.** The log shows either `chat subscriptions present for all N watched
    channels` or the channels it re-subscribed. Startup takes a second or two - if it takes much
    longer, an ML library is being imported at startup again.
-2. **Open the dashboard.** The watchlist, the switches and existing moments render; `Refresh` shows
-   no pending items.
+2. **Open the dashboard.** The review page lists the existing moments and announces nothing as
+   new; the Channels page shows the watchlist and the switches. Clicking a row of the queue opens
+   that moment without the page reloading, and `J`/`K` move through the queue.
 3. **Check chat is arriving.** With a tracked channel live, chat lines appear in the log within
    seconds. If they don't, see "Operational quirks" in `CLAUDE.md`.
 4. **Check recording.** A browser window opens briefly, then the log says `recording started`.
    `data/recordings/<channel>/` fills with `.ts` segments and stays at roughly ten minutes' worth.
 5. **Wait for a moment.** The log shows, in order: `MOMENT detected`, `moment N closed after Xs
    reaction`, `clip saved for moment N`, `context clips saved for moment N: after, before`.
-6. **Review it.** The moment's card on the dashboard has the chat snippet, a clip that plays with
-   sound and starts before the reaction, and the two context clips. Rate it and reload: the rating
-   sticks.
-7. **Try one analysis step.** Turn `Transcript` on; the next clip gets a transcript (the first one
-   takes longer while the model loads). Turn it off again.
+6. **Review it.** Within half a minute the queue announces the new moment. Opened, it has the
+   chat, a clip that plays with sound and starts before the reaction, and the footage from before
+   and after it in the same player. `Space` plays and pauses; a number key rates it and moves on
+   to the next unrated moment. Reload: the rating sticks.
+7. **Try one analysis step.** Turn `Transcript` on (Channels page); the next clip gets a transcript
+   (the first one takes longer while the model loads). Turn it off again.
 8. **If the stream runs an ad:** the log shows `stream discontinuity` with `ad=True`, a playlist
    is saved under `data/hls_debug/`, and segments keep arriving afterwards. The recording's start
    line says whether a VOD was found; if it was, a moment right after the ad logs `footage from
    the VOD used` and neither its clip nor its "before" context shows the ad.
-9. **Shut down from the dashboard.** A banner shows how much work is still in flight; the process
-   exits on its own once that is done, and not before.
+9. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
+   how much work is still in flight, and the process exits on its own once that is done, and not
+   before.
 
 ## Checking a detector change against a real stream
 

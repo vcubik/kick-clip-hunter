@@ -81,6 +81,11 @@ async def run_forever(get_channel_slugs, recording_enabled=lambda: True, is_chan
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
 
 
+def recording_channels() -> list[str]:
+    """The channels being recorded right now, for the dashboard."""
+    return [slug for slug, recorder in _recorders.items() if recorder.is_active]
+
+
 async def stop_all() -> None:
     """Stop every active recorder - used on app shutdown so no download is
     cut off mid-segment when the app itself exits.

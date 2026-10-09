@@ -1,0 +1,66 @@
+{#- The watchlist and the controls of the service itself: which channels are
+    watched, what is done with each new clip, and shutting the service down. -#}
+{% extends "base.html" %}
+{% from "_macros.html" import switch %}
+{% block title %}Channels{% endblock %}
+{% block main %}
+<main class="channels">
+<div class="channels-in">
+  <h1 class="visually-hidden">Channels</h1>
+
+  <section aria-labelledby="watchlist-title" data-status-scope>
+    <h2 class="title" id="watchlist-title">Watchlist</h2>
+    {% if watchlist %}
+    <table class="watchlist">
+      <thead>
+        <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Tracking</th></tr>
+      </thead>
+      <tbody>
+        {% for channel in watchlist %}
+        <tr>
+          <td title="Kick user id {{ channel.broadcaster_user_id }}">{{ channel.slug }}</td>
+          <td class="ch-meta">{{ channel.added }}</td>
+          <td>{% if channel.recording %}<span class="ch-lamp ch-lamp-rec">Recording</span>{% else %}<span class="ch-meta">Not recording</span>{% endif %}</td>
+          <td>{{ switch("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", channel.tracking_enabled) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="lead">No channels on the watchlist yet. Add one to start watching its chat.</p>
+    {% endif %}
+    <form class="ch-line add-channel" data-add-channel>
+      <input type="text" class="ch-input" name="slug" aria-label="Channel name on Kick" placeholder="Channel name on Kick" autocomplete="off" required>
+      <button type="submit" class="ch-btn">Add to watchlist</button>
+    </form>
+    <p class="status-line" role="status" data-status></p>
+  </section>
+
+  <section aria-labelledby="analysis-title" data-status-scope>
+    <h2 class="title" id="analysis-title">Per-clip analysis</h2>
+    <p class="section-lead">Each step runs on every new clip and takes CPU time, so a step does nothing until you switch it on.</p>
+    <div class="settings">
+      {% for setting in analysis_settings %}
+      <span aria-hidden="true">{{ setting.label }}</span>
+      {{ switch(setting.label, "/settings/" ~ setting.name, setting.enabled) }}
+      <span class="ch-cap">{{ setting.caption }}</span>
+      {% endfor %}
+    </div>
+    <p class="status-line" role="status" data-status></p>
+  </section>
+
+  <section aria-labelledby="shutdown-title" data-shutdown data-status-scope>
+    <h2 class="title" id="shutdown-title">Shut down</h2>
+    <div class="ch-line" data-shutdown-ask>
+      <button type="button" class="ch-btn" data-shutdown-open{% if shutdown_requested %} disabled{% endif %}>{{ "Shutting down" if shutdown_requested else "Shut down" }}</button>
+    </div>
+    <div class="ch-line" data-shutdown-confirm hidden>
+      <span>Stops watching and shuts down once clips in progress are finished.</span>
+      <button type="button" class="ch-btn ch-btn-primary" data-shutdown-go>Shut down</button>
+      <button type="button" class="ch-btn ch-btn-quiet" data-shutdown-cancel>Cancel</button>
+    </div>
+    <p class="status-line" role="status" data-status></p>
+  </section>
+</div>
+</main>
+{% endblock %}

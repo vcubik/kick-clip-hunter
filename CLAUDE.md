@@ -81,9 +81,13 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   10 x 10 MB) - check the file first when something went wrong while unattended. On
   startup it also turns off the console's QuickEdit mode (`win_console.py`), which
   otherwise freezes the whole app whenever someone clicks in the terminal window.
-- Dashboard: `GET /dashboard`. It never reloads on its own; the Refresh button at the top
-  reloads it and shows how many new moments/clips have arrived since the page was loaded
-  (polled from `GET /moments/status`)
+- Dashboard: `GET /dashboard` is the review page - a queue of moments (unrated, all, or
+  best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
+  (1-5 rate and move on, J/K move, Space plays). `GET /dashboard/channels` has the
+  watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
+  queue announces how many new moments/clips have arrived since the page was loaded
+  (polled from `GET /moments/status`). An empty queue is the normal state, so that page
+  then says what the service is doing instead.
 - Tests: `pip install -r requirements-dev.txt`, then `python -m pytest` (with the project's
   virtual environment: `.venv\Scripts\python.exe -m pytest`). See "Testing" below.
 
@@ -117,9 +121,19 @@ Module map (`src/kick_clip_hunter/`):
 - `detector.py` — the heuristic engine; its module docstring is the source of truth for
   how detection works, don't duplicate that explanation here
 - `timeutil.py` — UTC-to-local-time display helper
-- `main.py` — FastAPI app: webhook receiver + `/dashboard` route + wires moment
+- `main.py` — FastAPI app: webhook receiver + the dashboard's routes + wires moment
   detection to clip extraction
-- `templates/dashboard.html` — the dashboard's Jinja2 template
+- `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
+  the queue is grouped by stream, how times, counts and detector reasons are worded.
+  Pure functions, so the wording is unit-tested without rendering a page
+- `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
+  `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
+  served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
+  without reloading
+- `static/` — `dashboard.css` (design tokens first - every colour, size and space used
+  is one of them - then components, then page layout; its opening comment states the
+  rules), `dashboard.js` (no dependencies, everything wired by delegation because the
+  open moment's markup gets replaced) and the bundled typeface, Archivo, with its licence
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
@@ -132,7 +146,8 @@ Module map (`src/kick_clip_hunter/`):
   handle a discontinuity and the `PLAYBACK_DELAY_SECONDS` clock shift.
   A moment's clip is kept short (about 35s unless the reaction keeps drawing in new
   people); the 30s before and 60s after it are saved next to it as
-  `moment_<id>_before.mp4` / `_after.mp4` and shown on the dashboard under "context".
+  `moment_<id>_before.mp4` / `_after.mp4` and offered in the dashboard's player next to
+  the clip.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
@@ -163,8 +178,8 @@ Module map (`src/kick_clip_hunter/`):
 
   These four all run as fire-and-forget background tasks right after a clip is saved
   (`main.py`'s `_transcribe_clip_background` and siblings), storing their raw output on
-  the `moments` row. Each has its own on/off switch on the dashboard ("Per-clip
-  analysis", persisted in `app_settings`); all four default to off since they cost CPU
+  the `moments` row. Each has its own on/off switch on the dashboard's Channels page
+  ("Per-clip analysis", persisted in `app_settings`); all four default to off since they cost CPU
   time on every clip, and `backfill_taste.py` can fill in whatever was skipped later. None of them judge or score a clip - they're pure local data
   capture for a future learned classifier (detector features + these embeddings/tags,
   no API call at inference), once enough rated moments exist to train one.

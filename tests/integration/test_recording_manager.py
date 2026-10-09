@@ -263,6 +263,16 @@ class TestRecorderRegistry:
         assert recorders["running"].stops == 1
         assert recorders["idle"].stops == 0
 
+    def test_the_channels_being_recorded_are_the_ones_whose_recorder_is_running(self, recorders):
+        recorders["running"] = StandInRecorder(active=True)
+        recorders["idle"] = StandInRecorder(active=False)
+        recorders["also_running"] = StandInRecorder(active=True)
+
+        assert recording_manager.recording_channels() == ["running", "also_running"]
+
+    def test_nothing_is_being_recorded_before_any_channel_was_looked_at(self, recorders):
+        assert recording_manager.recording_channels() == []
+
 
 class TestClipRequests:
     START = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)

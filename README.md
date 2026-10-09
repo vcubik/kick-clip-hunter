@@ -26,8 +26,9 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
 - **Cuts the clip.** When a moment fires, a clip of about 35 seconds is cut around it - longer if
   new people keep joining the reaction - and the 30 seconds before and 60 seconds after are saved
   next to it as context.
-- **Lets you review.** The dashboard lists moments with the chat that triggered them and the clip,
-  and takes a 1-5 rating, tags and notes. Those ratings are what detector tuning is checked against.
+- **Lets you review.** The dashboard queues the moments that are not rated yet and opens one at a
+  time: the clip, the chat that triggered it, and a 1-5 rating, tags and a note, all reachable from
+  the keyboard. Those ratings are what detector tuning is checked against.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -71,8 +72,8 @@ Run the server:
 PYTHONPATH=src python -m uvicorn kick_clip_hunter.main:app --host 0.0.0.0 --port 8000 --no-access-log
 ```
 
-Open the dashboard at `http://localhost:8000/dashboard`. Channels can be added there, or from the
-command line:
+Open the dashboard at `http://localhost:8000/dashboard`. Channels can be added on its Channels
+page, or from the command line:
 
 ```
 PYTHONPATH=src python scripts/subscribe.py <channel_slug>
@@ -107,6 +108,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | Module (`src/kick_clip_hunter/`) | Role |
 |---|---|
 | `main.py` | FastAPI app: webhook receiver, moment sessions, dashboard and its controls. |
+| `dashboard_view.py`, `templates/`, `static/` | The dashboard's pages: what they say, their markup, their stylesheet and script. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
@@ -116,6 +118,9 @@ what, and the short manual checklist for the parts that only exist against the r
 
 [CLAUDE.md](CLAUDE.md) holds the detailed development notes: design decisions, what had to be
 worked out about Kick's behaviour and why, and the operational quirks found along the way.
+
+The dashboard is set in [Archivo](https://github.com/Omnibus-Type/Archivo), bundled under the SIL
+Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
 
 ## Limitations
 

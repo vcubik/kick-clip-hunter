@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 import logging.handlers
+import mimetypes
 import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -17,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import (
     audio_events,
+    dashboard_view,
     detector,
     frame_encoder,
     recorder,
@@ -35,6 +38,7 @@ from .db import (
     get_chat_snippet,
     get_connection,
     get_flag,
+    get_moment,
     get_moment_channels,
     get_recent_moments,
     get_streamer_by_slug,
@@ -65,7 +69,7 @@ from .kick_client import (
 from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
-from .timeutil import to_local
+from .timeutil import to_local_datetime
 from .watchlist import add_channel_to_watchlist
 from .webhook_security import get_kick_public_key, verify_signature
 
@@ -311,6 +315,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 settings = load_settings()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# The dashboard's stylesheet, script and font. Their content types are set
+# here rather than left to the system: on Windows they come from the
+# registry, where ".js" is often mapped to something else, and a browser
+# ignores a stylesheet that is not served as text/css.
+STATIC_DIR = Path(__file__).parent / "static"
+for _content_type, _extension in (("text/css", ".css"), ("text/javascript", ".js"), ("font/ttf", ".ttf")):
+    mimetypes.add_type(_content_type, _extension)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 Path("data/clips").mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory="data/clips"), name="clips")
@@ -587,11 +599,31 @@ async def health():
 
 MOMENTS_PAGE_SIZE = 50
 
+# Which moments each of the review queue's lists holds, as filters for the
+# moment queries.
+SHOW_FILTERS: dict[str, dict] = {
+    dashboard_view.SHOW_UNRATED: {"unrated": True},
+    dashboard_view.SHOW_ALL: {},
+    dashboard_view.SHOW_BEST: {"min_rating": dashboard_view.BEST_RATING_MIN},
+}
 
 # How long after detection a missing analysis result is still shown as "in
 # progress". Cutting the clip and running a step on it takes a minute or two;
 # anything older without a result was either never analysed or failed.
 ANALYSIS_PENDING_SECONDS = 600
+# The analysis steps whose result is text the dashboard shows (frame
+# embeddings are stored but there is nothing of them to read).
+ANALYSIS_TEXT_RESULTS = ("transcript", "audio_events", "sound_events")
+# How long after detection a moment without a clip is still shown as having
+# one on the way. A moment stays open for up to MOMENT_SESSION_MAX_SECONDS,
+# then waits for its post-roll to be broadcast, and a cut that has to come
+# from the VOD waits for that to be written; past this, no clip is coming.
+CLIP_PENDING_SECONDS = 300
+
+
+def _moment_age_seconds(row) -> float:
+    detected = datetime.fromisoformat(row["detected_at"]).astimezone(timezone.utc)
+    return (datetime.now(timezone.utc) - detected).total_seconds()
 
 
 def _pending_analysis(row) -> set[str]:
@@ -603,16 +635,23 @@ def _pending_analysis(row) -> set[str]:
     clip without a transcript - which, with analysis off by default, was
     every clip, forever.
     """
-    if not row["clip_path"]:
-        return set()
-    age = datetime.now(timezone.utc) - datetime.fromisoformat(row["detected_at"]).astimezone(timezone.utc)
-    if age.total_seconds() > ANALYSIS_PENDING_SECONDS:
+    if not row["clip_path"] or _moment_age_seconds(row) > ANALYSIS_PENDING_SECONDS:
         return set()
     return {
-        name
-        for name in ("transcript", "audio_events", "sound_events")
-        if row[name] is None and _flags.get(SETTING_KEYS[name], False)
+        name for name in ANALYSIS_TEXT_RESULTS if row[name] is None and _flags.get(SETTING_KEYS[name], False)
     }
+
+
+def _clip_state(row) -> str:
+    """Whether a moment's clip is there to play ("ready"), is still being cut
+    ("pending") or is not coming ("missing")."""
+    if row["clip_path"]:
+        return "ready"
+    return "pending" if _moment_age_seconds(row) <= CLIP_PENDING_SECONDS else "missing"
+
+
+def _clip_url(clip_path: str) -> str:
+    return f"/clips/{quote(clip_path)}"
 
 
 def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
@@ -621,87 +660,247 @@ def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
         return {}
     folder = Path(clip_path).parent
     return {
-        side: f"/clips/{(folder / name).as_posix()}"
+        side: _clip_url((folder / name).as_posix())
         for side, name in recorder.context_clip_names(Path(clip_path).name).items()
         if (CLIPS_DIR / folder / name).exists()
     }
 
 
+def _footage(clip_path: str | None) -> list[dict]:
+    """What the player can show for a moment besides its clip: the footage
+    saved just before and just after it. Empty when there is only the clip,
+    since then there is nothing to choose between."""
+    context = _context_clip_urls(clip_path)
+    if not context:
+        return []
+    footage = []
+    if "before" in context:
+        footage.append({"label": f"{recorder.CONTEXT_BEFORE_SECONDS} s before", "url": context["before"]})
+    footage.append({"label": "Clip", "url": _clip_url(clip_path), "current": True})
+    if "after" in context:
+        footage.append({"label": f"{recorder.CONTEXT_AFTER_SECONDS} s after", "url": context["after"]})
+    return footage
+
+
+def _open_moment(conn, row, today: date) -> dict:
+    """Everything the review page shows of the one moment that is open."""
+    pending = _pending_analysis(row)
+    return {
+        "id": row["id"],
+        "channel": row["channel_slug"],
+        "when": dashboard_view.when_words(to_local_datetime(row["detected_at"]), today),
+        "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
+        "clip_url": _clip_url(row["clip_path"]) if row["clip_path"] else None,
+        "clip_state": _clip_state(row),
+        "footage": _footage(row["clip_path"]),
+        "summary": dashboard_view.summary_words(row),
+        "rating": row["rating"],
+        "rating_words": dashboard_view.rating_words(row["rating"]),
+        "stream_type": row["stream_type"],
+        "moment_type": row["moment_type"],
+        "notes": row["notes"] or "",
+        "analysis": [
+            {"label": label, "text": row[name] or "", "pending": name in pending}
+            for name, label in ANALYSIS_SETTINGS
+            if name in ANALYSIS_TEXT_RESULTS and (row[name] or name in pending)
+        ],
+        "chat": dashboard_view.chat_lines(
+            get_chat_snippet(conn, row["channel_slug"], row["window_start"], row["window_end"])
+        ),
+    }
+
+
+def _asset_version() -> int:
+    """Changes whenever the stylesheet or the script does, so a browser never
+    pairs a new page with its cached copy of the old ones."""
+    return max(int((STATIC_DIR / name).stat().st_mtime) for name in ("dashboard.css", "dashboard.js"))
+
+
+def _today() -> date:
+    return datetime.now().astimezone().date()
+
+
+def _page_context(conn, nav: str) -> dict:
+    """What every dashboard page needs: which page it is, and the state of
+    the service shown in the bar across its top."""
+    streamers = get_streamers(conn)
+    tracked = sum(1 for row in streamers if row["tracking_enabled"])
+    recording = recording_manager.recording_channels()
+    watching = _flags.get("watching_enabled", True)
+    return {
+        "nav": nav,
+        "asset_version": _asset_version(),
+        "watching_enabled": watching,
+        "recording": recording,
+        "channel_count_words": dashboard_view.channel_count_words(len(recording), tracked),
+        "service_words": dashboard_view.service_words(
+            recording=len(recording),
+            tracked=tracked,
+            watchlist=len(streamers),
+            watching=watching,
+            shutting_down=_shutdown_requested,
+        ),
+        "shutdown_requested": _shutdown_requested,
+        "shutdown_words": dashboard_view.shutdown_words(len(_moment_sessions) + len(_background_tasks)),
+    }
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request, channel: str | None = None, offset: int = 0):
-    offset = max(0, offset)
+async def dashboard(
+    request: Request,
+    show: str = dashboard_view.SHOW_UNRATED,
+    channel: str | None = None,
+    offset: int = 0,
+    moment: int | None = None,
+):
+    """The review page: a queue of moments and the one that is open.
+
+    `show` picks the list (unrated, all, best), `channel` narrows it to one
+    channel and `offset` pages through it. `moment` is the one to open; left
+    out, it is the first of the list, and with an empty list the page says
+    what the service is doing instead.
+    """
+    show = show if show in dashboard_view.SHOWS else dashboard_view.SHOW_UNRATED
+    channel = channel or None
+    today = _today()
+
     conn = get_connection()
     try:
-        streamers = [
-            {
-                "slug": row["slug"],
-                "broadcaster_user_id": row["broadcaster_user_id"],
-                "added_at_local": to_local(row["added_at"]),
-                "tracking_enabled": bool(row["tracking_enabled"]),
-            }
-            for row in get_streamers(conn)
-        ]
+        counts = {
+            name: count_moments(conn, channel_slug=channel, **filters) for name, filters in SHOW_FILTERS.items()
+        }
+        # A list gets shorter as its moments are rated, so a page that was
+        # there a minute ago may be past its end now: show the last one then.
+        last_page = max(counts[show] - 1, 0) // MOMENTS_PAGE_SIZE * MOMENTS_PAGE_SIZE
+        offset = min(max(0, offset), last_page)
+        rows = get_recent_moments(
+            conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel, **SHOW_FILTERS[show]
+        )
+        groups = dashboard_view.queue_groups(rows, today)
+        for group in groups:
+            for item in group["rows"]:
+                item["href"] = dashboard_view.review_url(show, channel, offset=offset, moment=item["id"])
 
-        channels = get_moment_channels(conn)
-        total_moments = count_moments(conn, channel_slug=channel)
-        moment_status = _moment_status(conn)
+        opened = get_moment(conn, moment) if moment is not None else None
+        if opened is None and rows:
+            opened = rows[0]
 
-        moments = []
-        for row in get_recent_moments(conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel):
-            stream_elapsed = row["stream_elapsed_seconds"]
-            snippet = get_chat_snippet(conn, row["channel_slug"], row["window_start"], row["window_end"])
-            moments.append(
-                {
-                    "id": row["id"],
-                    "channel_slug": row["channel_slug"],
-                    "detected_at_local": to_local(row["detected_at"]),
-                    "stream_time": str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown",
-                    "reason": row["reason"],
-                    "score": row["score"],
-                    "message_count": row["message_count"],
-                    "baseline_message_rate": row["baseline_message_rate"],
-                    "current_message_rate": row["current_message_rate"],
-                    "emote_count": row["emote_count"],
-                    "keyword_hits": row["keyword_hits"],
-                    "snippet": snippet,
-                    "clip_url": f"/clips/{row['clip_path']}" if row["clip_path"] else None,
-                    "context_urls": _context_clip_urls(row["clip_path"]),
-                    "rating": row["rating"],
-                    "notes": row["notes"] or "",
-                    "transcript": row["transcript"] or "",
-                    "audio_events": row["audio_events"] or "",
-                    "sound_events": row["sound_events"] or "",
-                    "pending": _pending_analysis(row),
-                    "stream_type": row["stream_type"],
-                    "moment_type": row["moment_type"],
-                }
+        empty = None
+        if not rows:
+            newest = get_recent_moments(conn, limit=1, channel_slug=channel)
+            empty = dashboard_view.empty_queue_words(
+                show, channel, to_local_datetime(newest[0]["detected_at"]) if newest else None, today
             )
+
+        context = _page_context(conn, "review")
+        context.update(
+            {
+                "show": show,
+                "tabs": [
+                    {
+                        "show": name,
+                        "label": dashboard_view.SHOW_LABELS[name],
+                        "count": counts[name],
+                        "href": dashboard_view.review_url(name, channel),
+                        "current": name == show,
+                    }
+                    for name in dashboard_view.SHOWS
+                ],
+                "channels": get_moment_channels(conn),
+                "selected_channel": channel,
+                "groups": groups,
+                "empty": empty,
+                "paging": _paging(show, channel, offset, len(rows), counts[show]),
+                "moment": _open_moment(conn, opened, today) if opened is not None else None,
+                # Offered from an empty list when there is something to go through elsewhere.
+                "rated_href": (
+                    dashboard_view.review_url(dashboard_view.SHOW_ALL, channel)
+                    if show != dashboard_view.SHOW_ALL and counts[dashboard_view.SHOW_ALL]
+                    else None
+                ),
+                "moment_status": _moment_status(conn),
+                "best_rating_min": dashboard_view.BEST_RATING_MIN,
+                "stream_types": STREAM_TYPES,
+                "moment_types": MOMENT_TYPES,
+            }
+        )
     finally:
         conn.close()
 
-    return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "streamers": streamers,
-            "moments": moments,
-            "channels": channels,
-            "selected_channel": channel,
-            "offset": offset,
-            "page_size": MOMENTS_PAGE_SIZE,
-            "total_moments": total_moments,
-            "moment_status": moment_status,
-            "watching_enabled": _flags.get("watching_enabled", True),
-            "analysis_settings": [
-                (name, label, _flags.get(SETTING_KEYS[name], False))
-                for name, label in ANALYSIS_SETTINGS
-            ],
-            "shutdown_requested": _shutdown_requested,
-            "pending_work_count": len(_moment_sessions) + len(_background_tasks),
+    return templates.TemplateResponse(request, "review.html", context)
+
+
+def _paging(show: str, channel: str | None, offset: int, shown: int, total: int) -> dict | None:
+    """Links to the neighbouring pages of the queue, or None when the whole
+    list fits on one."""
+    newer = offset > 0
+    older = offset + shown < total
+    if not newer and not older:
+        return None
+    return {
+        "words": f"{offset + 1} to {offset + shown} of {total}",
+        "newer_href": (
+            dashboard_view.review_url(show, channel, offset=max(offset - MOMENTS_PAGE_SIZE, 0)) if newer else None
+        ),
+        "older_href": dashboard_view.review_url(show, channel, offset=offset + MOMENTS_PAGE_SIZE) if older else None,
+    }
+
+
+@app.get("/dashboard/moments/{moment_id}", response_class=HTMLResponse)
+async def dashboard_moment(request: Request, moment_id: int):
+    """One moment as the review page shows it, on its own - what the page
+    fetches to open another moment from the queue without loading everything
+    around it again."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        context = {
+            "moment": _open_moment(conn, row, _today()),
             "stream_types": STREAM_TYPES,
             "moment_types": MOMENT_TYPES,
-        },
-    )
+        }
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_moment.html", context)
+
+
+@app.get("/dashboard/channels", response_class=HTMLResponse)
+async def dashboard_channels(request: Request):
+    """The watchlist and the controls of the service itself."""
+    today = _today()
+    conn = get_connection()
+    try:
+        context = _page_context(conn, "channels")
+        recording = set(context["recording"])
+        context.update(
+            {
+                "watchlist": [
+                    {
+                        "slug": row["slug"],
+                        "broadcaster_user_id": row["broadcaster_user_id"],
+                        "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
+                        "recording": row["slug"] in recording,
+                        "tracking_enabled": bool(row["tracking_enabled"]),
+                    }
+                    for row in get_streamers(conn)
+                ],
+                "analysis_settings": [
+                    {
+                        "name": name,
+                        "label": label,
+                        "caption": dashboard_view.ANALYSIS_CAPTIONS[name],
+                        "enabled": _flags.get(SETTING_KEYS[name], False),
+                    }
+                    for name, label in ANALYSIS_SETTINGS
+                ],
+            }
+        )
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(request, "channels.html", context)
 
 
 def _moment_status(conn) -> dict[str, int]:

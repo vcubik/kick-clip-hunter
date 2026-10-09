@@ -38,8 +38,18 @@ class Element:
             elif child.tag not in _NOT_TEXT:
                 yield from child._strings()
 
-    def find(self, tag: str | None = None, class_: str | None = None, **attrs: str) -> list[Element]:
-        """Every descendant matching all the given criteria, in document order."""
+    def _has(self, name: str, value: str | bool) -> bool:
+        name = name.replace("_", "-")
+        if value is True:
+            return name in self.attrs
+        return self.attrs.get(name) == value
+
+    def find(self, tag: str | None = None, class_: str | None = None, **attrs: str | bool) -> list[Element]:
+        """Every descendant matching all the given criteria, in document order.
+
+        An attribute is matched by its value; `True` asks only that it is
+        there, which is how to find one that takes no value (`disabled`,
+        `hidden`, a bare `data-` hook)."""
         found = []
         for child in self.children:
             if isinstance(child, str):
@@ -47,13 +57,13 @@ class Element:
             if (
                 (tag is None or child.tag == tag)
                 and (class_ is None or class_ in child.classes)
-                and all(child.attrs.get(name.replace("_", "-")) == value for name, value in attrs.items())
+                and all(child._has(name, value) for name, value in attrs.items())
             ):
                 found.append(child)
             found.extend(child.find(tag, class_, **attrs))
         return found
 
-    def one(self, tag: str | None = None, class_: str | None = None, **attrs: str) -> Element:
+    def one(self, tag: str | None = None, class_: str | None = None, **attrs: str | bool) -> Element:
         matches = self.find(tag, class_, **attrs)
         assert len(matches) == 1, f"expected exactly one <{tag or '*'} class={class_!r} {attrs}>, found {len(matches)}"
         return matches[0]

@@ -1,0 +1,82 @@
+{#- The review page: the queue of moments on the left and the one that is
+    open beside it. With nothing to open, the page says what the service is
+    doing instead - an empty queue is the normal state, since moments are
+    rare. -#}
+{% extends "base.html" %}
+{% from "_macros.html" import meter %}
+{% block title %}Review{% endblock %}
+{% block main %}
+<main class="review">
+<aside class="queue" aria-label="Moments" data-queue data-channel="{{ selected_channel or '' }}" data-best-from="{{ best_rating_min }}">
+  <div class="queue-head">
+    <nav class="ch-tabs" aria-label="Which moments to list">
+      {% for tab in tabs %}
+      <a class="ch-tab" href="{{ tab.href }}" data-show="{{ tab.show }}"{% if tab.current %} aria-current="true"{% endif %}>{{ tab.label }} <span data-count>{{ tab.count }}</span></a>
+      {% endfor %}
+    </nav>
+    <form class="queue-filter" method="get" action="/dashboard">
+      {% if show != "unrated" %}<input type="hidden" name="show" value="{{ show }}">{% endif %}
+      <select class="ch-select" id="channel-filter" name="channel" aria-label="Channel" data-submit-on-change>
+        <option value=""{% if not selected_channel %} selected{% endif %}>All channels</option>
+        {% for name in channels %}
+        <option value="{{ name }}"{% if name == selected_channel %} selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
+    </form>
+  </div>
+
+  {#- The page never reloads on its own; the script fills this in when the
+      service has more moments or clips than it had when the page was made. -#}
+  <div class="ch-banner" role="status" data-news data-moments="{{ moment_status.moments }}" data-clips="{{ moment_status.clips }}" hidden>
+    <span data-news-words></span>
+    <a class="ch-btn ch-btn-primary ch-btn-compact" href="/dashboard">Show them</a>
+  </div>
+
+  <div class="queue-list">
+    {% for group in groups %}
+    <section class="queue-group">
+      <h2 class="ch-group"><b>{{ group.channel }}</b> <span>{{ group.when }}</span></h2>
+      {% for row in group.rows %}
+      <a class="ch-row{% if row.rating is none %} is-unrated{% endif %}" href="{{ row.href }}" data-moment="{{ row.id }}"{% if moment and row.id == moment.id %} aria-current="true"{% endif %}>
+        <span class="ch-time" title="{{ row.time_title }}">{{ row.time }}</span>
+        <span class="ch-what">{{ row.what }}</span>
+        {{ meter(row.rating, row.rating_words) }}
+      </a>
+      {% endfor %}
+    </section>
+    {% endfor %}
+    {% if empty %}
+    <p class="queue-empty">{{ empty.queue }}</p>
+    {% endif %}
+    {% if paging %}
+    <nav class="queue-pages" aria-label="Pages of the list">
+      <span>{{ paging.words }}</span>
+      {% if paging.newer_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.newer_href }}" rel="prev">Newer</a>{% endif %}
+      {% if paging.older_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.older_href }}" rel="next">Older</a>{% endif %}
+    </nav>
+    {% endif %}
+  </div>
+
+  <p class="ch-keys-hint">
+    <span><kbd>1</kbd> to <kbd>5</kbd> rate</span>
+    <span><kbd>J</kbd> <kbd>K</kbd> move</span>
+    <span><kbd>Space</kbd> play</span>
+  </p>
+</aside>
+
+<div class="open" data-open>
+  {% if moment %}
+  {% include "_moment.html" %}
+  {% else %}
+  <section class="statement">
+    <h1 class="heading">{{ empty.heading }}</h1>
+    <p class="lead">{{ empty.lead or service_words }}</p>
+    {% if rated_href %}
+    <a class="ch-btn" href="{{ rated_href }}">Go through rated clips</a>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+</main>
+{% endblock %}
