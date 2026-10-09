@@ -1,14 +1,12 @@
 """Local speech-to-text for cut clips, via faster-whisper.
 
-Step one of the moment-judge pipeline described in docs/moment-judge-design.md:
-for stream comedy, what the streamer actually says carries most of the
-signal, and it's the judge's primary planned evidence. Shipped standalone
-first (transcript stored and shown per moment, no judge yet) to check that
-cheaply, before spending API budget wiring up the judge itself.
+For stream comedy, what the streamer actually says carries much of the
+signal, so the transcript is stored and shown per moment. Like the other
+per-clip analysis steps it is pure data capture for a future learned
+classifier - nothing here judges or scores a clip.
 
-This is the one piece of that pipeline that stays fully local - the host has
-no usable LLM accelerator (see the design doc), but transcription is a CPU
-task faster-whisper handles fine regardless of the GPU situation.
+Runs on CPU: the host has no usable GPU accelerator, but transcription is a
+task faster-whisper handles fine without one.
 
 MODEL_SIZE is int8-quantized large-v3-turbo: the full multilingual model
 (needed for Czech - the English-only distil/Parakeet/Canary variants aren't
