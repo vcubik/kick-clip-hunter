@@ -235,7 +235,7 @@ Some things only exist against the real Kick, and faking them would only test th
 
 | Not covered by the suite | Why |
 |---|---|
-| `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser through kick.com's bot protection. |
+| `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser against kick.com, whose pages only load in a headed browser. |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
