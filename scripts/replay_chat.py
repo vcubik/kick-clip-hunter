@@ -53,7 +53,7 @@ class SessionSettings:
     in step."""
 
     poll_seconds: float = 3.0
-    quiet_seconds: float = 12.0
+    quiet_seconds: float = 30.0
     max_seconds: float = 60.0
     post_roll_seconds: float = 10.0
 
