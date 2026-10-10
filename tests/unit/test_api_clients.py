@@ -12,6 +12,8 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, kick_client, seventv_client, watchlist
+from kick_clip_hunter.seventv_client import Emote
+from tests.support.kick_api import seventv_emote_id
 
 pytestmark = pytest.mark.anyio
 
@@ -131,24 +133,81 @@ class TestSevenTvEmotes:
     async def test_returns_the_names_in_the_channels_emote_set(self, kick_api):
         kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW", "catJAM", "Sadge"])
 
-        assert await seventv_client.get_channel_emote_names(4242) == ["KEKW", "catJAM", "Sadge"]
+        emotes = await seventv_client.get_channel_emotes(4242)
+
+        assert [emote.name for emote in emotes] == ["KEKW", "catJAM", "Sadge"]
+
+    async def test_an_emote_comes_with_its_id_and_the_shape_of_its_picture(self, kick_api):
+        kick_api.add_channel(
+            "some_channel",
+            4242,
+            seventv_emotes=["KEKW", "WideHard"],
+            seventv_ids={"KEKW": "01F6MQ33FG000FFJ97ZB8MWRZH"},
+            seventv_sizes={"WideHard": (96, 32)},
+        )
+
+        assert await seventv_client.get_channel_emotes(4242) == [
+            Emote("KEKW", "01F6MQ33FG000FFJ97ZB8MWRZH", 32, 32),
+            Emote("WideHard", seventv_emote_id("WideHard"), 96, 32),
+        ]
+
+    async def test_an_emote_whose_picture_files_are_not_listed_is_of_unknown_shape(self, kick_api):
+        kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"], seventv_sizes={"KEKW": None})
+
+        assert await seventv_client.get_channel_emotes(4242) == [Emote("KEKW", seventv_emote_id("KEKW"), 0, 0)]
+
+    @pytest.mark.parametrize("bad_id", ["../../evil", "abc?x=1", "", None, 12345])
+    async def test_only_a_plain_id_is_taken_for_one(self, kick_api, bad_id):
+        # The id ends up in an address the dashboard loads a picture from.
+        # The name is still an emote name as far as the detector goes.
+        kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"], seventv_ids={"KEKW": bad_id})
+
+        emotes = await seventv_client.get_channel_emotes(4242)
+
+        assert emotes == [Emote("KEKW")]
+        assert seventv_client.emote_pictures(emotes) == {}
+
+    async def test_pictures_are_the_emotes_that_have_one_by_name(self, kick_api):
+        emotes = [Emote("KEKW", "ID1", 32, 32), Emote("Sadge"), Emote("WideHard", "ID2", 96, 32)]
+
+        assert seventv_client.emote_pictures(emotes) == {"KEKW": ("ID1", 32, 32), "WideHard": ("ID2", 96, 32)}
 
     async def test_a_channel_without_a_7tv_account_has_none(self, kick_api):
         kick_api.add_channel("some_channel", 4242, seventv_emotes=None)
 
-        assert await seventv_client.get_channel_emote_names(4242) == []
+        assert await seventv_client.get_channel_emotes(4242) == []
 
     async def test_an_account_without_an_emote_set_has_none(self, kick_api):
         kick_api.add_channel("some_channel", 4242, seventv_has_emote_set=False)
 
-        assert await seventv_client.get_channel_emote_names(4242) == []
+        assert await seventv_client.get_channel_emotes(4242) == []
 
     async def test_a_server_error_is_not_mistaken_for_no_emotes(self, kick_api):
         kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
         kick_api.failures["7tv.io"] = 500
 
         with pytest.raises(httpx.HTTPStatusError):
-            await seventv_client.get_channel_emote_names(4242)
+            await seventv_client.get_channel_emotes(4242)
+
+
+class TestSevenTvGlobalEmotes:
+    async def test_returns_the_emotes_every_channel_has(self, kick_api):
+        kick_api.seventv_global.seventv_emotes = ["EZ", "Clap"]
+        kick_api.seventv_global.seventv_sizes = {"Clap": (48, 32)}
+
+        assert await seventv_client.get_global_emotes() == [
+            Emote("EZ", seventv_emote_id("EZ"), 32, 32),
+            Emote("Clap", seventv_emote_id("Clap"), 48, 32),
+        ]
+
+    async def test_an_empty_set_is_no_emotes(self, kick_api):
+        assert await seventv_client.get_global_emotes() == []
+
+    async def test_a_server_error_is_not_mistaken_for_no_emotes(self, kick_api):
+        kick_api.failures["7tv.io"] = 500
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await seventv_client.get_global_emotes()
 
 
 class TestAddingToTheWatchlist:
@@ -175,6 +234,68 @@ class TestAddingToTheWatchlist:
                 "sadge": detector.EMOTE_MENTION_OTHER_WEIGHT,
             },
         )
+
+    def pictures(self, broadcaster_user_id: int = 4242) -> dict:
+        conn = db.get_connection()
+        try:
+            return db.get_channel_emotes(conn, broadcaster_user_id)
+        finally:
+            conn.close()
+
+    async def test_every_emote_is_stored_as_the_picture_its_name_stands_for(self, kick_api):
+        # Including the ones the detector has no use for: a name too short to
+        # listen for and a dance emote are still drawn when someone types them.
+        kick_api.add_channel(
+            "some_channel", 4242, seventv_emotes=["KEKW", "catJAM", "re"], seventv_sizes={"catJAM": (64, 32)}
+        )
+
+        await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert self.pictures() == {
+            "KEKW": (seventv_emote_id("KEKW"), 32, 32),
+            "catJAM": (seventv_emote_id("catJAM"), 64, 32),
+            "re": (seventv_emote_id("re"), 32, 32),
+        }
+
+    async def test_the_same_name_is_each_channels_own_emote(self, kick_api):
+        kick_api.add_channel("channel_a", 1, seventv_emotes=["KEKW"], seventv_ids={"KEKW": "EMOTEA"})
+        kick_api.add_channel("channel_b", 2, seventv_emotes=["KEKW"], seventv_ids={"KEKW": "EMOTEB"})
+
+        await watchlist.add_channel_to_watchlist("channel_a")
+        await watchlist.add_channel_to_watchlist("channel_b")
+
+        assert self.pictures(1) == {"KEKW": ("EMOTEA", 32, 32)}
+        assert self.pictures(2) == {"KEKW": ("EMOTEB", 32, 32)}
+
+    async def test_adding_again_refreshes_the_pictures(self, kick_api):
+        channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW", "Sadge"])
+        await watchlist.add_channel_to_watchlist("some_channel")
+
+        channel.seventv_emotes = ["KEKW"]
+        channel.seventv_ids = {"KEKW": "ANOTHERKEKW"}
+        await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert self.pictures() == {"KEKW": ("ANOTHERKEKW", 32, 32)}
+
+    async def test_pictures_can_be_refreshed_without_touching_what_the_detector_listens_for(self, kick_api):
+        channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
+        await watchlist.add_channel_to_watchlist("some_channel")
+        channel.seventv_emotes = ["OMEGALUL", "Sadge"]
+
+        assert await watchlist.refresh_emote_pictures(4242) == 2
+
+        assert set(self.pictures()) == {"OMEGALUL", "Sadge"}
+        assert self.stored()[1] == {"kekw": detector.EMOTE_MENTION_LAUGH_WEIGHT}
+
+    async def test_without_a_channel_it_is_the_global_emotes_that_are_refreshed(self, kick_api):
+        kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
+        await watchlist.add_channel_to_watchlist("some_channel")
+        kick_api.seventv_global.seventv_emotes = ["EZ", "Clap"]
+
+        assert await watchlist.refresh_emote_pictures() == 2
+
+        assert set(self.pictures(db.GLOBAL_EMOTES_OWNER)) == {"EZ", "Clap"}
+        assert set(self.pictures()) == {"KEKW"}
 
     async def test_uses_the_configured_credentials(self, kick_api):
         kick_api.add_channel("some_channel", 4242)

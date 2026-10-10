@@ -15,6 +15,13 @@ from dataclasses import dataclass, field
 import httpx
 
 
+def seventv_emote_id(name: str) -> str:
+    """The id the fake 7TV gives an emote of that name, unless the channel
+    says otherwise: made from the name, so two channels' emotes of one name
+    are the same emote only if nothing is set to tell them apart."""
+    return "7TV" + name.encode().hex().upper()
+
+
 @dataclass
 class FakeChannel:
     slug: str
@@ -26,6 +33,28 @@ class FakeChannel:
     seventv_emotes: list[str] | None = field(default_factory=list)
     # False = a 7TV account that has no emote set selected ("emote_set": null).
     seventv_has_emote_set: bool = True
+    # Emote ids by name, for the names that should not get seventv_emote_id's.
+    seventv_ids: dict[str, object] = field(default_factory=dict)
+    # (width, height) of an emote's smallest picture by name; 32x32 otherwise.
+    # None = 7TV lists no picture files for it.
+    seventv_sizes: dict[str, tuple[int, int] | None] = field(default_factory=dict)
+
+    def seventv_emote(self, name: str) -> dict:
+        """One entry of the channel's emote set, in the shape 7TV sends."""
+        emote_id = self.seventv_ids.get(name, seventv_emote_id(name))
+        size = self.seventv_sizes.get(name, (32, 32))
+        files = []
+        if size is not None:
+            files = [
+                {"name": f"{scale}x.{kind}", "width": size[0] * scale, "height": size[1] * scale}
+                for kind in ("avif", "webp")
+                for scale in (1, 2, 3, 4)
+            ]
+        return {
+            "id": emote_id,
+            "name": name,
+            "data": {"id": emote_id, "host": {"url": f"//cdn.7tv.app/emote/{emote_id}", "files": files}},
+        }
 
 
 @dataclass
@@ -45,6 +74,9 @@ class FakeKickApi:
     # Every request received, as (method, url path, parsed body or query).
     requests: list[tuple[str, str, object]] = field(default_factory=list)
     tokens_issued: int = 0
+    # 7TV's global emote set, the one every channel has on top of its own:
+    # its seventv_* fields are what the fake 7TV answers with.
+    seventv_global: FakeChannel = field(default_factory=lambda: FakeChannel("", 0))
 
     def add_channel(self, slug: str, broadcaster_user_id: int, **kwargs) -> FakeChannel:
         channel = FakeChannel(slug=slug, broadcaster_user_id=broadcaster_user_id, **kwargs)
@@ -114,6 +146,10 @@ class FakeKickApi:
                 self.subscribed.append(body["broadcaster_user_id"])  # type: ignore[index]
                 return httpx.Response(200, json={"data": [{"name": "chat.message.sent", "version": 1}]})
 
+        if request.url.host == "7tv.io" and path == "/v3/emote-sets/global":
+            emotes = [self.seventv_global.seventv_emote(n) for n in self.seventv_global.seventv_emotes or []]
+            return httpx.Response(200, json={"id": "GLOBAL", "name": "Global Emotes", "emotes": emotes})
+
         if request.url.host == "7tv.io" and path.startswith("/v3/users/kick/"):
             user_id = int(path.rsplit("/", 1)[1])
             channel = next((c for c in self.channels.values() if c.broadcaster_user_id == user_id), None)
@@ -121,7 +157,9 @@ class FakeKickApi:
                 return httpx.Response(404, json={"error": "Unknown User"})
             if not channel.seventv_has_emote_set:
                 return httpx.Response(200, json={"emote_set": None})
-            return httpx.Response(200, json={"emote_set": {"emotes": [{"name": n} for n in channel.seventv_emotes]}})
+            return httpx.Response(
+                200, json={"emote_set": {"emotes": [channel.seventv_emote(n) for n in channel.seventv_emotes]}}
+            )
 
         return httpx.Response(404, json={"message": f"fake API has no route for {request.method} {url}"})
 

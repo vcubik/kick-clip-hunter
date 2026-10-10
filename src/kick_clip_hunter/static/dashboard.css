@@ -256,9 +256,11 @@ a { color: inherit; }
 .ch-nick-4 { color: var(--nick-4); }
 .ch-nick-5 { color: var(--nick-5); }
 .ch-nick-6 { color: var(--nick-6); }
-/* A native emote: its picture inside the line. Its name is the
-   alternative text, so that is what shows if the picture does not load. */
-.ch-emote { width: 20px; height: 20px; margin: 0 1px; vertical-align: -5px; object-fit: contain; font-size: 12px; font-weight: 600; }
+/* An emote, Kick's own or the channel's 7TV one: its picture inside the
+   line, as tall as the line and as wide as the markup says (7TV emotes are
+   not all square). Its name is the alternative text, so that is what shows
+   if the picture does not load. */
+.ch-emote { height: 20px; margin: 0 1px; vertical-align: -5px; object-fit: contain; font-size: 12px; font-weight: 600; }
 
 /* Transport: the one row under the clip. */
 .ch-transport { display: flex; align-items: center; gap: var(--space-12); height: var(--h-control); margin-top: var(--space-4); }

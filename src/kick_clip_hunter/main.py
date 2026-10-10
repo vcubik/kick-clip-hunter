@@ -38,6 +38,7 @@ from .db import (
     get_channel_keywords,
     get_chat_between,
     get_chat_delay,
+    get_chat_emotes,
     get_connection,
     get_flag,
     get_moment,
@@ -74,7 +75,7 @@ from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .timeutil import to_local_datetime
-from .watchlist import add_channel_to_watchlist
+from .watchlist import add_channel_to_watchlist, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -297,11 +298,43 @@ async def _keep_chat_subscriptions() -> None:
             logger.exception("periodic chat subscription check failed")
 
 
+async def _refresh_emote_pictures() -> None:
+    """Fetch every watched channel's 7TV emote set again, and the global
+    emotes every channel has on top of its own, so chat on the dashboard is
+    drawn with the pictures in use now.
+
+    Channels change their sets all the time, and one added before pictures
+    were stored has none at all. Only the pictures are refreshed here - what
+    the detector listens for changes when someone asks for it (subscribe.py,
+    refresh_emotes.py), not behind a restart. A set 7TV can't be asked
+    about keeps the pictures it had.
+    """
+    try:
+        logger.info("%d global 7TV emote picture(s) stored", await refresh_emote_pictures())
+    except Exception:
+        logger.exception("could not refresh the global 7TV emote pictures")
+
+    conn = get_connection()
+    try:
+        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
+    finally:
+        conn.close()
+    for broadcaster_user_id, slug in watch:
+        try:
+            count = await refresh_emote_pictures(broadcaster_user_id)
+            logger.info("%d 7TV emote picture(s) stored for %s", count, slug)
+        except Exception:
+            logger.exception("could not refresh the 7TV emote pictures of %s", slug)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_flags()
     await _ensure_chat_subscriptions()
     tasks = [
+        # In the background: the dashboard works without them, 7TV being
+        # slow or down must not hold up the start.
+        asyncio.create_task(_refresh_emote_pictures()),
         asyncio.create_task(
             recording_manager.run_forever(
                 _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
@@ -743,7 +776,8 @@ def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[di
     laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]))
     everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names)
     strip = chat_trace.trace(timeline, everything, laughing, usual=row["baseline_message_rate"], window=window)
-    return strip, chat_trace.chat_replay(messages, timeline, window)
+    emotes = get_chat_emotes(conn, row["broadcaster_user_id"])
+    return strip, chat_trace.chat_replay(messages, timeline, window, emotes)
 
 
 def _queue_activity(conn, rows) -> dict[int, dict]:

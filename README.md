@@ -84,7 +84,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 
 | Script | What it does |
 |---|---|
-| `refresh_emotes.py <slug>` | Re-fetch a watched channel's 7TV emotes. |
+| `refresh_emotes.py <slug>` | Re-fetch a watched channel's 7TV emotes: what the detector listens for and the pictures chat is drawn with. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |

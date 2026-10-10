@@ -141,7 +141,7 @@
     {% for line in moment.chat %}
     <p class="ch-chat{% if line.in_moment %} is-moment{% endif %}" data-at="{{ line.at }}"><b class="ch-nick-{{ line.colour }}">{{ line.nick }}</b> <span>
       {%- for part in line.parts -%}
-      {%- if part.emote %}<img class="ch-emote" src="{{ part.image }}" alt="{{ part.emote }}" title="{{ part.emote }}" width="20" height="20" loading="lazy">{% else %}{{ part.text }}{% endif -%}
+      {%- if part.emote %}<img class="ch-emote" src="{{ part.image }}" alt="{{ part.emote }}" title="{{ part.emote }}" width="{{ part.width }}" height="20" loading="lazy">{% else %}{{ part.text }}{% endif -%}
       {%- endfor -%}
     </span></p>
     {% else %}

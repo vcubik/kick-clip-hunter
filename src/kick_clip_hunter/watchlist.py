@@ -1,4 +1,4 @@
-"""Add a channel to the watchlist: fetches its 7TV emote keywords, makes
+"""Add a channel to the watchlist: fetches its 7TV emotes, makes
 sure its chat.message.sent events are subscribed, and records the streamer
 locally - in that order, so a failure part-way leaves nothing half-done.
 
@@ -7,7 +7,13 @@ in main.py, so the two stay in lockstep instead of drifting apart.
 """
 
 from .config import load_settings
-from .db import add_streamer, get_connection, replace_channel_keywords
+from .db import (
+    GLOBAL_EMOTES_OWNER,
+    add_streamer,
+    get_connection,
+    replace_channel_emotes,
+    replace_channel_keywords,
+)
 from .detector import EMOTE_MENTION_LAUGH_WEIGHT, classify_emote_names
 from .kick_client import (
     get_app_access_token,
@@ -15,7 +21,35 @@ from .kick_client import (
     get_event_subscriptions,
     subscribe_chat_messages,
 )
-from .seventv_client import get_channel_emote_names
+from .seventv_client import Emote, emote_pictures, get_channel_emotes, get_global_emotes
+
+
+def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
+    """Stores what a channel's 7TV emote set means for it: the names the
+    detector listens for, with their weights, and the picture each name is
+    shown as. Returns how many of the names are laugh-related."""
+    keyword_weights = classify_emote_names([emote.name for emote in emotes])
+    replace_channel_keywords(conn, broadcaster_id, keyword_weights)
+    replace_channel_emotes(conn, broadcaster_id, emote_pictures(emotes))
+    return sum(1 for weight in keyword_weights.values() if weight == EMOTE_MENTION_LAUGH_WEIGHT)
+
+
+async def refresh_emote_pictures(broadcaster_id: int = GLOBAL_EMOTES_OWNER) -> int:
+    """Fetches a channel's 7TV emote set again and stores its pictures,
+    leaving the detector's keywords as they are. Without a channel it is
+    7TV's global emotes, the ones every channel has, that are fetched.
+    Returns how many pictures there are."""
+    if broadcaster_id == GLOBAL_EMOTES_OWNER:
+        emotes = await get_global_emotes()
+    else:
+        emotes = await get_channel_emotes(broadcaster_id)
+    pictures = emote_pictures(emotes)
+    conn = get_connection()
+    try:
+        replace_channel_emotes(conn, broadcaster_id, pictures)
+    finally:
+        conn.close()
+    return len(pictures)
 
 
 async def add_channel_to_watchlist(slug: str) -> dict:
@@ -29,9 +63,7 @@ async def add_channel_to_watchlist(slug: str) -> dict:
     # Everything that can fail is fetched before anything is changed on
     # Kick's side: a 7TV outage used to leave a chat subscription behind for
     # a channel that never made it onto the local watchlist.
-    emote_names = await get_channel_emote_names(broadcaster_id)
-    keyword_weights = classify_emote_names(emote_names)
-    laugh_count = sum(1 for weight in keyword_weights.values() if weight == EMOTE_MENTION_LAUGH_WEIGHT)
+    emotes = await get_channel_emotes(broadcaster_id)
 
     # Subscribing twice creates a second subscription on Kick's side, so a
     # channel that is already subscribed (re-added, or re-run to refresh it)
@@ -43,13 +75,13 @@ async def add_channel_to_watchlist(slug: str) -> dict:
     conn = get_connection()
     try:
         add_streamer(conn, broadcaster_id, slug)
-        replace_channel_keywords(conn, broadcaster_id, keyword_weights)
+        laugh_count = store_channel_emotes(conn, broadcaster_id, emotes)
     finally:
         conn.close()
 
     return {
         "slug": slug,
         "broadcaster_user_id": broadcaster_id,
-        "emote_count": len(emote_names),
+        "emote_count": len(emotes),
         "laugh_emote_count": laugh_count,
     }

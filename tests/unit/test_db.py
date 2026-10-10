@@ -84,7 +84,14 @@ def store_chat(
 
 class TestSchema:
     def test_a_fresh_database_gets_every_table(self, conn):
-        assert tables(conn) >= {"streamers", "chat_messages", "moments", "channel_keywords", "app_settings"}
+        assert tables(conn) >= {
+            "streamers",
+            "chat_messages",
+            "moments",
+            "channel_keywords",
+            "channel_emotes",
+            "app_settings",
+        }
 
     def test_the_database_file_and_its_directory_are_created_on_first_use(self):
         assert not db.DB_PATH.parent.exists()
@@ -338,6 +345,61 @@ class TestChannelKeywords:
         db.replace_channel_keywords(conn, 1, {"KEKW": 3.5, "kekw": 3.5})
 
         assert db.get_channel_keywords(conn, 1) == {"kekw": 3.5}
+
+
+class TestChannelEmotes:
+    def test_emotes_are_stored_by_name_with_their_id_and_size(self, conn):
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32), "WideHard": ("ID2", 96, 32)})
+
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID1", 32, 32), "WideHard": ("ID2", 96, 32)}
+
+    def test_names_differing_only_in_case_are_different_emotes(self, conn):
+        # Unlike the detector's keywords: 7TV tells "KEKW" from "kekw".
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32), "kekw": ("ID2", 32, 32)})
+
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID1", 32, 32), "kekw": ("ID2", 32, 32)}
+
+    def test_replacing_drops_the_previous_set(self, conn):
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32), "Sadge": ("ID2", 32, 32)})
+
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID3", 32, 32)})
+
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID3", 32, 32)}
+
+    def test_each_channel_has_its_own_emotes(self, conn):
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32)})
+        db.replace_channel_emotes(conn, 2, {"KEKW": ("ID2", 32, 32)})
+
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID1", 32, 32)}
+        assert db.get_channel_emotes(conn, 2) == {"KEKW": ("ID2", 32, 32)}
+        assert db.get_channel_emotes(conn, 3) == {}
+
+    def test_chat_can_use_the_global_emotes_and_the_channels_own(self, conn):
+        db.replace_channel_emotes(conn, db.GLOBAL_EMOTES_OWNER, {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32)})
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32)})
+
+        assert db.get_chat_emotes(conn, 1) == {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32), "KEKW": ("ID1", 32, 32)}
+        assert db.get_chat_emotes(conn, 2) == {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32)}
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID1", 32, 32)}
+
+    def test_a_channels_own_emote_wins_over_a_global_one_of_the_same_name(self, conn):
+        db.replace_channel_emotes(conn, db.GLOBAL_EMOTES_OWNER, {"EZ": ("GLOBAL", 32, 32)})
+        db.replace_channel_emotes(conn, 1, {"EZ": ("OWN", 64, 32)})
+
+        assert db.get_chat_emotes(conn, 1) == {"EZ": ("OWN", 64, 32)}
+        assert db.get_chat_emotes(conn, 2) == {"EZ": ("GLOBAL", 32, 32)}
+
+    def test_a_database_from_before_emote_pictures_gains_the_table(self):
+        connection = db.get_connection()
+        connection.execute("DROP TABLE channel_emotes")
+        connection.commit()
+        connection.close()
+
+        connection = db.get_connection()
+        try:
+            assert db.get_channel_emotes(connection, 1) == {}
+        finally:
+            connection.close()
 
 
 class TestChatMessages:

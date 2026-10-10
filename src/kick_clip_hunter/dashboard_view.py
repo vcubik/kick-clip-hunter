@@ -39,6 +39,15 @@ NICK_COLOURS = 6
 # kept), and serves the picture for an id from here.
 _EMOTE_TOKEN = re.compile(r"\[emote:(\d+):([^\]]+)\]")
 KICK_EMOTE_IMAGE = "https://files.kick.com/emotes/{id}/fullsize"
+# 7TV emotes are typed as plain words; which emote a word is depends on the
+# channel (see chat_parts). Twice the smallest size, so the picture stays
+# sharp on a dense screen.
+SEVENTV_EMOTE_IMAGE = "https://cdn.7tv.app/emote/{id}/2x.webp"
+# An emote is as tall as a line of chat (the stylesheet's .ch-emote) and as
+# wide as its own shape makes it, within reason.
+EMOTE_HEIGHT = 20
+EMOTE_MAX_WIDTH = 80
+_WHITESPACE = re.compile(r"(\s+)")
 
 # Two moments belong to the same stream when the times that stream went
 # live, worked out from each of them, agree this closely. They normally agree
@@ -214,18 +223,54 @@ def nick_colour(name: str) -> int:
     return value % NICK_COLOURS + 1
 
 
-def chat_parts(content: str) -> list[dict[str, str]]:
-    """A chat message as plain text and native Kick emotes, in order. Each
-    emote comes with its name and the address of its picture."""
-    parts: list[dict[str, str]] = []
+def _emote_width(width: int, height: int) -> int:
+    """How wide an emote of that shape is drawn. One of unknown shape is
+    taken to be square."""
+    if width <= 0 or height <= 0:
+        return EMOTE_HEIGHT
+    return max(1, min(EMOTE_MAX_WIDTH, round(EMOTE_HEIGHT * width / height)))
+
+
+def _text_parts(text: str, emotes: Mapping[str, tuple[str, int, int]]) -> list[dict[str, Any]]:
+    """A stretch of typed text with the channel's 7TV emotes picked out of
+    it. As in the 7TV extension, an emote is a whole word spelled exactly
+    like its name: "KEKW" is one, "kekw" and "KEKW!" are not."""
+    parts: list[dict[str, Any]] = []
+    plain = ""
+    for piece in _WHITESPACE.split(text):
+        if piece not in emotes:
+            plain += piece
+            continue
+        if plain:
+            parts.append({"text": plain})
+            plain = ""
+        emote_id, width, height = emotes[piece]
+        parts.append(
+            {"emote": piece, "image": SEVENTV_EMOTE_IMAGE.format(id=emote_id), "width": _emote_width(width, height)}
+        )
+    if plain:
+        parts.append({"text": plain})
+    return parts
+
+
+def chat_parts(content: str, emotes: Mapping[str, tuple[str, int, int]] | None = None) -> list[dict[str, Any]]:
+    """A chat message as plain text and emotes, in order. Each emote comes
+    with its name, the address of its picture and how wide to draw it.
+
+    Native Kick emotes are in the message itself. 7TV emotes are ordinary
+    words that mean a picture only in a channel that has an emote of that
+    name, so `emotes` is that channel's own set - (emote id, width, height)
+    by name, see db.get_channel_emotes. Without it they stay words."""
+    emotes = emotes or {}
+    parts: list[dict[str, Any]] = []
     position = 0
     for token in _EMOTE_TOKEN.finditer(content):
-        if token.start() > position:
-            parts.append({"text": content[position : token.start()]})
-        parts.append({"emote": token.group(2), "image": KICK_EMOTE_IMAGE.format(id=token.group(1))})
+        parts.extend(_text_parts(content[position : token.start()], emotes))
+        parts.append(
+            {"emote": token.group(2), "image": KICK_EMOTE_IMAGE.format(id=token.group(1)), "width": EMOTE_HEIGHT}
+        )
         position = token.end()
-    if position < len(content):
-        parts.append({"text": content[position:]})
+    parts.extend(_text_parts(content[position:], emotes))
     return parts
 
 
