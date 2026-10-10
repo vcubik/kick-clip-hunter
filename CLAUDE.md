@@ -186,7 +186,8 @@ Module map (`src/kick_clip_hunter/`):
   video to lay over it (`chat_video.py`), lined up with where the video really begins;
   the dialog's slider moves its lines up to 10s either way against the picture, for that
   one video, on top of the channel's chat delay - and shows them beside the picture as
-  they will be. What state a cut is in is kept in memory while one is being made and told
+  they will be. The chat video is see-through unless a background colour is picked
+  for it there (`chat_background`, "#rrggbb"), for putting chat next to the picture. What state a cut is in is kept in memory while one is being made and told
   from the files otherwise
 - `chat_video.py` — chat as a video with a transparent background (ProRes 4444,
   `moment_<id>_trim_chat.mov`), for an editor to lay over the video cut out with Trim.

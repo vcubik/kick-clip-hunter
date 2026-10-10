@@ -92,3 +92,22 @@ class TestMovingChat:
     def test_what_is_not_a_number_of_seconds_is_refused(self, value):
         with pytest.raises(TrimError, match="chat_shift must be a number"):
             clip_trim.chat_shift(value)
+
+
+class TestWhatIsBehindChat:
+    @pytest.mark.parametrize("asked", [None, ""])
+    def test_nothing_unless_a_colour_was_asked_for(self, asked):
+        assert clip_trim.chat_background(asked) is None
+
+    def test_a_colour_is_kept_as_it_is_written_in_a_stylesheet(self):
+        assert clip_trim.chat_background("#1A2b3C") == "#1a2b3c"
+
+    @pytest.mark.parametrize(
+        "value", ["red", "#fff", "#12345g", "#1234567", "1a2b3c", "#1a2b3c; color: red", " #1a2b3c", 0x1A2B3C, True]
+    )
+    def test_anything_else_is_refused(self, value):
+        with pytest.raises(TrimError, match="chat_background must be a colour"):
+            clip_trim.chat_background(value)
+
+    def test_what_the_dialog_starts_out_with_is_such_a_colour(self):
+        assert clip_trim.chat_background(clip_trim.DEFAULT_CHAT_BACKGROUND) == clip_trim.DEFAULT_CHAT_BACKGROUND

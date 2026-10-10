@@ -802,6 +802,7 @@ async def _trim_background(
     lead: float,
     lines: list[dict] | None,
     shift: float,
+    background: str | None,
     video: Path,
     chat: Path,
 ) -> None:
@@ -829,7 +830,7 @@ async def _trim_background(
         # The chat video starts on the trimmed video's first frame, wherever
         # in the file that turned out to be.
         shown = chat_video.lines_from(lines, begins - lead, shift)
-        frames = await asyncio.to_thread(chat_video.render, shown, duration, chat)
+        frames = await asyncio.to_thread(chat_video.render, shown, duration, chat, background)
     except Exception:
         logger.exception("[%s] rendering the chat video failed for moment %d", channel, moment_id)
         _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT_FAILED, "early": early}
@@ -976,6 +977,7 @@ def _open_moment(conn, row, today: date) -> dict:
                 "min_seconds": dashboard_view.number_words(clip_trim.MIN_SECONDS),
                 "chat": bool(chat),
                 "chat_shift_limit": dashboard_view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS),
+                "chat_background": clip_trim.DEFAULT_CHAT_BACKGROUND,
             }
             if row["clip_path"] and row["clip_duration"] and strip
             else None
@@ -1218,7 +1220,8 @@ async def trim_moment(moment_id: int, request: Request):
     own (see clip_trim.py), and with `chat` its chat as a video to lay over
     it (chat_video.py). `start` and `end` are clip time; `chat_shift` moves
     the chat video's lines that many seconds later than the channel's chat
-    delay has them. What was cut for the moment before is replaced."""
+    delay has them, and `chat_background` ("#rrggbb") puts a colour behind
+    them instead of nothing. What was cut for the moment before is replaced."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="the service is shutting down")
     try:
@@ -1239,6 +1242,7 @@ async def trim_moment(moment_id: int, request: Request):
         try:
             span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
             shift = clip_trim.chat_shift(asked.get("chat_shift"))
+            background = clip_trim.chat_background(asked.get("chat_background"))
         except clip_trim.TrimError as e:
             raise HTTPException(status_code=400, detail=str(e)) from None
         lines = None
@@ -1261,6 +1265,7 @@ async def trim_moment(moment_id: int, request: Request):
                 row["context_before"] or 0.0,
                 lines,
                 shift,
+                background,
                 video,
                 chat,
             )

@@ -15,6 +15,7 @@ the clip's first frame, negative in the footage before it.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,13 @@ CHAT_SHIFT_LIMIT_SECONDS = 10.0
 # from what was stored when the file was cut. A time this far past an end is
 # taken to mean the end.
 SLACK_SECONDS = 1.0
+
+
+# What the chat video has behind its text when it is not to be laid over
+# the picture but put next to it. It goes into a style attribute, so it is
+# a colour written one way and nothing else.
+DEFAULT_CHAT_BACKGROUND = "#18181b"
+_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 
 class TrimError(ValueError):
@@ -73,3 +81,13 @@ def chat_shift(value: Any) -> float:
     if abs(shift) > CHAT_SHIFT_LIMIT_SECONDS:
         raise TrimError(f"chat can be moved by {CHAT_SHIFT_LIMIT_SECONDS:g} s at most")
     return shift
+
+
+def chat_background(value: Any) -> str | None:
+    """The colour behind the chat video's text, from what was asked for:
+    "#rrggbb", or None for nothing behind it."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not _COLOUR.fullmatch(value):
+        raise TrimError("chat_background must be a colour written as #rrggbb")
+    return value.lower()

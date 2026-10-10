@@ -419,7 +419,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-check { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: 600; cursor: pointer; }
 .trim-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lit); }
 .trim-shift { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
-.trim-shift-words { font-size: 13px; font-variant-numeric: tabular-nums; }
+.trim-shift-words { min-width: 220px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.trim-background { display: inline-flex; align-items: center; gap: var(--space-8); }
+.trim-background input[type="color"] { width: var(--h-control); height: var(--h-compact); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); cursor: pointer; }
+.trim-background input:disabled { opacity: 0.45; cursor: not-allowed; }
 .trim-note { max-width: 100ch; margin-top: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
 .trim-foot { display: flex; align-items: center; gap: var(--space-8); margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
 .trim-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }

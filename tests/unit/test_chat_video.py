@@ -124,6 +124,14 @@ class TestPage:
         assert [each.attrs["data-at"] for each in lines] == ["-2", "3.5"]
         assert [each.one("b").text for each in lines] == ["alice", "bob"]
 
+    def test_there_is_nothing_behind_the_lines_unless_a_colour_is_given(self):
+        assert "style" not in parse(chat_video.page_html([line(1)])).one("html").attrs
+
+    def test_a_background_is_the_whole_pages(self):
+        page = parse(chat_video.page_html([line(1)], background="#18181b"))
+
+        assert page.one("html").attrs["style"] == "background: #18181b"
+
     def test_a_chatter_has_their_colour_and_badges(self):
         known = line(1, own_colour="#9ad8ff", badges=[{"icon": "moderator", "words": "Moderator"}])
 

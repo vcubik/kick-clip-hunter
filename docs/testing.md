@@ -293,7 +293,8 @@ Run this on a live channel after changing any of the above, or the code right ne
    with it, as far as the footage goes and no closer to the other handle than a second. `I` and
    `O` put the start and the end where the player is, `Space` plays and stops at the end of the
    stretch, and a number key rates nothing. Tick the chat box: chat appears beside the picture and
-   follows it, and the slider moves it earlier or later. Export: the dialog says it is cutting,
+   follows it, and the slider moves it earlier or later; with "on a background" ticked the chat
+   beside the picture takes the colour picked, and so does the exported chat video behind its text. Export: the dialog says it is cutting,
    then that the video is ready while its chat is rendered, and a minute or two later offers both
    to download - and how much before the start that was set the video begins. The log says `moment
    N trimmed` and `chat video saved for moment N`. Laid over the video in an editor (or with
