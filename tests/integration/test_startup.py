@@ -194,6 +194,36 @@ class TestEmotePictures:
         }
         assert self.pictures(second) == {"KEKW": ("ANOTHERKEKW", 32, 32)}
 
+    async def test_the_global_emotes_are_fetched_too(self, service):
+        service.watch("channel_a")
+        service.api.seventv_global.seventv_emotes = ["EZ", "Clap"]
+
+        await service.main._refresh_emote_pictures()
+
+        assert set(self.pictures(db.GLOBAL_EMOTES_OWNER)) == {"EZ", "Clap"}
+
+    async def test_they_are_fetched_even_with_nothing_on_the_watchlist(self, service):
+        service.api.seventv_global.seventv_emotes = ["EZ"]
+
+        await service.main._refresh_emote_pictures()
+
+        assert set(self.pictures(db.GLOBAL_EMOTES_OWNER)) == {"EZ"}
+
+    async def test_failing_to_fetch_the_global_emotes_does_not_stop_the_channels(self, service, caplog):
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].seventv_emotes = ["KEKW"]
+        service.api.seventv_global.seventv_emotes = ["EZ"]
+        await service.main._refresh_emote_pictures()
+        service.api.channels["channel_a"].seventv_emotes = ["OMEGALUL"]
+        service.api.failures["emote-sets/global"] = 503
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await service.main._refresh_emote_pictures()
+
+        assert set(self.pictures(db.GLOBAL_EMOTES_OWNER)) == {"EZ"}
+        assert set(self.pictures(user_id)) == {"OMEGALUL"}
+        assert any("could not refresh the global 7TV emote pictures" in r.getMessage() for r in caplog.records)
+
     async def test_what_the_detector_listens_for_is_left_alone(self, service):
         user_id = service.watch("channel_a", keywords={"kekw": 3.5})
         service.api.channels["channel_a"].seventv_emotes = ["OMEGALUL"]

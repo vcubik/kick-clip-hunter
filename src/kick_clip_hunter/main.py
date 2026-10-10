@@ -35,9 +35,9 @@ from .db import (
     STREAM_TYPES,
     count_moments,
     count_moments_with_clip,
-    get_channel_emotes,
     get_channel_keywords,
     get_chat_between,
+    get_chat_emotes,
     get_connection,
     get_flag,
     get_moment,
@@ -297,15 +297,21 @@ async def _keep_chat_subscriptions() -> None:
 
 
 async def _refresh_emote_pictures() -> None:
-    """Fetch every watched channel's 7TV emote set again, so chat on the
-    dashboard is drawn with the pictures the channel uses now.
+    """Fetch every watched channel's 7TV emote set again, and the global
+    emotes every channel has on top of its own, so chat on the dashboard is
+    drawn with the pictures in use now.
 
     Channels change their sets all the time, and one added before pictures
     were stored has none at all. Only the pictures are refreshed here - what
     the detector listens for changes when someone asks for it (subscribe.py,
-    refresh_emotes.py), not behind a restart. A channel 7TV can't be asked
+    refresh_emotes.py), not behind a restart. A set 7TV can't be asked
     about keeps the pictures it had.
     """
+    try:
+        logger.info("%d global 7TV emote picture(s) stored", await refresh_emote_pictures())
+    except Exception:
+        logger.exception("could not refresh the global 7TV emote pictures")
+
     conn = get_connection()
     try:
         watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
@@ -759,7 +765,7 @@ def _chat_against_clip(conn, row) -> tuple[dict | None, list[dict]]:
     laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]))
     everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names)
     strip = chat_trace.trace(timeline, everything, laughing, usual=row["baseline_message_rate"], window=window)
-    emotes = get_channel_emotes(conn, row["broadcaster_user_id"])
+    emotes = get_chat_emotes(conn, row["broadcaster_user_id"])
     return strip, chat_trace.chat_replay(messages, timeline, window, emotes)
 
 

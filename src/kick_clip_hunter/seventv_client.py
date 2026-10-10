@@ -63,6 +63,16 @@ async def get_channel_emotes(broadcaster_user_id: int) -> list[Emote]:
     return [_emote(entry) for entry in emote_set.get("emotes", [])]
 
 
+async def get_global_emotes() -> list[Emote]:
+    """The emotes 7TV gives every channel on top of its own set."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{API_BASE}/emote-sets/global")
+        response.raise_for_status()
+        data = response.json()
+
+    return [_emote(entry) for entry in data.get("emotes") or []]
+
+
 def emote_pictures(emotes: list[Emote]) -> dict[str, tuple[str, int, int]]:
     """Those of a channel's emotes that have a picture, as (id, width,
     height) by name - the form they are stored in (db.replace_channel_emotes)."""

@@ -374,6 +374,21 @@ class TestChannelEmotes:
         assert db.get_channel_emotes(conn, 2) == {"KEKW": ("ID2", 32, 32)}
         assert db.get_channel_emotes(conn, 3) == {}
 
+    def test_chat_can_use_the_global_emotes_and_the_channels_own(self, conn):
+        db.replace_channel_emotes(conn, db.GLOBAL_EMOTES_OWNER, {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32)})
+        db.replace_channel_emotes(conn, 1, {"KEKW": ("ID1", 32, 32)})
+
+        assert db.get_chat_emotes(conn, 1) == {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32), "KEKW": ("ID1", 32, 32)}
+        assert db.get_chat_emotes(conn, 2) == {"EZ": ("G1", 32, 32), "Clap": ("G2", 32, 32)}
+        assert db.get_channel_emotes(conn, 1) == {"KEKW": ("ID1", 32, 32)}
+
+    def test_a_channels_own_emote_wins_over_a_global_one_of_the_same_name(self, conn):
+        db.replace_channel_emotes(conn, db.GLOBAL_EMOTES_OWNER, {"EZ": ("GLOBAL", 32, 32)})
+        db.replace_channel_emotes(conn, 1, {"EZ": ("OWN", 64, 32)})
+
+        assert db.get_chat_emotes(conn, 1) == {"EZ": ("OWN", 64, 32)}
+        assert db.get_chat_emotes(conn, 2) == {"EZ": ("GLOBAL", 32, 32)}
+
     def test_a_database_from_before_emote_pictures_gains_the_table(self):
         connection = db.get_connection()
         connection.execute("DROP TABLE channel_emotes")

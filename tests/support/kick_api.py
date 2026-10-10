@@ -74,6 +74,9 @@ class FakeKickApi:
     # Every request received, as (method, url path, parsed body or query).
     requests: list[tuple[str, str, object]] = field(default_factory=list)
     tokens_issued: int = 0
+    # 7TV's global emote set, the one every channel has on top of its own:
+    # its seventv_* fields are what the fake 7TV answers with.
+    seventv_global: FakeChannel = field(default_factory=lambda: FakeChannel("", 0))
 
     def add_channel(self, slug: str, broadcaster_user_id: int, **kwargs) -> FakeChannel:
         channel = FakeChannel(slug=slug, broadcaster_user_id=broadcaster_user_id, **kwargs)
@@ -142,6 +145,10 @@ class FakeKickApi:
                     return httpx.Response(500, json={"message": "Internal Server Error"})
                 self.subscribed.append(body["broadcaster_user_id"])  # type: ignore[index]
                 return httpx.Response(200, json={"data": [{"name": "chat.message.sent", "version": 1}]})
+
+        if request.url.host == "7tv.io" and path == "/v3/emote-sets/global":
+            emotes = [self.seventv_global.seventv_emote(n) for n in self.seventv_global.seventv_emotes or []]
+            return httpx.Response(200, json={"id": "GLOBAL", "name": "Global Emotes", "emotes": emotes})
 
         if request.url.host == "7tv.io" and path.startswith("/v3/users/kick/"):
             user_id = int(path.rsplit("/", 1)[1])

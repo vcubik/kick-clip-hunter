@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS channel_keywords (
 -- A channel's 7TV emotes as chat types them: the exact name (7TV names are
 -- case-sensitive, and a channel can rename an emote in its own set) and the
 -- emote it stands for there. channel_keywords above is what the detector
--- listens for; this is what the dashboard draws.
+-- listens for; this is what the dashboard draws. 7TV's global emotes, the
+-- ones every channel has, are kept here too, under GLOBAL_EMOTES_OWNER.
 CREATE TABLE IF NOT EXISTS channel_emotes (
     broadcaster_user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
@@ -109,6 +110,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT NOT NULL
 );
 """
+
+
+# The broadcaster_user_id 7TV's global emotes are stored under in
+# channel_emotes. No channel has it.
+GLOBAL_EMOTES_OWNER = 0
 
 
 def get_connection() -> sqlite3.Connection:
@@ -278,6 +284,16 @@ def get_channel_emotes(conn: sqlite3.Connection, broadcaster_user_id: int) -> di
         (broadcaster_user_id,),
     ).fetchall()
     return {row[0]: (row[1], row[2], row[3]) for row in rows}
+
+
+def get_chat_emotes(conn: sqlite3.Connection, broadcaster_user_id: int) -> dict[str, tuple[str, int, int]]:
+    """Every 7TV emote a word in a channel's chat can stand for: 7TV's
+    global ones and the channel's own. Where both have an emote of the same
+    name the channel's wins, as it does for its viewers."""
+    return {
+        **get_channel_emotes(conn, GLOBAL_EMOTES_OWNER),
+        **get_channel_emotes(conn, broadcaster_user_id),
+    }
 
 
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:

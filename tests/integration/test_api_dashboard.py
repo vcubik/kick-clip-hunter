@@ -573,6 +573,21 @@ class TestOpenMoment:
         ]
         assert pictures(parse(response.text)) == [view.SEVENTV_EMOTE_IMAGE.format(id="EMOTEB")]
 
+    async def test_7tvs_global_emotes_are_pictures_in_every_channel(self, service):
+        store_emotes(db.GLOBAL_EMOTES_OWNER, {"EZ": ("GLOBALEZ", 32, 32), "Clap": ("GLOBALCLAP", 32, 32)})
+        store_emotes(1, {"KEKW": ("EMOTEA", 32, 32), "Clap": ("OWNCLAP", 32, 32)})
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "EZ KEKW Clap", T0 - timedelta(seconds=2))
+
+        article = open_moment(await review(service))
+
+        # The channel's own emote of a name wins over the global one.
+        assert [emote.attrs["src"] for emote in article.find("img", class_="ch-emote")] == [
+            view.SEVENTV_EMOTE_IMAGE.format(id="GLOBALEZ"),
+            view.SEVENTV_EMOTE_IMAGE.format(id="EMOTEA"),
+            view.SEVENTV_EMOTE_IMAGE.format(id="OWNCLAP"),
+        ]
+
     async def test_a_word_no_emote_of_the_channel_is_named_stays_a_word(self, service):
         store_emotes(2, {"KEKW": ("EMOTEB", 32, 32)})  # another channel's
         add_moment("channel_a", detected_at=T0)

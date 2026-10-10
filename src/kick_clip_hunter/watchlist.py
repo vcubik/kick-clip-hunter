@@ -7,7 +7,13 @@ in main.py, so the two stay in lockstep instead of drifting apart.
 """
 
 from .config import load_settings
-from .db import add_streamer, get_connection, replace_channel_emotes, replace_channel_keywords
+from .db import (
+    GLOBAL_EMOTES_OWNER,
+    add_streamer,
+    get_connection,
+    replace_channel_emotes,
+    replace_channel_keywords,
+)
 from .detector import EMOTE_MENTION_LAUGH_WEIGHT, classify_emote_names
 from .kick_client import (
     get_app_access_token,
@@ -15,7 +21,7 @@ from .kick_client import (
     get_event_subscriptions,
     subscribe_chat_messages,
 )
-from .seventv_client import Emote, emote_pictures, get_channel_emotes
+from .seventv_client import Emote, emote_pictures, get_channel_emotes, get_global_emotes
 
 
 def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
@@ -28,10 +34,16 @@ def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
     return sum(1 for weight in keyword_weights.values() if weight == EMOTE_MENTION_LAUGH_WEIGHT)
 
 
-async def refresh_emote_pictures(broadcaster_id: int) -> int:
+async def refresh_emote_pictures(broadcaster_id: int = GLOBAL_EMOTES_OWNER) -> int:
     """Fetches a channel's 7TV emote set again and stores its pictures,
-    leaving the detector's keywords as they are. Returns how many there are."""
-    pictures = emote_pictures(await get_channel_emotes(broadcaster_id))
+    leaving the detector's keywords as they are. Without a channel it is
+    7TV's global emotes, the ones every channel has, that are fetched.
+    Returns how many pictures there are."""
+    if broadcaster_id == GLOBAL_EMOTES_OWNER:
+        emotes = await get_global_emotes()
+    else:
+        emotes = await get_channel_emotes(broadcaster_id)
+    pictures = emote_pictures(emotes)
     conn = get_connection()
     try:
         replace_channel_emotes(conn, broadcaster_id, pictures)

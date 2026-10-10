@@ -190,6 +190,26 @@ class TestSevenTvEmotes:
             await seventv_client.get_channel_emotes(4242)
 
 
+class TestSevenTvGlobalEmotes:
+    async def test_returns_the_emotes_every_channel_has(self, kick_api):
+        kick_api.seventv_global.seventv_emotes = ["EZ", "Clap"]
+        kick_api.seventv_global.seventv_sizes = {"Clap": (48, 32)}
+
+        assert await seventv_client.get_global_emotes() == [
+            Emote("EZ", seventv_emote_id("EZ"), 32, 32),
+            Emote("Clap", seventv_emote_id("Clap"), 48, 32),
+        ]
+
+    async def test_an_empty_set_is_no_emotes(self, kick_api):
+        assert await seventv_client.get_global_emotes() == []
+
+    async def test_a_server_error_is_not_mistaken_for_no_emotes(self, kick_api):
+        kick_api.failures["7tv.io"] = 500
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await seventv_client.get_global_emotes()
+
+
 class TestAddingToTheWatchlist:
     def stored(self) -> tuple[list, dict]:
         conn = db.get_connection()
@@ -266,6 +286,16 @@ class TestAddingToTheWatchlist:
 
         assert set(self.pictures()) == {"OMEGALUL", "Sadge"}
         assert self.stored()[1] == {"kekw": detector.EMOTE_MENTION_LAUGH_WEIGHT}
+
+    async def test_without_a_channel_it_is_the_global_emotes_that_are_refreshed(self, kick_api):
+        kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
+        await watchlist.add_channel_to_watchlist("some_channel")
+        kick_api.seventv_global.seventv_emotes = ["EZ", "Clap"]
+
+        assert await watchlist.refresh_emote_pictures() == 2
+
+        assert set(self.pictures(db.GLOBAL_EMOTES_OWNER)) == {"EZ", "Clap"}
+        assert set(self.pictures()) == {"KEKW"}
 
     async def test_uses_the_configured_credentials(self, kick_api):
         kick_api.add_channel("some_channel", 4242)

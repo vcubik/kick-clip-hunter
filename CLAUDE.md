@@ -124,7 +124,9 @@ Module map (`src/kick_clip_hunter/`):
   `channel_keywords` is what the detector listens for (lowercased, filtered, weighted) and
   only changes when asked (`subscribe.py`, `refresh_emotes.py`); `channel_emotes` is what
   the dashboard draws (every emote, exact case - the same word is a different picture in
-  another channel) and is also refreshed in the background on every start
+  another channel) and is also refreshed in the background on every start, together with
+  7TV's global emotes (the ones every channel has; a channel's own emote of the same name
+  wins over them)
 - `webhook_security.py` — verifies Kick's RSA-signed webhook payloads
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
   `ALTER TABLE`s in `get_connection()`, not a migration framework
