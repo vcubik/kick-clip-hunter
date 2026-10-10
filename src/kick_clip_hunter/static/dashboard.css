@@ -276,6 +276,12 @@ a { color: inherit; }
 .ch-now { font-size: 16px; font-weight: 600; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ch-of { font-weight: 400; color: var(--text-2); }
 .ch-gap { flex: 1 1 0; }
+/* Volume: a track lit as far as the level, with a lit thumb. */
+.ch-volume { appearance: none; width: 88px; height: var(--h-compact); margin: 0 var(--space-4) 0 calc(-1 * var(--space-4)); background: transparent; cursor: pointer; }
+.ch-volume::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-control); background: linear-gradient(to right, var(--lit) var(--level, 100%), var(--inset) var(--level, 100%)); }
+.ch-volume::-moz-range-track { height: 4px; border-radius: var(--radius-control); background: linear-gradient(to right, var(--lit) var(--level, 100%), var(--inset) var(--level, 100%)); }
+.ch-volume::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-volume::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
 
 /* Banner: one sentence about the whole page. In the queue it offers what is
    new; under the top bar, on `sunk`, it says the service is going down. */

@@ -227,9 +227,18 @@
   const SPEEDS = [1, 1.5, 2, 0.5];
   // How far past the clip's end counts as being in the footage after it.
   const RUN_ON_SECONDS = 0.01;
-  // Kept from one moment to the next.
+  // Kept from one moment to the next - the volume from one visit to the next
+  // as well, where the browser lets the page remember it.
+  const VOLUME_KEY = "clip-hunter-volume";
   let speed = 1;
   let muted = false;
+  let volume = 1;
+  try {
+    const kept = Number(localStorage.getItem(VOLUME_KEY) ?? 1);
+    if (kept >= 0 && kept <= 1) volume = kept;
+  } catch {
+    // no storage here: the volume starts out full
+  }
   // Of the open moment: the clip's own address, which of the files the
   // player holds (before, clip or after), and where to go once a file that
   // was just asked for has loaded.
@@ -352,6 +361,11 @@
     play.classList.toggle("is-playing", playing);
     play.setAttribute("aria-label", playing ? "Pause" : "Play");
     one("[data-mute]", article).setAttribute("aria-pressed", String(video.muted));
+    const heard = video.muted ? 0 : video.volume;
+    const slider = one("[data-volume]", article);
+    slider.value = String(heard);
+    slider.style.setProperty("--level", `${heard * 100}%`);
+    slider.setAttribute("aria-valuetext", `${Math.round(heard * 100)} percent`);
     one("[data-speed]", article).textContent = `${video.playbackRate}×`;
     if (!span) return;
 
@@ -384,6 +398,23 @@
   function toggleMute(video) {
     muted = !video.muted;
     video.muted = muted;
+    // Taking the mute off a clip that was turned all the way down has to
+    // make it heard.
+    if (!muted && volume === 0) setVolume(video, 0.5);
+  }
+
+  // Dragging the volume up from silence takes the mute off; all the way
+  // down is the same as muted.
+  function setVolume(video, value) {
+    volume = Math.min(Math.max(value, 0), 1);
+    muted = volume === 0;
+    video.volume = volume;
+    video.muted = muted;
+    try {
+      localStorage.setItem(VOLUME_KEY, String(volume));
+    } catch {
+      // kept for this page only, then
+    }
   }
 
   function toggleFullScreen(video) {
@@ -494,6 +525,7 @@
     if (!video) return;
     video.defaultPlaybackRate = speed;
     video.playbackRate = speed;
+    video.volume = volume;
     video.muted = muted;
     paint(video);
   }
@@ -643,7 +675,15 @@
     if (target.matches("[data-note]")) {
       grow(target);
       say(target, "");
+    } else if (target.matches("[data-volume]")) {
+      setVolume(clipOf(target), Number(target.value));
     }
+  });
+
+  // A slider let go of with the mouse does not keep the focus, so Space goes
+  // back to playing the clip.
+  document.addEventListener("pointerup", (event) => {
+    if (event.target.matches?.("[data-volume]")) event.target.blur();
   });
 
   document.addEventListener("change", (event) => {
