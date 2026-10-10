@@ -27,7 +27,8 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   new people keep joining the reaction - and the 30 seconds before and 60 seconds after are saved
   next to it as context.
 - **Lets you review.** The dashboard queues the moments that are not rated yet and opens one at a
-  time: the clip, the chat that triggered it, and a 1-5 rating, tags and a note, all reachable from
+  time: the clip, a trace of what chat did around it - which doubles as the scrubber - the chat
+  itself replayed in step with the picture, and a 1-5 rating, tags and a note, all reachable from
   the keyboard. Those ratings are what detector tuning is checked against.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
@@ -108,7 +109,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | Module (`src/kick_clip_hunter/`) | Role |
 |---|---|
 | `main.py` | FastAPI app: webhook receiver, moment sessions, dashboard and its controls. |
-| `dashboard_view.py`, `templates/`, `static/` | The dashboard's pages: what they say, their markup, their stylesheet and script. |
+| `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip, their markup, stylesheet and script. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |

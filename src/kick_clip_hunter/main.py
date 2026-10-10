@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import (
     audio_events,
+    chat_trace,
     dashboard_view,
     detector,
     frame_encoder,
@@ -35,7 +36,7 @@ from .db import (
     count_moments,
     count_moments_with_clip,
     get_channel_keywords,
-    get_chat_snippet,
+    get_chat_between,
     get_connection,
     get_flag,
     get_moment,
@@ -49,6 +50,7 @@ from .db import (
     set_flag,
     set_streamer_tracking,
     update_moment_audio_events,
+    update_moment_clip_duration,
     update_moment_clip_path,
     update_moment_frame_embedding,
     update_moment_notes,
@@ -375,7 +377,7 @@ async def _create_clip_background(
     # for it, or the clip comes out truncated right at the exciting part.
     await asyncio.sleep(post_roll_seconds + recorder.CLIP_SETTLE_SECONDS)
     try:
-        clip_path = await recording_manager.create_clip_for_moment(
+        clip = await recording_manager.create_clip_for_moment(
             channel, window_start, window_end, f"moment_{moment_id}.mp4",
             post_roll_seconds=post_roll_seconds,
         )
@@ -389,9 +391,18 @@ async def _create_clip_background(
         logger.exception("[%s] clip creation failed for moment %d", channel, moment_id)
         return
 
+    clip_path = clip.path
     conn = get_connection()
     try:
-        update_moment_clip_path(conn, moment_id, clip_path.relative_to(CLIPS_DIR).as_posix())
+        # Stored with the stretch of the broadcast it really holds, which is
+        # what lets the dashboard line chat up with the picture.
+        update_moment_clip_path(
+            conn,
+            moment_id,
+            clip_path.relative_to(CLIPS_DIR).as_posix(),
+            clip_start=clip.started_at.isoformat(),
+            clip_duration=clip.duration,
+        )
     finally:
         conn.close()
     logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
@@ -619,6 +630,11 @@ ANALYSIS_TEXT_RESULTS = ("transcript", "audio_events", "sound_events")
 # then waits for its post-roll to be broadcast, and a cut that has to come
 # from the VOD waits for that to be written; past this, no clip is coming.
 CLIP_PENDING_SECONDS = 300
+# The most chat lines read for one moment: for the trace and the replay
+# beside an open clip, and for a queue row's spark. Two minutes of a chat
+# posting ten messages a second stays under the first.
+CHAT_REPLAY_LIMIT = 2000
+QUEUE_CHAT_LIMIT = 1000
 
 
 def _moment_age_seconds(row) -> float:
@@ -666,25 +682,81 @@ def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
     }
 
 
-def _footage(clip_path: str | None) -> list[dict]:
-    """What the player can show for a moment besides its clip: the footage
-    saved just before and just after it. Empty when there is only the clip,
-    since then there is nothing to choose between."""
-    context = _context_clip_urls(clip_path)
-    if not context:
-        return []
-    footage = []
-    if "before" in context:
-        footage.append({"label": f"{recorder.CONTEXT_BEFORE_SECONDS} s before", "url": context["before"]})
-    footage.append({"label": "Clip", "url": _clip_url(clip_path), "current": True})
-    if "after" in context:
-        footage.append({"label": f"{recorder.CONTEXT_AFTER_SECONDS} s after", "url": context["after"]})
-    return footage
+def _moment_window(row) -> tuple[datetime, datetime]:
+    """When a moment's reaction ran, on chat's clock."""
+    return datetime.fromisoformat(row["window_start"]), datetime.fromisoformat(row["window_end"])
+
+
+async def _with_clip_length(conn, row):
+    """The moment with the length of its clip filled in. Clips cut before
+    lengths were stored are measured the first time one is opened, and that
+    is kept; a file that can't be measured is left as it is."""
+    if not row["clip_path"] or row["clip_duration"] is not None:
+        return row
+    path = CLIPS_DIR / row["clip_path"]
+    if not path.exists():
+        return row
+    duration = await asyncio.to_thread(recorder.probe_duration, path)
+    if duration is None:
+        return row
+    update_moment_clip_duration(conn, row["id"], duration)
+    return get_moment(conn, row["id"])
+
+
+def _chat_against_clip(conn, row) -> tuple[dict | None, list[dict]]:
+    """The strip under a moment's clip and the chat lines beside it: what
+    chat was doing from a little before the clip to a little after it, on
+    the clip's own time axis. No strip when the clip can't be placed at all
+    (see chat_trace.clip_timeline)."""
+    timeline = chat_trace.clip_timeline(
+        row,
+        pre_roll=recorder.PRE_ROLL_SECONDS,
+        post_roll=DYNAMIC_POST_ROLL_SECONDS,
+        playback_delay=recorder.PLAYBACK_DELAY_SECONDS,
+        context_before=recorder.CONTEXT_BEFORE_SECONDS,
+        context_after=recorder.CONTEXT_AFTER_SECONDS,
+    )
+    if timeline is None:
+        return None, []
+    if timeline.chat_start is None:
+        return chat_trace.trace(timeline, [], [], usual=0.0, window=None), []
+
+    messages = get_chat_between(
+        conn,
+        row["channel_slug"],
+        timeline.chat_start + timedelta(seconds=timeline.start),
+        timeline.chat_start + timedelta(seconds=timeline.end),
+        CHAT_REPLAY_LIMIT,
+    )
+    window = _moment_window(row)
+    laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]))
+    everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names)
+    strip = chat_trace.trace(timeline, everything, laughing, usual=row["baseline_message_rate"], window=window)
+    return strip, chat_trace.chat_replay(messages, timeline, window)
+
+
+def _queue_activity(conn, rows) -> dict[int, dict]:
+    """What chat did around each moment of the queue (see
+    chat_trace.queue_activity), by moment id. Imported clips have no chat
+    and are left out."""
+    activity = {}
+    for row in rows:
+        if row["reason"] == dashboard_view.IMPORT_REASON:
+            continue
+        window = _moment_window(row)
+        start, end = chat_trace.spark_span(window[0])
+        end = max(end, window[1] + timedelta(seconds=chat_trace.MOMENT_PADDING_SECONDS))
+        messages = get_chat_between(conn, row["channel_slug"], start, end, QUEUE_CHAT_LIMIT)
+        activity[row["id"]] = chat_trace.queue_activity(
+            messages, window, _channel_keywords(conn, row["broadcaster_user_id"])
+        )
+    return activity
 
 
 def _open_moment(conn, row, today: date) -> dict:
     """Everything the review page shows of the one moment that is open."""
     pending = _pending_analysis(row)
+    strip, chat = _chat_against_clip(conn, row)
     return {
         "id": row["id"],
         "channel": row["channel_slug"],
@@ -692,7 +764,9 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"]) if row["clip_path"] else None,
         "clip_state": _clip_state(row),
-        "footage": _footage(row["clip_path"]),
+        # The footage saved just before and just after the clip, where there is any.
+        "footage": _context_clip_urls(row["clip_path"]),
+        "strip": strip,
         "summary": dashboard_view.summary_words(row),
         "rating": row["rating"],
         "rating_words": dashboard_view.rating_words(row["rating"]),
@@ -704,9 +778,7 @@ def _open_moment(conn, row, today: date) -> dict:
             for name, label in ANALYSIS_SETTINGS
             if name in ANALYSIS_TEXT_RESULTS and (row[name] or name in pending)
         ],
-        "chat": dashboard_view.chat_lines(
-            get_chat_snippet(conn, row["channel_slug"], row["window_start"], row["window_end"])
-        ),
+        "chat": chat,
     }
 
 
@@ -776,14 +848,20 @@ async def dashboard(
         rows = get_recent_moments(
             conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel, **SHOW_FILTERS[show]
         )
-        groups = dashboard_view.queue_groups(rows, today)
+        activity = _queue_activity(conn, rows)
+        spark_top = chat_trace.spark_top(chat["all"] for chat in activity.values())
+        groups = dashboard_view.queue_groups(rows, today, {key: chat["said"] for key, chat in activity.items()})
         for group in groups:
             for item in group["rows"]:
                 item["href"] = dashboard_view.review_url(show, channel, offset=offset, moment=item["id"])
+                chat = activity.get(item["id"])
+                item["spark"] = chat_trace.spark_paths(chat["all"], chat["laugh"], spark_top) if chat else None
 
         opened = get_moment(conn, moment) if moment is not None else None
         if opened is None and rows:
             opened = rows[0]
+        if opened is not None:
+            opened = await _with_clip_length(conn, opened)
 
         empty = None
         if not rows:
@@ -820,6 +898,8 @@ async def dashboard(
                 ),
                 "moment_status": _moment_status(conn),
                 "best_rating_min": dashboard_view.BEST_RATING_MIN,
+                "spark_height": chat_trace.SPARK_HEIGHT,
+                "spark_steps": chat_trace.SPARK_STEPS,
                 "stream_types": STREAM_TYPES,
                 "moment_types": MOMENT_TYPES,
             }
@@ -857,7 +937,7 @@ async def dashboard_moment(request: Request, moment_id: int):
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
         context = {
-            "moment": _open_moment(conn, row, _today()),
+            "moment": _open_moment(conn, await _with_clip_length(conn, row), _today()),
             "stream_types": STREAM_TYPES,
             "moment_types": MOMENT_TYPES,
         }

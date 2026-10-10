@@ -8,6 +8,7 @@ nothing about the signature path is stubbed.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -246,18 +247,18 @@ class TestStoredTimes:
         assert row["created_at"] == "2020-01-01T00:00:00+00:00"
         assert row["received_at"] > "2026"
 
-    async def test_the_snippet_query_finds_messages_by_when_they_were_received(self, service):
+    async def test_chat_is_found_again_by_when_it_was_received(self, service):
+        before = datetime.now(timezone.utc)
         await service.chat(CHANNEL, "alice", "first")
         await service.chat(CHANNEL, "bob", "second")
-        (start,), (end,) = (
-            service.rows("SELECT MIN(received_at) FROM chat_messages")[0],
-            service.rows("SELECT MAX(received_at) FROM chat_messages")[0],
-        )
+        after = datetime.now(timezone.utc)
 
         conn = db.get_connection()
         try:
-            snippet = db.get_chat_snippet(conn, CHANNEL, start, end)
+            chat = db.get_chat_between(conn, CHANNEL, before, after)
+            earlier = db.get_chat_between(conn, CHANNEL, before - timedelta(hours=1), before - timedelta(seconds=1))
         finally:
             conn.close()
 
-        assert [(row["sender_username"], row["content"]) for row in snippet] == [("alice", "first"), ("bob", "second")]
+        assert [(row["sender_username"], row["content"]) for row in chat] == [("alice", "first"), ("bob", "second")]
+        assert earlier == []

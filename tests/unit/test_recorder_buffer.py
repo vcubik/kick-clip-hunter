@@ -293,3 +293,50 @@ class TestAdGroups:
         segments = rec.segments_overlapping(at(2), at(8))
 
         assert recorder._best_group(segments, at(2), at(8)) == segments
+
+
+class TestMeasuringAClipWithoutFfprobe:
+    """What `probe_duration` does when it cannot get an answer. Measuring a
+    real clip is in tests/integration/test_clip_cutting.py."""
+
+    def run_with(self, monkeypatch, outcome) -> list:
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(recorder.subprocess, "run", run)
+        return calls
+
+    def test_asks_ffprobe_for_the_length_and_nothing_else(self, monkeypatch):
+        answer = recorder.subprocess.CompletedProcess([], 0, stdout="38.400000\n", stderr="")
+        calls = self.run_with(monkeypatch, answer)
+
+        assert recorder.probe_duration(Path("data/clips/some_channel/moment_1.mp4")) == 38.4
+
+        ((command, options),) = calls
+        assert command[0] == recorder.FFPROBE_BIN
+        assert command[-1] == str(Path("data/clips/some_channel/moment_1.mp4"))
+        assert options["timeout"] == recorder.PROBE_TIMEOUT_SECONDS
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            FileNotFoundError("ffprobe is not installed"),
+            recorder.subprocess.CalledProcessError(1, "ffprobe"),
+            recorder.subprocess.TimeoutExpired("ffprobe", 15),
+        ],
+        ids=["not-installed", "cannot-read-the-file", "hangs"],
+    )
+    def test_no_answer_means_no_length_rather_than_an_error(self, monkeypatch, failure):
+        self.run_with(monkeypatch, failure)
+
+        assert recorder.probe_duration(Path("moment_1.mp4")) is None
+
+    def test_an_answer_that_is_not_a_number_means_no_length_either(self, monkeypatch):
+        self.run_with(monkeypatch, recorder.subprocess.CompletedProcess([], 0, stdout="N/A\n", stderr=""))
+
+        assert recorder.probe_duration(Path("moment_1.mp4")) is None

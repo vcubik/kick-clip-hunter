@@ -57,6 +57,11 @@ class TestCountsAndNumbers:
     def test_a_measured_value_carries_no_trailing_zeros(self, value, words):
         assert view.number_words(value) == words
 
+    def test_nothing_is_never_written_as_minus_nothing(self):
+        assert view.number_words(-0.0) == "0"
+        assert view.number_words(-0.001) == "0"
+        assert view.number_words(-0.5) == "-0.5"
+
     def test_a_value_can_be_rounded_harder(self):
         assert view.number_words(12.3456, 1) == "12.3"
         assert view.number_words(19.96, 1) == "20"
@@ -141,6 +146,13 @@ class TestReasons:
     def test_an_imported_clip_is_called_that(self):
         assert view.queue_label(row(reason=view.IMPORT_REASON)) == "Imported"
 
+    def test_what_chat_said_most_takes_the_place_of_the_reason(self):
+        # Written the way chat wrote it, not put into sentence case.
+        assert view.queue_label(row(), "xD \N{MULTIPLICATION SIGN}14") == "xD \N{MULTIPLICATION SIGN}14"
+        assert view.queue_label(row(clip_path=None), "KEKW \N{MULTIPLICATION SIGN}31") == (
+            "KEKW \N{MULTIPLICATION SIGN}31, no clip"
+        )
+
 
 class TestSummary:
     def test_gives_the_detectors_figures_as_sentences(self):
@@ -199,33 +211,34 @@ class TestChat:
     def test_plain_text_is_one_part(self):
         assert view.chat_parts("what was that") == [{"text": "what was that"}]
 
-    def test_a_native_emote_becomes_its_name(self):
-        assert view.chat_parts("[emote:37226:KEKW]") == [{"emote": "KEKW"}]
+    def test_a_native_emote_becomes_its_name_and_where_its_picture_is(self):
+        assert view.chat_parts("[emote:37226:KEKW]") == [
+            {"emote": "KEKW", "image": "https://files.kick.com/emotes/37226/fullsize"}
+        ]
 
     def test_text_and_emotes_keep_their_order(self):
-        assert view.chat_parts("he fell [emote:1:KEKW][emote:2:emojiLol] off the chair") == [
-            {"text": "he fell "},
-            {"emote": "KEKW"},
-            {"emote": "emojiLol"},
-            {"text": " off the chair"},
+        parts = view.chat_parts("he fell [emote:1:KEKW][emote:2:emojiLol] off the chair")
+
+        assert [part.get("text") or part["emote"] for part in parts] == [
+            "he fell ",
+            "KEKW",
+            "emojiLol",
+            " off the chair",
         ]
+        assert [part["image"] for part in parts if "emote" in part] == [
+            view.KICK_EMOTE_IMAGE.format(id=1),
+            view.KICK_EMOTE_IMAGE.format(id=2),
+        ]
+
+    def test_only_a_number_can_be_an_emotes_id(self):
+        # The id ends up in an address the page loads a picture from.
+        assert view.chat_parts("[emote:../../x:KEKW]") == [{"text": "[emote:../../x:KEKW]"}]
 
     def test_something_that_only_looks_like_an_emote_stays_text(self):
         assert view.chat_parts("[emote:KEKW] [emote:12:]") == [{"text": "[emote:KEKW] [emote:12:]"}]
 
     def test_an_empty_message_has_no_parts(self):
         assert view.chat_parts("") == []
-
-    def test_lines_carry_the_name_its_colour_and_the_parts(self):
-        messages = [
-            {"sender_username": "alice", "content": "xDDD"},
-            {"sender_username": None, "content": None},
-        ]
-
-        assert view.chat_lines(messages) == [
-            {"nick": "alice", "colour": view.nick_colour("alice"), "parts": [{"text": "xDDD"}]},
-            {"nick": "", "colour": view.nick_colour(""), "parts": []},
-        ]
 
 
 class TestQueueGroups:
@@ -254,6 +267,13 @@ class TestQueueGroups:
             "rating": 4,
             "rating_words": "rated 4 of 5",
         }
+
+    def test_a_row_says_what_chat_said_most_where_that_is_known(self):
+        rows = [row(id=2, reason="laugh"), row(id=1, reason="emotes")]
+
+        (group,) = view.queue_groups(rows, TODAY, {2: "KEKW \N{MULTIPLICATION SIGN}31", 1: None})
+
+        assert [item["what"] for item in group["rows"]] == ["KEKW \N{MULTIPLICATION SIGN}31", "Emotes"]
 
     def test_the_time_a_stream_went_live_may_differ_by_a_little(self):
         # Worked out from two moments it never agrees to the second.

@@ -6,7 +6,7 @@ detection heuristic against before deciding what's safe to prune.
 """
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "kick_clip_hunter.db"
@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_time
     ON chat_messages (channel_slug, created_at);
+
+-- Chat is looked up by when it arrived (received_at is the service's own
+-- clock, the one moments are timed on), a stretch of one channel at a time.
+CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_received
+    ON chat_messages (channel_slug, received_at);
 
 CREATE TABLE IF NOT EXISTS moments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,6 +197,19 @@ def get_connection() -> sqlite3.Connection:
     if "sound_embedding" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN sound_embedding BLOB")
 
+    # Which stretch of the broadcast a moment's clip holds: when its first
+    # frame was broadcast (the stream's program clock, like the recorder's
+    # segments) and how long it runs. A clip is cut on whole segments, so
+    # this differs from the window it was asked for by a few seconds - and
+    # without it chat can't be lined up with the picture. NULL for clips cut
+    # before this was stored; the dashboard fills in the length when it
+    # first shows one, and estimates the start.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "clip_start" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN clip_start TEXT")
+    if "clip_duration" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN clip_duration REAL")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -259,10 +277,10 @@ def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, en
 
 # What the dashboard and the scripts read of a moment.
 _MOMENT_COLUMNS = """
-    id, channel_slug, detected_at, window_start, window_end, reason, score,
+    id, broadcaster_user_id, channel_slug, detected_at, window_start, window_end, reason, score,
     message_count, baseline_message_rate, current_message_rate,
-    emote_count, keyword_hits, stream_elapsed_seconds, clip_path, rating, notes,
-    transcript, audio_events, sound_events, stream_type, moment_type
+    emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
+    rating, notes, transcript, audio_events, sound_events, stream_type, moment_type
 """
 
 
@@ -355,31 +373,27 @@ def get_moment_channels(conn: sqlite3.Connection) -> list[str]:
     return [row[0] for row in conn.execute("SELECT DISTINCT channel_slug FROM moments ORDER BY channel_slug")]
 
 
-SNIPPET_PADDING_SECONDS = 2
-
-
-def get_chat_snippet(
-    conn: sqlite3.Connection, channel_slug: str, window_start: str, window_end: str, limit: int = 20
+def get_chat_between(
+    conn: sqlite3.Connection, channel_slug: str, start: datetime, end: datetime, limit: int = 2000
 ) -> list[sqlite3.Row]:
-    """Chat messages inside a moment's detection window, with a small padding
-    buffer on both ends. window_start/window_end are reconstructed from
-    wall-clock time after the fact, while the detector's own window is based
-    on each message's arrival order - webhook delivery jitter between
-    messages means a message that was genuinely part of the burst can end up
-    with a received_at a few hundred ms outside the stored boundary.
+    """One channel's chat that arrived from `start` up to and including
+    `end`, oldest first - at most `limit` messages, the earliest ones.
+
+    The bounds are compared as text, which works because every stored
+    received_at is a UTC ISO timestamp; older rows end in "Z" and carry
+    milliseconds rather than "+00:00" and microseconds, which can only
+    misplace a message by less than a millisecond.
     """
     conn.row_factory = sqlite3.Row
-    padded_start = (datetime.fromisoformat(window_start) - timedelta(seconds=SNIPPET_PADDING_SECONDS)).isoformat()
-    padded_end = (datetime.fromisoformat(window_end) + timedelta(seconds=SNIPPET_PADDING_SECONDS)).isoformat()
     return conn.execute(
         """
-        SELECT sender_username, content
+        SELECT received_at, sender_username, content
         FROM chat_messages
         WHERE channel_slug = ? AND received_at BETWEEN ? AND ?
         ORDER BY received_at
         LIMIT ?
         """,
-        (channel_slug, padded_start, padded_end, limit),
+        (channel_slug, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat(), limit),
     ).fetchall()
 
 
@@ -461,8 +475,24 @@ def insert_moment(
     return cursor.lastrowid
 
 
-def update_moment_clip_path(conn: sqlite3.Connection, moment_id: int, clip_path: str) -> None:
-    conn.execute("UPDATE moments SET clip_path = ? WHERE id = ?", (clip_path, moment_id))
+def update_moment_clip_path(
+    conn: sqlite3.Connection,
+    moment_id: int,
+    clip_path: str,
+    clip_start: str | None = None,
+    clip_duration: float | None = None,
+) -> None:
+    """Records a moment's clip and, where it is known, the stretch of the
+    broadcast it holds (see the clip_start/clip_duration columns)."""
+    conn.execute(
+        "UPDATE moments SET clip_path = ?, clip_start = ?, clip_duration = ? WHERE id = ?",
+        (clip_path, clip_start, clip_duration, moment_id),
+    )
+    conn.commit()
+
+
+def update_moment_clip_duration(conn: sqlite3.Connection, moment_id: int, clip_duration: float) -> None:
+    conn.execute("UPDATE moments SET clip_duration = ? WHERE id = ?", (clip_duration, moment_id))
     conn.commit()
 
 

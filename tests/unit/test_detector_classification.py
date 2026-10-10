@@ -120,6 +120,37 @@ class TestChannelEmoteNames:
         assert detector.classify_emote_names([]) == {}
 
 
+class TestIsLaughing:
+    """The plain yes or no the dashboard's trace is drawn from."""
+
+    @pytest.mark.parametrize("content", ["xd", "XD", "to je konec xDDDD", "xD!", "ne xd ne"])
+    def test_the_typed_laugh_in_any_form(self, content):
+        assert detector.is_laughing(content)
+
+    @pytest.mark.parametrize("content", ["[emote:37226:KEKW]", "no way [emote:1:emojiLol]", "[emote:2:pepeLaugh] ok"])
+    def test_a_native_laugh_emote(self, content):
+        assert detector.is_laughing(content)
+
+    def test_one_of_the_channels_laugh_emotes_named_in_the_text(self):
+        assert detector.is_laughing("KEKW", ["kekw"])
+        assert detector.is_laughing("on spadl OMEGALUL", ["kekw", "omegalul"])
+
+    def test_the_same_word_means_nothing_on_a_channel_that_has_no_such_emote(self):
+        assert not detector.is_laughing("KEKW")
+
+    @pytest.mark.parametrize(
+        "content", ["", "what was that", "extra dobry", "[emote:5:catJAM]", "[emote:6:asmonSmash]", "GG", "???"]
+    )
+    def test_anything_else_is_not_laughing(self, content):
+        assert not detector.is_laughing(content, ["kekw"])
+
+    def test_the_channels_laugh_emotes_are_picked_out_of_all_of_its_emotes(self):
+        weights = detector.classify_emote_names(["KEKW", "Sadge", "OMEGALUL", "peepoHappy", "LULW"])
+
+        assert detector.laugh_emote_names(weights) == ["kekw", "omegalul", "lulw"]
+        assert detector.laugh_emote_names([]) == []
+
+
 class TestVoteMessages:
     @pytest.mark.parametrize("content", ["1", "2", " 1", "2 ", "  1  ", "\t2\n"])
     def test_a_bare_1_or_2_is_a_vote(self, content):

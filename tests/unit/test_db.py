@@ -18,6 +18,10 @@ from kick_clip_hunter import db
 T0 = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 
 
+def minutes(count: float) -> timedelta:
+    return timedelta(minutes=count)
+
+
 @pytest.fixture
 def conn():
     connection = db.get_connection()
@@ -95,8 +99,17 @@ class TestSchema:
             "reason", "score", "message_count", "baseline_message_rate", "current_message_rate",
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
-            "sound_events", "sound_embedding",
+            "sound_events", "sound_embedding", "clip_start", "clip_duration",
         }  # fmt: skip
+
+    def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT content FROM chat_messages"
+            " WHERE channel_slug = ? AND received_at BETWEEN ? AND ?",
+            ("some_channel", "a", "b"),
+        ).fetchall()
+
+        assert "idx_chat_messages_channel_received" in plan[0][-1]
 
     def test_ratings_are_integers(self, conn):
         # "3" != 3 once broke the dashboard's active-button check.
@@ -154,6 +167,7 @@ class TestUpgradingOlderDatabases:
             added_since = {
                 "stream_elapsed_seconds", "clip_path", "rating", "notes", "transcript", "audio_events",
                 "frame_embedding", "stream_type", "moment_type", "sound_events", "sound_embedding",
+                "clip_start", "clip_duration",
             }  # fmt: skip
             assert added_since <= set(columns(connection, "moments"))
             row = connection.execute("SELECT channel_slug, reason, score, clip_path, rating FROM moments").fetchone()
@@ -351,49 +365,68 @@ class TestChatMessages:
 
         assert conn.execute("SELECT content FROM chat_messages").fetchall() == [("first delivery",)]
 
-    def test_the_snippet_is_the_chat_inside_the_window_in_order(self, conn):
+    def test_a_stretch_of_chat_comes_back_in_the_order_it_arrived(self, conn):
         store_chat(conn, "some_channel", "carol", "third", T0 + timedelta(seconds=8))
         store_chat(conn, "some_channel", "alice", "first", T0 + timedelta(seconds=1))
         store_chat(conn, "some_channel", "bob", "second", T0 + timedelta(seconds=5))
 
-        snippet = db.get_chat_snippet(conn, "some_channel", T0.isoformat(), (T0 + timedelta(seconds=10)).isoformat())
+        chat = db.get_chat_between(conn, "some_channel", T0, T0 + timedelta(seconds=10))
 
-        assert [(row["sender_username"], row["content"]) for row in snippet] == [
+        assert [(row["sender_username"], row["content"]) for row in chat] == [
             ("alice", "first"), ("bob", "second"), ("carol", "third"),
         ]  # fmt: skip
+        assert [row["received_at"] for row in chat] == sorted(row["received_at"] for row in chat)
 
-    def test_the_window_is_padded_a_little_on_both_sides(self, conn):
-        # Webhook delivery jitter puts genuine burst messages just outside.
-        padding = db.SNIPPET_PADDING_SECONDS
-        assert padding >= 1
-        store_chat(conn, "some_channel", "too_early", "x", T0 - timedelta(seconds=padding + 1))
-        store_chat(conn, "some_channel", "just_before", "x", T0 - timedelta(seconds=padding / 2))
-        store_chat(conn, "some_channel", "just_after", "x", T0 + timedelta(seconds=10 + padding / 2))
-        store_chat(conn, "some_channel", "too_late", "x", T0 + timedelta(seconds=10 + padding + 1))
+    def test_the_stretch_ends_where_it_was_asked_to(self, conn):
+        store_chat(conn, "some_channel", "too_early", "x", T0 - timedelta(milliseconds=1))
+        store_chat(conn, "some_channel", "first", "x", T0)
+        store_chat(conn, "some_channel", "last", "x", T0 + timedelta(seconds=10))
+        store_chat(conn, "some_channel", "too_late", "x", T0 + timedelta(seconds=10, milliseconds=1))
 
-        snippet = db.get_chat_snippet(conn, "some_channel", T0.isoformat(), (T0 + timedelta(seconds=10)).isoformat())
+        chat = db.get_chat_between(conn, "some_channel", T0, T0 + timedelta(seconds=10))
 
-        assert [row["sender_username"] for row in snippet] == ["just_before", "just_after"]
+        assert [row["sender_username"] for row in chat] == ["first", "last"]
+
+    def test_the_stretch_can_be_given_in_any_time_zone(self, conn):
+        store_chat(conn, "some_channel", "alice", "x", T0 + timedelta(seconds=5))
+        prague = timezone(timedelta(hours=1))
+
+        chat = db.get_chat_between(conn, "some_channel", T0.astimezone(prague), (T0 + minutes(1)).astimezone(prague))
+
+        assert [row["sender_username"] for row in chat] == ["alice"]
+
+    def test_messages_stored_in_the_older_timestamp_form_are_found_too(self, conn):
+        # Before received_at was written by the service it was SQLite's own
+        # default: milliseconds and a "Z" instead of microseconds and "+00:00".
+        store_chat(conn, "some_channel", "new_form", "x", T0 + timedelta(seconds=5))
+        store_chat(conn, "some_channel", "old_form", "x", T0, message_id="old")
+        conn.execute("UPDATE chat_messages SET received_at = '2026-03-01T20:00:03.250Z' WHERE message_id = 'old'")
+        conn.execute(
+            "INSERT INTO chat_messages"
+            " (message_id, broadcaster_user_id, channel_slug, sender_username, content, received_at)"
+            " VALUES ('outside', 1, 'some_channel', 'old_form_outside', 'x', '2026-03-01T20:00:10.250Z')"
+        )
+        conn.commit()
+
+        chat = db.get_chat_between(conn, "some_channel", T0, T0 + timedelta(seconds=10))
+
+        assert [row["sender_username"] for row in chat] == ["old_form", "new_form"]
 
     def test_other_channels_are_left_out(self, conn):
         store_chat(conn, "some_channel", "alice", "here", T0)
         store_chat(conn, "another_channel", "bob", "elsewhere", T0)
 
-        snippet = db.get_chat_snippet(conn, "some_channel", T0.isoformat(), T0.isoformat())
+        chat = db.get_chat_between(conn, "some_channel", T0, T0)
 
-        assert [row["sender_username"] for row in snippet] == ["alice"]
+        assert [row["sender_username"] for row in chat] == ["alice"]
 
-    def test_a_busy_window_is_cut_to_the_first_messages(self, conn):
+    def test_a_busy_stretch_is_cut_to_its_first_messages(self, conn):
         for number in range(30):
             store_chat(conn, "some_channel", f"user{number:02d}", "x", T0 + timedelta(milliseconds=100 * number))
 
-        snippet = db.get_chat_snippet(conn, "some_channel", T0.isoformat(), (T0 + timedelta(seconds=10)).isoformat())
-        short = db.get_chat_snippet(
-            conn, "some_channel", T0.isoformat(), (T0 + timedelta(seconds=10)).isoformat(), limit=3
-        )
+        chat = db.get_chat_between(conn, "some_channel", T0, T0 + timedelta(seconds=10), limit=3)
 
-        assert len(snippet) == 20
-        assert [row["sender_username"] for row in short] == ["user00", "user01", "user02"]
+        assert [row["sender_username"] for row in chat] == ["user00", "user01", "user02"]
 
 
 class TestMoments:
@@ -510,6 +543,32 @@ class TestMoments:
 
     def test_a_moment_that_does_not_exist_is_none(self, conn):
         assert db.get_moment(conn, 999) is None
+
+    def test_a_clip_is_recorded_with_the_stretch_of_the_broadcast_it_holds(self, conn):
+        moment_id = store_moment(conn)
+
+        db.update_moment_clip_path(
+            conn, moment_id, "some_channel/moment_1.mp4", clip_start="2026-03-01T19:59:35+00:00", clip_duration=38.5
+        )
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["clip_path"], row["clip_start"], row["clip_duration"]) == (
+            "some_channel/moment_1.mp4",
+            "2026-03-01T19:59:35+00:00",
+            38.5,
+        )
+
+    def test_a_clip_of_unknown_extent_can_be_given_its_length_later(self, conn):
+        moment_id = store_moment(conn)
+        db.update_moment_clip_path(conn, moment_id, "some_channel/moment_1.mp4")
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["clip_start"], row["clip_duration"]) == (None, None)
+
+        db.update_moment_clip_duration(conn, moment_id, 41.25)
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["clip_path"], row["clip_start"], row["clip_duration"]) == ("some_channel/moment_1.mp4", None, 41.25)
 
     def test_counts(self, conn):
         store_moment(conn, channel="channel_a")

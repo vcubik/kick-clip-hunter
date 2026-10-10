@@ -40,6 +40,11 @@
       {% for row in group.rows %}
       <a class="ch-row{% if row.rating is none %} is-unrated{% endif %}" href="{{ row.href }}" data-moment="{{ row.id }}"{% if moment and row.id == moment.id %} aria-current="true"{% endif %}>
         <span class="ch-time" title="{{ row.time_title }}">{{ row.time }}</span>
+        <span class="ch-spark" aria-hidden="true">
+          {%- if row.spark -%}
+          <svg viewBox="0 0 {{ spark_steps }} {{ spark_height }}" preserveAspectRatio="none"><path class="ch-laugh" d="{{ row.spark.laugh }}"></path><path class="ch-all" d="{{ row.spark.all }}"></path></svg>
+          {%- endif -%}
+        </span>
         <span class="ch-what">{{ row.what }}</span>
         {{ meter(row.rating, row.rating_words) }}
       </a>

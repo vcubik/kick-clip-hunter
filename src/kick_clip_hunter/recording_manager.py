@@ -22,6 +22,7 @@ from .recorder import (
     POST_ROLL_SECONDS,
     PRE_ROLL_SECONDS,
     ChannelRecorder,
+    CutClip,
     RecorderError,
     extract_clip,
     extract_context_clips,
@@ -101,7 +102,7 @@ async def create_clip_for_moment(
     window_end: datetime,
     output_name: str,
     post_roll_seconds: int = POST_ROLL_SECONDS,
-) -> Path:
+) -> CutClip:
     recorder = _get_recorder(channel_slug)
     return await asyncio.to_thread(
         extract_clip, recorder, window_start, window_end, output_name,

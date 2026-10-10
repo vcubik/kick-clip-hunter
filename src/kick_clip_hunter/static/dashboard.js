@@ -3,8 +3,8 @@
 // The pages are rendered on the server and work as plain pages. This script
 // makes them quick to use: it opens a moment from the queue without loading
 // the page again, saves a rating, tag or note as it is set, drives the clip
-// player, and runs the review from the keyboard (1 to 5 rate, J and K move,
-// Space plays).
+// player from the strip under it, replays chat in step with the clip, and
+// runs the review from the keyboard (1 to 5 rate, J and K move, Space plays).
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -216,12 +216,24 @@
     field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
   }
 
-  // ---- The clip ---------------------------------------------------------
+  // ---- The clip and its timeline ---------------------------------------
+  //
+  // The strip under the clip is one timeline over up to three files: the
+  // footage saved before the clip, the clip, and the footage saved after it.
+  // Times on it are clip time - seconds from the clip's first frame, negative
+  // before it. The player holds one of the files at a time; which one, and
+  // where in it, follows from the clip time asked for.
 
   const SPEEDS = [1, 1.5, 2, 0.5];
   // Kept from one moment to the next.
   let speed = 1;
   let muted = false;
+  // Of the open moment: the clip's own address, which of the files the
+  // player holds (before, clip or after), and where to go once a file that
+  // was just asked for has loaded.
+  let clipAddress = null;
+  let footage = "clip";
+  let arriving = null;
 
   const clipOf = (control) => one("[data-clip]", control.closest(".moment"));
   const clock = (seconds) => {
@@ -229,26 +241,127 @@
     return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
   };
 
-  // Brings the transport in line with the clip.
+  // What the strip of a moment covers, or null for a clip that has none.
+  function spanOf(video) {
+    const trace = one("[data-trace]", video.closest(".moment"));
+    if (!trace || !one("[data-strip]", trace)) return null;
+    return {
+      start: Number(trace.dataset.start),
+      end: Number(trace.dataset.end),
+      clip: Number(trace.dataset.clipSeconds),
+      before: trace.dataset.before,
+      after: trace.dataset.after,
+    };
+  }
+
+  // Where the player is, in clip time - or where it is going, while the
+  // file that holds that is still loading. The footage before the clip ends
+  // where the clip starts, so it is counted back from its own end; until its
+  // length is known, the length the strip gives it stands in.
+  function clipTime(video) {
+    if (arriving) return arriving.time;
+    const span = spanOf(video);
+    if (!span || footage === "clip") return video.currentTime;
+    if (footage === "after") return span.clip + video.currentTime;
+    return video.currentTime - (Number.isFinite(video.duration) ? video.duration : -span.start);
+  }
+
+  // A clip time the way the page writes it: time into the clip, or how long
+  // before its start or after its end.
+  function timeWords(time, span) {
+    if (span && time < 0) return `−${clock(Math.ceil(-time))}`;
+    if (span && footage === "after") return `+${clock(time - span.clip)}`;
+    return clock(time);
+  }
+
+  function place(video, time) {
+    const span = spanOf(video);
+    if (footage === "before") video.currentTime = Math.max(0, video.duration + time);
+    else if (footage === "after") video.currentTime = Math.max(0, time - span.clip);
+    else video.currentTime = time;
+  }
+
+  // Moves the player to a clip time, loading another of the files if that
+  // is where the time lies. A time in context that has no footage is taken
+  // to the nearest end of the clip.
+  function goTo(video, time, { play } = {}) {
+    const span = spanOf(video);
+    if (!span) return;
+    // Loading another file pauses the player, so whether it was playing is
+    // carried over from before the load.
+    if (play === undefined) play = arriving ? arriving.play : !video.paused && !video.ended;
+    let wanted = "clip";
+    if (time < 0 && span.before) wanted = "before";
+    else if (time > span.clip && span.after) wanted = "after";
+    if (wanted === "clip") time = Math.min(Math.max(time, 0), span.clip);
+
+    if (wanted !== footage) {
+      footage = wanted;
+      arriving = { time, play };
+      video.src = wanted === "clip" ? clipAddress : span[wanted];
+      return;
+    }
+    if (arriving) {
+      arriving = { time, play };
+      return;
+    }
+    place(video, time);
+    if (play) video.play().catch(() => {});
+  }
+
+  function arrive(video) {
+    if (!arriving) return;
+    const { time, play } = arriving;
+    arriving = null;
+    place(video, time);
+    if (play) video.play().catch(() => {});
+  }
+
+  // Chat lines appear as the clip reaches them, the newest at the bottom.
+  function syncChat(article, time, words) {
+    const box = one("[data-chat]", article);
+    if (!box) return;
+    let changed = false;
+    for (const line of box.children) {
+      if (line.dataset.at === undefined) continue;
+      const later = Number(line.dataset.at) > time;
+      if (line.hidden !== later) {
+        line.hidden = later;
+        changed = true;
+      }
+    }
+    if (changed) box.scrollTop = box.scrollHeight;
+    one("[data-chat-foot]", article).textContent = box.querySelector("[data-at]") ? `In step with the clip, at ${words}` : "";
+  }
+
+  // Brings the transport, the playhead and the chat in line with the player.
   function paint(video) {
     const article = video.closest(".moment");
     if (!article) return;
-    const length = Number.isFinite(video.duration) ? video.duration : 0;
+    const span = spanOf(video);
+    const time = clipTime(video);
+    const words = timeWords(time, span);
+    const length = span ? span.clip : Number.isFinite(video.duration) ? video.duration : 0;
     const playing = !video.paused && !video.ended;
-    one("[data-now]", article).textContent = clock(video.currentTime);
+
+    one("[data-now]", article).textContent = words;
     one("[data-length]", article).textContent = clock(length);
-
-    const seek = one("[data-seek]", article);
-    seek.max = String(length);
-    seek.value = String(video.currentTime);
-    seek.style.setProperty("--played", length ? `${(video.currentTime / length) * 100}%` : "0%");
-    seek.setAttribute("aria-valuetext", `${clock(video.currentTime)} of ${clock(length)}`);
-
     const play = one("[data-play]", article);
     play.classList.toggle("is-playing", playing);
     play.setAttribute("aria-label", playing ? "Pause" : "Play");
     one("[data-mute]", article).setAttribute("aria-pressed", String(video.muted));
     one("[data-speed]", article).textContent = `${video.playbackRate}×`;
+    if (!span) return;
+
+    const strip = one("[data-strip]", article);
+    const left = `${Math.min(Math.max((time - span.start) / (span.end - span.start), 0), 1) * 100}%`;
+    one("[data-playhead]", strip).style.left = left;
+    const flag = one("[data-flag]", strip);
+    flag.style.setProperty("--at", left);
+    flag.textContent = words;
+    strip.setAttribute("aria-valuenow", time.toFixed(1));
+    strip.setAttribute("aria-valuetext", `${words} of ${clock(span.clip)}`);
+    syncChat(article, time, words);
   }
 
   function togglePlay(video) {
@@ -273,24 +386,67 @@
     else video.requestFullscreen?.().catch(() => {});
   }
 
-  // Plays the footage saved before or after the clip in the same player.
-  function showFootage(link) {
-    const video = clipOf(link);
-    for (const other of all("[data-footage]", link.closest(".footage"))) other.removeAttribute("aria-current");
-    link.setAttribute("aria-current", "true");
-    video.src = link.href;
-    video.play().catch(() => {});
+  // ---- The strip as a scrubber ------------------------------------------
+
+  // The clip time under the pointer, and how far along the strip that is.
+  function pointOn(strip, event) {
+    const box = strip.getBoundingClientRect();
+    const share = Math.min(Math.max((event.clientX - box.left) / box.width, 0), 1);
+    const trace = strip.closest("[data-trace]");
+    const start = Number(trace.dataset.start);
+    return { share, time: start + share * (Number(trace.dataset.end) - start) };
+  }
+
+  // Under the pointer: a hairline, and in the legend what chat did in that second.
+  function readOut(strip, event) {
+    const { share, time } = pointOn(strip, event);
+    const trace = strip.closest("[data-trace]");
+    const line = one("[data-hover]", strip);
+    line.hidden = false;
+    line.style.left = `${share * 100}%`;
+    const readout = one("[data-readout]", trace);
+    if (!readout) return;
+    const second = Math.floor(time - Number(trace.dataset.start));
+    const messages = Number(strip.dataset.all.split(",")[second] || 0);
+    const laughing = Number(strip.dataset.laugh.split(",")[second] || 0);
+    const when = time < 0 ? `${Math.ceil(-time)} s before` : time > Number(trace.dataset.clipSeconds) ? `${Math.floor(time - Number(trace.dataset.clipSeconds))} s after` : clock(time);
+    readout.textContent = `${when}: ${plural(messages, "message")} a second${laughing ? `, ${laughing} laughing` : ""}`;
+  }
+
+  function stopReadOut(strip) {
+    one("[data-hover]", strip).hidden = true;
+    const readout = one("[data-readout]", strip.closest("[data-trace]"));
+    if (readout) readout.textContent = "";
+  }
+
+  // Arrow keys step through the footage, Home and End go to the clip's ends.
+  const STRIP_KEYS = { ArrowLeft: -1, ArrowRight: 1, ArrowDown: -1, ArrowUp: 1, PageDown: -10, PageUp: 10 };
+
+  function stripKey(strip, event) {
+    const video = clipOf(strip);
+    const span = spanOf(video);
+    let time;
+    if (event.key === "Home") time = 0;
+    else if (event.key === "End") time = span.clip;
+    else if (event.key in STRIP_KEYS) time = clipTime(video) + STRIP_KEYS[event.key] * (event.shiftKey ? 5 : 1);
+    else return false;
+    event.preventDefault();
+    goTo(video, Math.min(Math.max(time, span.start), span.end));
+    return true;
   }
 
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
-    for (const video of all("[data-clip]")) {
-      video.defaultPlaybackRate = speed;
-      video.playbackRate = speed;
-      video.muted = muted;
-      paint(video);
-    }
+    const video = one("[data-clip]");
+    clipAddress = video ? video.getAttribute("src") : null;
+    footage = "clip";
+    arriving = null;
+    if (!video) return;
+    video.defaultPlaybackRate = speed;
+    video.playbackRate = speed;
+    video.muted = muted;
+    paint(video);
   }
 
   // ---- Switches, the watchlist, shutting down --------------------------
@@ -362,7 +518,6 @@
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
     ["[data-mute]", (button) => toggleMute(clipOf(button))],
     ["[data-fullscreen]", (button) => toggleFullScreen(clipOf(button))],
-    ["a[data-footage]", (link, event) => isPlainClick(event) && (event.preventDefault(), showFootage(link))],
     // In full screen the browser's own controls are showing and already do this.
     ["[data-clip]", (video) => video.controls || togglePlay(video)],
     ["[data-shutdown-open]", () => askToShutDown(true)],
@@ -382,6 +537,27 @@
     }
   });
 
+  // Pressing on the strip goes there, and so does dragging along it; a
+  // pointer that is only passing over it gets a readout instead.
+  document.addEventListener("pointerdown", (event) => {
+    const strip = event.target.closest("[data-strip]");
+    if (!strip || event.button !== 0) return;
+    strip.setPointerCapture(event.pointerId);
+    goTo(clipOf(strip), pointOn(strip, event).time);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    const strip = event.target.closest("[data-strip]");
+    if (!strip) return;
+    if (strip.hasPointerCapture(event.pointerId)) goTo(clipOf(strip), pointOn(strip, event).time);
+    readOut(strip, event);
+  });
+
+  document.addEventListener("pointerout", (event) => {
+    const strip = event.target.closest("[data-strip]");
+    if (strip && !strip.contains(event.relatedTarget)) stopReadOut(strip);
+  });
+
   document.addEventListener("dblclick", (event) => {
     const video = event.target.closest("[data-clip]");
     if (video) toggleFullScreen(video);
@@ -399,7 +575,8 @@
       }
       return;
     }
-    if (event.repeat || target.matches("textarea, select, input:not([type=range])") || !one(".review")) return;
+    if (target.matches("[data-strip]") && stripKey(target, event)) return;
+    if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
 
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
@@ -413,9 +590,7 @@
 
   document.addEventListener("input", (event) => {
     const target = event.target;
-    if (target.matches("[data-seek]")) {
-      clipOf(target).currentTime = Number(target.value);
-    } else if (target.matches("[data-note]")) {
+    if (target.matches("[data-note]")) {
       grow(target);
       say(target, "");
     }
@@ -435,9 +610,20 @@
   });
 
   // Media events do not bubble, so they are caught on the way down.
-  for (const type of ["loadedmetadata", "durationchange", "timeupdate", "play", "pause", "ended", "emptied", "volumechange", "ratechange"]) {
-    document.addEventListener(type, (event) => event.target.matches?.("[data-clip]") && paint(event.target), true);
+  const onMedia = (type, handle) =>
+    document.addEventListener(type, (event) => event.target.matches?.("[data-clip]") && handle(event.target), true);
+  for (const type of ["durationchange", "timeupdate", "seeked", "play", "pause", "emptied", "volumechange", "ratechange"]) {
+    onMedia(type, paint);
   }
+  onMedia("loadedmetadata", (video) => {
+    arrive(video);
+    paint(video);
+  });
+  // The footage before the clip runs on into the clip; the clip stops at its end.
+  onMedia("ended", (video) => {
+    if (footage === "before") goTo(video, 0, { play: true });
+    paint(video);
+  });
 
   // The page's own transport is not on screen in full screen, so the
   // browser's controls stand in for it for as long as that lasts.

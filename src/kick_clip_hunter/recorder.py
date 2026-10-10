@@ -63,6 +63,10 @@ from .kick_stream import get_stream_urls
 logger = logging.getLogger("kick_clip_hunter")
 
 FFMPEG_BIN = "ffmpeg"
+FFPROBE_BIN = "ffprobe"
+# Reading a file's length takes a fraction of a second; a probe that takes
+# this long is stuck on something that is not a video.
+PROBE_TIMEOUT_SECONDS = 15
 BUFFER_RETENTION_SECONDS = 600
 # Chat reacts to a moment with a lag - the detector's window_start/window_end
 # mark when the *reaction* (message spike) was seen, not when the funny thing
@@ -128,6 +132,25 @@ _ATTRIBUTE = re.compile(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)')
 
 class RecorderError(RuntimeError):
     pass
+
+
+@dataclass
+class CutClip:
+    """A clip that has been cut, and the stretch of the broadcast it holds.
+
+    A clip is made of whole segments, so that stretch is a little longer
+    than the window it was asked for. The times are on the stream's program
+    clock, like the segments' own; chat saw the same frames
+    PLAYBACK_DELAY_SECONDS later.
+    """
+
+    path: Path
+    started_at: datetime
+    ended_at: datetime
+
+    @property
+    def duration(self) -> float:
+        return (self.ended_at - self.started_at).total_seconds()
 
 
 @dataclass
@@ -526,7 +549,7 @@ def _clip_segments(
     return _best_group(segments, clip_start, clip_end)
 
 
-def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], output_name: str) -> Path:
+def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], output_name: str) -> CutClip:
     out_dir = CLIPS_DIR / recorder.channel_slug
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / output_name
@@ -553,7 +576,7 @@ def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], outpu
     finally:
         joined.unlink(missing_ok=True)
 
-    return output_path
+    return CutClip(output_path, segments[0].started_at, segments[-1].ended_at)
 
 
 def extract_clip(
@@ -563,8 +586,29 @@ def extract_clip(
     output_name: str,
     pre_roll_seconds: int = PRE_ROLL_SECONDS,
     post_roll_seconds: int = POST_ROLL_SECONDS,
-) -> Path:
+) -> CutClip:
     return _write_clip(recorder, _clip_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds), output_name)
+
+
+def probe_duration(path: Path) -> float | None:
+    """How long a video file runs, in seconds - or None if ffprobe is not
+    there or can't make sense of the file."""
+    try:
+        result = subprocess.run(
+            [
+                FFPROBE_BIN, "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        return float(result.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def context_clip_names(clip_name: str) -> dict[str, str]:
@@ -604,5 +648,5 @@ def extract_context_clips(
             if window_start <= s.started_at + timedelta(seconds=s.duration / 2) < window_end
         ]
         if segments:
-            saved[side] = _write_clip(recorder, _best_group(segments, window_start, window_end), names[side])
+            saved[side] = _write_clip(recorder, _best_group(segments, window_start, window_end), names[side]).path
     return saved

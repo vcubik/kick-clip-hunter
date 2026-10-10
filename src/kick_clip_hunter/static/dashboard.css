@@ -5,11 +5,15 @@
    of the pages.
 
    The rules the tokens are used by:
-   - The tool is grey and flat. No shadows, no gradients, no cards; a 1px
-     `line` separates panes and `quiet` hairlines separate rows.
+   - The tool is grey; what chat did is on paper. Every screen is built from
+     the neutral greys, and chat activity is drawn on `paper` and nowhere
+     else - the only light surface on a page.
+   - Grey and flat: no shadows, no gradients, no cards; a 1px `line`
+     separates panes and `quiet` hairlines separate rows.
    - One colour, one meaning. `lit` is something you set, `sunk` is where you
-     are, `rec` is the recording lamp. Nothing is coloured for decoration,
-     and a problem is stated in words, not in red.
+     are, `pen` is laughing, `marker` is the moment, `rec` is the recording
+     lamp. Nothing is coloured for decoration, and a problem is stated in
+     words, not in red.
    - Hierarchy comes from weight and from the typeface's width, not from
      size, capitals or dimmer greys: text is `text` or `text-2`, nothing
      fainter is readable on `field`. */
@@ -41,6 +45,16 @@
   --rec: #FF4A3D;         /* the dot of a recording lamp, nothing else */
   --video: #000000;
 
+  /* Chart paper: what chat did is drawn on it, in ink and one red pen. */
+  --paper: #F5F6F2;
+  --ink: #1B263B;         /* all messages; text on paper */
+  --ink-2: #56617A;       /* the usual pace */
+  --grid: #D3E5DA;
+  --grid-strong: #A6CCB7;
+  --pen: #CF2E2E;         /* laughing */
+  --pen-dark: #FF6B5E;    /* the same pen where it writes on grey */
+  --marker: #FFEB57;      /* the moment */
+
   /* Chat usernames; a name always gets the same one. */
   --nick-1: #FFC2D2;
   --nick-2: #9AD8FF;
@@ -66,6 +80,7 @@
   --h-control: 36px;
   --h-row: 40px;
   --h-bar: 48px;
+  --h-strip: 96px;
   --w-queue: 320px;
   --w-chat: 340px;
 
@@ -79,7 +94,7 @@
   /* Everything on the review page except the picture: the top bar and what
      sits above and below the clip. The clip is sized so that all of it fits
      one screen without scrolling. */
-  --stage-rest: 384px;
+  --stage-rest: 512px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -176,7 +191,7 @@ a { color: inherit; }
 .ch-group { display: flex; align-items: baseline; gap: var(--space-8); padding: var(--space-12) var(--space-12) 6px; font-size: 14px; line-height: 20px; font-weight: 400; }
 .ch-group b { font-weight: 700; }
 .ch-group span { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
-.ch-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
+.ch-row { display: grid; grid-template-columns: 58px 64px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
 .ch-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .ch-row:focus-visible, .ch-tab:focus-visible, .bar-nav a:focus-visible { outline-offset: -2px; }
 .ch-row[aria-current="true"] { background-color: var(--sunk); border-left-color: var(--lit); }
@@ -184,10 +199,56 @@ a { color: inherit; }
 .ch-row .ch-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ch-row.is-unrated .ch-time, .ch-row.is-unrated .ch-what { font-weight: 700; }
 .ch-row[aria-current="true"] .ch-meter i:not(.is-lit) { background: var(--quiet); }
+/* The shape of chat around the moment, in a well: all messages in `lit`,
+   laughing in `pen-dark`. Every spark on a page is drawn to one scale. */
+.ch-spark { display: block; height: 18px; background: var(--inset); }
+.ch-row[aria-current="true"] .ch-spark { background: var(--line); }
+.ch-spark svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.ch-spark path { fill: none; stroke-width: 1.5px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.ch-spark .ch-all { stroke: var(--lit); }
+.ch-spark .ch-laugh { stroke: var(--pen-dark); }
+
+/* The trace: what chat did, on paper, on the clip's own time axis. Fine grid
+   lines every 2 seconds, heavier ones every 10; all messages as an ink line,
+   laughing as a pen line with a wash under it; the usual pace dashed; the
+   moment as a highlighter band; the context either side of the clip washed
+   with ink. With a clip to play it is the scrubber, and carries the playhead. */
+.trace { margin: var(--space-8) 0 0; }
+.ch-legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-16); min-height: 20px; font-size: 12px; line-height: 16px; }
+.ch-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.ch-chip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 10px; background: var(--paper); }
+.ch-chip i { width: 14px; height: 2px; background: var(--ink); }
+.ch-chip i.ch-laugh { background: var(--pen); }
+.ch-chip i.ch-usual { height: 0; border-top: 1px dashed var(--ink-2); background: none; }
+.ch-readout { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.ch-strip { position: relative; height: var(--h-strip); border-top: 1px solid var(--sunk); border-bottom: 1px solid var(--sunk); background: var(--paper); color: var(--ink); touch-action: none; }
+.ch-strip[role="slider"] { cursor: pointer; }
+.ch-strip:focus-visible { outline-offset: 3px; }
+.ch-strip svg { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; overflow: visible; }
+.ch-strip path { fill: none; vector-effect: non-scaling-stroke; }
+.ch-strip .ch-grid { stroke: var(--grid); stroke-width: 1px; shape-rendering: crispEdges; }
+.ch-strip .ch-grid-strong { stroke: var(--grid-strong); stroke-width: 1px; shape-rendering: crispEdges; }
+.ch-strip .ch-all { stroke: var(--ink); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; }
+.ch-strip .ch-laugh { stroke: var(--pen); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; }
+.ch-strip .ch-wash { fill: var(--pen); fill-opacity: 0.14; stroke: none; }
+.ch-strip .ch-context { position: absolute; top: 0; bottom: 0; background: var(--ink); opacity: 0.05; }
+.ch-strip .ch-moment { position: absolute; top: 0; bottom: 0; background: var(--marker); mix-blend-mode: multiply; }
+.ch-strip .ch-usual { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--ink-2); }
+.ch-strip .ch-note { position: absolute; top: 5px; margin: 0 var(--space-4); padding: 0 var(--space-4); background: var(--paper); font-size: 12px; line-height: 16px; white-space: nowrap; }
+.ch-strip .ch-hover { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink-2); pointer-events: none; }
+.ch-strip .ch-playhead { position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px; background: var(--ink); pointer-events: none; }
+/* The flag rides the playhead (--at), but stops short of the strip's ends
+   rather than hang over them. */
+.ch-strip .ch-flag { position: absolute; top: 3px; left: clamp(22px, var(--at, 0%), calc(100% - 22px)); transform: translateX(-50%); padding: 0 5px; border-radius: var(--radius-control); background: var(--ink); color: var(--paper); font-size: 12px; line-height: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.ch-axis { position: relative; height: 18px; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.ch-axis span { position: absolute; top: 2px; white-space: nowrap; }
+.ch-axis .is-middle { transform: translateX(-50%); }
+.ch-axis .is-end { transform: translateX(-100%); }
 
 /* Chat: the username in its colour, then what was said. The space between
    them is a real one, so the margin only tops it up. */
 .ch-chat { padding: 1px 0 1px var(--space-8); border-left: 2px solid transparent; overflow-wrap: anywhere; }
+.ch-chat.is-moment { border-left-color: var(--marker); }
 .ch-chat b { margin-right: var(--space-2); font-weight: 700; }
 .ch-nick-1 { color: var(--nick-1); }
 .ch-nick-2 { color: var(--nick-2); }
@@ -195,8 +256,9 @@ a { color: inherit; }
 .ch-nick-4 { color: var(--nick-4); }
 .ch-nick-5 { color: var(--nick-5); }
 .ch-nick-6 { color: var(--nick-6); }
-/* A native emote, for now by its name. */
-.ch-emote-name { margin: 0 1px; font-weight: 600; font-stretch: var(--width-compact); }
+/* A native emote: its picture inside the line. Its name is the
+   alternative text, so that is what shows if the picture does not load. */
+.ch-emote { width: 20px; height: 20px; margin: 0 1px; vertical-align: -5px; object-fit: contain; font-size: 12px; font-weight: 600; }
 
 /* Transport: the one row under the clip. */
 .ch-transport { display: flex; align-items: center; gap: var(--space-12); height: var(--h-control); margin-top: var(--space-4); }
@@ -262,17 +324,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .player video { display: block; width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
 .no-clip { padding: var(--space-24) 0; border-top: 1px solid var(--quiet); border-bottom: 1px solid var(--quiet); }
 
-/* Where the clip is and how far it can go: the played part is lit. */
-.seek { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: var(--space-16); margin: var(--space-4) 0 0; background: transparent; cursor: pointer; --played: 0%; }
-.seek::-webkit-slider-runnable-track { height: var(--space-4); background: linear-gradient(to right, var(--lit) var(--played), var(--inset) var(--played)); }
-.seek::-webkit-slider-thumb { -webkit-appearance: none; width: var(--space-2); height: 14px; margin-top: -5px; border: 0; border-radius: 0; background: var(--lit); }
-.seek::-moz-range-track { height: var(--space-4); background: var(--inset); }
-.seek::-moz-range-progress { height: var(--space-4); background: var(--lit); }
-.seek::-moz-range-thumb { width: var(--space-2); height: 14px; border: 0; border-radius: 0; background: var(--lit); }
-
-.footage { grid-auto-columns: auto; }
-.footage .ch-tab { height: var(--h-compact); padding-left: 10px; padding-right: 10px; }
-
 .moment-summary { max-width: 80ch; margin-top: var(--space-12); }
 .verdict { display: flex; align-items: flex-start; gap: var(--space-12); margin-top: var(--space-12); }
 .verdict .ch-cap { display: flex; align-items: center; height: var(--h-control); white-space: nowrap; }
@@ -289,8 +340,12 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .chat-head { display: flex; align-items: baseline; gap: var(--space-8); padding: var(--space-12) var(--space-12) var(--space-8); }
 .chat-head h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
 .chat-head span { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
-.chat-lines { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 0 var(--space-12) var(--space-12) var(--space-2); }
+/* Chat reads upwards from the bottom, the newest line last; the space
+   above the lines takes whatever they do not fill. */
+.chat-lines { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 0 var(--space-12) var(--space-8) var(--space-2); }
+.chat-lines::before { content: ""; flex: 1 1 0; }
 .chat-empty { padding-left: 10px; color: var(--text-2); }
+.chat-foot { min-height: 33px; padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
 
 /* A page that is a statement: nothing new, nothing yet. */
 .statement { min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
@@ -324,6 +379,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .review, .moment { display: block; }
   .queue { border-right: 0; border-bottom: 1px solid var(--line); }
   .queue-list, .chat-lines { flex: none; max-height: 340px; }
+  .chat-lines::before { content: none; }
   .stage { overflow: visible; padding: var(--space-16); }
   .stage-in { max-width: none; }
   .verdict { flex-wrap: wrap; }

@@ -139,10 +139,13 @@ raw output turned into what gets stored (hallucinated subtitle credits dropped, 
 top labels above the confidence floor)?
 
 **8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`,
-`unit/test_dashboard_view.py`
+`unit/test_dashboard_view.py`, `unit/test_chat_trace.py`
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
-the right one open, with its chat, clip and context footage? Does an empty queue say what the service
+the right one open, with its chat, clip and context footage? Is chat put on the clip's own time axis
+correctly - a stored clip start shifted by the playback delay, an older clip placed by its length, a
+missing clip stood in for by its window - and are the trace, the queue's sparks and "what chat said
+most" drawn from that as intended? Does an empty queue say what the service
 is doing? Is everything a Kick user can type - chat, usernames, emote names - escaped? Do the file
 routes refuse to serve anything outside their directories? Are dates, counts and detector reasons
 worded as intended? Do rating, tags and notes validate and persist; do the switches survive a
@@ -252,10 +255,14 @@ Run this on a live channel after changing any of the above, or the code right ne
    `data/recordings/<channel>/` fills with `.ts` segments and stays at roughly ten minutes' worth.
 5. **Wait for a moment.** The log shows, in order: `MOMENT detected`, `moment N closed after Xs
    reaction`, `clip saved for moment N`, `context clips saved for moment N: after, before`.
-6. **Review it.** Within half a minute the queue announces the new moment. Opened, it has the
-   chat, a clip that plays with sound and starts before the reaction, and the footage from before
-   and after it in the same player. `Space` plays and pauses; a number key rates it and moves on
-   to the next unrated moment. Reload: the rating sticks.
+6. **Review it.** Within half a minute the queue announces the new moment. Opened, it has a clip
+   that plays with sound and starts before the reaction, and under it the trace of chat with the
+   moment marked. Clicking on the trace moves the clip there, and into the footage before or after
+   it at either end; chat lines appear beside the clip as it reaches them. This is the check that
+   the picture and chat line up: the laughing on the trace should start a few seconds after what
+   caused it on screen (if it is clearly off, `PLAYBACK_DELAY_SECONDS` is). `Space` plays and
+   pauses; a number key rates the moment and moves on to the next unrated one. Reload: the rating
+   sticks.
 7. **Try one analysis step.** Turn `Transcript` on (Channels page); the next clip gets a transcript
    (the first one takes longer while the model loads). Turn it off again.
 8. **If the stream runs an ad:** the log shows `stream discontinuity` with `ad=True`, a playlist

@@ -17,8 +17,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from kick_clip_hunter import chat_trace, recorder, recording_manager
 from kick_clip_hunter import dashboard_view as view
-from kick_clip_hunter import recorder, recording_manager
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
 
@@ -86,12 +86,22 @@ def switch_states(page: Element) -> dict[str, str]:
 
 
 def chat(article: Element) -> list[tuple[str, str]]:
-    """(who, what they said) for every chat line shown."""
+    """(who, what they said) for every chat line shown. An emote counts as
+    its name, which is what stands in for its picture."""
     lines = []
     for line in article.find("p", class_="ch-chat"):
         who, said = [child for child in line.children if not isinstance(child, str)]
-        lines.append((who.text, said.text))
+        words = [part if isinstance(part, str) else part.attrs["alt"] for part in said.children]
+        lines.append((who.text, " ".join(" ".join(words).split())))
     return lines
+
+
+def clip_cut_at(chat_start: datetime, seconds: float = 40.0) -> dict:
+    """Columns of a moment whose clip is `seconds` long and whose first
+    frame chat saw at `chat_start` - stored, as the recorder stores it, on
+    the stream's clock, which runs ahead of chat's."""
+    broadcast = chat_start - timedelta(seconds=recorder.PLAYBACK_DELAY_SECONDS)
+    return {"clip_start": broadcast.isoformat(), "clip_duration": seconds}
 
 
 class RunningRecorder:
@@ -290,6 +300,73 @@ class TestQueue:
         assert row.one("span", class_="ch-meter").attrs["aria-label"] == "not rated yet"
         assert row.one("span", class_="ch-meter").find("i", class_="is-lit") == []
 
+    async def test_a_row_draws_the_shape_of_chat_around_its_moment(self, service):
+        add_moment("channel_a", detected_at=T0, reaction_seconds=10)
+        for number in range(6):
+            add_chat("channel_a", f"fan{number}", "xDDD" if number < 2 else "what", T0 - timedelta(seconds=9))
+
+        (row,) = queue_rows(await review(service))
+
+        spark = row.one("span", class_="ch-spark").one("svg")
+        assert spark.attrs["viewbox"] == f"0 0 {chat_trace.SPARK_STEPS} {chat_trace.SPARK_HEIGHT}"
+        everything = spark.one("path", class_="ch-all").attrs["d"].removeprefix("M").split(" L")
+        assert len(everything) == chat_trace.SPARK_STEPS
+        # The burst is the tallest thing on the page, so it reaches the top;
+        # it sits a quarter of the way in, where every moment's does.
+        burst = chat_trace.SPARK_LEAD_SECONDS // chat_trace.SPARK_STEP_SECONDS
+        assert (
+            everything[burst]
+            == f"{burst + 0.5},{chat_trace.SPARK_HEIGHT - 1 - (chat_trace.SPARK_HEIGHT - 2) * 6 / 8:g}"
+        )
+        assert spark.one("path", class_="ch-laugh").attrs["d"].startswith(f"M{burst - 0.5},")
+
+    async def test_sparks_on_one_page_share_a_scale(self, service):
+        small = add_moment("channel_a", detected_at=T0, reaction_seconds=10)
+        big = add_moment("channel_a", detected_at=T0 + minutes(10), reaction_seconds=10)
+        for number in range(4):
+            add_chat("channel_a", f"fan{number}", "what", T0 - timedelta(seconds=9))
+        for number in range(40):
+            add_chat("channel_a", f"fan{number}", "what", T0 + minutes(10) - timedelta(seconds=9))
+
+        rows = {int(row.attrs["data-moment"]): row for row in queue_rows(await review(service))}
+
+        def peak(row: Element) -> float:
+            points = row.one("path", class_="ch-all").attrs["d"].removeprefix("M").split(" L")
+            return chat_trace.SPARK_HEIGHT - min(float(point.split(",")[1]) for point in points)
+
+        assert peak(rows[big]) == chat_trace.SPARK_HEIGHT - 1
+        assert peak(rows[small]) == pytest.approx(1 + (chat_trace.SPARK_HEIGHT - 2) * 4 / 40)
+
+    async def test_a_row_says_what_chat_said_most_in_its_moment(self, service):
+        add_moment("channel_a", detected_at=T0, reaction_seconds=10, clip_path="channel_a/moment_1.mp4")
+        for number, content in enumerate(["xD", "xDDDD", "what", "to je konec xd", "[emote:1:KEKW]"]):
+            add_chat("channel_a", f"fan{number}", content, T0 - timedelta(seconds=5))
+        # Said a lot, but long before the moment.
+        for number in range(8):
+            add_chat("channel_a", f"early{number}", "GG", T0 - timedelta(seconds=24))
+
+        (row,) = queue_rows(await review(service))
+
+        assert row.one("span", class_="ch-what").text == f"xD {chat_trace.TIMES_SIGN}3"
+
+    async def test_a_row_falls_back_on_what_set_the_moment_off(self, service):
+        add_moment("channel_a", detected_at=T0, reason="emotes", clip_path="channel_a/moment_1.mp4")
+        add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=5))
+
+        (row,) = queue_rows(await review(service))
+
+        assert row.one("span", class_="ch-what").text == "Emotes"
+
+    async def test_an_imported_clip_has_no_chat_to_draw(self, service):
+        add_moment("channel_a", detected_at=T0, reason=view.IMPORT_REASON, clip_path="channel_a/import.mp4")
+        add_chat("channel_a", "alice", "xD", T0 - timedelta(seconds=5))
+        add_chat("channel_a", "bob", "xD", T0 - timedelta(seconds=5))
+
+        (row,) = queue_rows(await review(service))
+
+        assert row.one("span", class_="ch-spark").find("svg") == []
+        assert row.one("span", class_="ch-what").text == "Imported"
+
     async def test_a_row_without_a_stream_time_shows_the_time_of_day(self, service):
         add_moment(detected_at=T0, stream_elapsed_seconds=None)
 
@@ -386,17 +463,52 @@ class TestOpenMoment:
             "8 laughs or emote names and 3 emotes among them."
         )
 
-    async def test_shows_the_chat_around_the_moment(self, service):
-        add_moment("channel_a", detected_at=T0, reaction_seconds=10)
-        add_chat("channel_a", "early_bird", "long before", T0 - timedelta(seconds=60))
+    async def test_shows_the_chat_from_before_the_clip_to_after_it(self, service):
+        # A 40 second clip that chat saw from T0-25, around a reaction that
+        # ran from T0-10 to T0.
+        add_moment("channel_a", detected_at=T0, reaction_seconds=10, **clip_cut_at(T0 - timedelta(seconds=25)))
+        before = recorder.CONTEXT_BEFORE_SECONDS
+        after = recorder.CONTEXT_AFTER_SECONDS
+        add_chat("channel_a", "long_gone", "long before", T0 - timedelta(seconds=25 + before + 5))
+        add_chat("channel_a", "early_bird", "what is he doing", T0 - timedelta(seconds=25 + before - 5))
         add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=8))
         add_chat("channel_a", "bob", "xDDD", T0 - timedelta(seconds=3))
-        add_chat("channel_a", "latecomer", "what did I miss", T0 + timedelta(seconds=60))
+        add_chat("channel_a", "latecomer", "what did I miss", T0 + timedelta(seconds=15 + after - 5))
+        add_chat("channel_a", "much_later", "still here", T0 + timedelta(seconds=15 + after + 5))
         add_chat("channel_b", "elsewhere", "another channel entirely", T0 - timedelta(seconds=5))
 
         article = open_moment(await review(service))
 
-        assert chat(article) == [("alice", "what was that"), ("bob", "xDDD")]
+        assert chat(article) == [
+            ("early_bird", "what is he doing"),
+            ("alice", "what was that"),
+            ("bob", "xDDD"),
+            ("latecomer", "what did I miss"),
+        ]
+
+    async def test_every_chat_line_knows_where_in_the_clip_it_belongs(self, service):
+        clip = {"clip_path": "channel_a/moment_1.mp4", **clip_cut_at(T0 - timedelta(seconds=25))}
+        add_moment("channel_a", detected_at=T0, reaction_seconds=10, **clip)
+        add_chat("channel_a", "early_bird", "what is he doing", T0 - timedelta(seconds=40))
+        add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=8))
+        add_chat("channel_a", "bob", "xDDD", T0 - timedelta(seconds=3, milliseconds=250))
+
+        article = open_moment(await review(service))
+
+        lines = article.find("p", class_="ch-chat")
+        # Seconds from the clip's first frame; the first line came before it.
+        assert [line.attrs["data-at"] for line in lines] == ["-15", "17", "21.8"]
+        assert ["is-moment" in line.classes for line in lines] == [False, True, True]
+        assert article.one("div", class_="chat-head").text == "Chat replayed with the clip"
+
+    async def test_without_a_clip_the_chat_is_simply_there_to_read(self, service):
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=8))
+
+        article = open_moment(await review(service))
+
+        assert chat(article) == [("alice", "what was that")]
+        assert article.one("div", class_="chat-head").text == "Chat around the moment"
 
     async def test_a_chatter_keeps_their_colour(self, service):
         add_moment("channel_a", detected_at=T0)
@@ -408,14 +520,17 @@ class TestOpenMoment:
         assert [name.classes for name in names] == [{f"ch-nick-{view.nick_colour(name.text)}"} for name in names]
         assert names[0].classes == names[2].classes
 
-    async def test_native_emotes_are_shown_by_name(self, service):
+    async def test_native_emotes_are_shown_as_pictures_named_for_what_they_are(self, service):
         add_moment("channel_a", detected_at=T0)
         add_chat("channel_a", "alice", "no way [emote:37226:KEKW][emote:1730752:emojiLol]", T0 - timedelta(seconds=2))
 
         article = open_moment(await review(service))
 
         assert chat(article) == [("alice", "no way KEKW emojiLol")]
-        assert [emote.text for emote in article.find("span", class_="ch-emote-name")] == ["KEKW", "emojiLol"]
+        assert [(emote.attrs["alt"], emote.attrs["src"]) for emote in article.find("img", class_="ch-emote")] == [
+            ("KEKW", "https://files.kick.com/emotes/37226/fullsize"),
+            ("emojiLol", "https://files.kick.com/emotes/1730752/fullsize"),
+        ]
 
     async def test_says_so_when_no_chat_was_stored_for_the_window(self, service):
         add_moment("channel_a")
@@ -483,6 +598,213 @@ class TestOpenMoment:
         add_moment(clip_path="channel_a/moment_1.mp4")
 
         assert open_moment(await review(service)).find("dl") == []
+
+
+class TestTrace:
+    """What chat did, on the clip's own time axis, under the clip."""
+
+    def clip(self, **columns) -> int:
+        """A moment with a 40 second clip chat saw from T0-25, whose reaction
+        ran from T0-10 to T0 - clip seconds 15 to 25."""
+        columns = {"clip_path": "channel_a/moment_1.mp4", **clip_cut_at(T0 - timedelta(seconds=25)), **columns}
+        return add_moment("channel_a", detected_at=T0, reaction_seconds=10, **columns)
+
+    def burst(self) -> None:
+        """Nine messages in clip second 17, four of them laughing."""
+        for number in range(9):
+            content = "xDDD" if number < 4 else f"what {number}"
+            add_chat("channel_a", f"fan{number}", content, T0 - timedelta(seconds=8) + timedelta(milliseconds=number))
+
+    async def trace(self, service, **params) -> Element:
+        return open_moment(await review(service, **params)).one("figure", class_="trace")
+
+    async def test_covers_the_clip_and_the_context_either_side_of_it(self, service):
+        self.clip()
+
+        trace = await self.trace(service)
+
+        before, after = recorder.CONTEXT_BEFORE_SECONDS, recorder.CONTEXT_AFTER_SECONDS
+        assert (trace.attrs["data-start"], trace.attrs["data-end"], trace.attrs["data-clip-seconds"]) == (
+            str(-before),
+            str(40 + after),
+            "40",
+        )
+        assert [label.text for label in trace.one("div", class_="ch-axis").find("span")] == [
+            f"{before} s before", "0:00", "0:10", "0:20", "0:30", "0:40", f"{after} s after",
+        ]  # fmt: skip
+        assert len(trace.one("div", class_="ch-strip").find("div", class_="ch-context")) == 2
+
+    async def test_draws_what_chat_did_second_by_second(self, service):
+        self.clip()
+        self.burst()
+
+        trace = await self.trace(service)
+
+        strip = trace.one("div", class_="ch-strip")
+        second = recorder.CONTEXT_BEFORE_SECONDS + 17
+        assert strip.attrs["data-all"].split(",")[second] == "9"
+        assert strip.attrs["data-laugh"].split(",")[second] == "4"
+        assert sum(map(int, strip.attrs["data-all"].split(","))) == 9
+        # The lines themselves: all messages through every second, laughing
+        # only around the second someone laughed in.
+        assert f"{second + 0.5},3" in strip.one("path", class_="ch-all").attrs["d"]
+        assert (
+            strip.one("path", class_="ch-laugh").attrs["d"]
+            == f"M{second - 0.5},12 L{second + 0.5},8 L{second + 1.5},12"
+        )
+
+    async def test_marks_the_moment_and_says_how_high_it_went(self, service):
+        self.clip()
+        self.burst()
+
+        trace = await self.trace(service)
+
+        assert trace.one("span", class_="ch-note").text == "the moment: 10 s, peaking at 9/s"
+        assert len(trace.find("div", class_="ch-moment")) == 1
+        assert trace.one("figcaption").text == (
+            f"Chat messages a second from {recorder.CONTEXT_BEFORE_SECONDS} seconds before the clip "
+            f"to {recorder.CONTEXT_AFTER_SECONDS} seconds after it. "
+            "The usual pace is 0.5 a second; it peaks at 9 a second during the 10 second moment."
+        )
+
+    async def test_says_what_its_lines_are(self, service):
+        self.clip()
+
+        trace = await self.trace(service)
+
+        assert [key.text for key in trace.one("div", class_="ch-legend").find("span") if key.text] == [
+            "all messages",
+            "laughing",
+            "usual pace, 0.5/s",
+        ]
+
+    async def test_a_channels_own_laugh_emote_counts_as_laughing(self, service):
+        self.clip(broadcaster_user_id=77)
+        service.watch("channel_a", 77, keywords={"omegalul": 3.5, "sadge": 1.0})
+        add_chat("channel_a", "alice", "OMEGALUL", T0 - timedelta(seconds=8))
+        add_chat("channel_a", "bob", "sadge", T0 - timedelta(seconds=8))
+
+        strip = (await self.trace(service)).one("div", class_="ch-strip")
+
+        second = recorder.CONTEXT_BEFORE_SECONDS + 17
+        assert (strip.attrs["data-all"].split(",")[second], strip.attrs["data-laugh"].split(",")[second]) == ("2", "1")
+
+    async def test_is_the_scrubber_of_a_clip_that_can_be_played(self, service):
+        self.clip()
+
+        strip = (await self.trace(service)).one("div", class_="ch-strip")
+
+        assert strip.attrs["role"] == "slider" and strip.attrs["tabindex"] == "0"
+        assert (strip.attrs["aria-valuemin"], strip.attrs["aria-valuemax"]) == (
+            str(-recorder.CONTEXT_BEFORE_SECONDS),
+            str(40 + recorder.CONTEXT_AFTER_SECONDS),
+        )
+        assert len(strip.find("div", class_="ch-playhead")) == 1
+
+    async def test_is_only_a_picture_of_chat_when_there_is_no_clip(self, service):
+        add_moment("channel_a", detected_at=T0, reaction_seconds=10)
+        self.burst()
+
+        strip = (await self.trace(service)).one("div", class_="ch-strip")
+
+        # Chat reacted whether or not there was footage to cut: the window
+        # that would have been cut stands in for the clip.
+        assert "role" not in strip.attrs and "tabindex" not in strip.attrs
+        assert strip.find("div", class_="ch-playhead") == []
+        assert sum(map(int, strip.attrs["data-all"].split(","))) == 9
+
+    async def test_a_clip_cut_before_its_start_was_stored_is_placed_by_its_length(self, service):
+        # Asked for: 15s before the reaction to 10s after it, 35 seconds; the
+        # file runs 39, so it is taken to start two seconds earlier.
+        self.clip(clip_start=None, clip_duration=39.0)
+        add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=8))
+        pre_roll = recorder.PRE_ROLL_SECONDS
+
+        article = open_moment(await review(service))
+
+        assert article.one("figure", class_="trace").attrs["data-clip-seconds"] == "39"
+        slack = (39 - (10 + pre_roll + service.main.DYNAMIC_POST_ROLL_SECONDS)) / 2
+        assert article.one("p", class_="ch-chat").attrs["data-at"] == view.number_words(10 + pre_roll + slack - 8, 1)
+
+    async def test_an_imported_clip_gets_bare_paper_to_scrub_on(self, service):
+        add_moment("channel_a", reason=view.IMPORT_REASON, clip_path="channel_a/import.mp4", clip_duration=52.0)
+
+        trace = await self.trace(service)
+
+        assert (trace.attrs["data-start"], trace.attrs["data-end"]) == ("0", "52")
+        assert trace.find("div", class_="ch-legend") == [] and trace.find("path", class_="ch-all") == []
+        assert trace.one("div", class_="ch-strip").attrs["role"] == "slider"
+        assert trace.one("figcaption").text == "No chat was measured for this clip."
+
+    async def test_an_imported_clip_of_unknown_length_has_no_strip(self, service):
+        add_moment("channel_a", reason=view.IMPORT_REASON, clip_path="channel_a/import.mp4")
+
+        article = open_moment(await review(service))
+
+        assert article.find("figure", class_="trace") == []
+        assert len(article.find("video")) == 1
+
+
+class TestClipLength:
+    """Clips cut before their length was stored are measured when first opened."""
+
+    @pytest.mark.ffmpeg
+    async def test_a_clip_of_unknown_length_is_measured_once_and_remembered(self, service, ts_segments, monkeypatch):
+        moment_id = add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
+        clip = recorder.CLIPS_DIR / "channel_a" / "moment_1.mp4"
+        clip.parent.mkdir(parents=True)
+        clip.write_bytes(b"".join(segment.read_bytes() for segment in ts_segments[:3]))
+        probes = []
+        real_probe = recorder.probe_duration
+        monkeypatch.setattr(recorder, "probe_duration", lambda path: probes.append(path) or real_probe(path))
+
+        first = open_moment(await review(service))
+        again = open_moment(await review(service))
+
+        (row,) = service.rows("SELECT clip_duration, clip_start FROM moments WHERE id = ?", moment_id)
+        assert row["clip_duration"] == pytest.approx(3.0, abs=0.35) and row["clip_start"] is None
+        assert first.one("figure", class_="trace").attrs["data-clip-seconds"] == view.number_words(row["clip_duration"])
+        assert again.one("figure", class_="trace").attrs == first.one("figure", class_="trace").attrs
+        assert probes == [clip]
+
+    async def test_a_file_that_cannot_be_measured_is_shown_all_the_same(self, service):
+        moment_id = add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
+        clip = recorder.CLIPS_DIR / "channel_a" / "moment_1.mp4"
+        clip.parent.mkdir(parents=True)
+        clip.write_bytes(b"not really video")
+
+        article = open_moment(await review(service))
+
+        assert article.one("video").attrs["src"] == "/clips/channel_a/moment_1.mp4"
+        assert service.rows("SELECT clip_duration FROM moments WHERE id = ?", moment_id)[0][0] is None
+
+    async def test_a_length_that_is_stored_is_not_measured_again(self, service, monkeypatch):
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", clip_duration=38.0)
+        clip = recorder.CLIPS_DIR / "channel_a" / "moment_1.mp4"
+        clip.parent.mkdir(parents=True)
+        clip.write_bytes(b"not really video")
+        monkeypatch.setattr(recorder, "probe_duration", lambda path: pytest.fail("the clip was measured again"))
+
+        article = open_moment(await review(service))
+
+        assert article.one("figure", class_="trace").attrs["data-clip-seconds"] == "38"
+
+    async def test_a_clip_whose_file_is_gone_is_not_measured(self, service, monkeypatch):
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
+        monkeypatch.setattr(recorder, "probe_duration", lambda path: pytest.fail("there is no file to measure"))
+
+        assert opened(await review(service)) is not None
+
+    async def test_the_moment_served_on_its_own_measures_its_clip_too(self, service, monkeypatch):
+        moment_id = add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
+        clip = recorder.CLIPS_DIR / "channel_a" / "moment_1.mp4"
+        clip.parent.mkdir(parents=True)
+        clip.write_bytes(b"not really video")
+        monkeypatch.setattr(recorder, "probe_duration", lambda path: 12.5)
+
+        alone = await page_at(service, f"/dashboard/moments/{moment_id}")
+
+        assert alone.one("figure", class_="trace").attrs["data-clip-seconds"] == "12.5"
 
 
 class TestOpenMomentOnItsOwn:
@@ -581,9 +903,10 @@ class TestClips:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"not really video")
 
-    def footage(self, article: Element) -> list[tuple[str, str]]:
-        """(label, address) of everything the player offers to show."""
-        return [(link.text, link.attrs["href"]) for link in article.find("a", data_footage=True)]
+    def footage(self, article: Element) -> dict[str, str]:
+        """Addresses of the footage the player can show besides the clip."""
+        trace = article.one("figure", class_="trace").attrs
+        return {side: trace[f"data-{side}"] for side in ("before", "after") if f"data-{side}" in trace}
 
     async def test_a_moment_with_a_clip_embeds_it(self, service):
         add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
@@ -592,8 +915,7 @@ class TestClips:
 
         assert [video.attrs["src"] for video in article.find("video")] == ["/clips/channel_a/moment_1.mp4"]
         assert article.find("p", class_="no-clip") == []
-        # With nothing else to show, there is nothing to choose between.
-        assert self.footage(article) == []
+        assert self.footage(article) == {}
 
     async def test_a_clip_gets_its_controls(self, service):
         add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
@@ -602,7 +924,9 @@ class TestClips:
 
         labels = [button.attrs["aria-label"] for button in article.one("div", class_="ch-transport").find("button")]
         assert labels == ["Play", "Playback speed", "Mute", "Full screen"]
-        assert article.one("input", type="range").attrs["aria-label"] == "Position in the clip"
+        # There is no seek bar: the strip under the clip is the scrubber.
+        assert article.find("input") == []
+        assert article.one("div", role="slider").attrs["aria-label"] == "Position in the footage"
 
     async def test_a_fresh_moment_without_a_clip_says_one_is_on_its_way(self, service):
         add_moment(detected_at=datetime.now(timezone.utc))
@@ -624,30 +948,34 @@ class TestClips:
     async def test_context_footage_is_offered_only_where_the_files_exist(self, service):
         both = add_moment("channel_a", detected_at=T0, clip_path="channel_a/moment_1.mp4")
         after_only = add_moment("channel_a", detected_at=T0 + minutes(1), clip_path="channel_a/moment_2.mp4")
+        neither = add_moment("channel_a", detected_at=T0 + minutes(2), clip_path="channel_a/moment_3.mp4")
         self.clip_file("channel_a/moment_1_before.mp4")
         self.clip_file("channel_a/moment_1_after.mp4")
         self.clip_file("channel_a/moment_2_after.mp4")
-        before = f"{recorder.CONTEXT_BEFORE_SECONDS} s before"
-        after = f"{recorder.CONTEXT_AFTER_SECONDS} s after"
 
-        assert self.footage(open_moment(await review(service, moment=both))) == [
-            (before, "/clips/channel_a/moment_1_before.mp4"),
-            ("Clip", "/clips/channel_a/moment_1.mp4"),
-            (after, "/clips/channel_a/moment_1_after.mp4"),
-        ]
-        assert self.footage(open_moment(await review(service, moment=after_only))) == [
-            ("Clip", "/clips/channel_a/moment_2.mp4"),
-            (after, "/clips/channel_a/moment_2_after.mp4"),
-        ]
+        assert self.footage(open_moment(await review(service, moment=both))) == {
+            "before": "/clips/channel_a/moment_1_before.mp4",
+            "after": "/clips/channel_a/moment_1_after.mp4",
+        }
+        assert self.footage(open_moment(await review(service, moment=after_only))) == {
+            "after": "/clips/channel_a/moment_2_after.mp4"
+        }
+        assert self.footage(open_moment(await review(service, moment=neither))) == {}
 
-    async def test_the_clip_is_what_the_player_starts_on(self, service):
-        add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
+    async def test_the_player_starts_on_the_clip_at_its_first_frame(self, service):
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **clip_cut_at(T0, seconds=40))
         self.clip_file("channel_a/moment_1_before.mp4")
 
         article = open_moment(await review(service))
 
-        assert [link.text for link in article.find("a", data_footage=True, aria_current="true")] == ["Clip"]
         assert article.one("video").attrs["src"] == "/clips/channel_a/moment_1.mp4"
+        strip = article.one("div", role="slider")
+        # A 40 second clip on a strip with context either side: the playhead
+        # starts where the clip does, not at the strip's left edge.
+        shown = recorder.CONTEXT_BEFORE_SECONDS + 40 + recorder.CONTEXT_AFTER_SECONDS
+        expected = view.number_words(recorder.CONTEXT_BEFORE_SECONDS / shown * 100, 3)
+        assert strip.one("div", class_="ch-playhead").attrs["style"] == f"left: {expected}%"
+        assert strip.one("span", class_="ch-flag").text == "0:00"
 
     async def test_a_file_name_is_made_safe_for_an_address(self, service):
         # Imported clips keep the name of the file they came from.
@@ -723,13 +1051,30 @@ class TestUntrustedText:
         assert len(page.find("script")) == 1  # the page's own
 
     async def test_an_emote_name_is_escaped_too(self, service):
+        payload = '"><script>alert(1)</script><img src=x onerror=alert(1)>'
         add_moment("channel_a", detected_at=T0)
-        add_chat("channel_a", "mallory", "[emote:1:<img src=x onerror=alert(1)>]", T0 - timedelta(seconds=2))
+        add_chat("channel_a", "mallory", f"[emote:1:{payload}]", T0 - timedelta(seconds=2))
 
         article = open_moment(await review(service))
 
-        assert article.one("span", class_="ch-emote-name").text == "<img src=x onerror=alert(1)>"
-        assert article.find("img") == []
+        # The name is the picture's alternative text and nothing else: one
+        # picture, from Kick's address, with no attribute of the name's making.
+        (emote,) = article.find("img")
+        assert emote.attrs["alt"] == payload and emote.attrs["title"] == payload
+        assert emote.attrs["src"] == "https://files.kick.com/emotes/1/fullsize"
+        assert set(emote.attrs) == {"class", "src", "alt", "title", "width", "height", "loading"}
+        assert article.find("script") == []
+
+    async def test_what_chat_said_most_is_escaped_in_the_queue(self, service):
+        add_moment("channel_a", detected_at=T0)
+        for second in (2, 3, 4):
+            add_chat("channel_a", f"mallory{second}", "<u>W</u>", T0 - timedelta(seconds=second))
+
+        page = await review(service)
+
+        (row,) = queue_rows(page)
+        assert row.one("span", class_="ch-what").text == f"<u>W</u> {chat_trace.TIMES_SIGN}3, no clip"
+        assert page.find("u") == []
 
     async def test_notes_cannot_break_out_of_their_text_area(self, service):
         add_moment(notes='</textarea><script>alert("xss")</script>')

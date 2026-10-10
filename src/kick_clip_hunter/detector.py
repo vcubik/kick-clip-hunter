@@ -63,6 +63,7 @@ keep being tuned once we've watched detections against real streams.
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 SHORT_WINDOW_SECONDS = 10
@@ -317,6 +318,30 @@ def classify_message(content: str, channel_keyword_weights: dict[str, float] | N
     matched_weights = [weight for keyword, weight in (channel_keyword_weights or {}).items() if keyword in lowered]
     mention_weight = max(matched_weights) if matched_weights else 0.0
     return laugh_weight, mention_weight
+
+
+def laugh_emote_names(emote_names: Iterable[str]) -> list[str]:
+    """Those of a channel's 7TV emote names (the keys of its keyword
+    weights, lowercased) that signal laughing."""
+    return [name for name in emote_names if is_laugh_emote_name(name)]
+
+
+def is_laughing(content: str, laugh_names: Iterable[str] = ()) -> bool:
+    """Whether a chat message is someone laughing, by any of the signs the
+    detector listens for: the typed laugh, a native laugh emote, or one of
+    the channel's laugh emotes named in the text (`laugh_names`, see
+    laugh_emote_names).
+
+    Unlike the weights above this is a plain yes or no. It is for showing
+    what chat was doing - the laughing line on the dashboard's trace - not
+    for deciding whether something was a moment.
+    """
+    if LAUGH_WEAK_PATTERN.search(content) or LAUGH_STRONG_PATTERN.search(content):
+        return True
+    if any(is_laugh_emote_name(name) for name in NATIVE_EMOTE_TOKEN_PATTERN.findall(content)):
+        return True
+    lowered = content.lower()
+    return any(name in lowered for name in laugh_names)
 
 
 def _reaction_weight(entries: list, index: int) -> float:
