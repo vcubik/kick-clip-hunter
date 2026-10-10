@@ -21,6 +21,7 @@ from . import (
     audio_events,
     chat_identity,
     chat_trace,
+    chat_video,
     dashboard_view,
     detector,
     frame_encoder,
@@ -747,6 +748,51 @@ def _clip_url(clip_path: str) -> str:
     return f"/clips/{quote(clip_path)}"
 
 
+# Chat videos being rendered right now, and the ones whose rendering
+# failed, by moment id. Any other moment's is told from whether its file is
+# there, so a restart forgets nothing that matters.
+_chat_videos: dict[int, str] = {}
+
+
+def _chat_video_path(clip_path: str) -> Path:
+    """Where a clip's chat video is kept, like the clip's own path: under
+    CLIPS_DIR."""
+    clip = Path(clip_path)
+    return clip.with_name(chat_video.video_name(clip.name))
+
+
+def _chat_video(row) -> dict:
+    """Where the chat video of a moment that has a clip stands: being
+    rendered, there to download, failed, or never asked for."""
+    state = _chat_videos.get(row["id"])
+    url = None
+    if state is None:
+        relative = _chat_video_path(row["clip_path"])
+        file = CLIPS_DIR / relative
+        if file.exists():
+            state = dashboard_view.CHAT_VIDEO_READY
+            # Rendered again, it is a different file under the same name.
+            url = f"{_clip_url(relative.as_posix())}?v={int(file.stat().st_mtime)}"
+        else:
+            state = dashboard_view.CHAT_VIDEO_NONE
+    return {"state": state, "url": url, "words": dashboard_view.chat_video_words(state)}
+
+
+async def _render_chat_video_background(
+    moment_id: int, channel: str, lines: list[dict], duration: float, output: Path
+) -> None:
+    # Drives a browser and an encoder for about twice the clip's length -
+    # off the event loop, and as a tracked task so a shutdown waits for it.
+    try:
+        frames = await asyncio.to_thread(chat_video.render, lines, duration, output)
+    except Exception:
+        logger.exception("[%s] rendering the chat video failed for moment %d", channel, moment_id)
+        _chat_videos[moment_id] = dashboard_view.CHAT_VIDEO_FAILED
+        return
+    _chat_videos.pop(moment_id, None)
+    logger.info("[%s] chat video saved for moment %d: %s (%d frames)", channel, moment_id, output.name, frames)
+
+
 def _moment_window(row) -> tuple[datetime, datetime]:
     """When a moment's reaction ran, on chat's clock."""
     return datetime.fromisoformat(row["window_start"]), datetime.fromisoformat(row["window_end"])
@@ -871,6 +917,9 @@ def _open_moment(conn, row, today: date) -> dict:
             if row["clip_path"] and strip and strip["has_chat"]
             else None
         ),
+        # The chat as a video to lay over the clip: where there is a clip of
+        # known length and chat to put in it.
+        "chat_video": _chat_video(row) if row["clip_path"] and row["clip_duration"] and chat else None,
     }
 
 
@@ -1101,6 +1150,54 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     finally:
         conn.close()
     return {"moment_id": moment_id, "rating": value or None}
+
+
+@app.post("/moments/{moment_id}/chat_video")
+async def render_chat_video(moment_id: int):
+    """Starts rendering a moment's chat as a video with a transparent
+    background (see chat_video.py). It is made when asked for - it takes a
+    while and most clips never need one - and again when asked again, with
+    chat placed as the channel's chat delay now has it."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="the service is shutting down")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        row = await _with_clip_length(conn, row)
+        if not row["clip_path"] or not row["clip_duration"]:
+            raise HTTPException(status_code=409, detail="the moment has no clip to render chat for")
+        _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
+    finally:
+        conn.close()
+    if not lines:
+        raise HTTPException(status_code=409, detail="no chat was stored for this moment")
+
+    if _chat_videos.get(moment_id) != dashboard_view.CHAT_VIDEO_RENDERING:
+        _chat_videos[moment_id] = dashboard_view.CHAT_VIDEO_RENDERING
+        output = CLIPS_DIR / _chat_video_path(row["clip_path"])
+        _track_task(
+            _render_chat_video_background(moment_id, row["channel_slug"], lines, row["clip_duration"], output)
+        )
+    return {"moment_id": moment_id, "state": dashboard_view.CHAT_VIDEO_RENDERING}
+
+
+@app.get("/moments/{moment_id}/chat_video")
+async def chat_video_state(moment_id: int):
+    """Where a moment's chat video stands - what the page asks while one
+    is being rendered."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    if not row["clip_path"]:
+        return {"moment_id": moment_id, "state": dashboard_view.CHAT_VIDEO_NONE, "url": None}
+    video = _chat_video(row)
+    return {"moment_id": moment_id, "state": video["state"], "url": video["url"]}
 
 
 @app.post("/moments/{moment_id}/stream_type")

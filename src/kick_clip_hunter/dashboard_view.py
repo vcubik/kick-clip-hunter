@@ -154,6 +154,24 @@ def stream_time_words(seconds: int | None) -> str | None:
     return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
+# Where a moment's chat video stands (see chat_video.py), and what the
+# page says about each.
+CHAT_VIDEO_NONE = "none"
+CHAT_VIDEO_RENDERING = "rendering"
+CHAT_VIDEO_READY = "ready"
+CHAT_VIDEO_FAILED = "failed"
+CHAT_VIDEO_WORDS = {
+    CHAT_VIDEO_NONE: "Chat as a video to lay over the clip",
+    CHAT_VIDEO_RENDERING: "Rendering the chat video. That takes a minute or two.",
+    CHAT_VIDEO_READY: "Chat video is ready",
+    CHAT_VIDEO_FAILED: "The chat video could not be rendered. The server log says why.",
+}
+
+
+def chat_video_words(state: str) -> str:
+    return CHAT_VIDEO_WORDS[state]
+
+
 def rating_words(rating: int | None) -> str:
     return f"rated {rating} of 5" if rating else "not rated yet"
 

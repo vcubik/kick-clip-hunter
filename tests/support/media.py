@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import struct
 import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -77,6 +79,34 @@ def probe(path: Path) -> dict:
         "duration": float(data["format"]["duration"]),
         "streams": sorted(stream["codec_type"] for stream in data["streams"]),
     }
+
+
+def video_stream(path: Path) -> dict:
+    """What ffprobe says of a file's video stream: codec, profile, pixel
+    format, frame rate, frame count and duration, as it prints them."""
+    # fmt: off
+    result = subprocess.run(
+        [
+            FFPROBE, "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,profile,pix_fmt,r_frame_rate,nb_frames,duration",
+            "-of", "json", str(path),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    # fmt: on
+    (stream,) = json.loads(result.stdout)["streams"]
+    return stream
+
+
+def png_frame(width: int = 16, height: int = 16, rgba: tuple[int, int, int, int] = (255, 255, 255, 255)) -> bytes:
+    """A PNG of one colour, see-through to whatever degree its alpha says."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    rows = (b"\x00" + bytes(rgba) * width) * height
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
 def decodes_cleanly(path: Path) -> bool:

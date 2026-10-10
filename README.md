@@ -115,6 +115,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
+| `chat_video.py` | A moment's chat rendered as a transparent video (ProRes 4444) to lay over the clip in an editor. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
 | `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps. |
 

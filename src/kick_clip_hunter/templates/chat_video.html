@@ -1,0 +1,20 @@
+{#- The page a chat video is made from (chat_video.py): every chat line of
+    the clip, none of them shown until the script is told what second of
+    the clip it is. Nothing but chat on it, and no background. -#}
+{% from "_chat_line.html" import chat_line with context -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat</title>
+<link rel="stylesheet" href="/static/chat_video.css">
+<script src="/static/chat_video.js" defer></script>
+</head>
+<body>
+<div class="chat-lines" data-chat>
+{% for line in lines %}
+{{ chat_line(line, lazy=false) }}
+{% endfor %}
+</div>
+</body>
+</html>
