@@ -440,10 +440,12 @@ async def _create_clip_background(
     window_end: datetime,
     post_roll_seconds: int = recorder.POST_ROLL_SECONDS,
 ) -> None:
-    # The post-roll footage doesn't exist yet at the instant a moment closes
-    # - wait for it to actually be published and downloaded before looking
-    # for it, or the clip comes out truncated right at the exciting part.
-    await asyncio.sleep(post_roll_seconds + recorder.CLIP_SETTLE_SECONDS)
+    # Neither the post-roll footage nor the context that goes into the file
+    # after the clip exists yet at the instant a moment closes - wait for it
+    # to actually be published and downloaded before looking for it, or the
+    # file comes out truncated: without its context, or cut off right at the
+    # exciting part.
+    await asyncio.sleep(post_roll_seconds + recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS)
     try:
         clip = await recording_manager.create_clip_for_moment(
             channel, window_start, window_end, f"moment_{moment_id}.mp4",
@@ -463,58 +465,53 @@ async def _create_clip_background(
     conn = get_connection()
     try:
         # Stored with the stretch of the broadcast it really holds, which is
-        # what lets the dashboard line chat up with the picture.
+        # what lets the dashboard line chat up with the picture, and with how
+        # much footage the file has either side of it.
         update_moment_clip_path(
             conn,
             moment_id,
             clip_path.relative_to(CLIPS_DIR).as_posix(),
             clip_start=clip.started_at.isoformat(),
             clip_duration=clip.duration,
+            context_before=clip.context_before,
+            context_after=clip.context_after,
         )
     finally:
         conn.close()
-    logger.info("[%s] clip saved for moment %d: %s", channel, moment_id, clip_path)
-    _track_task(
-        _save_context_clips_background(moment_id, channel, window_start, window_end, clip_path.name, post_roll_seconds)
+    logger.info(
+        "[%s] clip saved for moment %d: %s (%.0f s, with %.0f s before it and %.0f s after)",
+        channel, moment_id, clip_path, clip.duration, clip.context_before, clip.context_after,
     )
+    extent = (clip.context_before, clip.duration, clip.context_after)
     if _flags.get("transcript_enabled"):
-        _track_task(_transcribe_clip_background(moment_id, channel, clip_path))
+        _track_task(_transcribe_clip_background(moment_id, channel, clip_path, extent))
     if _flags.get("audio_events_enabled"):
-        _track_task(_detect_audio_events_background(moment_id, channel, clip_path))
+        _track_task(_detect_audio_events_background(moment_id, channel, clip_path, extent))
     if _flags.get("frames_enabled"):
-        _track_task(_encode_frames_background(moment_id, channel, clip_path))
+        _track_task(_encode_frames_background(moment_id, channel, clip_path, extent))
     if _flags.get("sound_events_enabled"):
-        _track_task(_tag_sound_events_background(moment_id, channel, clip_path))
+        _track_task(_tag_sound_events_background(moment_id, channel, clip_path, extent))
 
 
-async def _save_context_clips_background(
-    moment_id: int,
-    channel: str,
-    window_start: datetime,
-    window_end: datetime,
-    clip_name: str,
-    post_roll_seconds: int,
-) -> None:
-    # The clip itself is kept short; what led up to it and what followed are
-    # saved as separate files next to it. The "after" part hasn't been
-    # broadcast yet when the clip is cut, so wait for it.
-    await asyncio.sleep(recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS)
-    try:
-        saved = await recording_manager.create_context_clips_for_moment(
-            channel, window_start, window_end, clip_name, post_roll_seconds=post_roll_seconds
-        )
-    except Exception:
-        logger.exception("[%s] context clips failed for moment %d", channel, moment_id)
-        return
-    logger.info("[%s] context clips saved for moment %d: %s", channel, moment_id, ", ".join(sorted(saved)) or "none")
+# Where a clip lies in its file: seconds of context before it, its own
+# length, seconds of context after it.
+ClipExtent = tuple[float, float, float]
 
 
-async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path) -> None:
+def _on_clip_alone(analyse, clip_path: Path, extent: ClipExtent):
+    """Runs an analysis step on the clip itself. Its file also holds the
+    footage either side of it, and what a step finds is stored as a
+    description of the moment, not of the minute around it."""
+    with recorder.clip_alone(clip_path, *extent) as alone:
+        return analyse(alone)
+
+
+async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: Path, extent: ClipExtent) -> None:
     # CPU-bound (faster-whisper) - runs off the event loop via to_thread, and
     # as its own task so a slow transcription never delays the clip being
     # marked ready on the dashboard.
     try:
-        transcript = await asyncio.to_thread(transcriber.transcribe_clip, clip_path)
+        transcript = await asyncio.to_thread(_on_clip_alone, transcriber.transcribe_clip, clip_path, extent)
     except Exception:
         logger.exception("[%s] transcription failed for moment %d", channel, moment_id)
         return
@@ -527,12 +524,14 @@ async def _transcribe_clip_background(moment_id: int, channel: str, clip_path: P
     logger.info("[%s] transcript saved for moment %d (%d chars)", channel, moment_id, len(transcript))
 
 
-async def _detect_audio_events_background(moment_id: int, channel: str, clip_path: Path) -> None:
+async def _detect_audio_events_background(
+    moment_id: int, channel: str, clip_path: Path, extent: ClipExtent
+) -> None:
     # CPU-bound (SenseVoice via funasr) - same to_thread/own-task treatment
     # as transcription, and independent of it: one failing never blocks the
     # other or the clip being marked ready on the dashboard.
     try:
-        tags = await asyncio.to_thread(audio_events.detect_audio_events, clip_path)
+        tags = await asyncio.to_thread(_on_clip_alone, audio_events.detect_audio_events, clip_path, extent)
     except Exception:
         logger.exception("[%s] audio event detection failed for moment %d", channel, moment_id)
         return
@@ -545,11 +544,11 @@ async def _detect_audio_events_background(moment_id: int, channel: str, clip_pat
     logger.info("[%s] audio events saved for moment %d: %s", channel, moment_id, tags)
 
 
-async def _encode_frames_background(moment_id: int, channel: str, clip_path: Path) -> None:
+async def _encode_frames_background(moment_id: int, channel: str, clip_path: Path, extent: ClipExtent) -> None:
     # CPU-bound (ffmpeg frame extraction + SigLIP2) - same to_thread/own-task
     # treatment as transcription.
     try:
-        embedding = await asyncio.to_thread(frame_encoder.encode_clip, clip_path)
+        embedding = await asyncio.to_thread(_on_clip_alone, frame_encoder.encode_clip, clip_path, extent)
     except Exception:
         logger.exception("[%s] frame encoding failed for moment %d", channel, moment_id)
         return
@@ -565,12 +564,14 @@ async def _encode_frames_background(moment_id: int, channel: str, clip_path: Pat
     logger.info("[%s] frame embedding saved for moment %d (%d bytes)", channel, moment_id, len(embedding))
 
 
-async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: Path) -> None:
+async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: Path, extent: ClipExtent) -> None:
     # CPU-bound (ffmpeg audio extraction + PANNs) - same to_thread/own-task
     # treatment as transcription, and independent of audio_events.py's
     # SenseVoice tagging: one failing never blocks the other.
     try:
-        tags, embedding = await asyncio.to_thread(sound_events.tag_sound_events, clip_path)
+        tags, embedding = await asyncio.to_thread(
+            _on_clip_alone, sound_events.tag_sound_events, clip_path, extent
+        )
     except Exception:
         logger.exception("[%s] sound event tagging failed for moment %d", channel, moment_id)
         return
@@ -701,9 +702,10 @@ ANALYSIS_PENDING_SECONDS = 600
 ANALYSIS_TEXT_RESULTS = ("transcript", "audio_events", "sound_events")
 # How long after detection a moment without a clip is still shown as having
 # one on the way. A moment stays open for up to MOMENT_SESSION_MAX_SECONDS,
-# then waits for its post-roll to be broadcast, and a cut that has to come
-# from the VOD waits for that to be written; past this, no clip is coming.
-CLIP_PENDING_SECONDS = 300
+# then waits for its post-roll and the context after it to be broadcast, and
+# a cut that has to come from the VOD waits for that to be written; past
+# this, no clip is coming.
+CLIP_PENDING_SECONDS = 360
 # The most chat lines read for one moment: for the trace and the replay
 # beside an open clip, and for a queue row's spark. Two minutes of a chat
 # posting ten messages a second stays under the first.
@@ -744,18 +746,6 @@ def _clip_state(row) -> str:
 
 def _clip_url(clip_path: str) -> str:
     return f"/clips/{quote(clip_path)}"
-
-
-def _context_clip_urls(clip_path: str | None) -> dict[str, str]:
-    """URLs of whichever before/after context clips exist next to a clip."""
-    if not clip_path:
-        return {}
-    folder = Path(clip_path).parent
-    return {
-        side: _clip_url((folder / name).as_posix())
-        for side, name in recorder.context_clip_names(Path(clip_path).name).items()
-        if (CLIPS_DIR / folder / name).exists()
-    }
 
 
 # Chat videos being rendered right now, and the ones whose rendering
@@ -898,8 +888,9 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"]) if row["clip_path"] else None,
         "clip_state": _clip_state(row),
-        # The footage saved just before and just after the clip, where there is any.
-        "footage": _context_clip_urls(row["clip_path"]),
+        # How far into its file the clip begins: the footage that led up to
+        # it comes first. The page starts the player there.
+        "clip_lead": dashboard_view.number_words(row["context_before"] or 0.0, 3),
         "strip": strip,
         "summary": dashboard_view.summary_words(row),
         "rating": row["rating"],

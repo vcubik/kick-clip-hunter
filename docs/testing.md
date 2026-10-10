@@ -127,8 +127,11 @@ ticked (which opens a browser in production) when the API says it is live and it
 
 **6. Clip cutting** - `integration/test_clip_cutting.py`
 With the real ffmpeg: is the clip the right length, playable, with video and sound? Is a clip that
-straddles a break cut from its longer side instead of stitched across it? Do the before/after context
-clips abut the clip with nothing repeated and nothing missing?
+straddles a break cut from its longer side instead of stitched across it? Is the footage before and
+after the clip in the same file, with nothing repeated and nothing missing, and left out where it lies
+beyond a break? Can the clip be cut back out of its file for the analysis steps, starting on its own
+first picture? Do an older moment's separate context clips join into the file that would be cut today
+(with the scripts that use this in `integration/test_clip_scripts.py`)?
 
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
@@ -142,7 +145,7 @@ top labels above the confidence floor)?
 `unit/test_dashboard_view.py`, `unit/test_chat_trace.py`
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
-the right one open, with its chat, clip and context footage? Is chat put on the clip's own time axis
+the right one open, with its chat and its clip, started where the clip begins in its file? Is chat put on the clip's own time axis
 correctly - a stored clip start shifted by the channel's chat delay, an older clip placed by its
 length, a missing clip stood in for by its window - and are the trace, the queue's sparks and "what
 chat said most" drawn from that as intended? Does changing a channel's chat delay move its chat, and
@@ -161,7 +164,8 @@ only that (refreshing emotes must not subscribe a second time)?
 
 **10. The whole thing** - `e2e/test_webhook_to_clip.py`
 A stream is recorded from an HLS server, chat erupts through signed webhooks, and the resulting clip -
-with its context clips - is on the dashboard, served, playable and rateable. Once more with an ad
+one file, with its context around it - is on the dashboard, served, playable and rateable, and an
+analysis step switched on for it is handed the clip alone. Once more with an ad
 break right before the reaction, and once with no recording at all.
 
 **11. The suite itself** - `unit/test_suite_isolation.py`
@@ -256,11 +260,14 @@ Run this on a live channel after changing any of the above, or the code right ne
 4. **Check recording.** A browser window opens briefly, then the log says `recording started`.
    `data/recordings/<channel>/` fills with `.ts` segments and stays at roughly ten minutes' worth.
 5. **Wait for a moment.** The log shows, in order: `MOMENT detected`, `moment N closed after Xs
-   reaction`, `clip saved for moment N`, `context clips saved for moment N: after, before`.
+   reaction`, and about a minute and a half later `clip saved for moment N: ... (35 s, with 30 s
+   before it and 60 s after)` - one file, cut once the footage after the clip has been broadcast.
 6. **Review it.** Within half a minute the queue announces the new moment. Opened, it has a clip
-   that plays with sound and starts before the reaction, and under it the trace of chat with the
-   moment marked. Clicking on the trace moves the clip there, and into the footage before or after
-   it at either end; chat lines appear beside the clip as it reaches them. This is the check that
+   that plays with sound and starts before the reaction - at 0:00, not in the footage the file
+   opens with - and under it the trace of chat with the moment marked. Clicking on the trace moves
+   the clip there, and into the footage before or after it at either end (shown as minus and plus
+   times); played on, the clip runs into the footage after it, and played again from the very end
+   it starts over at the clip. Chat lines appear beside the clip as it reaches them. This is the check that
    the picture and chat line up: the laughing on the trace should start a few seconds after what
    caused it on screen. If it is clearly off, move the channel's chat with Earlier/Later under the
    chat lines - the trace and the lines follow while the clip plays on, and the setting is still
@@ -273,7 +280,7 @@ Run this on a live channel after changing any of the above, or the code right ne
 8. **If the stream runs an ad:** the log shows `stream discontinuity` with `ad=True`, a playlist
    is saved under `data/hls_debug/`, and segments keep arriving afterwards. The recording's start
    line says whether a VOD was found; if it was, a moment right after the ad logs `footage from
-   the VOD used` and neither its clip nor its "before" context shows the ad.
+   the VOD used` and nowhere in its file - not in the clip, not in the footage before it - is the ad.
 9. **Render a chat video.** Under the chat of a moment with a clip, press Render. The row says it
    is rendering and, a minute or two later and without a reload, offers a download; the log says
    `chat video saved for moment N`. Laid over the clip in an editor (or with ffmpeg's `overlay`

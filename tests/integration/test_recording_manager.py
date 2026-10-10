@@ -293,19 +293,3 @@ class TestClipRequests:
 
         assert path == Path("data/clips/channel_a/moment_1.mp4")
         assert calls == [("channel_a", self.START, self.END, "moment_1.mp4", PRE_ROLL_SECONDS, 7)]
-
-    async def test_context_clips_are_cut_with_the_same_arguments(self, monkeypatch):
-        calls = []
-
-        def extract_context_clips(recorder, start, end, name, pre_roll, post_roll):
-            calls.append((recorder.channel_slug, start, end, name, pre_roll, post_roll))
-            return {"before": Path("before.mp4")}
-
-        monkeypatch.setattr(recording_manager, "extract_context_clips", extract_context_clips)
-
-        saved = await recording_manager.create_context_clips_for_moment(
-            "channel_a", self.START, self.END, "moment_1.mp4", post_roll_seconds=7
-        )
-
-        assert saved == {"before": Path("before.mp4")}
-        assert calls == [("channel_a", self.START, self.END, "moment_1.mp4", PRE_ROLL_SECONDS, 7)]

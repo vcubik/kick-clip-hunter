@@ -66,13 +66,23 @@ def record_live_stream(hls, recording, ts_segments, *, break_at: int | None = No
 
 
 async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
-    service, hls, recording, ts_segments, scaled_down_clip_geometry
+    service, hls, recording, ts_segments, scaled_down_clip_geometry, monkeypatch
 ):
     # A watched channel is live, and its stream is being recorded.
     service.watch(CHANNEL, live_for_seconds=1800)
     channel_recorder = record_live_stream(hls, recording, ts_segments)
     assert len(channel_recorder._stored_segments()) == 40
     service.warm_up(CHANNEL)
+
+    # One analysis step is switched on, to see what it is handed.
+    analysed: list[float] = []
+
+    def transcribe(clip_path) -> str:
+        analysed.append(probe(clip_path)["duration"])
+        return "to je konec"
+
+    monkeypatch.setattr(service.main.transcriber, "transcribe_clip", transcribe)
+    await service.client.post("/settings/transcript?enabled=1")
 
     # Chat erupts: signed webhook deliveries, one per message.
     await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
@@ -82,43 +92,46 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert moment["reason"] == "laugh"
     assert moment["stream_elapsed_seconds"] == pytest.approx(1800, abs=10)
 
-    # ...and once the reaction has died down, its clip and context are cut.
+    # ...and once the reaction has died down and what followed it has been
+    # broadcast, its clip is cut: one file, the clip with its context.
     await service.settle()
     (moment,) = service.moments()
     clip_name = f"moment_{moment['id']}.mp4"
     assert moment["clip_path"] == f"{CHANNEL}/{clip_name}"
 
     clip = recorder.CLIPS_DIR / CHANNEL / clip_name
+    assert [path.name for path in clip.parent.iterdir()] == [clip_name]
     details = probe(clip)
     assert details["streams"] == ["audio", "video"]
-    # pre-roll + playback delay + the 10s detection window + (post-roll - delay),
-    # in whole one-second segments.
-    expected = PRE_ROLL + DELAY + detector.SHORT_WINDOW_SECONDS + (POST_ROLL - DELAY)
-    assert expected - 1 <= details["duration"] <= expected + 2.5
     assert decodes_cleanly(clip)
+    # The clip itself: pre-roll + playback delay + the 10s detection window +
+    # (post-roll - delay), in whole one-second segments.
+    expected = PRE_ROLL + DELAY + detector.SHORT_WINDOW_SECONDS + (POST_ROLL - DELAY)
+    assert expected - 1 <= moment["clip_duration"] <= expected + 2.5
+    # Around it in the file, the footage that led up to it and what followed.
+    assert (moment["context_before"], moment["context_after"]) == (CONTEXT_BEFORE, CONTEXT_AFTER)
+    assert details["duration"] == pytest.approx(CONTEXT_BEFORE + moment["clip_duration"] + CONTEXT_AFTER, abs=0.35)
 
-    before, after = (clip.with_name(name) for name in recorder.context_clip_names(clip_name).values())
-    assert probe(before)["duration"] == pytest.approx(CONTEXT_BEFORE, abs=0.5)
-    assert probe(after)["duration"] == pytest.approx(CONTEXT_AFTER, abs=0.5)
+    # The analysis step was handed the clip, not everything in its file.
+    assert analysed == [pytest.approx(moment["clip_duration"], abs=0.35)]
+    assert moment["transcript"] == "to je konec"
 
     # The dashboard has the moment waiting in its queue and open beside it,
-    # with its chat, its clip and the footage around it.
+    # with its chat and its clip, which the player starts at - past the
+    # footage that the file opens with.
     page = parse((await service.client.get("/dashboard")).text)
     (row,) = page.find("a", class_="ch-row")
     assert row.attrs["data-moment"] == str(moment["id"])
     article = page.one("article", class_="moment")
     assert article.one("h1").text == CHANNEL
-    assert article.one("video").attrs["src"] == f"/clips/{CHANNEL}/{clip_name}"
+    video = article.one("video")
+    assert video.attrs["src"] == f"/clips/{CHANNEL}/{clip_name}#t={CONTEXT_BEFORE}"
+    assert video.attrs["data-lead"] == str(CONTEXT_BEFORE)
     trace = article.one("figure", class_="trace")
-    assert (trace.attrs["data-before"], trace.attrs["data-after"]) == (
-        f"/clips/{CHANNEL}/moment_{moment['id']}_before.mp4",
-        f"/clips/{CHANNEL}/moment_{moment['id']}_after.mp4",
-    )
 
-    # The clip was stored with the stretch of the broadcast it holds, which
-    # is the file's own length - and that puts the laughing where it belongs
-    # on the strip under it: inside the clip, after the pre-roll.
-    assert moment["clip_duration"] == pytest.approx(details["duration"], abs=0.35)
+    # The clip was stored with the stretch of the broadcast it holds - and
+    # that puts the laughing where it belongs on the strip under it: inside
+    # the clip, after the pre-roll.
     assert float(trace.attrs["data-clip-seconds"]) == moment["clip_duration"]
     laughing = [line for line in article.find("p", class_="ch-chat") if line.text == "fan0 xDDD"]
     assert len(laughing) == 1 and "is-moment" in laughing[0].classes
@@ -127,7 +140,8 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert sum(map(int, counted)) == detector._dynamic_min_reaction_unique(10)
     assert (await service.client.get("/moments/status")).json() == {"moments": 1, "clips": 1}
 
-    # The clip the page points at is the file that was cut.
+    # The clip the page points at is the file that was cut. (Where in it
+    # to start is the browser's business, not the server's.)
     served = await service.client.get(f"/clips/{CHANNEL}/{clip_name}")
     assert served.status_code == 200
     assert served.content == clip.read_bytes()

@@ -38,6 +38,8 @@ def moment_row(**overrides) -> dict:
         "window_end": chat_at(30).isoformat(),
         "clip_start": None,
         "clip_duration": None,
+        "context_before": None,
+        "context_after": None,
     }
     values.update(overrides)
     return values
@@ -98,6 +100,32 @@ class TestWhereAClipSitsAgainstChat:
         timeline = timeline_of(moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0))
 
         assert (timeline.start, timeline.end, timeline.seconds) == (-30, 98.0, 128.0)
+
+    def test_a_file_that_holds_more_footage_than_that_is_covered_to_its_ends(self):
+        # Whole segments: the file has a little more than was asked for.
+        row = moment_row(
+            clip_start=CLIP_START.isoformat(), clip_duration=38.0, context_before=32.5, context_after=61.25
+        )
+
+        timeline = timeline_of(row)
+
+        assert (timeline.start, timeline.end) == (-32.5, 38.0 + 61.25)
+        assert timeline.clip_seconds == 38.0
+
+    def test_a_file_that_holds_less_still_has_the_usual_stretch_of_chat_around_it(self):
+        row = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0, context_before=0.0, context_after=12.0)
+
+        timeline = timeline_of(row)
+
+        assert (timeline.start, timeline.end) == (-30, 98.0)
+
+    def test_where_the_clip_sits_against_chat_does_not_depend_on_the_footage_around_it(self):
+        alone = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0)
+        with_context = {**alone, "context_before": 32.5, "context_after": 61.25}
+
+        when = CLIP_START + timedelta(seconds=17)
+
+        assert timeline_of(with_context).at(when) == timeline_of(alone).at(when)
 
     def test_clip_time_counts_from_the_clips_first_frame(self):
         assert TIMELINE.at(chat_at(0)) == 0

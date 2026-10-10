@@ -24,8 +24,8 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   ten-minute buffer by downloading the stream's own HLS segments, which keeps working through ad
   breaks and other mid-stream discontinuities.
 - **Cuts the clip.** When a moment fires, a clip of about 35 seconds is cut around it - longer if
-  new people keep joining the reaction - and the 30 seconds before and 60 seconds after are saved
-  next to it as context.
+  new people keep joining the reaction - into one video file that also holds the 30 seconds before
+  it and the 60 seconds after, as context.
 - **Lets you review.** The dashboard queues the moments that are not rated yet and opens one at a
   time: the clip, a trace of what chat did around it - which doubles as the scrubber - the chat
   itself replayed in step with the picture, and a 1-5 rating, tags and a note, all reachable from
@@ -88,6 +88,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |
+| `join_context_clips.py` | One-off: join older moments' separate context clips into the clip's file. |
 | `backfill_taste.py` | Run the clip analysis steps for clips that are missing them. |
 | `create_clip.py <slug>` | Publish an official Kick clip of a channel's current stream. |
 | `check.py` | Lint, test formatting and the test suite - what CI runs. |

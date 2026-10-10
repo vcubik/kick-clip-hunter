@@ -1233,19 +1233,15 @@ class TestClips:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"not really video")
 
-    def footage(self, article: Element) -> dict[str, str]:
-        """Addresses of the footage the player can show besides the clip."""
-        trace = article.one("figure", class_="trace").attrs
-        return {side: trace[f"data-{side}"] for side in ("before", "after") if f"data-{side}" in trace}
-
     async def test_a_moment_with_a_clip_embeds_it(self, service):
         add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
 
         article = open_moment(await review(service))
 
-        assert [video.attrs["src"] for video in article.find("video")] == ["/clips/channel_a/moment_1.mp4"]
+        (video,) = article.find("video")
+        # A file that is the clip and nothing else plays from its start.
+        assert (video.attrs["src"], video.attrs["data-lead"]) == ("/clips/channel_a/moment_1.mp4", "0")
         assert article.find("p", class_="no-clip") == []
-        assert self.footage(article) == {}
 
     async def test_a_clip_gets_its_controls(self, service):
         add_moment("channel_a", clip_path="channel_a/moment_1.mp4")
@@ -1267,7 +1263,7 @@ class TestClips:
         article = open_moment(await review(service))
 
         assert article.find("video") == [] and article.find("div", class_="ch-transport") == []
-        assert article.one("p", class_="no-clip").text == "The clip is still being cut. That takes about a minute."
+        assert article.one("p", class_="no-clip").text == "The clip is still being cut. That takes about two minutes."
 
     async def test_an_older_one_says_there_is_none(self, service):
         long_ago = datetime.now(timezone.utc) - timedelta(seconds=service.main.CLIP_PENDING_SECONDS + 60)
@@ -1278,26 +1274,57 @@ class TestClips:
         assert article.find("video") == []
         assert article.one("p", class_="no-clip").text == "No clip was saved for this moment."
 
-    async def test_context_footage_is_offered_only_where_the_files_exist(self, service):
-        both = add_moment("channel_a", detected_at=T0, clip_path="channel_a/moment_1.mp4")
-        after_only = add_moment("channel_a", detected_at=T0 + minutes(1), clip_path="channel_a/moment_2.mp4")
-        neither = add_moment("channel_a", detected_at=T0 + minutes(2), clip_path="channel_a/moment_3.mp4")
+    async def test_a_file_that_opens_with_the_lead_up_is_started_where_the_clip_is(self, service):
+        cut = {**clip_cut_at(T0, seconds=40), "context_before": 31.5, "context_after": 58.25}
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **cut)
+
+        article = open_moment(await review(service))
+
+        (video,) = article.find("video")
+        # Both for a browser on its own (the address says where to start)
+        # and for the page's script, which counts clip time from there.
+        assert video.attrs["src"] == "/clips/channel_a/moment_1.mp4#t=31.5"
+        assert video.attrs["data-lead"] == "31.5"
+
+    async def test_the_strip_covers_all_the_footage_the_file_has(self, service):
+        # Whole segments: a file holds a little more than the context asked for.
+        longer = recorder.CONTEXT_BEFORE_SECONDS + 2.5, recorder.CONTEXT_AFTER_SECONDS + 3.25
+        cut = {**clip_cut_at(T0, seconds=40), "context_before": longer[0], "context_after": longer[1]}
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **cut)
+
+        trace = open_moment(await review(service)).one("figure", class_="trace")
+
+        assert float(trace.attrs["data-start"]) == -longer[0]
+        assert float(trace.attrs["data-end"]) == 40 + longer[1]
+        assert float(trace.attrs["data-clip-seconds"]) == 40
+
+    async def test_and_the_usual_stretch_of_chat_where_the_file_has_less(self, service):
+        # No footage from before the clip (the recording had only just
+        # started): chat from then is drawn all the same.
+        cut = {**clip_cut_at(T0, seconds=40), "context_before": 0.0, "context_after": 12.0}
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **cut)
+
+        article = open_moment(await review(service))
+
+        trace = article.one("figure", class_="trace")
+        assert float(trace.attrs["data-start"]) == -recorder.CONTEXT_BEFORE_SECONDS
+        assert float(trace.attrs["data-end"]) == 40 + recorder.CONTEXT_AFTER_SECONDS
+        assert article.one("video").attrs["data-lead"] == "0"
+
+    async def test_context_still_kept_in_files_of_its_own_is_not_played(self, service):
+        # A moment from before a moment had one file, not joined yet (see
+        # scripts/join_context_clips.py): its clip plays, alone.
+        add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **clip_cut_at(T0, seconds=40))
         self.clip_file("channel_a/moment_1_before.mp4")
         self.clip_file("channel_a/moment_1_after.mp4")
-        self.clip_file("channel_a/moment_2_after.mp4")
 
-        assert self.footage(open_moment(await review(service, moment=both))) == {
-            "before": "/clips/channel_a/moment_1_before.mp4",
-            "after": "/clips/channel_a/moment_1_after.mp4",
-        }
-        assert self.footage(open_moment(await review(service, moment=after_only))) == {
-            "after": "/clips/channel_a/moment_2_after.mp4"
-        }
-        assert self.footage(open_moment(await review(service, moment=neither))) == {}
+        markup = (await service.client.get("/dashboard")).text
+
+        assert [video.attrs["src"] for video in parse(markup).find("video")] == ["/clips/channel_a/moment_1.mp4"]
+        assert "_before.mp4" not in markup and "_after.mp4" not in markup
 
     async def test_the_player_starts_on_the_clip_at_its_first_frame(self, service):
         add_moment("channel_a", clip_path="channel_a/moment_1.mp4", **clip_cut_at(T0, seconds=40))
-        self.clip_file("channel_a/moment_1_before.mp4")
 
         article = open_moment(await review(service))
 

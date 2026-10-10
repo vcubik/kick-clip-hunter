@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
@@ -280,15 +279,17 @@ CLIP_HOLDS = (START - timedelta(seconds=26), END + timedelta(seconds=1))
 
 @pytest.fixture
 def clip_cutter(service, monkeypatch):
-    """Replaces the two calls into the recorder with stand-ins that write
-    placeholder files and remember how they were called."""
+    """Replaces the call into the recorder with a stand-in that writes a
+    placeholder file and remembers how it was called."""
 
     class Cutter:
         def __init__(self) -> None:
             self.clip_error: Exception | None = None
-            self.context_error: Exception | None = None
             self.clip_calls: list = []
-            self.context_calls: list = []
+            # Seconds of footage the file is said to hold before and after
+            # the clip. None by default: the placeholder is not a video a
+            # clip could be cut out of for the analysis steps.
+            self.context: tuple[float, float] = (0.0, 0.0)
 
     cutter = Cutter()
 
@@ -299,16 +300,9 @@ def clip_cutter(service, monkeypatch):
         path = recorder.CLIPS_DIR / channel / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"clip")
-        return recorder.CutClip(path, CLIP_HOLDS[0], CLIP_HOLDS[1])
-
-    async def create_context(channel, start, end, name, post_roll_seconds):
-        cutter.context_calls.append((channel, start, end, name, post_roll_seconds))
-        if cutter.context_error is not None:
-            raise cutter.context_error
-        return {"before": Path("before.mp4"), "after": Path("after.mp4")}
+        return recorder.CutClip(path, CLIP_HOLDS[0], CLIP_HOLDS[1], *cutter.context)
 
     monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
-    monkeypatch.setattr(service.main.recording_manager, "create_context_clips_for_moment", create_context)
     return cutter
 
 
@@ -333,7 +327,18 @@ class TestCuttingTheClip:
         assert datetime.fromisoformat(row["clip_start"]) == CLIP_HOLDS[0]
         assert row["clip_duration"] == (CLIP_HOLDS[1] - CLIP_HOLDS[0]).total_seconds()
 
-    async def test_it_waits_for_the_post_roll_to_be_broadcast_before_cutting(
+    async def test_how_much_footage_the_file_has_around_the_clip_is_recorded_too(self, service, moment, clip_cutter):
+        clip_cutter.context = (31.5, 58.25)
+
+        await self.cut(service, moment)
+
+        (row,) = service.moments()
+        assert (row["context_before"], row["context_after"]) == (31.5, 58.25)
+        # The clip's own start and length are the clip's, not the file's.
+        assert datetime.fromisoformat(row["clip_start"]) == CLIP_HOLDS[0]
+        assert row["clip_duration"] == (CLIP_HOLDS[1] - CLIP_HOLDS[0]).total_seconds()
+
+    async def test_it_waits_for_the_post_roll_and_the_context_after_it_before_cutting(
         self, service, moment, clip_cutter, monkeypatch
     ):
         slept: list[float] = []
@@ -346,38 +351,30 @@ class TestCuttingTheClip:
 
             async def sleep(self, seconds):
                 if not slept:
-                    assert clip_cutter.clip_calls == [], "the clip was cut before waiting for its post-roll"
+                    assert clip_cutter.clip_calls == [], "the clip was cut before waiting for its footage"
                 slept.append(seconds)
 
         monkeypatch.setattr(service.main, "asyncio", RecordingSleep())
 
         await self.cut(service, moment, post_roll=7)
 
-        assert slept == [
-            7 + recorder.CLIP_SETTLE_SECONDS,
-            recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS,
-        ]
-
-    async def test_context_clips_are_cut_with_the_same_window(self, service, moment, clip_cutter):
-        await self.cut(service, moment, post_roll=7)
-
-        assert clip_cutter.context_calls == [(CHANNEL, START, END, f"moment_{moment}.mp4", 7)]
+        # One wait, one cut: the file is written once everything that goes
+        # into it has been broadcast.
+        assert slept == [7 + recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS]
+        assert len(clip_cutter.clip_calls) == 1
 
     @pytest.mark.parametrize(
         "error",
         [RecorderError("No buffered segments"), StreamUrlError("not live"), RuntimeError("ffmpeg exploded")],
         ids=["no-footage", "stream-not-live", "unexpected-error"],
     )
-    async def test_a_failed_cut_leaves_the_moment_without_a_clip_and_nothing_else_runs(
-        self, service, moment, clip_cutter, error
-    ):
+    async def test_a_failed_cut_leaves_the_moment_without_a_clip(self, service, moment, clip_cutter, error):
         clip_cutter.clip_error = error
 
         await self.cut(service, moment)
 
         (row,) = service.moments()
-        assert row["clip_path"] is None
-        assert clip_cutter.context_calls == []
+        assert (row["clip_path"], row["clip_start"], row["context_before"]) == (None, None, None)
 
     async def test_only_an_unexpected_failure_is_logged_as_an_error(self, service, moment, clip_cutter, caplog):
         with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
@@ -391,16 +388,6 @@ class TestCuttingTheClip:
         errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
         assert len(errors) == 1
         assert "clip creation failed" in errors[0].getMessage() and errors[0].exc_info is not None
-
-    async def test_failing_context_clips_do_not_take_the_clip_with_them(self, service, moment, clip_cutter, caplog):
-        clip_cutter.context_error = RuntimeError("disk full")
-
-        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
-            await self.cut(service, moment)
-
-        (row,) = service.moments()
-        assert row["clip_path"] == f"{CHANNEL}/moment_{moment}.mp4"
-        assert any("context clips failed" in record.getMessage() for record in caplog.records)
 
 
 class TestPerClipAnalysis:

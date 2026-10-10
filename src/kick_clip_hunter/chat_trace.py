@@ -132,6 +132,11 @@ def clip_timeline(
     clip at all, the window that would have been cut stands in for it, since
     chat reacted either way. Chat is taken to have seen that frame
     `chat_delay` seconds later (see CHAT_DELAY_SECONDS).
+
+    The strip covers `context_before` seconds before the clip and
+    `context_after` after it, and more where the clip's file holds more
+    footage than that: everything that can be played is on it, and chat is
+    drawn that far either way whether or not there is footage for it.
     None for an imported clip of unknown length, which has nothing to draw.
     """
     duration = row["clip_duration"]
@@ -146,7 +151,12 @@ def clip_timeline(
         asked = (window_end - window_start).total_seconds() + pre_roll + post_roll
         duration = duration or asked
         broadcast_start = window_start - timedelta(seconds=playback_delay + pre_roll + (duration - asked) / 2)
-    return Timeline(broadcast_start + timedelta(seconds=chat_delay), duration, context_before, context_after)
+    return Timeline(
+        broadcast_start + timedelta(seconds=chat_delay),
+        duration,
+        max(context_before, row["context_before"] or 0.0),
+        max(context_after, row["context_after"] or 0.0),
+    )
 
 
 def _arrived(message: Row) -> datetime:
