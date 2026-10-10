@@ -83,7 +83,7 @@
   --h-row: 40px;
   --h-bar: 48px;
   --h-strip: 96px;
-  --w-queue: 320px;
+  --w-queue: 400px;
   --w-chat: 340px;
 
   /* One family; its width axis carries role. */
@@ -327,6 +327,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .stage-in { width: 100%; max-width: max(520px, calc((100vh - var(--stage-rest)) * 16 / 9)); }
 
 .moment-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-16); margin-bottom: var(--space-12); }
+.moment-name { flex: 1 1 0; min-width: 0; max-width: 360px; margin-right: auto; }
 .moment-when { font-size: 13px; line-height: 16px; color: var(--text-2); }
 .moment-clock { display: flex; align-items: baseline; gap: var(--space-8); font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .moment-clock .counter { color: var(--text); }

@@ -193,6 +193,12 @@ def get_connection() -> sqlite3.Connection:
     if "notes" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN notes TEXT")
 
+    # A name the reviewer gives a moment, shown in the dashboard's queue in
+    # place of what chat said most. NULL until one is given.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(moments)")}
+    if "title" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN title TEXT")
+
     # Local speech-to-text of the cut clip (see transcriber.py) - filled in
     # asynchronously after the clip exists, so it's NULL for a while even on
     # a moment that will eventually have one.
@@ -382,7 +388,7 @@ _MOMENT_COLUMNS = """
     id, broadcaster_user_id, channel_slug, detected_at, window_start, window_end, reason, score,
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
-    rating, notes, transcript, audio_events, sound_events, stream_type, moment_type
+    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type
 """
 
 
@@ -640,6 +646,11 @@ def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int |
 
 def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_end: str) -> None:
     conn.execute("UPDATE moments SET window_end = ? WHERE id = ?", (window_end, moment_id))
+    conn.commit()
+
+
+def update_moment_title(conn: sqlite3.Connection, moment_id: int, title: str | None) -> None:
+    conn.execute("UPDATE moments SET title = ? WHERE id = ?", (title, moment_id))
     conn.commit()
 
 

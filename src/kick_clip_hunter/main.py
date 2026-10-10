@@ -64,6 +64,7 @@ from .db import (
     update_moment_sound_embedding,
     update_moment_sound_events,
     update_moment_stream_type,
+    update_moment_title,
     update_moment_transcript,
     update_moment_type,
     update_moment_window_end,
@@ -706,6 +707,8 @@ CLIP_PENDING_SECONDS = 300
 # beside an open clip, and for a queue row's spark. Two minutes of a chat
 # posting ten messages a second stays under the first.
 CHAT_REPLAY_LIMIT = 2000
+# A moment's name has to fit a queue row; longer ones are cut to this.
+MOMENT_TITLE_MAX_LENGTH = 60
 QUEUE_CHAT_LIMIT = 1000
 
 
@@ -858,6 +861,8 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_type": row["stream_type"],
         "moment_type": row["moment_type"],
         "notes": row["notes"] or "",
+        "title": row["title"] or "",
+        "title_max": MOMENT_TITLE_MAX_LENGTH,
         "analysis": [
             {"label": label, "text": row[name] or "", "pending": name in pending}
             for name, label in ANALYSIS_SETTINGS
@@ -1133,6 +1138,20 @@ async def set_moment_moment_type(moment_id: int, value: str = ""):
     finally:
         conn.close()
     return {"moment_id": moment_id, "moment_type": value or None}
+
+
+@app.post("/moments/{moment_id}/title")
+async def set_moment_title(moment_id: int, request: Request):
+    """Names a moment; an empty name takes the name away again."""
+    data = await request.json()
+    title = " ".join((data.get("title") or "").split())[:MOMENT_TITLE_MAX_LENGTH]
+
+    conn = get_connection()
+    try:
+        update_moment_title(conn, moment_id, title or None)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "title": title or None}
 
 
 @app.post("/moments/{moment_id}/notes")

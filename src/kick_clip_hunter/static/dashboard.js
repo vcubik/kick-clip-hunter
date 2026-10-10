@@ -81,6 +81,7 @@
     let markup = null;
     try {
       await saveNote();
+      await saveTitle();
       const response = await fetch(`/dashboard/moments/${row.dataset.moment}`);
       if (response.ok) markup = await response.text();
     } catch {
@@ -208,6 +209,26 @@
     }
     field.defaultValue = saved;
     say(article, "Note saved.");
+  }
+
+  // Saves the moment's name if it was changed, and puts it on the moment's
+  // row in the queue - or, if the name was taken away, what the row said
+  // before it had one.
+  async function saveTitle(field = one("[data-title]")) {
+    if (!field || field.value === field.defaultValue) return;
+    const article = field.closest(".moment");
+    const response = await post(`/moments/${article.dataset.moment}/title`, { title: field.value });
+    if (!response || !response.ok) {
+      say(article, "Could not save the name. Try again.");
+      return;
+    }
+    const title = (await response.json()).title || "";
+    field.value = title;
+    field.defaultValue = title;
+    say(article, "");
+    const what = one(`a.ch-row[data-moment="${article.dataset.moment}"] .ch-what`);
+    if (!what) return;
+    what.textContent = title ? `${title}${"noClip" in what.dataset ? ", no clip" : ""}` : what.dataset.unnamed;
   }
 
   // The note is one line until more is typed into it.
@@ -648,6 +669,14 @@
   document.addEventListener("keydown", (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
+    if (target.matches("[data-title]")) {
+      // Enter finishes the name and so does Escape; leaving the field saves it.
+      if (event.key === "Escape" || event.key === "Enter") {
+        event.preventDefault();
+        target.blur();
+      }
+      return;
+    }
     if (target.matches("[data-note]")) {
       // Enter finishes the note (Shift+Enter starts a new line in it), and
       // so does Escape; leaving the field is what saves it.
@@ -689,6 +718,7 @@
   document.addEventListener("change", (event) => {
     const target = event.target;
     if (target.matches("[data-note]")) saveNote(target);
+    else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
   });
 
@@ -724,7 +754,10 @@
     for (const video of all("[data-clip]")) video.controls = document.fullscreenElement === video;
   });
 
-  window.addEventListener("pagehide", () => saveNote());
+  window.addEventListener("pagehide", () => {
+    saveNote();
+    saveTitle();
+  });
 
   dress();
   currentRow()?.scrollIntoView({ block: "nearest" });

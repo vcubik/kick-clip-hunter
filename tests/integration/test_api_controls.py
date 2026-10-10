@@ -179,6 +179,33 @@ class TestTags:
         assert response.status_code == 400
 
 
+class TestTitle:
+    async def test_a_name_is_stored_with_its_spaces_tidied(self, service):
+        moment_id = add_moment()
+
+        response = await service.client.post(f"/moments/{moment_id}/title", json={"title": "  fell   off the chair \n"})
+
+        assert response.json() == {"moment_id": moment_id, "title": "fell off the chair"}
+        assert moment(moment_id)["title"] == "fell off the chair"
+
+    @pytest.mark.parametrize("body", [{"title": ""}, {"title": "  \t"}, {"title": None}, {}])
+    async def test_an_empty_name_takes_the_name_away(self, service, body):
+        moment_id = add_moment(title="old name")
+
+        response = await service.client.post(f"/moments/{moment_id}/title", json=body)
+
+        assert response.json() == {"moment_id": moment_id, "title": None}
+        assert moment(moment_id)["title"] is None
+
+    async def test_a_name_too_long_for_a_queue_row_is_cut(self, service):
+        moment_id = add_moment()
+        longest = service.main.MOMENT_TITLE_MAX_LENGTH
+
+        await service.client.post(f"/moments/{moment_id}/title", json={"title": "x" * (longest + 20)})
+
+        assert moment(moment_id)["title"] == "x" * longest
+
+
 class TestNotes:
     async def test_a_note_is_stored_trimmed(self, service):
         moment_id = add_moment()

@@ -41,6 +41,7 @@ def row(**overrides) -> dict:
         "stream_elapsed_seconds": 3600,
         "clip_path": "some_channel/moment_1.mp4",
         "rating": None,
+        "title": None,
     }
     values.update(overrides)
     return values
@@ -145,6 +146,20 @@ class TestReasons:
 
     def test_an_imported_clip_is_called_that(self):
         assert view.queue_label(row(reason=view.IMPORT_REASON)) == "Imported"
+
+    def test_a_name_the_reviewer_gave_takes_the_place_of_everything_else(self):
+        named = row(title="He fell off the chair")
+
+        assert view.queue_label(named, "KEKW \N{MULTIPLICATION SIGN}31") == "He fell off the chair"
+        assert view.queue_label(row(title="Chair", clip_path=None)) == "Chair, no clip"
+
+    def test_what_a_named_row_would_say_without_its_name_can_be_asked_for(self):
+        named = row(title="He fell off the chair")
+
+        assert (
+            view.queue_label(named, "KEKW \N{MULTIPLICATION SIGN}31", named=False) == "KEKW \N{MULTIPLICATION SIGN}31"
+        )
+        assert view.queue_label(named, named=False) == view.queue_label(row())
 
     def test_what_chat_said_most_takes_the_place_of_the_reason(self):
         # Written the way chat wrote it, not put into sentence case.
@@ -335,6 +350,8 @@ class TestQueueGroups:
             "time": "1:02:03",
             "time_title": "Today at 21:02",
             "what": "Laughing",
+            "unnamed": "Laughing",
+            "has_clip": True,
             "rating": 4,
             "rating_words": "rated 4 of 5",
         }
