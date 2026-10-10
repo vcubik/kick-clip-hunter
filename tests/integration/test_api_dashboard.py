@@ -98,9 +98,10 @@ def chat(article: Element) -> list[tuple[str, str]]:
 
 def clip_cut_at(chat_start: datetime, seconds: float = 40.0) -> dict:
     """Columns of a moment whose clip is `seconds` long and whose first
-    frame chat saw at `chat_start` - stored, as the recorder stores it, on
-    the stream's clock, which runs ahead of chat's."""
-    broadcast = chat_start - timedelta(seconds=recorder.PLAYBACK_DELAY_SECONDS)
+    frame chat is taken to have seen at `chat_start` - stored, as the
+    recorder stores it, on the stream's clock, which chat runs behind by the
+    delay every channel starts out with."""
+    broadcast = chat_start - timedelta(seconds=chat_trace.CHAT_DELAY_SECONDS)
     return {"clip_start": broadcast.isoformat(), "clip_duration": seconds}
 
 
@@ -724,7 +725,12 @@ class TestTrace:
 
         assert article.one("figure", class_="trace").attrs["data-clip-seconds"] == "39"
         slack = (39 - (10 + pre_roll + service.main.DYNAMIC_POST_ROLL_SECONDS)) / 2
-        assert article.one("p", class_="ch-chat").attrs["data-at"] == view.number_words(10 + pre_roll + slack - 8, 1)
+        # The recorder reached back further for the clip than chat is taken
+        # to run behind, which puts chat that much later in it.
+        later = recorder.PLAYBACK_DELAY_SECONDS - chat_trace.CHAT_DELAY_SECONDS
+        assert article.one("p", class_="ch-chat").attrs["data-at"] == view.number_words(
+            10 + pre_roll + slack - 8 + later, 1
+        )
 
     async def test_an_imported_clip_gets_bare_paper_to_scrub_on(self, service):
         add_moment("channel_a", reason=view.IMPORT_REASON, clip_path="channel_a/import.mp4", clip_duration=52.0)
@@ -743,6 +749,133 @@ class TestTrace:
 
         assert article.find("figure", class_="trace") == []
         assert len(article.find("video")) == 1
+
+
+class TestMovingChat:
+    """How far behind its broadcast a channel's chat runs is a guess, so the
+    open moment lets it be corrected - for that channel."""
+
+    START = chat_trace.CHAT_DELAY_SECONDS
+    MOST = chat_trace.CHAT_DELAY_MAX_SECONDS
+
+    def clip(self, channel: str = "channel_a") -> int:
+        """A moment with a 40 second clip whose first frame was broadcast at
+        T0-30, and one chat message that arrived 20 seconds after that."""
+        add_chat(channel, "alice", "what was that", T0 - timedelta(seconds=10))
+        return add_moment(
+            channel,
+            detected_at=T0,
+            clip_path=f"{channel}/moment_1.mp4",
+            clip_start=(T0 - timedelta(seconds=30)).isoformat(),
+            clip_duration=40.0,
+        )
+
+    async def article(self, service, **params) -> Element:
+        return open_moment(await review(service, **params))
+
+    def said_at(self, article: Element) -> str:
+        return article.one("p", class_="ch-chat").attrs["data-at"]
+
+    def control(self, article: Element) -> Element:
+        return article.one("p", class_="chat-delay")
+
+    def can_go(self, article: Element) -> list[str]:
+        return [button.text for button in self.control(article).find("button") if "disabled" not in button.attrs]
+
+    async def test_a_channel_starts_out_with_the_usual_delay(self, service):
+        self.clip()
+
+        article = await self.article(service)
+
+        assert self.control(article).one("span").text == f"Stream delay {self.START} s"
+        assert self.control(article).attrs["data-chat-delay"] == str(self.START)
+        assert self.can_go(article) == ["Earlier", "Later"]
+        # Whoever wrote the message was watching the picture that was
+        # broadcast that long before it arrived.
+        assert self.said_at(article) == str(20 - self.START)
+
+    async def test_setting_it_moves_the_channels_chat(self, service):
+        self.clip()
+
+        response = await service.client.post("/channels/channel_a/chat_delay?seconds=2")
+
+        assert response.json() == {"slug": "channel_a", "chat_delay_seconds": 2}
+        article = await self.article(service)
+        assert self.said_at(article) == "18"
+        assert self.control(article).one("span").text == "Stream delay 2 s"
+        assert self.control(article).attrs["data-chat-delay"] == "2"
+
+    async def test_the_trace_moves_with_the_chat_lines(self, service):
+        self.clip()
+        await service.client.post("/channels/channel_a/chat_delay?seconds=12")
+
+        counts = (await self.article(service)).one("div", class_="ch-strip").attrs["data-all"].split(",")
+
+        assert counts.index("1") == recorder.CONTEXT_BEFORE_SECONDS + 20 - 12
+
+    async def test_the_moment_fetched_on_its_own_moves_too(self, service):
+        # Which is what the page swaps in once the delay has been changed.
+        moment_id = self.clip()
+        await service.client.post("/channels/channel_a/chat_delay?seconds=2")
+
+        alone = await page_at(service, f"/dashboard/moments/{moment_id}")
+
+        assert self.said_at(alone) == "18" and self.control(alone).attrs["data-chat-delay"] == "2"
+
+    async def test_with_no_delay_chat_sits_where_it_arrived_and_can_go_no_later(self, service):
+        self.clip()
+        await service.client.post("/channels/channel_a/chat_delay?seconds=0")
+
+        article = await self.article(service)
+
+        assert self.said_at(article) == "20"
+        assert self.can_go(article) == ["Earlier"]
+
+    async def test_at_the_longest_delay_chat_can_go_no_earlier(self, service):
+        self.clip()
+        await service.client.post(f"/channels/channel_a/chat_delay?seconds={self.MOST}")
+
+        assert self.can_go(await self.article(service)) == ["Later"]
+
+    async def test_it_is_kept_for_the_one_channel(self, service):
+        self.clip("channel_a")
+        other = self.clip("channel_b")
+        await service.client.post("/channels/channel_a/chat_delay?seconds=1")
+
+        article = await self.article(service, show="all", moment=other)
+
+        assert self.control(article).attrs["data-chat-delay"] == str(self.START)
+        assert self.said_at(article) == str(20 - self.START)
+
+    @pytest.mark.parametrize("seconds", [-1, MOST + 1])
+    async def test_a_delay_out_of_range_is_refused(self, service, seconds):
+        self.clip()
+
+        response = await service.client.post(f"/channels/channel_a/chat_delay?seconds={seconds}")
+
+        assert response.status_code == 400
+        assert self.control(await self.article(service)).attrs["data-chat-delay"] == str(self.START)
+
+    async def test_a_channel_there_are_no_moments_from_is_a_404(self, service):
+        self.clip()
+
+        response = await service.client.post("/channels/nobody/chat_delay?seconds=3")
+
+        assert response.status_code == 404
+
+    async def test_is_not_offered_where_there_is_no_clip_to_be_out_of_step_with(self, service):
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "what was that", T0 - timedelta(seconds=8))
+
+        article = await self.article(service)
+
+        assert chat(article) == [("alice", "what was that")]
+        assert article.find("p", class_="chat-delay") == []
+
+    async def test_is_not_offered_for_an_imported_clip_which_has_no_chat(self, service):
+        add_moment("channel_a", reason=view.IMPORT_REASON, clip_path="channel_a/import.mp4", clip_duration=52.0)
+
+        assert (await self.article(service)).find("p", class_="chat-delay") == []
 
 
 class TestClipLength:

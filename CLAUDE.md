@@ -87,7 +87,9 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   messages a second and how many of them were laughing, on the clip's own time axis, from
   30s before the clip to 60s after it. It is also the scrubber - one timeline over the
   clip and its two context files - and chat is replayed beside it in step with the
-  picture. `GET /dashboard/channels` has the
+  picture. How far behind the broadcast viewers were is a guess (5s to start with), so
+  under the chat are Earlier/Later buttons that correct it for the open moment's channel.
+  `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
@@ -134,10 +136,14 @@ Module map (`src/kick_clip_hunter/`):
   to, the trace under the clip and the spark in a queue row as SVG paths, and what chat
   said most in a moment ("KEKW x31"). Pure, like `dashboard_view.py`. "Clip time" is
   seconds from the clip's first frame; a clip's start is stored on the stream's program
-  clock (`moments.clip_start`, with `clip_duration`), and chat saw each frame
-  `PLAYBACK_DELAY_SECONDS` later. Clips cut before those columns existed have their
-  length measured (ffprobe) the first time one is opened and are placed by estimate:
-  centred on the window they were cut for
+  clock (`moments.clip_start`, with `clip_duration`), and chat is taken to have seen
+  each frame `CHAT_DELAY_SECONDS` later - an assumption, since the real figure is the
+  player's buffer plus any delay the streamer has set, so it can be set per channel from
+  the review page (`POST /channels/{slug}/chat_delay`, kept in `app_settings`). It is not
+  the recorder's `PLAYBACK_DELAY_SECONDS`, which frames clips and is on the long side. At
+  0 chat sits where a streamer's own on-screen chat shows it. Clips cut before those
+  columns existed have their length measured (ffprobe) the first time one is opened and
+  are placed by estimate: centred on the window they were cut for
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment

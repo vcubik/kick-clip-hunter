@@ -143,9 +143,10 @@ top labels above the confidence floor)?
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
 the right one open, with its chat, clip and context footage? Is chat put on the clip's own time axis
-correctly - a stored clip start shifted by the playback delay, an older clip placed by its length, a
-missing clip stood in for by its window - and are the trace, the queue's sparks and "what chat said
-most" drawn from that as intended? Does an empty queue say what the service
+correctly - a stored clip start shifted by the channel's chat delay, an older clip placed by its
+length, a missing clip stood in for by its window - and are the trace, the queue's sparks and "what
+chat said most" drawn from that as intended? Does changing a channel's chat delay move its chat, and
+only its? Does an empty queue say what the service
 is doing? Is everything a Kick user can type - chat, usernames, emote names - escaped? Do the file
 routes refuse to serve anything outside their directories? Are dates, counts and detector reasons
 worded as intended? Do rating, tags and notes validate and persist; do the switches survive a
@@ -260,7 +261,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    moment marked. Clicking on the trace moves the clip there, and into the footage before or after
    it at either end; chat lines appear beside the clip as it reaches them. This is the check that
    the picture and chat line up: the laughing on the trace should start a few seconds after what
-   caused it on screen (if it is clearly off, `PLAYBACK_DELAY_SECONDS` is). `Space` plays and
+   caused it on screen. If it is clearly off, move the channel's chat with Earlier/Later under the
+   chat lines - the trace and the lines follow while the clip plays on, and the setting is still
+   there after a reload. On a stream that shows its own chat, "Stream delay 0 s" should make the
+   two match. `Space` plays and
    pauses; a number key rates the moment and moves on to the next unrated one. Reload: the rating
    sticks.
 7. **Try one analysis step.** Turn `Transcript` on (Channels page); the next clip gets a transcript

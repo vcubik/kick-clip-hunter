@@ -37,6 +37,7 @@ from .db import (
     count_moments_with_clip,
     get_channel_keywords,
     get_chat_between,
+    get_chat_delay,
     get_connection,
     get_flag,
     get_moment,
@@ -47,6 +48,7 @@ from .db import (
     get_streamers,
     insert_chat_message,
     insert_moment,
+    set_chat_delay,
     set_flag,
     set_streamer_tracking,
     update_moment_audio_events,
@@ -703,7 +705,15 @@ async def _with_clip_length(conn, row):
     return get_moment(conn, row["id"])
 
 
-def _chat_against_clip(conn, row) -> tuple[dict | None, list[dict]]:
+def _chat_delay(conn, channel_slug: str) -> int:
+    """How far behind its broadcast a channel's chat is taken to run: what
+    was set for the channel on the review page, or what every channel starts
+    out with."""
+    stored = get_chat_delay(conn, channel_slug)
+    return chat_trace.CHAT_DELAY_SECONDS if stored is None else stored
+
+
+def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[dict]]:
     """The strip under a moment's clip and the chat lines beside it: what
     chat was doing from a little before the clip to a little after it, on
     the clip's own time axis. No strip when the clip can't be placed at all
@@ -713,6 +723,7 @@ def _chat_against_clip(conn, row) -> tuple[dict | None, list[dict]]:
         pre_roll=recorder.PRE_ROLL_SECONDS,
         post_roll=DYNAMIC_POST_ROLL_SECONDS,
         playback_delay=recorder.PLAYBACK_DELAY_SECONDS,
+        chat_delay=chat_delay,
         context_before=recorder.CONTEXT_BEFORE_SECONDS,
         context_after=recorder.CONTEXT_AFTER_SECONDS,
     )
@@ -756,7 +767,8 @@ def _queue_activity(conn, rows) -> dict[int, dict]:
 def _open_moment(conn, row, today: date) -> dict:
     """Everything the review page shows of the one moment that is open."""
     pending = _pending_analysis(row)
-    strip, chat = _chat_against_clip(conn, row)
+    chat_delay = _chat_delay(conn, row["channel_slug"])
+    strip, chat = _chat_against_clip(conn, row, chat_delay)
     return {
         "id": row["id"],
         "channel": row["channel_slug"],
@@ -779,6 +791,13 @@ def _open_moment(conn, row, today: date) -> dict:
             if name in ANALYSIS_TEXT_RESULTS and (row[name] or name in pending)
         ],
         "chat": chat,
+        # Moving chat against the picture is offered where there is a picture
+        # for it to be out of step with.
+        "chat_delay": (
+            {"seconds": chat_delay, "most": chat_trace.CHAT_DELAY_MAX_SECONDS}
+            if row["clip_path"] and strip and strip["has_chat"]
+            else None
+        ),
     }
 
 
@@ -1122,6 +1141,26 @@ async def set_channel_tracking(slug: str, enabled: int = 1):
         conn.close()
     logger.info("tracking for %s -> %s", slug, "on" if value else "off")
     return {"slug": slug, "tracking_enabled": value}
+
+
+@app.post("/channels/{slug}/chat_delay")
+async def set_channel_chat_delay(slug: str, seconds: int):
+    """Sets how far behind its broadcast a channel's chat is taken to run
+    when it is shown against a clip (see chat_trace.CHAT_DELAY_SECONDS). Any
+    channel there are moments from, on the watchlist or not."""
+    most = chat_trace.CHAT_DELAY_MAX_SECONDS
+    if not 0 <= seconds <= most:
+        raise HTTPException(status_code=400, detail=f"seconds must be from 0 to {most}")
+
+    conn = get_connection()
+    try:
+        if slug not in get_moment_channels(conn):
+            raise HTTPException(status_code=404, detail=f"no moments from channel {slug!r}")
+        set_chat_delay(conn, slug, seconds)
+    finally:
+        conn.close()
+    logger.info("chat delay for %s -> %d s", slug, seconds)
+    return {"slug": slug, "chat_delay_seconds": seconds}
 
 
 @app.post("/webhooks/kick")
