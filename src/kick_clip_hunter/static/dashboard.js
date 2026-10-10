@@ -239,15 +239,13 @@
 
   // ---- The clip and its timeline ---------------------------------------
   //
-  // The strip under the clip is one timeline over up to three files: the
-  // footage saved before the clip, the clip, and the footage saved after it.
-  // Times on it are clip time - seconds from the clip's first frame, negative
-  // before it. The player holds one of the files at a time; which one, and
-  // where in it, follows from the clip time asked for.
+  // The strip under the clip is a timeline over the clip's file, which holds
+  // more than the clip: the footage that led up to it comes first and what
+  // followed comes after. Times on the strip are clip time - seconds from
+  // the clip's first frame, negative before it - so the player's own time
+  // is clip time plus however long the footage before the clip runs.
 
   const SPEEDS = [1, 1.5, 2, 0.5];
-  // How far past the clip's end counts as being in the footage after it.
-  const RUN_ON_SECONDS = 0.01;
   // Kept from one moment to the next - the volume from one visit to the next
   // as well, where the browser lets the page remember it.
   const VOLUME_KEY = "clip-hunter-volume";
@@ -260,12 +258,6 @@
   } catch {
     // no storage here: the volume starts out full
   }
-  // Of the open moment: the clip's own address, which of the files the
-  // player holds (before, clip or after), and where to go once a file that
-  // was just asked for has loaded.
-  let clipAddress = null;
-  let footage = "clip";
-  let arriving = null;
 
   const clipOf = (control) => one("[data-clip]", control.closest(".moment"));
   const clock = (seconds) => {
@@ -281,71 +273,38 @@
       start: Number(trace.dataset.start),
       end: Number(trace.dataset.end),
       clip: Number(trace.dataset.clipSeconds),
-      before: trace.dataset.before,
-      after: trace.dataset.after,
     };
   }
 
-  // Where the player is, in clip time - or where it is going, while the
-  // file that holds that is still loading. The footage before the clip ends
-  // where the clip starts, so it is counted back from its own end; until its
-  // length is known, the length the strip gives it stands in.
+  // How long the footage before the clip runs in the player's file.
+  const leadOf = (video) => Number(video.dataset.lead) || 0;
+
+  // Where the player is, in clip time.
   function clipTime(video) {
-    if (arriving) return arriving.time;
-    const span = spanOf(video);
-    if (!span || footage === "clip") return video.currentTime;
-    if (footage === "after") return span.clip + video.currentTime;
-    return video.currentTime - (Number.isFinite(video.duration) ? video.duration : -span.start);
+    return video.currentTime - leadOf(video);
   }
 
   // A clip time the way the page writes it: time into the clip, or how long
   // before its start or after its end.
   function timeWords(time, span) {
     if (span && time < 0) return `−${clock(Math.ceil(-time))}`;
-    if (span && footage === "after") return `+${clock(time - span.clip)}`;
+    if (span && time > span.clip) return `+${clock(time - span.clip)}`;
     return clock(time);
   }
 
   function place(video, time) {
-    const span = spanOf(video);
-    if (footage === "before") video.currentTime = Math.max(0, video.duration + time);
-    else if (footage === "after") video.currentTime = Math.max(0, time - span.clip);
-    else video.currentTime = time;
+    video.currentTime = Math.max(0, time + leadOf(video));
   }
 
-  // Moves the player to a clip time, loading another of the files if that
-  // is where the time lies. A time in context that has no footage is taken
-  // to the nearest end of the clip.
+  // Moves the player to a clip time. The strip can show more of chat than
+  // there is footage for; a time beyond the footage is taken to its nearest
+  // end.
   function goTo(video, time, { play } = {}) {
     const span = spanOf(video);
     if (!span) return;
-    // Loading another file pauses the player, so whether it was playing is
-    // carried over from before the load.
-    if (play === undefined) play = arriving ? arriving.play : !video.paused && !video.ended;
-    let wanted = "clip";
-    if (time < 0 && span.before) wanted = "before";
-    else if (time > span.clip && span.after) wanted = "after";
-    if (wanted === "clip") time = Math.min(Math.max(time, 0), span.clip);
-
-    if (wanted !== footage) {
-      footage = wanted;
-      arriving = { time, play };
-      video.src = wanted === "clip" ? clipAddress : span[wanted];
-      return;
-    }
-    if (arriving) {
-      arriving = { time, play };
-      return;
-    }
-    place(video, time);
-    if (play) video.play().catch(() => {});
-  }
-
-  function arrive(video) {
-    if (!arriving) return;
-    const { time, play } = arriving;
-    arriving = null;
-    place(video, time);
+    const lead = leadOf(video);
+    const last = Number.isFinite(video.duration) ? video.duration - lead : span.end;
+    place(video, Math.min(Math.max(time, -lead), last));
     if (play) video.play().catch(() => {});
   }
 
@@ -404,9 +363,9 @@
   function togglePlay(video) {
     if (!video) return;
     // Played to the end of the footage after the clip, it starts over at
-    // the clip, not at the file the player happens to hold.
-    if (video.ended && footage === "after") goTo(video, 0, { play: true });
-    else if (video.paused || video.ended) video.play().catch(() => {});
+    // the clip, not at the footage before it that the file opens with.
+    if (video.ended) place(video, 0);
+    if (video.paused || video.ended) video.play().catch(() => {});
     else video.pause();
   }
 
@@ -540,9 +499,6 @@
   function dress() {
     for (const field of all("[data-note]")) grow(field);
     const video = one("[data-clip]");
-    clipAddress = video ? video.getAttribute("src") : null;
-    footage = "clip";
-    arriving = null;
     if (!video) return;
     video.defaultPlaybackRate = speed;
     video.playbackRate = speed;
@@ -732,21 +688,9 @@
   // Media events do not bubble, so they are caught on the way down.
   const onMedia = (type, handle) =>
     document.addEventListener(type, (event) => event.target.matches?.("[data-clip]") && handle(event.target), true);
-  for (const type of ["durationchange", "timeupdate", "seeked", "play", "pause", "emptied", "volumechange", "ratechange"]) {
+  for (const type of ["loadedmetadata", "durationchange", "timeupdate", "seeked", "play", "pause", "ended", "emptied", "volumechange", "ratechange"]) {
     onMedia(type, paint);
   }
-  onMedia("loadedmetadata", (video) => {
-    arrive(video);
-    paint(video);
-  });
-  // One file runs on into the next: the footage before the clip into the
-  // clip, and the clip into the footage after it, where there is any.
-  onMedia("ended", (video) => {
-    const span = spanOf(video);
-    if (footage === "before") goTo(video, 0, { play: true });
-    else if (footage === "clip" && span && span.after) goTo(video, span.clip + RUN_ON_SECONDS, { play: true });
-    paint(video);
-  });
 
   // The page's own transport is not on screen in full screen, so the
   // browser's controls stand in for it for as long as that lasts.

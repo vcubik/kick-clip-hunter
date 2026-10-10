@@ -108,6 +108,7 @@ class TestSchema:
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
+            "context_before", "context_after",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
@@ -175,7 +176,7 @@ class TestUpgradingOlderDatabases:
             added_since = {
                 "stream_elapsed_seconds", "clip_path", "rating", "notes", "transcript", "audio_events",
                 "frame_embedding", "stream_type", "moment_type", "sound_events", "sound_embedding",
-                "clip_start", "clip_duration",
+                "clip_start", "clip_duration", "context_before", "context_after",
             }  # fmt: skip
             assert added_since <= set(columns(connection, "moments"))
             row = connection.execute("SELECT channel_slug, reason, score, clip_path, rating FROM moments").fetchone()
@@ -659,6 +660,61 @@ class TestMoments:
             "2026-03-01T19:59:35+00:00",
             38.5,
         )
+
+    def test_and_with_how_much_footage_its_file_has_either_side_of_it(self, conn):
+        moment_id = store_moment(conn)
+
+        db.update_moment_clip_path(
+            conn,
+            moment_id,
+            "some_channel/moment_1.mp4",
+            clip_start="2026-03-01T19:59:35+00:00",
+            clip_duration=38.5,
+            context_before=31.5,
+            context_after=58.25,
+        )
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["clip_duration"], row["context_before"], row["context_after"]) == (38.5, 31.5, 58.25)
+
+    def test_a_file_that_is_the_clip_alone_has_no_context_recorded(self, conn):
+        moment_id = store_moment(conn)
+
+        db.update_moment_clip_path(conn, moment_id, "some_channel/moment_1.mp4", clip_duration=38.5)
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["context_before"], row["context_after"]) == (None, None)
+
+    def test_joined_context_is_recorded_without_touching_where_the_clip_starts(self, conn):
+        moment_id = store_moment(conn)
+        db.update_moment_clip_path(
+            conn, moment_id, "some_channel/moment_1.mp4", clip_start="2026-03-01T19:59:35+00:00", clip_duration=38.5
+        )
+
+        db.update_moment_context(conn, moment_id, 38.5, 29.2, 58.3)
+
+        row = db.get_moment(conn, moment_id)
+        assert (row["clip_path"], row["clip_start"]) == ("some_channel/moment_1.mp4", "2026-03-01T19:59:35+00:00")
+        assert (row["clip_duration"], row["context_before"], row["context_after"]) == (38.5, 29.2, 58.3)
+
+    def test_the_moments_whose_file_is_the_clip_alone_can_be_listed(self, conn):
+        without_clip = store_moment(conn)
+        alone = store_moment(conn)
+        with_context = store_moment(conn)
+        joined = store_moment(conn)
+        db.update_moment_clip_path(conn, alone, "some_channel/moment_2.mp4", clip_duration=38.5)
+        db.update_moment_clip_path(
+            conn, with_context, "some_channel/moment_3.mp4", clip_duration=38.5, context_before=30.0, context_after=0.0
+        )
+        db.update_moment_clip_path(conn, joined, "some_channel/moment_4.mp4")
+        db.update_moment_context(conn, joined, 40.0, 0.0, 58.0)
+
+        rows = db.get_moments_with_clip_alone(conn)
+
+        assert without_clip not in [row["id"] for row in rows]
+        assert [(row["id"], row["clip_path"], row["clip_duration"]) for row in rows] == [
+            (alone, "some_channel/moment_2.mp4", 38.5)
+        ]
 
     def test_a_clip_of_unknown_extent_can_be_given_its_length_later(self, conn):
         moment_id = store_moment(conn)

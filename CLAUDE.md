@@ -73,6 +73,11 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
     many moments would have fired and how long their clips would have been, optionally
     with detector constants overridden for comparison. The way to check a threshold change
     against a real stream before running it live; read-only.
+  - `join_context_clips.py [--dry-run]` — one-off for moments from before a moment had
+    one video file: joins each clip with the `_before`/`_after` context clips next to it
+    into one file, in the clip's place, without re-encoding, and records where the clip
+    lies in it. Until it has been run such a moment plays as its clip alone. Running it
+    again does nothing more.
   - `backfill_taste.py [--limit N]` — fills in transcript/audio-event tags/frame
     embedding for any moment with a clip but missing one or more of them (imports
     don't go through the live pipeline's background tasks, so they start out missing
@@ -85,8 +90,10 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
   (1-5 rate and move on, J/K move, Space plays). Under the clip is the chat trace:
   messages a second and how many of them were laughing, on the clip's own time axis, from
-  30s before the clip to 60s after it. It is also the scrubber - one timeline over the
-  clip and its two context files - and chat is replayed beside it in step with the
+  30s before the clip to 60s after it. It is also the scrubber - a timeline over the
+  clip's file, which opens with the footage that led up to the clip and runs on into what
+  followed; times on it are clip time (minus before the clip, plus after it) - and chat is
+  replayed beside it in step with the
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
   their badges in front of it. Where a message belongs against the picture is a guess (to
@@ -183,11 +190,18 @@ Module map (`src/kick_clip_hunter/`):
   changes the stream layout mid-broadcast, which left ffmpeg alive but recording
   garbage for hours. See the module docstring for the full story, including how clips
   handle a discontinuity and the `PLAYBACK_DELAY_SECONDS` clock shift.
-  A moment's clip is kept short (about 35s unless the reaction keeps drawing in new
-  people); the 30s before and 60s after it are saved next to it as
-  `moment_<id>_before.mp4` / `_after.mp4` and played by the dashboard from the same strip
-  as the clip. `extract_clip` returns the stretch of the broadcast the clip really holds
-  (whole segments, so a little more than was asked for), which is stored with the moment.
+  A moment has one file, `moment_<id>.mp4`. The clip itself is kept short (about 35s
+  unless the reaction keeps drawing in new people), and the 30s before and 60s after it
+  are in the same file on either side of it, as context - so the file is cut only once
+  the context after the clip has been broadcast, about a minute later than the clip
+  alone could be. `extract_clip` returns the stretch of the broadcast the clip really
+  holds (whole segments, so a little more than was asked for) and how much footage the
+  file has before and after it; both are stored with the moment (`clip_start`,
+  `clip_duration` are the clip's own; `context_before`, `context_after` the footage
+  around it, NULL where the file is the clip alone). Everything in a file comes from one
+  group of segments, the one the clip is best cut from, so context beyond a break in the
+  stream is left out. The analysis steps are given the clip without its context
+  (`clip_alone`), cut out of the file for as long as they run.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
@@ -295,9 +309,11 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   writes as the stream goes along (12.5s segments, same program clock, roughly 15-25s
   behind live) and serves from `stream.kick.com` to a plain HTTP client. Its URL comes
   from `/api/v2/channels/{slug}/videos` (not reachable with a plain HTTP client, so it
-  is fetched inside the browser session that captures the live URL). A clip or context clip whose window
-  touches an ad is cut from the VOD instead, so it comes out up to ~25s longer than
-  usual (whole VOD segments); a channel with VODs turned off still gets the ad.
+  is fetched inside the browser session that captures the live URL). A moment whose file
+  would touch an ad - in the clip or in the context around it - is cut from the VOD
+  instead, so its clip comes out up to ~25s longer than usual (whole VOD segments); a
+  channel with VODs turned off gets the clip from the live segments, and context only as
+  far as the ad.
 
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`

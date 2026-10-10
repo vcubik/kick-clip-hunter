@@ -31,7 +31,7 @@ from kick_clip_hunter.db import (
     update_moment_sound_events,
     update_moment_transcript,
 )
-from kick_clip_hunter.recorder import CLIPS_DIR
+from kick_clip_hunter.recorder import CLIPS_DIR, clip_alone
 
 
 def main(limit: int | None) -> None:
@@ -50,43 +50,47 @@ def main(limit: int | None) -> None:
                 print(f"moment {row['id']}: clip file missing on disk ({clip_path}), skipping")
                 continue
 
-            if row["transcript"] is None:
-                try:
-                    transcript = transcriber.transcribe_clip(clip_path)
-                    update_moment_transcript(conn, row["id"], transcript)
-                    print(f"moment {row['id']}: transcript saved ({len(transcript)} chars)")
-                except Exception as e:
-                    print(f"moment {row['id']}: transcription failed: {e}")
+            # The steps look at the clip itself: a file that also holds the
+            # footage either side of it has the clip cut out of it for them.
+            extent = (row["context_before"], row["clip_duration"], row["context_after"])
+            with clip_alone(clip_path, *extent) as alone:
+                if row["transcript"] is None:
+                    try:
+                        transcript = transcriber.transcribe_clip(alone)
+                        update_moment_transcript(conn, row["id"], transcript)
+                        print(f"moment {row['id']}: transcript saved ({len(transcript)} chars)")
+                    except Exception as e:
+                        print(f"moment {row['id']}: transcription failed: {e}")
 
-            if row["audio_events"] is None:
-                try:
-                    tags = audio_events.detect_audio_events(clip_path)
-                    update_moment_audio_events(conn, row["id"], tags)
-                    print(f"moment {row['id']}: audio events saved: {tags}")
-                except Exception as e:
-                    print(f"moment {row['id']}: audio event detection failed: {e}")
+                if row["audio_events"] is None:
+                    try:
+                        tags = audio_events.detect_audio_events(alone)
+                        update_moment_audio_events(conn, row["id"], tags)
+                        print(f"moment {row['id']}: audio events saved: {tags}")
+                    except Exception as e:
+                        print(f"moment {row['id']}: audio event detection failed: {e}")
 
-            if row["frame_embedding"] is None:
-                try:
-                    embedding = frame_encoder.encode_clip(clip_path)
-                    if embedding:
-                        update_moment_frame_embedding(conn, row["id"], embedding)
-                        print(f"moment {row['id']}: frame embedding saved ({len(embedding)} bytes)")
-                    else:
-                        print(f"moment {row['id']}: no frames extracted, skipping")
-                except Exception as e:
-                    print(f"moment {row['id']}: frame encoding failed: {e}")
+                if row["frame_embedding"] is None:
+                    try:
+                        embedding = frame_encoder.encode_clip(alone)
+                        if embedding:
+                            update_moment_frame_embedding(conn, row["id"], embedding)
+                            print(f"moment {row['id']}: frame embedding saved ({len(embedding)} bytes)")
+                        else:
+                            print(f"moment {row['id']}: no frames extracted, skipping")
+                    except Exception as e:
+                        print(f"moment {row['id']}: frame encoding failed: {e}")
 
-            if row["sound_events"] is None or row["sound_embedding"] is None:
-                try:
-                    tags, embedding = sound_events.tag_sound_events(clip_path)
-                    if row["sound_events"] is None:
-                        update_moment_sound_events(conn, row["id"], tags)
-                    if row["sound_embedding"] is None and embedding:
-                        update_moment_sound_embedding(conn, row["id"], embedding)
-                    print(f"moment {row['id']}: sound events saved: {tags}")
-                except Exception as e:
-                    print(f"moment {row['id']}: sound event tagging failed: {e}")
+                if row["sound_events"] is None or row["sound_embedding"] is None:
+                    try:
+                        tags, embedding = sound_events.tag_sound_events(alone)
+                        if row["sound_events"] is None:
+                            update_moment_sound_events(conn, row["id"], tags)
+                        if row["sound_embedding"] is None and embedding:
+                            update_moment_sound_embedding(conn, row["id"], embedding)
+                        print(f"moment {row['id']}: sound events saved: {tags}")
+                    except Exception as e:
+                        print(f"moment {row['id']}: sound event tagging failed: {e}")
     finally:
         conn.close()
 

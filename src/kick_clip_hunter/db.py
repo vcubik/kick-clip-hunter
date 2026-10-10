@@ -247,6 +247,18 @@ def get_connection() -> sqlite3.Connection:
     if "clip_duration" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN clip_duration REAL")
 
+    # A moment's file holds the clip and the footage either side of it: how
+    # many seconds of it come before the clip's first frame, and how many
+    # after its last. clip_start and clip_duration are still the clip's own,
+    # so the file runs for context_before + clip_duration + context_after.
+    # NULL where the file is the clip alone - an imported clip, or one from
+    # when context was kept in files of its own next to the clip (see
+    # scripts/join_context_clips.py).
+    if "context_before" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN context_before REAL")
+    if "context_after" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN context_after REAL")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -388,6 +400,7 @@ _MOMENT_COLUMNS = """
     id, broadcaster_user_id, channel_slug, detected_at, window_start, window_end, reason, score,
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
+    context_before, context_after,
     rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type
 """
 
@@ -462,8 +475,8 @@ def get_moments_missing_taste_data(conn: sqlite3.Connection) -> list[sqlite3.Row
     conn.row_factory = sqlite3.Row
     return conn.execute(
         """
-        SELECT id, channel_slug, clip_path, transcript, audio_events, frame_embedding,
-               sound_events, sound_embedding
+        SELECT id, channel_slug, clip_path, clip_duration, context_before, context_after,
+               transcript, audio_events, frame_embedding, sound_events, sound_embedding
         FROM moments
         WHERE clip_path IS NOT NULL
           AND (transcript IS NULL OR audio_events IS NULL OR frame_embedding IS NULL
@@ -583,18 +596,52 @@ def insert_moment(
     return cursor.lastrowid
 
 
+def get_moments_with_clip_alone(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Moments whose clip file is recorded as holding the clip and nothing
+    else - among them the ones cut when the footage either side of a clip
+    was kept in files of its own. See scripts/join_context_clips.py."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT id, channel_slug, clip_path, clip_duration
+        FROM moments
+        WHERE clip_path IS NOT NULL AND context_before IS NULL AND context_after IS NULL
+        ORDER BY id
+        """
+    ).fetchall()
+
+
 def update_moment_clip_path(
     conn: sqlite3.Connection,
     moment_id: int,
     clip_path: str,
     clip_start: str | None = None,
     clip_duration: float | None = None,
+    context_before: float | None = None,
+    context_after: float | None = None,
 ) -> None:
     """Records a moment's clip and, where it is known, the stretch of the
-    broadcast it holds (see the clip_start/clip_duration columns)."""
+    broadcast it holds (see the clip_start/clip_duration columns) and how
+    much footage its file has on either side of it (context_before/_after)."""
     conn.execute(
-        "UPDATE moments SET clip_path = ?, clip_start = ?, clip_duration = ? WHERE id = ?",
-        (clip_path, clip_start, clip_duration, moment_id),
+        """
+        UPDATE moments
+        SET clip_path = ?, clip_start = ?, clip_duration = ?, context_before = ?, context_after = ?
+        WHERE id = ?
+        """,
+        (clip_path, clip_start, clip_duration, context_before, context_after, moment_id),
+    )
+    conn.commit()
+
+
+def update_moment_context(
+    conn: sqlite3.Connection, moment_id: int, clip_duration: float, context_before: float, context_after: float
+) -> None:
+    """Records that a moment's file now also holds the footage either side
+    of its clip - what joining its context clips into it makes true."""
+    conn.execute(
+        "UPDATE moments SET clip_duration = ?, context_before = ?, context_after = ? WHERE id = ?",
+        (clip_duration, context_before, context_after, moment_id),
     )
     conn.commit()
 

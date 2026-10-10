@@ -22,6 +22,14 @@ the boundary. It also means ffmpeg never sees the playlist URLs, whose signed
 token is long enough to overflow ffmpeg's ~4096-byte URL limit (this module
 used to need a local proxy to work around that).
 
+A moment gets one file. The clip itself is kept short, and the footage that
+led up to it and what followed are in the same file on either side of it,
+as context: whoever takes the video away has room to cut differently, and
+the dashboard has one thing to play. Where the clip lies inside its file is
+returned with it (`CutClip`) and stored with the moment. Everything in a
+file comes from one group of segments - the one the clip itself is best cut
+from - so context that lies beyond a break in the stream is left out.
+
 A segment's file name carries everything needed to find it again:
 `<start epoch ms>_<duration ms>_<group>.ts`. Start time comes from the
 playlist's own EXT-X-PROGRAM-DATE-TIME (UTC, like the timestamps in
@@ -49,8 +57,11 @@ import logging
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -74,12 +85,11 @@ BUFFER_RETENTION_SECONDS = 600
 # weighted heavier than post-roll. Post-roll is generous too, though: the
 # payoff/aftermath of a bit often runs on past the chat spike, and clips were
 # felt to be cut off at the end. Pre-roll used to be 25s; it's shorter now
-# that the footage either side of a clip is kept next to it as separate
-# context clips (see extract_context_clips) instead of being baked in.
+# that the footage either side of a clip is kept as context around it.
 PRE_ROLL_SECONDS = 15
 POST_ROLL_SECONDS = 35
-# Footage saved next to each clip rather than in it, so the clip itself can
-# stay short without losing the lead-up or the aftermath.
+# Footage kept in a clip's file on either side of the clip itself, so the
+# clip can stay short without losing the lead-up or the aftermath.
 CONTEXT_BEFORE_SECONDS = 30
 CONTEXT_AFTER_SECONDS = 60
 # Segment times are the stream's own program clock, i.e. when a frame was
@@ -117,6 +127,14 @@ VOD_GROUP = "vod"
 # whose window ends later than the VOD reaches waits up to this long for it
 # to catch up, re-reading its playlist this often.
 VOD_WAIT_SECONDS = 45
+# How far either side of where a clip should begin in its file the frame it
+# really begins on is looked for, and how far past that frame's own time a cut
+# is asked to start so that rounding can't put it before the frame.
+KEYFRAME_SEARCH_SECONDS = 6.0
+KEYFRAME_MARGIN_SECONDS = 0.01
+# How far the length of a file joined from a clip and its context clips may
+# be from the sum of theirs before the join is taken to have gone wrong.
+JOIN_TOLERANCE_SECONDS = 1.0
 VOD_POLL_SECONDS = 3
 # Raw playlists saved at each discontinuity, for working out how ad breaks
 # are marked. Capped per channel.
@@ -142,11 +160,17 @@ class CutClip:
     than the window it was asked for. The times are on the stream's program
     clock, like the segments' own; chat saw the same frames
     PLAYBACK_DELAY_SECONDS later.
+
+    The file holds more than the clip: `context_before` seconds of footage
+    come before the clip's first frame and `context_after` follow its last,
+    so the file runs for context_before + duration + context_after.
     """
 
     path: Path
     started_at: datetime
     ended_at: datetime
+    context_before: float = 0.0
+    context_after: float = 0.0
 
     @property
     def duration(self) -> float:
@@ -513,19 +537,41 @@ class ChannelRecorder:
         return found
 
 
-def _best_group(segments: list[_StoredSegment], start: datetime, end: datetime) -> list[_StoredSegment]:
+def _coverage(segments: list[_StoredSegment], start: datetime, end: datetime) -> dict[str, float]:
+    """How many seconds of [start, end] each group's segments cover."""
+    coverage: dict[str, float] = {}
+    for segment in segments:
+        overlap = (min(segment.ended_at, end) - max(segment.started_at, start)).total_seconds()
+        coverage[segment.group] = coverage.get(segment.group, 0.0) + max(overlap, 0.0)
+    return coverage
+
+
+def _best_group(
+    segments: list[_StoredSegment],
+    start: datetime,
+    end: datetime,
+    wider: tuple[datetime, datetime] | None = None,
+) -> list[_StoredSegment]:
     """The segments of whichever group covers the most of [start, end].
 
     Segments from different groups can't be reliably joined into one clip
     (the stream layout may differ on either side of the boundary), so a
     window straddling one keeps only its longer side. An ad is the exception:
     it is only chosen when there is nothing else, however long it is.
+
+    Between groups that cover [start, end] equally, the one covering more of
+    `wider` is taken - of the live segments and the VOD's footage of the
+    same clip, the one that also has the context around it.
     """
-    coverage: dict[str, float] = {}
-    for segment in segments:
-        overlap = (min(segment.ended_at, end) - max(segment.started_at, start)).total_seconds()
-        coverage[segment.group] = coverage.get(segment.group, 0.0) + max(overlap, 0.0)
-    best = max(coverage, key=lambda group: (not group.endswith(AD_GROUP_SUFFIX), coverage[group]))
+    coverage = _coverage(segments, start, end)
+    around = _coverage(segments, *wider) if wider else {}
+
+    def worth(group: str) -> tuple[bool, float, float]:
+        # To a tenth of a second: two groups holding the same stretch of the
+        # broadcast in differently cut segments add up a hair differently.
+        return not group.endswith(AD_GROUP_SUFFIX), round(coverage[group], 1), around.get(group, 0.0)
+
+    best = max(coverage, key=worth)
     return [s for s in segments if s.group == best]
 
 
@@ -538,18 +584,54 @@ def _window_segments(recorder: ChannelRecorder, start: datetime, end: datetime) 
     return segments
 
 
+def _moment_segments(
+    recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: int, post_roll_seconds: int
+) -> tuple[list[_StoredSegment], list[_StoredSegment], list[_StoredSegment]]:
+    """The segments of a moment's file, in three runs: the context before
+    the clip, the clip, and the context after it.
+
+    `start` and `end` are when chat reacted. The clip is the whole segments
+    overlapping that window, widened by the pre- and post-roll and moved
+    back onto the stream's clock. The context is the segments of the same
+    group lying (by their midpoint) within CONTEXT_BEFORE_SECONDS before the
+    clip's first segment and CONTEXT_AFTER_SECONDS after its last, so the
+    three runs meet without a gap or a repeat.
+    """
+    clip_start = start - timedelta(seconds=pre_roll_seconds + PLAYBACK_DELAY_SECONDS)
+    clip_end = end + timedelta(seconds=post_roll_seconds - PLAYBACK_DELAY_SECONDS)
+    widest = (
+        clip_start - timedelta(seconds=CONTEXT_BEFORE_SECONDS),
+        clip_end + timedelta(seconds=CONTEXT_AFTER_SECONDS),
+    )
+    buffered = _window_segments(recorder, *widest)
+    inside = [s for s in buffered if s.ended_at >= clip_start and s.started_at <= clip_end]
+    if not inside:
+        raise RecorderError(f"No buffered segments cover {start} - {end} for {recorder.channel_slug!r}")
+
+    # Chosen for the clip, not for the file: context is worth having, but
+    # never at the price of the clip's own footage.
+    candidates = [s for s in buffered if s.group in {inside_segment.group for inside_segment in inside}]
+    group = _best_group(candidates, clip_start, clip_end, wider=widest)[0].group
+    clip = [s for s in inside if s.group == group]
+    first, last = clip[0].started_at, clip[-1].ended_at
+
+    def middle(segment: _StoredSegment) -> datetime:
+        return segment.started_at + timedelta(seconds=segment.duration / 2)
+
+    same = [s for s in buffered if s.group == group]
+    before = [s for s in same if first - timedelta(seconds=CONTEXT_BEFORE_SECONDS) <= middle(s) < first]
+    after = [s for s in same if last <= middle(s) < last + timedelta(seconds=CONTEXT_AFTER_SECONDS)]
+    return before, clip, after
+
+
 def _clip_segments(
     recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: int, post_roll_seconds: int
 ) -> list[_StoredSegment]:
-    clip_start = start - timedelta(seconds=pre_roll_seconds + PLAYBACK_DELAY_SECONDS)
-    clip_end = end + timedelta(seconds=post_roll_seconds - PLAYBACK_DELAY_SECONDS)
-    segments = _window_segments(recorder, clip_start, clip_end)
-    if not segments:
-        raise RecorderError(f"No buffered segments cover {start} - {end} for {recorder.channel_slug!r}")
-    return _best_group(segments, clip_start, clip_end)
+    """The segments of the clip itself, without the context around it."""
+    return _moment_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)[1]
 
 
-def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], output_name: str) -> CutClip:
+def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], output_name: str) -> Path:
     out_dir = CLIPS_DIR / recorder.channel_slug
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / output_name
@@ -576,7 +658,7 @@ def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], outpu
     finally:
         joined.unlink(missing_ok=True)
 
-    return CutClip(output_path, segments[0].started_at, segments[-1].ended_at)
+    return output_path
 
 
 def extract_clip(
@@ -587,7 +669,79 @@ def extract_clip(
     pre_roll_seconds: int = PRE_ROLL_SECONDS,
     post_roll_seconds: int = POST_ROLL_SECONDS,
 ) -> CutClip:
-    return _write_clip(recorder, _clip_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds), output_name)
+    """Cut a moment's file: its clip with the context either side of it.
+
+    The context after the clip has to have been broadcast and downloaded by
+    the time this is called (see CONTEXT_AFTER_SECONDS); whatever of it is
+    not there yet is simply not in the file.
+    """
+    before, clip, after = _moment_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)
+    path = _write_clip(recorder, [*before, *clip, *after], output_name)
+    first, last = clip[0].started_at, clip[-1].ended_at
+    return CutClip(
+        path,
+        first,
+        last,
+        context_before=(first - before[0].started_at).total_seconds() if before else 0.0,
+        context_after=(after[-1].ended_at - last).total_seconds() if after else 0.0,
+    )
+
+
+def _keyframe_near(path: Path, second: float) -> float:
+    """When the frame a cut without re-encoding can start on is shown, for
+    the one nearest to `second` of a video - or `second` itself if the file
+    can't be asked."""
+    first = max(second - KEYFRAME_SEARCH_SECONDS, 0.0)
+    try:
+        result = subprocess.run(
+            [
+                FFPROBE_BIN, "-v", "error",
+                "-select_streams", "v:0", "-skip_frame", "nokey",
+                "-read_intervals", f"{first:.3f}%{second + KEYFRAME_SEARCH_SECONDS:.3f}",
+                "-show_entries", "frame=pts_time",
+                "-of", "csv=p=0",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        times = [float(line.strip().strip(",")) for line in result.stdout.splitlines() if line.strip().strip(",")]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return second
+    return min(times, key=lambda time: abs(time - second), default=second)
+
+
+@contextmanager
+def clip_part(path: Path, start: float, duration: float) -> Iterator[Path]:
+    """The clip itself, out of a file that also holds the context around
+    it, as a file of its own for as long as the `with` block runs.
+
+    For what should look at the clip and nothing else - the analysis steps,
+    whose results describe the moment. `start` is where the clip begins in
+    the file. A clip begins on a segment's first frame, which the video can
+    be cut at without re-encoding - but where exactly the file has that
+    frame is a few hundredths of a second off what the segments' lengths add
+    up to, and ffmpeg starts a copy on the last such frame *before* the
+    time asked for. So the frame is looked up, and asked for by its own time.
+    """
+    start = _keyframe_near(path, start) + KEYFRAME_MARGIN_SECONDS
+    with tempfile.TemporaryDirectory(prefix="clip_part_") as folder:
+        part = Path(folder) / path.name
+        subprocess.run(
+            [
+                FFMPEG_BIN, "-y",
+                "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
+                "-i", str(path),
+                "-c", "copy", "-avoid_negative_ts", "make_zero",
+                str(part),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        yield part
 
 
 def probe_duration(path: Path) -> float | None:
@@ -611,42 +765,80 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
+@contextmanager
+def clip_alone(
+    path: Path, context_before: float | None, duration: float | None, context_after: float | None
+) -> Iterator[Path]:
+    """A moment's clip without the context around it, whatever its file
+    holds: the file itself where that is nothing but the clip (an imported
+    one, or one from before context was kept in the clip's file), otherwise
+    the clip cut out of it for as long as the `with` block runs."""
+    if not duration or not (context_before or context_after):
+        yield path
+        return
+    with clip_part(path, context_before or 0.0, duration) as part:
+        yield part
+
+
+# -- clips from before a moment had one file ---------------------------------
+
+
 def context_clip_names(clip_name: str) -> dict[str, str]:
+    """What the footage before and after a clip was called when it was kept
+    in files of its own next to the clip (see join_context_clips)."""
     stem = Path(clip_name).stem
     return {"before": f"{stem}_before.mp4", "after": f"{stem}_after.mp4"}
 
 
-def extract_context_clips(
-    recorder: ChannelRecorder,
-    start: datetime,
-    end: datetime,
-    clip_name: str,
-    pre_roll_seconds: int = PRE_ROLL_SECONDS,
-    post_roll_seconds: int = POST_ROLL_SECONDS,
-) -> dict[str, Path]:
-    """Cut the footage right before and right after a moment's clip into
-    their own files next to it (`<clip>_before.mp4`, `<clip>_after.mp4`).
+def join_context_clips(clip_path: Path) -> tuple[float, float, float] | None:
+    """Make one file of a clip and the context clips kept next to it.
 
-    Takes the same arguments the clip itself was cut with, so the context
-    lines up exactly with the clip's first and last segment - played back to
-    back, before + clip + after is one continuous stretch. Whichever side has
-    no usable footage is simply left out of the result.
+    Moments used to have up to three files: the clip, and the footage before
+    and after it. They were cut from one run of segments at the clip's own
+    first and last segment, so played back to back they are one continuous
+    stretch - which is what this writes, in the clip's place, without
+    re-encoding. The context files are removed once the joined file is there.
+
+    Returns how long the context before the clip, the clip and the context
+    after it run in the joined file, or None if the clip has no context
+    files (or cannot be measured) and was left alone.
     """
-    clip = _clip_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)
-    clip_start, clip_end = clip[0].started_at, clip[-1].ended_at
-    windows = {
-        "before": (clip_start - timedelta(seconds=CONTEXT_BEFORE_SECONDS), clip_start),
-        "after": (clip_end, clip_end + timedelta(seconds=CONTEXT_AFTER_SECONDS)),
-    }
-    names = context_clip_names(clip_name)
-    saved: dict[str, Path] = {}
-    for side, (window_start, window_end) in windows.items():
-        # Only segments that lie (by their midpoint) inside the window, so
-        # nothing from the clip itself is repeated.
-        segments = [
-            s for s in _window_segments(recorder, window_start, window_end)
-            if window_start <= s.started_at + timedelta(seconds=s.duration / 2) < window_end
-        ]
-        if segments:
-            saved[side] = _write_clip(recorder, _best_group(segments, window_start, window_end), names[side]).path
-    return saved
+    names = context_clip_names(clip_path.name)
+    sides = {side: clip_path.with_name(name) for side, name in names.items()}
+    parts = [path for path in (sides["before"], clip_path, sides["after"]) if path.exists()]
+    if len(parts) < 2 or not clip_path.exists():
+        return None
+    lengths = {path: probe_duration(path) for path in parts}
+    if any(length is None for length in lengths.values()):
+        return None
+
+    listing = clip_path.with_name(f".{clip_path.stem}.join.txt")
+    joined = clip_path.with_name(f".{clip_path.stem}.join.mp4")
+    try:
+        # ffmpeg's concat list: one file per line, a quote inside a name
+        # written as '\''.
+        lines = ["file '" + path.resolve().as_posix().replace("'", "'\\''") + "'" for path in parts]
+        listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                FFMPEG_BIN, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(listing),
+                "-c", "copy",
+                str(joined),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        whole = probe_duration(joined)
+        expected = sum(lengths.values())
+        if whole is None or abs(whole - expected) > JOIN_TOLERANCE_SECONDS:
+            raise RecorderError(f"joining {clip_path.name} gave {whole} s of footage, expected {expected:.1f} s")
+        joined.replace(clip_path)
+    finally:
+        listing.unlink(missing_ok=True)
+        joined.unlink(missing_ok=True)
+    for path in sides.values():
+        path.unlink(missing_ok=True)
+    return lengths.get(sides["before"], 0.0), lengths[clip_path], lengths.get(sides["after"], 0.0)

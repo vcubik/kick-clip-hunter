@@ -18,7 +18,9 @@
 
   {% if moment.clip_url %}
   <div class="player">
-    <video src="{{ moment.clip_url }}" preload="metadata" playsinline data-clip></video>
+    {#- The file opens with the footage that led up to the clip; the
+        player starts where the clip does. -#}
+    <video src="{{ moment.clip_url }}{% if moment.clip_lead != "0" %}#t={{ moment.clip_lead }}{% endif %}" preload="metadata" playsinline data-clip data-lead="{{ moment.clip_lead }}"></video>
   </div>
   <div class="ch-transport">
     <button type="button" class="ch-btn ch-btn-icon play" aria-label="Play" data-play>
@@ -37,19 +39,17 @@
     </button>
   </div>
   {% elif moment.clip_state == "pending" %}
-  <p class="no-clip">The clip is still being cut. That takes about a minute.</p>
+  <p class="no-clip">The clip is still being cut. That takes about two minutes.</p>
   {% else %}
   <p class="no-clip">No clip was saved for this moment.</p>
   {% endif %}
 
   {#- What chat did, on the clip's own time axis. With a clip to play it is
-      also the scrubber: one timeline over the clip and the footage saved
+      also the scrubber: one timeline over the clip and the footage kept
       before and after it. -#}
   {% if moment.strip %}
   {% set strip = moment.strip %}
-  <figure class="trace" data-trace data-start="{{ strip.start }}" data-end="{{ strip.end }}" data-clip-seconds="{{ strip.clip_seconds }}"
-    {%- if moment.footage.before %} data-before="{{ moment.footage.before }}"{% endif %}
-    {%- if moment.footage.after %} data-after="{{ moment.footage.after }}"{% endif %}>
+  <figure class="trace" data-trace data-start="{{ strip.start }}" data-end="{{ strip.end }}" data-clip-seconds="{{ strip.clip_seconds }}">
     <figcaption class="visually-hidden">{{ strip.label }}</figcaption>
     {% if strip.has_chat %}
     <div class="ch-legend">
