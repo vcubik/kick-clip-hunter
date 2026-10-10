@@ -453,6 +453,44 @@ class TestQueue:
         assert opened(await review(service, moment=999)) == only
 
 
+class TestNamedMoments:
+    async def test_a_row_says_the_name_the_moment_was_given(self, service):
+        add_moment("channel_a", detected_at=T0, clip_path="channel_a/moment_1.mp4", title="He fell off the chair")
+
+        page = await review(service)
+
+        (what,) = [row.one("span", class_="ch-what") for row in queue_rows(page)]
+        assert what.text == "He fell off the chair"
+        # What it goes back to saying if the name is taken away.
+        assert what.attrs["data-unnamed"] == "Laughing"
+
+    async def test_the_open_moment_has_its_name_in_a_field_to_change_it(self, service):
+        add_moment("channel_a", detected_at=T0, title="He fell off the chair")
+
+        field = open_moment(await review(service)).one("input", class_="moment-name")
+
+        assert field.attrs["value"] == "He fell off the chair"
+        assert field.attrs["maxlength"] == str(service.main.MOMENT_TITLE_MAX_LENGTH)
+
+    async def test_a_moment_with_no_name_has_an_empty_field_and_its_usual_row(self, service):
+        add_moment("channel_a", detected_at=T0)
+
+        page = await review(service)
+
+        assert open_moment(page).one("input", class_="moment-name").attrs["value"] == ""
+        (what,) = [row.one("span", class_="ch-what") for row in queue_rows(page)]
+        assert what.text == what.attrs["data-unnamed"] == "Laughing, no clip"
+        assert "data-no-clip" in what.attrs
+
+    async def test_a_name_is_text_and_never_markup(self, service):
+        add_moment("channel_a", detected_at=T0, clip_path="channel_a/moment_1.mp4", title='<b>"x"</b>')
+
+        page = await review(service)
+
+        assert queue_rows(page)[0].one("span", class_="ch-what").text == '<b>"x"</b>'
+        assert open_moment(page).one("input", class_="moment-name").attrs["value"] == '<b>"x"</b>'
+
+
 class TestOpenMoment:
     async def test_says_which_channel_when_and_how_far_into_the_stream(self, service, today):
         add_moment("channel_a", detected_at=T0, stream_elapsed_seconds=3723)
@@ -1212,7 +1250,7 @@ class TestClips:
         assert labels == ["Play", "Playback speed", "Mute", "Full screen"]
         # There is no seek bar: the strip under the clip is the scrubber. The
         # one slider among the controls is the volume.
-        (volume,) = article.find("input")
+        (volume,) = article.one("div", class_="ch-transport").find("input")
         assert volume.attrs["aria-label"] == "Volume" and volume.attrs["type"] == "range"
         assert (volume.attrs["min"], volume.attrs["max"]) == ("0", "1")
         assert article.one("div", role="slider").attrs["aria-label"] == "Position in the footage"

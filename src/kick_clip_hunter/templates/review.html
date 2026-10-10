@@ -45,7 +45,7 @@
           <svg viewBox="0 0 {{ spark_steps }} {{ spark_height }}" preserveAspectRatio="none"><path class="ch-laugh" d="{{ row.spark.laugh }}"></path><path class="ch-all" d="{{ row.spark.all }}"></path></svg>
           {%- endif -%}
         </span>
-        <span class="ch-what">{{ row.what }}</span>
+        <span class="ch-what" data-unnamed="{{ row.unnamed }}"{% if not row.has_clip %} data-no-clip{% endif %}>{{ row.what }}</span>
         {{ meter(row.rating, row.rating_words) }}
       </a>
       {% endfor %}

@@ -168,18 +168,24 @@ def reason_words(reason: str, *, main_only: bool = False) -> list[str]:
     return [REASON_WORDS.get(token, token.replace("_", " ")) for token in chosen]
 
 
-def queue_label(row: Row, reaction: str | None = None) -> str:
-    """The few words a queue row has room for: what chat said most in the
-    moment (`reaction`, as chat wrote it) or, failing that, what set the
-    moment off."""
-    if reaction:
+NO_CLIP_WORDS = "no clip"
+
+
+def queue_label(row: Row, reaction: str | None = None, *, named: bool = True) -> str:
+    """The few words a queue row has room for: the name the reviewer gave
+    the moment or, until it has one, what chat said most in it (`reaction`,
+    as chat wrote it) or, failing that, what set it off. `named=False` gives
+    what the row would say without its name."""
+    if named and row["title"]:
+        words = [row["title"]]
+    elif reaction:
         words = [reaction]
     elif row["reason"] == IMPORT_REASON:
         words = ["Imported"]
     else:
         words = [sentence_case(", ".join(reason_words(row["reason"], main_only=True)))]
     if not row["clip_path"]:
-        words.append("no clip")
+        words.append(NO_CLIP_WORDS)
     return ", ".join(words)
 
 
@@ -338,6 +344,9 @@ def queue_groups(
                 "time": stream_time_words(elapsed) or clock_words(detected),
                 "time_title": when_words(detected, today),
                 "what": queue_label(row, (reactions or {}).get(row["id"])),
+                # What the row goes back to saying if its name is taken away.
+                "unnamed": queue_label(row, (reactions or {}).get(row["id"]), named=False),
+                "has_clip": bool(row["clip_path"]),
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
             }

@@ -10,6 +10,7 @@
       <h1 class="title">{{ moment.channel }}</h1>
       <p class="moment-when">{{ moment.when }}</p>
     </div>
+    <input type="text" class="ch-input moment-name" value="{{ moment.title }}" maxlength="{{ moment.title_max }}" aria-label="Name of this moment" placeholder="Name this moment" autocomplete="off" data-title>
     {% if moment.stream_time %}
     <p class="moment-clock"><span class="counter">{{ moment.stream_time }}</span> <span>into the stream</span></p>
     {% endif %}
