@@ -105,9 +105,11 @@ def frame_times(duration: float, fps: int = FPS) -> list[float]:
     return [frame / fps for frame in range(max(1, math.ceil(duration * fps)))]
 
 
-def page_html(lines: Sequence[Mapping[str, Any]]) -> str:
-    """The page the browser is stepped through: every line, none shown yet."""
-    return _templates.get_template("chat_video.html").render(lines=lines)
+def page_html(lines: Sequence[Mapping[str, Any]], background: str | None = None) -> str:
+    """The page the browser is stepped through: every line, none shown yet.
+    `background` is a colour to put behind them ("#rrggbb", see
+    clip_trim.chat_background); without one there is nothing there."""
+    return _templates.get_template("chat_video.html").render(lines=lines, background=background)
 
 
 def answer(url: str, resource_type: str) -> tuple[str, Path | None]:
@@ -220,10 +222,14 @@ def encode(frames: Iterable[bytes], output: Path, fps: int = FPS) -> int:
     return count
 
 
-def render(lines: Sequence[Mapping[str, Any]], duration: float, output: Path) -> int:
+def render(
+    lines: Sequence[Mapping[str, Any]], duration: float, output: Path, background: str | None = None
+) -> int:
     """Renders the chat video of a clip `duration` seconds long from its
-    chat lines (see chat_trace.chat_replay) and returns its frame count."""
-    html = page_html(lines_for_clip(lines, duration))
+    chat lines (see chat_trace.chat_replay) and returns its frame count.
+    With a `background` colour the video is that colour behind the text, to
+    put next to the picture; without one it is see-through, to lay over it."""
+    html = page_html(lines_for_clip(lines, duration), background)
     with _one_at_a_time:
         frames = capture_frames(html, frame_times(duration))
         try:

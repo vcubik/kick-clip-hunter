@@ -226,6 +226,12 @@
       <span>later</span>
     </label>
     <output class="trim-shift-words" data-trim-shift-words>Chat where the review page has it</output>
+    {#- Nothing behind the text, to lay it over the picture - or a colour,
+        to put it next to the picture. The chat beside the player shows it. -#}
+    <span class="trim-background">
+      <label class="trim-check"><input type="checkbox" disabled data-trim-background> on a background</label>
+      <input type="color" value="{{ trim.chat_background }}" aria-label="Colour behind the chat" disabled data-trim-background-colour>
+    </span>
   </div>
   {% endif %}
   <p class="trim-note">Cut without re-encoding, so the video begins on the last frame a cut can begin on before the start you set: up to a couple of seconds earlier.{% if trim.chat %} Its chat is lined up with where it really begins.{% endif %}</p>

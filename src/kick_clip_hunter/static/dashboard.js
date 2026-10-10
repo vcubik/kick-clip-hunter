@@ -732,12 +732,28 @@
   }
 
   // Whether the chat goes with the video: its lines are then shown beside
-  // the picture, and can be moved against it.
+  // the picture, and can be moved against it and given a background.
   function wantTrimChat(box) {
     const dialog = trimOf(box);
     one("[data-trim-chat-pane]", dialog).hidden = !box.checked;
     one("[data-trim-shift]", dialog).disabled = !box.checked;
+    one("[data-trim-background]", dialog).disabled = !box.checked;
+    paintTrimBackground(dialog);
     paintTrim(dialog);
+  }
+
+  // The colour the chat video is to have behind its text, or null for
+  // nothing there.
+  function trimBackground(dialog) {
+    const wanted = one("[data-trim-background]", dialog);
+    return wanted && wanted.checked ? one("[data-trim-background-colour]", dialog).value : null;
+  }
+
+  // The chat beside the player shows the background the video will have.
+  function paintTrimBackground(dialog) {
+    const wanted = one("[data-trim-background]", dialog);
+    one("[data-trim-background-colour]", dialog).disabled = wanted.disabled || !wanted.checked;
+    one("[data-trim-chat-pane]", dialog).style.background = trimBackground(dialog) || "";
   }
 
   function shiftTrimChat(slider) {
@@ -794,6 +810,7 @@
       end: to,
       chat: Boolean(chat && chat.checked),
       chat_shift: shift ? Number(shift.value) : 0,
+      chat_background: trimBackground(dialog),
     });
     if (!dialog.isConnected) return; // another moment was opened meanwhile
     if (!response || !response.ok) {
@@ -1022,6 +1039,8 @@
       shiftTrimChat(target);
     } else if (target.matches("[data-chat-delay-slider]")) {
       previewChatShift(target);
+    } else if (target.matches("[data-trim-background-colour]")) {
+      paintTrimBackground(trimOf(target));
     }
   });
 
@@ -1036,6 +1055,7 @@
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
+    else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
   });

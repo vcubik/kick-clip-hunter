@@ -1821,13 +1821,17 @@ class TestTrimming:
         dialog = await self.dialog(service)
 
         limit = view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS)
-        box = dialog.one("input", type="checkbox")
+        box = dialog.one("input", data_trim_chat=True)
         slider = dialog.one("input", type="range")
         assert "checked" not in box.attrs
         assert (slider.attrs["min"], slider.attrs["max"], slider.attrs["value"]) == (f"-{limit}", limit, "0")
         # Nothing to move until chat is wanted.
         assert "disabled" in slider.attrs
         assert "hidden" in dialog.one("div", class_="trim-chat").attrs
+        # Nor anything to put behind it: that is off, on a colour to start from.
+        colour = dialog.one("input", type="color")
+        assert colour.attrs["value"] == clip_trim.DEFAULT_CHAT_BACKGROUND and "disabled" in colour.attrs
+        assert "checked" not in dialog.one("input", data_trim_background=True).attrs
 
     async def test_a_clip_without_chat_is_trimmed_without_it(self, service, footage):
         self.SOURCE.parent.mkdir(parents=True, exist_ok=True)
@@ -1978,6 +1982,18 @@ class TestTrimming:
 
         assert self.lines(browser) == lines
 
+    async def test_chat_has_nothing_behind_it_unless_a_colour_is_asked_for(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+
+        await self.ask(service, moment_id, chat=True)
+        await service.settle()
+        await self.ask(service, moment_id, chat=True, chat_background="#0A2540")
+        await service.settle()
+
+        clear, coloured = [parse(html).one("html").attrs for html in browser.pages]
+        assert "style" not in clear
+        assert coloured["style"] == "background: #0a2540"
+
     async def test_chat_starts_from_where_the_channels_chat_delay_puts_it(self, service, footage, browser):
         moment_id = self.clip_with_chat(footage)
         delay = chat_trace.CHAT_DELAY_SECONDS + 1
@@ -2103,8 +2119,22 @@ class TestTrimming:
             {"end": True},
             {"chat_shift": clip_trim.CHAT_SHIFT_LIMIT_SECONDS + 1},
             {"chat_shift": "later"},
+            {"chat_background": "navy"},
+            {"chat_background": "#000; background: url(//example.com)"},
         ],
-        ids=["too-short", "backwards", "before-footage", "past-footage", "text", "no-start", "yes", "too-far", "words"],
+        ids=[
+            "too-short",
+            "backwards",
+            "before-footage",
+            "past-footage",
+            "text",
+            "no-start",
+            "yes",
+            "too-far",
+            "words",
+            "colour-name",
+            "more-than-a-colour",
+        ],
     )
     async def test_a_stretch_that_cannot_be_cut_is_refused(self, service, footage, asked):
         moment_id = self.clip_with_chat(footage)
