@@ -273,6 +273,9 @@ def moment(service) -> int:
 
 START = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 END = START + timedelta(seconds=10)
+# What the stand-in cutter says its clip holds: whole segments around the
+# window asked for, on the stream's clock.
+CLIP_HOLDS = (START - timedelta(seconds=26), END + timedelta(seconds=1))
 
 
 @pytest.fixture
@@ -296,7 +299,7 @@ def clip_cutter(service, monkeypatch):
         path = recorder.CLIPS_DIR / channel / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"clip")
-        return path
+        return recorder.CutClip(path, CLIP_HOLDS[0], CLIP_HOLDS[1])
 
     async def create_context(channel, start, end, name, post_roll_seconds):
         cutter.context_calls.append((channel, start, end, name, post_roll_seconds))
@@ -320,6 +323,15 @@ class TestCuttingTheClip:
         assert clip_cutter.clip_calls == [(CHANNEL, START, END, f"moment_{moment}.mp4", 7)]
         (row,) = service.moments()
         assert row["clip_path"] == f"{CHANNEL}/moment_{moment}.mp4"
+
+    async def test_the_stretch_of_the_broadcast_the_clip_holds_is_recorded_with_it(self, service, moment, clip_cutter):
+        # What was cut, not what was asked for: the dashboard lines chat up
+        # with the picture by it.
+        await self.cut(service, moment)
+
+        (row,) = service.moments()
+        assert datetime.fromisoformat(row["clip_start"]) == CLIP_HOLDS[0]
+        assert row["clip_duration"] == (CLIP_HOLDS[1] - CLIP_HOLDS[0]).total_seconds()
 
     async def test_it_waits_for_the_post_roll_to_be_broadcast_before_cutting(
         self, service, moment, clip_cutter, monkeypatch

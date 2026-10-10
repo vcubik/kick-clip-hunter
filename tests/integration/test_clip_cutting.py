@@ -39,6 +39,12 @@ def chat_time(seconds: float) -> datetime:
     return at(seconds + DELAY)
 
 
+def cut(*args, **kwargs) -> Path:
+    """Cuts a clip and hands back just the file, for the tests that are
+    about what is in it."""
+    return recorder.extract_clip(*args, **kwargs).path
+
+
 def buffer_segments(rec: ChannelRecorder, ts_segments: list[Path], indexes, group: str = "1-0") -> None:
     """Puts one-second segment `i` of the source footage at second `i` of
     the buffer's timeline."""
@@ -57,62 +63,68 @@ def rec(ts_segments) -> ChannelRecorder:
 
 class TestExtractClip:
     def test_produces_a_playable_clip_with_video_and_sound(self, rec):
-        clip = recorder.extract_clip(
-            rec, chat_time(20), chat_time(25), "moment_1.mp4", pre_roll_seconds=5, post_roll_seconds=5
-        )
+        clip = cut(rec, chat_time(20), chat_time(25), "moment_1.mp4", pre_roll_seconds=5, post_roll_seconds=5)
 
         assert clip == recorder.CLIPS_DIR / "some_channel" / "moment_1.mp4"
         assert probe(clip)["streams"] == ["audio", "video"]
         assert decodes_cleanly(clip)
 
-    def test_covers_pre_roll_reaction_and_post_roll(self, rec):
-        # Footage 15s..30s is asked for; whole segments touching that range
-        # are used, so one extra second on either side at most.
+    def test_says_which_stretch_of_the_broadcast_the_clip_holds(self, rec):
+        # Footage 15s..30s is asked for. The clip is made of whole segments,
+        # so what it holds starts and ends on a segment's edge around that.
         clip = recorder.extract_clip(
             rec, chat_time(20), chat_time(25), "moment_1.mp4", pre_roll_seconds=5, post_roll_seconds=5
         )
+
+        assert at(14) <= clip.started_at <= at(15)
+        assert at(30) <= clip.ended_at <= at(31)
+        assert clip.duration == (clip.ended_at - clip.started_at).total_seconds()
+        assert probe(clip.path)["duration"] == pytest.approx(clip.duration, abs=TOLERANCE)
+
+    def test_covers_pre_roll_reaction_and_post_roll(self, rec):
+        # Footage 15s..30s is asked for; whole segments touching that range
+        # are used, so one extra second on either side at most.
+        clip = cut(rec, chat_time(20), chat_time(25), "moment_1.mp4", pre_roll_seconds=5, post_roll_seconds=5)
 
         duration = probe(clip)["duration"]
         assert 15 - TOLERANCE <= duration <= 17 + TOLERANCE
 
     def test_a_longer_reaction_gives_a_proportionally_longer_clip(self, rec):
-        short = recorder.extract_clip(rec, chat_time(20), chat_time(22), "short.mp4", 5, 5)
-        longer = recorder.extract_clip(rec, chat_time(20), chat_time(30), "longer.mp4", 5, 5)
+        short = cut(rec, chat_time(20), chat_time(22), "short.mp4", 5, 5)
+        longer = cut(rec, chat_time(20), chat_time(30), "longer.mp4", 5, 5)
 
         assert probe(longer)["duration"] - probe(short)["duration"] == pytest.approx(8, abs=2 * TOLERANCE)
 
     def test_pre_and_post_roll_default_to_the_modules_constants(self, rec):
-        with_defaults = recorder.extract_clip(rec, chat_time(20), chat_time(25), "defaults.mp4")
-        explicit = recorder.extract_clip(
+        with_defaults = cut(rec, chat_time(20), chat_time(25), "defaults.mp4")
+        explicit = cut(
             rec, chat_time(20), chat_time(25), "explicit.mp4", recorder.PRE_ROLL_SECONDS, recorder.POST_ROLL_SECONDS
         )
 
         assert probe(with_defaults)["duration"] == pytest.approx(probe(explicit)["duration"], abs=TOLERANCE)
 
     def test_leaves_no_working_files_behind(self, rec):
-        recorder.extract_clip(rec, chat_time(20), chat_time(25), "moment_1.mp4", 5, 5)
+        cut(rec, chat_time(20), chat_time(25), "moment_1.mp4", 5, 5)
 
         assert sorted(path.name for path in (recorder.CLIPS_DIR / "some_channel").iterdir()) == ["moment_1.mp4"]
 
     def test_the_buffer_itself_is_not_consumed(self, rec):
         before = sorted(path.name for path in rec._base_dir.iterdir())
 
-        recorder.extract_clip(rec, chat_time(20), chat_time(25), "moment_1.mp4", 5, 5)
+        cut(rec, chat_time(20), chat_time(25), "moment_1.mp4", 5, 5)
 
         assert sorted(path.name for path in rec._base_dir.iterdir()) == before
 
     def test_a_window_partly_outside_the_buffer_yields_what_there_is(self, rec):
         # The buffer ends at second 40; the request runs to second 60.
-        clip = recorder.extract_clip(
-            rec, chat_time(35), chat_time(50), "tail.mp4", pre_roll_seconds=5, post_roll_seconds=10
-        )
+        clip = cut(rec, chat_time(35), chat_time(50), "tail.mp4", pre_roll_seconds=5, post_roll_seconds=10)
 
         assert probe(clip)["duration"] == pytest.approx(11, abs=1 + TOLERANCE)
         assert decodes_cleanly(clip)
 
     def test_no_footage_at_all_is_an_error_and_writes_nothing(self, rec):
         with pytest.raises(RecorderError):
-            recorder.extract_clip(rec, chat_time(500), chat_time(505), "nothing.mp4", 5, 5)
+            cut(rec, chat_time(500), chat_time(505), "nothing.mp4", 5, 5)
 
         assert not (recorder.CLIPS_DIR / "some_channel" / "nothing.mp4").exists()
 
@@ -122,7 +134,7 @@ class TestExtractClip:
             (broken._base_dir / f"{int(at(second).timestamp() * 1000)}_1000_1-0.ts").write_bytes(b"not mpeg-ts at all")
 
         with pytest.raises(subprocess.CalledProcessError):
-            recorder.extract_clip(broken, chat_time(4), chat_time(6), "broken.mp4", 2, 2)
+            cut(broken, chat_time(4), chat_time(6), "broken.mp4", 2, 2)
 
         leftovers = [path.name for path in (recorder.CLIPS_DIR / "broken_channel").iterdir() if path.suffix == ".ts"]
         assert leftovers == []
@@ -141,14 +153,14 @@ class TestClipAcrossABreak:
 
     def test_a_clip_mostly_before_the_break_stops_at_it(self, rec):
         # Footage 12s..24s: eight seconds before the break, four after.
-        clip = recorder.extract_clip(rec, chat_time(12), chat_time(24), "before.mp4", 0, 0)
+        clip = cut(rec, chat_time(12), chat_time(24), "before.mp4", 0, 0)
 
         assert probe(clip)["duration"] == pytest.approx(9, abs=TOLERANCE)  # seconds 11-20
         assert decodes_cleanly(clip)
 
     def test_a_clip_mostly_after_the_break_starts_at_it(self, rec):
         # Footage 17s..30s: three seconds before the break, ten after.
-        clip = recorder.extract_clip(rec, chat_time(17), chat_time(30), "after.mp4", 0, 0)
+        clip = cut(rec, chat_time(17), chat_time(30), "after.mp4", 0, 0)
 
         assert probe(clip)["duration"] == pytest.approx(11, abs=TOLERANCE)  # seconds 20-31
         assert decodes_cleanly(clip)
@@ -162,7 +174,7 @@ class TestContextClips:
         monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", 8)
 
     def cut(self, rec, start: float, end: float, name: str = "moment_7.mp4"):
-        clip = recorder.extract_clip(rec, chat_time(start), chat_time(end), name, 0, 0)
+        clip = cut(rec, chat_time(start), chat_time(end), name, 0, 0)
         context = recorder.extract_context_clips(rec, chat_time(start), chat_time(end), name, 0, 0)
         return clip, context
 
@@ -197,7 +209,7 @@ class TestContextClips:
 
     def test_context_is_cut_from_the_same_arguments_as_the_clip(self, rec):
         # Pre- and post-roll move the clip's edges, and the context with them.
-        clip = recorder.extract_clip(rec, chat_time(18), chat_time(20), "moment_9.mp4", 4, 4)
+        clip = cut(rec, chat_time(18), chat_time(20), "moment_9.mp4", 4, 4)
         context = recorder.extract_context_clips(rec, chat_time(18), chat_time(20), "moment_9.mp4", 4, 4)
 
         total = sum(probe(path)["duration"] for path in (context["before"], clip, context["after"]))
@@ -267,7 +279,7 @@ class TestAdReplacedFromTheVod:
         def chat(seconds: float) -> datetime:
             return start + timedelta(seconds=seconds + DELAY)
 
-        return recorder.extract_clip(rec, chat(first), chat(last), name, 0, 0)
+        return cut(rec, chat(first), chat(last), name, 0, 0)
 
     def test_a_clip_through_an_ad_is_cut_from_the_vod_instead(self, recording, live, vod, start):
         rec = self.recorded(recording, live, vod)
@@ -364,3 +376,21 @@ class TestAdReplacedFromTheVod:
 
         assert probe(clip)["duration"] == pytest.approx(4, abs=TOLERANCE)
         assert any("VOD backfill failed" in record.getMessage() for record in caplog.records)
+
+
+class TestMeasuringAClip:
+    """Clips cut before their length was stored are measured by the dashboard."""
+
+    def test_gives_the_length_of_a_clip_in_seconds(self, rec):
+        clip = recorder.extract_clip(rec, chat_time(20), chat_time(25), "moment_1.mp4", 5, 5)
+
+        assert recorder.probe_duration(clip.path) == pytest.approx(clip.duration, abs=TOLERANCE)
+
+    def test_a_file_that_is_not_a_video_has_no_length(self, tmp_path):
+        path = tmp_path / "moment_1.mp4"
+        path.write_bytes(b"not really video")
+
+        assert recorder.probe_duration(path) is None
+
+    def test_neither_has_a_file_that_is_not_there(self, tmp_path):
+        assert recorder.probe_duration(tmp_path / "gone.mp4") is None

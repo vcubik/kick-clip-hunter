@@ -108,13 +108,23 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert row.attrs["data-moment"] == str(moment["id"])
     article = page.one("article", class_="moment")
     assert article.one("h1").text == CHANNEL
-    assert "fan0 xDDD" in [line.text for line in article.find("p", class_="ch-chat")]
     assert article.one("video").attrs["src"] == f"/clips/{CHANNEL}/{clip_name}"
-    assert [link.attrs["href"] for link in article.find("a", data_footage=True)] == [
+    trace = article.one("figure", class_="trace")
+    assert (trace.attrs["data-before"], trace.attrs["data-after"]) == (
         f"/clips/{CHANNEL}/moment_{moment['id']}_before.mp4",
-        f"/clips/{CHANNEL}/{clip_name}",
         f"/clips/{CHANNEL}/moment_{moment['id']}_after.mp4",
-    ]
+    )
+
+    # The clip was stored with the stretch of the broadcast it holds, which
+    # is the file's own length - and that puts the laughing where it belongs
+    # on the strip under it: inside the clip, after the pre-roll.
+    assert moment["clip_duration"] == pytest.approx(details["duration"], abs=0.35)
+    assert float(trace.attrs["data-clip-seconds"]) == moment["clip_duration"]
+    laughing = [line for line in article.find("p", class_="ch-chat") if line.text == "fan0 xDDD"]
+    assert len(laughing) == 1 and "is-moment" in laughing[0].classes
+    assert PRE_ROLL <= float(laughing[0].attrs["data-at"]) <= moment["clip_duration"]
+    counted = trace.one("div", class_="ch-strip").attrs["data-laugh"].split(",")
+    assert sum(map(int, counted)) == detector._dynamic_min_reaction_unique(10)
     assert (await service.client.get("/moments/status")).json() == {"moments": 1, "clips": 1}
 
     # The clip the page points at is the file that was cut.
@@ -168,4 +178,8 @@ async def test_without_a_recording_the_moment_is_still_detected_and_shown(servic
     article = page.one("article", class_="moment")
     assert article.find("video") == []
     assert "fan0 xDDD" in [line.text for line in article.find("p", class_="ch-chat")]
+    # With no footage there is nothing to scrub, but chat is still drawn.
+    strip = article.one("figure", class_="trace").one("div", class_="ch-strip")
+    assert "role" not in strip.attrs
+    assert sum(map(int, strip.attrs["data-laugh"].split(","))) == detector._dynamic_min_reaction_unique(10)
     assert (await service.client.get("/moments/status")).json() == {"moments": 1, "clips": 0}

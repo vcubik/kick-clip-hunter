@@ -13,12 +13,12 @@ the reviewer would use rather than the detector's ("laughing", not "laugh").
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
-from .detector import NATIVE_EMOTE_TOKEN_PATTERN
 from .timeutil import to_local_datetime
 
 # The three lists the review queue offers.
@@ -33,6 +33,12 @@ BEST_RATING_MIN = 4
 # How many colours chat usernames are spread over (nick-1 to nick-6 in the
 # stylesheet).
 NICK_COLOURS = 6
+
+# Kick puts its native emotes inline in a message as "[emote:12345:name]"
+# (the same token detector.NATIVE_EMOTE_TOKEN_PATTERN matches, with the id
+# kept), and serves the picture for an id from here.
+_EMOTE_TOKEN = re.compile(r"\[emote:(\d+):([^\]]+)\]")
+KICK_EMOTE_IMAGE = "https://files.kick.com/emotes/{id}/fullsize"
 
 # Two moments belong to the same stream when the times that stream went
 # live, worked out from each of them, agree this closely. They normally agree
@@ -83,7 +89,8 @@ def count_words(count: int, noun: str) -> str:
 def number_words(value: float, places: int = 2) -> str:
     """A measured value without trailing zeros: 0.5, 1.25, 12."""
     text = f"{value:.{places}f}"
-    return text.rstrip("0").rstrip(".") if "." in text else text
+    text = text.rstrip("0").rstrip(".") if "." in text else text
+    return "0" if text == "-0" else text
 
 
 def list_words(items: list[str]) -> str:
@@ -152,12 +159,19 @@ def reason_words(reason: str, *, main_only: bool = False) -> list[str]:
     return [REASON_WORDS.get(token, token.replace("_", " ")) for token in chosen]
 
 
-def queue_label(row: Row) -> str:
-    """The few words a queue row has room for."""
-    words = ["imported"] if row["reason"] == IMPORT_REASON else reason_words(row["reason"], main_only=True)
+def queue_label(row: Row, reaction: str | None = None) -> str:
+    """The few words a queue row has room for: what chat said most in the
+    moment (`reaction`, as chat wrote it) or, failing that, what set the
+    moment off."""
+    if reaction:
+        words = [reaction]
+    elif row["reason"] == IMPORT_REASON:
+        words = ["Imported"]
+    else:
+        words = [sentence_case(", ".join(reason_words(row["reason"], main_only=True)))]
     if not row["clip_path"]:
         words.append("no clip")
-    return sentence_case(", ".join(words))
+    return ", ".join(words)
 
 
 def summary_words(row: Row) -> str:
@@ -201,24 +215,18 @@ def nick_colour(name: str) -> int:
 
 
 def chat_parts(content: str) -> list[dict[str, str]]:
-    """A chat message as plain text and native Kick emotes, in order. Kick
-    puts those emotes inline as "[emote:12345:name]" tokens; here each one
-    becomes its name, without the brackets and the id around it."""
+    """A chat message as plain text and native Kick emotes, in order. Each
+    emote comes with its name and the address of its picture."""
     parts: list[dict[str, str]] = []
-    for index, piece in enumerate(NATIVE_EMOTE_TOKEN_PATTERN.split(content)):
-        if index % 2:
-            parts.append({"emote": piece})
-        elif piece:
-            parts.append({"text": piece})
+    position = 0
+    for token in _EMOTE_TOKEN.finditer(content):
+        if token.start() > position:
+            parts.append({"text": content[position : token.start()]})
+        parts.append({"emote": token.group(2), "image": KICK_EMOTE_IMAGE.format(id=token.group(1))})
+        position = token.end()
+    if position < len(content):
+        parts.append({"text": content[position:]})
     return parts
-
-
-def chat_lines(messages: Iterable[Row]) -> list[dict[str, Any]]:
-    lines = []
-    for message in messages:
-        nick = message["sender_username"] or ""
-        lines.append({"nick": nick, "colour": nick_colour(nick), "parts": chat_parts(message["content"] or "")})
-    return lines
 
 
 # -- the queue --------------------------------------------------------------
@@ -247,9 +255,12 @@ def _same_stream(group: dict[str, Any], started: datetime | None, day: date) -> 
     return abs(group["started"] - started) <= SAME_STREAM_TOLERANCE
 
 
-def queue_groups(rows: Iterable[Row], today: date) -> list[dict[str, Any]]:
+def queue_groups(
+    rows: Iterable[Row], today: date, reactions: Mapping[int, str | None] | None = None
+) -> list[dict[str, Any]]:
     """The queue's rows, given newest first, grouped by the stream they came
-    from.
+    from. `reactions` maps a moment's id to what chat said most in it, where
+    that is known (see chat_trace.reaction_words).
 
     A stream is a channel and the time it went live, which is known for any
     moment that recorded how far into the stream it was. Moments without it
@@ -281,7 +292,7 @@ def queue_groups(rows: Iterable[Row], today: date) -> list[dict[str, Any]]:
                 # Stream time where it is known; the time of day otherwise.
                 "time": stream_time_words(elapsed) or clock_words(detected),
                 "time_title": when_words(detected, today),
-                "what": queue_label(row),
+                "what": queue_label(row, (reactions or {}).get(row["id"])),
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
             }

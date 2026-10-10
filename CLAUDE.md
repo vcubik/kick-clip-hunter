@@ -83,7 +83,11 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   otherwise freezes the whole app whenever someone clicks in the terminal window.
 - Dashboard: `GET /dashboard` is the review page - a queue of moments (unrated, all, or
   best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
-  (1-5 rate and move on, J/K move, Space plays). `GET /dashboard/channels` has the
+  (1-5 rate and move on, J/K move, Space plays). Under the clip is the chat trace:
+  messages a second and how many of them were laughing, on the clip's own time axis, from
+  30s before the clip to 60s after it. It is also the scrubber - one timeline over the
+  clip and its two context files - and chat is replayed beside it in step with the
+  picture. `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
@@ -126,6 +130,14 @@ Module map (`src/kick_clip_hunter/`):
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page
+- `chat_trace.py` — chat set against a clip: which second of the clip a message belongs
+  to, the trace under the clip and the spark in a queue row as SVG paths, and what chat
+  said most in a moment ("KEKW x31"). Pure, like `dashboard_view.py`. "Clip time" is
+  seconds from the clip's first frame; a clip's start is stored on the stream's program
+  clock (`moments.clip_start`, with `clip_duration`), and chat saw each frame
+  `PLAYBACK_DELAY_SECONDS` later. Clips cut before those columns existed have their
+  length measured (ffprobe) the first time one is opened and are placed by estimate:
+  centred on the window they were cut for
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
@@ -146,8 +158,9 @@ Module map (`src/kick_clip_hunter/`):
   handle a discontinuity and the `PLAYBACK_DELAY_SECONDS` clock shift.
   A moment's clip is kept short (about 35s unless the reaction keeps drawing in new
   people); the 30s before and 60s after it are saved next to it as
-  `moment_<id>_before.mp4` / `_after.mp4` and offered in the dashboard's player next to
-  the clip.
+  `moment_<id>_before.mp4` / `_after.mp4` and played by the dashboard from the same strip
+  as the clip. `extract_clip` returns the stretch of the broadcast the clip really holds
+  (whole segments, so a little more than was asked for), which is stored with the moment.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
