@@ -55,7 +55,9 @@
   --pen-dark: #FF6B5E;    /* the same pen where it writes on grey */
   --marker: #FFEB57;      /* the moment */
 
-  /* Chat usernames; a name always gets the same one. */
+  /* Chat usernames; a name always gets the same one. Someone whose colour
+     on Kick is known is drawn in that instead - the one colour on a page
+     that is not a token, because it is theirs. */
   --nick-1: #FFC2D2;
   --nick-2: #9AD8FF;
   --nick-3: #9CE8C2;
@@ -256,6 +258,9 @@ a { color: inherit; }
 .ch-nick-4 { color: var(--nick-4); }
 .ch-nick-5 { color: var(--nick-5); }
 .ch-nick-6 { color: var(--nick-6); }
+/* A chatter's badge in front of their name: moderator, subscriber and so
+   on. What it is is the alternative text and the tooltip. */
+.ch-badge { width: 16px; height: 16px; margin-right: 3px; vertical-align: -3px; border-radius: 3px; font-size: 0; }
 /* An emote, Kick's own or the channel's 7TV one: its picture inside the
    line, as tall as the line and as wide as the markup says (7TV emotes are
    not all square). Its name is the alternative text, so that is what shows

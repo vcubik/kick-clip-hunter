@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import (
     audio_events,
+    chat_identity,
     chat_trace,
     dashboard_view,
     detector,
@@ -39,6 +40,7 @@ from .db import (
     get_chat_between,
     get_chat_delay,
     get_chat_emotes,
+    get_chat_identities,
     get_connection,
     get_flag,
     get_moment,
@@ -50,6 +52,7 @@ from .db import (
     insert_chat_message,
     insert_moment,
     set_chat_delay,
+    set_chat_identity,
     set_flag,
     set_streamer_tracking,
     update_moment_audio_events,
@@ -357,7 +360,12 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # registry, where ".js" is often mapped to something else, and a browser
 # ignores a stylesheet that is not served as text/css.
 STATIC_DIR = Path(__file__).parent / "static"
-for _content_type, _extension in (("text/css", ".css"), ("text/javascript", ".js"), ("font/ttf", ".ttf")):
+for _content_type, _extension in (
+    ("text/css", ".css"),
+    ("text/javascript", ".js"),
+    ("font/ttf", ".ttf"),
+    ("image/svg+xml", ".svg"),
+):
     mimetypes.add_type(_content_type, _extension)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -374,6 +382,29 @@ _channel_keywords_cache: dict[int, dict[str, float]] = {}
 # cache keeps us from hammering the channels endpoint.
 _stream_start_cache: dict[str, tuple[datetime | None, float]] = {}
 STREAM_INFO_CACHE_SECONDS = 120
+
+
+# What was last stored of each chatter's identity (name colour and badges),
+# by (channel, name). Kick sends it with every message and it hardly ever
+# changes, so this is what keeps it from being written every time: only
+# someone not seen since the start, or seen changed, costs a write.
+_chat_identity_cache: dict[tuple[int, str], chat_identity.Identity] = {}
+# Past this many chatters the cache is simply started over - each of them
+# then costs one more write the next time they speak.
+CHAT_IDENTITY_CACHE_LIMIT = 50_000
+
+
+def _remember_chat_identity(conn, broadcaster_user_id: int, username: str, sender: dict) -> None:
+    identity = chat_identity.from_sender(sender)
+    if identity is None or not username:
+        return
+    key = (broadcaster_user_id, username)
+    if _chat_identity_cache.get(key) == identity:
+        return
+    if len(_chat_identity_cache) >= CHAT_IDENTITY_CACHE_LIMIT:
+        _chat_identity_cache.clear()
+    set_chat_identity(conn, broadcaster_user_id, username, *identity)
+    _chat_identity_cache[key] = identity
 
 
 def _channel_keywords(conn, broadcaster_user_id: int) -> dict[str, float]:
@@ -777,7 +808,9 @@ def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[di
     everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names)
     strip = chat_trace.trace(timeline, everything, laughing, usual=row["baseline_message_rate"], window=window)
     emotes = get_chat_emotes(conn, row["broadcaster_user_id"])
-    return strip, chat_trace.chat_replay(messages, timeline, window, emotes)
+    chatters = {message["sender_username"] for message in messages if message["sender_username"]}
+    identities = get_chat_identities(conn, row["broadcaster_user_id"], chatters)
+    return strip, chat_trace.chat_replay(messages, timeline, window, emotes, identities)
 
 
 def _queue_activity(conn, rows) -> dict[int, dict]:
@@ -1262,6 +1295,8 @@ async def kick_webhook(
                 # feeding it to the detector a second time would inflate the
                 # very burst it is trying to measure.
                 return {"status": "duplicate"}
+
+            _remember_chat_identity(conn, broadcaster_user_id, sender_username, sender)
 
             spike = detector.record_message(
                 channel,

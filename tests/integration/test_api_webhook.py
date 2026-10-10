@@ -187,6 +187,141 @@ class TestChatMessages:
         assert not detector._entries
 
 
+MOD = {"username_color": "#FF5733", "badges": [{"text": "Moderator", "type": "moderator"}]}
+
+
+class TestChatIdentities:
+    """Who a chatter is - name colour, badges - comes with every message
+    and is kept once per chatter, not once per message."""
+
+    def identities(self, service) -> dict[tuple[str, str], tuple]:
+        rows = service.rows(
+            """
+            SELECT s.slug, i.username, i.colour, i.badges FROM chat_identities i
+            LEFT JOIN streamers s ON s.broadcaster_user_id = i.broadcaster_user_id
+            """
+        )
+        return {(row[0], row[1]): (row[2], json.loads(row[3])) for row in rows}
+
+    @pytest.fixture
+    def writes(self, service, monkeypatch) -> list[str]:
+        """Names an identity was written for, in order."""
+        written = []
+        real = service.main.set_chat_identity
+
+        def counting(conn, broadcaster_user_id, username, colour, badges):
+            written.append(username)
+            real(conn, broadcaster_user_id, username, colour, badges)
+
+        monkeypatch.setattr(service.main, "set_chat_identity", counting)
+        return written
+
+    async def test_a_chatters_colour_and_badges_are_kept(self, service):
+        service.watch(CHANNEL)
+
+        await service.chat(CHANNEL, "alice", "hello", identity=MOD)
+
+        assert self.identities(service) == {
+            (CHANNEL, "alice"): ("#ff5733", [{"text": "Moderator", "type": "moderator"}])
+        }
+
+    async def test_they_are_written_once_however_much_someone_talks(self, service, writes):
+        service.watch(CHANNEL)
+
+        for number in range(20):
+            await service.chat(CHANNEL, "alice", f"message {number}", identity=MOD)
+            await service.chat(CHANNEL, "bob", f"reply {number}", identity={"username_color": "#00FF00", "badges": []})
+
+        assert writes == ["alice", "bob"]
+        assert len(service.rows("SELECT * FROM chat_messages")) == 40
+
+    async def test_a_change_is_written(self, service, writes):
+        service.watch(CHANNEL)
+        subscribed = {**MOD, "badges": [*MOD["badges"], {"text": "Subscriber", "type": "subscriber", "count": 1}]}
+
+        await service.chat(CHANNEL, "alice", "one", identity=MOD)
+        await service.chat(CHANNEL, "alice", "two", identity=subscribed)
+        await service.chat(CHANNEL, "alice", "three", identity=subscribed)
+
+        assert writes == ["alice", "alice"]
+        assert self.identities(service)[(CHANNEL, "alice")][1] == [
+            {"text": "Moderator", "type": "moderator"},
+            {"count": 1, "text": "Subscriber", "type": "subscriber"},
+        ]
+
+    async def test_a_message_without_an_identity_changes_nothing(self, service, writes):
+        service.watch(CHANNEL)
+
+        await service.chat(CHANNEL, "alice", "one", identity=MOD)
+        await service.chat(CHANNEL, "alice", "two")
+        await service.chat(CHANNEL, "bob", "three")
+
+        assert writes == ["alice"]
+        assert set(self.identities(service)) == {(CHANNEL, "alice")}
+
+    async def test_the_same_person_is_kept_per_channel(self, service):
+        service.watch("channel_a")
+        service.watch("channel_b")
+
+        await service.chat("channel_a", "alice", "hello", identity=MOD)
+        await service.chat("channel_b", "alice", "hello", identity={"username_color": "#00FF00", "badges": []})
+
+        assert self.identities(service) == {
+            ("channel_a", "alice"): ("#ff5733", [{"text": "Moderator", "type": "moderator"}]),
+            ("channel_b", "alice"): ("#00ff00", []),
+        }
+
+    async def test_what_is_already_stored_is_not_written_again_after_a_restart_unless_spoken(self, service, writes):
+        # The memory of what was stored does not outlive the process: the
+        # first message of each chatter after a start costs one write.
+        service.watch(CHANNEL)
+        await service.chat(CHANNEL, "alice", "one", identity=MOD)
+        service.main._chat_identity_cache.clear()
+
+        await service.chat(CHANNEL, "alice", "two", identity=MOD)
+        await service.chat(CHANNEL, "alice", "three", identity=MOD)
+
+        assert writes == ["alice", "alice"]
+        assert len(self.identities(service)) == 1
+
+    async def test_the_memory_of_what_was_stored_does_not_grow_without_end(self, service, monkeypatch):
+        monkeypatch.setattr(service.main, "CHAT_IDENTITY_CACHE_LIMIT", 3)
+        service.watch(CHANNEL)
+
+        for number in range(10):
+            await service.chat(CHANNEL, f"viewer{number}", "hello", identity=MOD)
+
+        assert len(service.main._chat_identity_cache) <= 3
+        assert len(self.identities(service)) == 10
+
+    async def test_a_redelivered_message_writes_nothing(self, service, writes):
+        service.watch(CHANNEL)
+        payload = chat_payload(CHANNEL, service.user_id(CHANNEL), "alice", "hello", identity=MOD)
+        changed = {**payload, "sender": {**payload["sender"], "identity": {"username_color": "#000000", "badges": []}}}
+
+        await service.deliver(payload)
+        await service.deliver(changed)
+
+        assert writes == ["alice"]
+
+    async def test_a_colour_that_is_not_one_is_not_stored_as_one(self, service):
+        service.watch(CHANNEL)
+        nasty = {"username_color": "red; background: url(//evil.example)", "badges": [{"type": "../x", "text": "x"}]}
+
+        response = await service.chat(CHANNEL, "mallory", "hello", identity=nasty)
+
+        assert response.status_code == 200
+        assert self.identities(service) == {(CHANNEL, "mallory"): (None, [])}
+
+    async def test_with_tracking_off_nothing_is_kept_of_the_chatter_either(self, service):
+        service.watch(CHANNEL)
+        await service.client.post(f"/channels/{CHANNEL}/tracking", params={"enabled": "0"})
+
+        await service.chat(CHANNEL, "alice", "hello", identity=MOD)
+
+        assert self.identities(service) == {}
+
+
 class TestPausing:
     async def test_with_watching_off_messages_are_dropped(self, service):
         await service.client.post("/settings/watching?enabled=0")

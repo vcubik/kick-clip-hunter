@@ -13,6 +13,7 @@ things end up on the page.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -101,6 +102,15 @@ def store_emotes(broadcaster_user_id: int, emotes: dict[str, tuple[str, int, int
     conn = db.get_connection()
     try:
         db.replace_channel_emotes(conn, broadcaster_user_id, emotes)
+    finally:
+        conn.close()
+
+
+def store_identity(broadcaster_user_id: int, username: str, colour: str | None, badges: list[dict]) -> None:
+    """What the webhook receiver keeps of a chatter once it has seen them."""
+    conn = db.get_connection()
+    try:
+        db.set_chat_identity(conn, broadcaster_user_id, username, colour, json.dumps(badges))
     finally:
         conn.close()
 
@@ -598,6 +608,56 @@ class TestOpenMoment:
 
         assert article.find("img", class_="ch-emote") == []
         assert article.one("p", class_="ch-chat").text.split() == ["alice", "KEKW"]
+
+    async def test_a_known_chatter_has_their_kick_colour_and_badges(self, service):
+        store_identity(
+            1,
+            "alice",
+            "#9ad8ff",
+            [{"type": "moderator", "text": "Moderator"}, {"type": "subscriber", "text": "Subscriber", "count": 7}],
+        )
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "hello", T0 - timedelta(seconds=3))
+        add_chat("channel_a", "bob", "hi", T0 - timedelta(seconds=2))
+
+        article = open_moment(await review(service))
+        alice, bob = [line.one("b") for line in article.find("p", class_="ch-chat")]
+
+        assert chat(article) == [("alice", "hello"), ("bob", "hi")]
+        assert alice.attrs["style"] == "color: #9ad8ff"
+        assert [(badge.attrs["alt"], badge.attrs["src"].split("?")[0]) for badge in alice.find("img")] == [
+            ("Moderator", "/static/badges/moderator.svg"),
+            ("Subscriber, 7 months", "/static/badges/subscriber.svg"),
+        ]
+        # Someone not seen since identities were kept looks as before.
+        assert "style" not in bob.attrs and bob.find("img") == []
+        assert bob.classes == {f"ch-nick-{view.nick_colour('bob')}"}
+
+    async def test_who_someone_is_in_another_channel_does_not_show_here(self, service):
+        store_identity(2, "alice", "#9ad8ff", [{"type": "moderator", "text": "Moderator"}])
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "hello", T0 - timedelta(seconds=2))
+
+        name = open_moment(await review(service)).one("p", class_="ch-chat").one("b")
+
+        assert "style" not in name.attrs and name.find("img") == []
+
+    async def test_a_badge_of_a_kind_there_is_no_picture_for_still_says_what_it_is(self, service):
+        store_identity(1, "alice", None, [{"type": "brand_new_badge", "text": "Brand new"}])
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "hello", T0 - timedelta(seconds=2))
+
+        (badge,) = open_moment(await review(service)).one("p", class_="ch-chat").find("img", class_="ch-badge")
+
+        assert badge.attrs["src"].split("?")[0] == "/static/badges/other.svg"
+        assert badge.attrs["alt"] == badge.attrs["title"] == "Brand new"
+
+    async def test_every_badge_picture_is_served_as_a_picture(self, service):
+        for icon in sorted(chat_trace.chat_identity.BADGE_ICONS | {chat_trace.chat_identity.OTHER_BADGE}):
+            response = await service.client.get(f"/static/badges/{icon}.svg")
+
+            assert response.status_code == 200, icon
+            assert response.headers["content-type"].startswith("image/svg+xml"), icon
 
     async def test_says_so_when_no_chat_was_stored_for_the_window(self, service):
         add_moment("channel_a")
@@ -1248,6 +1308,19 @@ class TestUntrustedText:
         # ...and nothing of it became markup.
         assert article.find("script") == [] and article.find("img") == [] and article.find("u") == []
         assert len(page.find("script")) == 1  # the page's own
+
+    async def test_a_badges_words_are_escaped_too(self, service):
+        payload = '"><script>alert(1)</script>'
+        store_identity(1, "mallory", "#9ad8ff", [{"type": "vip", "text": payload}])
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "mallory", "hello", T0 - timedelta(seconds=2))
+
+        article = open_moment(await review(service))
+
+        assert article.find("script") == []
+        (badge,) = article.find("img", class_="ch-badge")
+        assert badge.attrs["alt"] == payload and badge.attrs["title"] == payload
+        assert set(badge.attrs) == {"class", "src", "alt", "title", "width", "height"}
 
     async def test_an_emote_name_is_escaped_too(self, service):
         payload = '"><script>alert(1)</script><img src=x onerror=alert(1)>'

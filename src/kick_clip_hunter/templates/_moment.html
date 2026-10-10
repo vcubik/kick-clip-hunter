@@ -139,7 +139,9 @@
   <div class="chat-head"><h2>Chat</h2> <span>{{ "replayed with the clip" if moment.clip_url and moment.chat else "around the moment" }}</span></div>
   <div class="chat-lines" data-chat>
     {% for line in moment.chat %}
-    <p class="ch-chat{% if line.in_moment %} is-moment{% endif %}" data-at="{{ line.at }}"><b class="ch-nick-{{ line.colour }}">{{ line.nick }}</b> <span>
+    <p class="ch-chat{% if line.in_moment %} is-moment{% endif %}" data-at="{{ line.at }}"><b class="ch-nick-{{ line.colour }}"{% if line.own_colour %} style="color: {{ line.own_colour }}"{% endif %}>
+      {%- for badge in line.badges %}<img class="ch-badge" src="/static/badges/{{ badge.icon }}.svg?v={{ asset_version }}" alt="{{ badge.words }}" title="{{ badge.words }}" width="16" height="16">{% endfor -%}
+      {{ line.nick }}</b> <span>
       {%- for part in line.parts -%}
       {%- if part.emote %}<img class="ch-emote" src="{{ part.image }}" alt="{{ part.emote }}" title="{{ part.emote }}" width="{{ part.width }}" height="20" loading="lazy">{% else %}{{ part.text }}{% endif -%}
       {%- endfor -%}
