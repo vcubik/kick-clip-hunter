@@ -1210,8 +1210,11 @@ class TestClips:
 
         labels = [button.attrs["aria-label"] for button in article.one("div", class_="ch-transport").find("button")]
         assert labels == ["Play", "Playback speed", "Mute", "Full screen"]
-        # There is no seek bar: the strip under the clip is the scrubber.
-        assert article.find("input") == []
+        # There is no seek bar: the strip under the clip is the scrubber. The
+        # one slider among the controls is the volume.
+        (volume,) = article.find("input")
+        assert volume.attrs["aria-label"] == "Volume" and volume.attrs["type"] == "range"
+        assert (volume.attrs["min"], volume.attrs["max"]) == ("0", "1")
         assert article.one("div", role="slider").attrs["aria-label"] == "Position in the footage"
 
     async def test_a_fresh_moment_without_a_clip_says_one_is_on_its_way(self, service):
