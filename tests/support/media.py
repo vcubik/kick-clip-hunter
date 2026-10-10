@@ -62,6 +62,30 @@ def make_ts_segments(directory: Path, count: int, seconds_each: float = 1.0, siz
     return segments
 
 
+def make_video(path: Path, seconds: float, keyframe_every: float = 2.0, size: str = "160x120") -> Path:
+    """An MP4 of the test pattern with a tone, `seconds` long, with a frame
+    a cut can begin on every `keyframe_every` seconds from its first - as
+    far as ffmpeg can tell, a moment's file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fps = 10
+    keyframe_interval = str(int(fps * keyframe_every))
+    # fmt: off
+    subprocess.run(
+        [
+            FFMPEG, "-y", "-v", "error",
+            "-f", "lavfi", "-i", f"testsrc=size={size}:rate={fps}:duration={seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-g", keyframe_interval, "-keyint_min", keyframe_interval, "-sc_threshold", "0",
+            "-c:a", "aac", "-b:a", "32k",
+            str(path),
+        ],
+        check=True,
+    )
+    # fmt: on
+    return path
+
+
 def probe(path: Path) -> dict:
     """Duration and stream types of a media file, via ffprobe."""
     # fmt: off

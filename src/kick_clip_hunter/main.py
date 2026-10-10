@@ -22,6 +22,7 @@ from . import (
     chat_identity,
     chat_trace,
     chat_video,
+    clip_trim,
     dashboard_view,
     detector,
     frame_encoder,
@@ -748,49 +749,93 @@ def _clip_url(clip_path: str) -> str:
     return f"/clips/{quote(clip_path)}"
 
 
-# Chat videos being rendered right now, and the ones whose rendering
-# failed, by moment id. Any other moment's is told from whether its file is
-# there, so a restart forgets nothing that matters.
-_chat_videos: dict[int, str] = {}
+# Stretches of footage being cut out for an editor right now, the ones that
+# failed, and how long before the start that was set the last one of a
+# moment begins, by moment id. Any other moment's is told from whether its
+# files are there, so a restart forgets nothing that matters.
+_trims: dict[int, dict] = {}
 
 
-def _chat_video_path(clip_path: str) -> Path:
-    """Where a clip's chat video is kept, like the clip's own path: under
-    CLIPS_DIR."""
+def _trim_paths(clip_path: str) -> tuple[Path, Path]:
+    """Where a moment's trimmed video and the chat video that goes with it
+    are kept, like the clip's own path: under CLIPS_DIR."""
     clip = Path(clip_path)
-    return clip.with_name(chat_video.video_name(clip.name))
+    video = clip.with_name(clip_trim.video_name(clip.name))
+    return video, video.with_name(chat_video.video_name(video.name))
 
 
-def _chat_video(row) -> dict:
-    """Where the chat video of a moment that has a clip stands: being
-    rendered, there to download, failed, or never asked for."""
-    state = _chat_videos.get(row["id"])
-    url = None
-    if state is None:
-        relative = _chat_video_path(row["clip_path"])
-        file = CLIPS_DIR / relative
-        if file.exists():
-            state = dashboard_view.CHAT_VIDEO_READY
-            # Rendered again, it is a different file under the same name.
-            url = f"{_clip_url(relative.as_posix())}?v={int(file.stat().st_mtime)}"
-        else:
-            state = dashboard_view.CHAT_VIDEO_NONE
-    return {"state": state, "url": url, "words": dashboard_view.chat_video_words(state)}
+def _download_url(relative: Path) -> str | None:
+    """The address of a file under CLIPS_DIR, or None if it is not there."""
+    file = CLIPS_DIR / relative
+    if not file.exists():
+        return None
+    # Made again, it is a different file under the same name.
+    return f"{_clip_url(relative.as_posix())}?v={int(file.stat().st_mtime)}"
 
 
-async def _render_chat_video_background(
-    moment_id: int, channel: str, lines: list[dict], duration: float, output: Path
+def _trim(row) -> dict:
+    """Where the stretch cut out of a moment's footage stands: being cut,
+    its chat being rendered, there to download, failed, or never asked
+    for."""
+    known = _trims.get(row["id"], {})
+    state = known.get("state")
+    video, chat = (_download_url(path) for path in _trim_paths(row["clip_path"]))
+    if state in (dashboard_view.TRIM_CUTTING, dashboard_view.TRIM_FAILED):
+        video = chat = None
+    elif state in (dashboard_view.TRIM_CHAT, dashboard_view.TRIM_CHAT_FAILED):
+        chat = None
+    else:
+        state = dashboard_view.TRIM_READY if video else dashboard_view.TRIM_NONE
+    return {
+        "state": state,
+        "words": dashboard_view.trim_words(state, known.get("early", 0.0)),
+        "video_url": video,
+        "chat_url": chat,
+    }
+
+
+async def _trim_background(
+    moment_id: int,
+    channel: str,
+    clip: Path,
+    span: tuple[float, float],
+    lead: float,
+    lines: list[dict] | None,
+    shift: float,
+    video: Path,
+    chat: Path,
 ) -> None:
-    # Drives a browser and an encoder for about twice the clip's length -
-    # off the event loop, and as a tracked task so a shutdown waits for it.
+    # The cut takes a moment; the chat video drives a browser and an encoder
+    # for about twice the cut's length. Both off the event loop, and as a
+    # tracked task so a shutdown waits for them.
     try:
-        frames = await asyncio.to_thread(chat_video.render, lines, duration, output)
+        # What was cut before goes first: a chat video left over from it
+        # would not belong to the new video.
+        chat.unlink(missing_ok=True)
+        video.unlink(missing_ok=True)
+        begins, duration = await asyncio.to_thread(recorder.trim_clip, clip, *span, video)
+    except Exception:
+        logger.exception("[%s] trimming failed for moment %d", channel, moment_id)
+        _trims[moment_id] = {"state": dashboard_view.TRIM_FAILED}
+        return
+    early = max(span[0] - begins, 0.0)
+    logger.info("[%s] moment %d trimmed: %s (%.1f s)", channel, moment_id, video.name, duration)
+    if lines is None:
+        _trims[moment_id] = {"early": early}
+        return
+
+    _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT, "early": early}
+    try:
+        # The chat video starts on the trimmed video's first frame, wherever
+        # in the file that turned out to be.
+        shown = chat_video.lines_from(lines, begins - lead, shift)
+        frames = await asyncio.to_thread(chat_video.render, shown, duration, chat)
     except Exception:
         logger.exception("[%s] rendering the chat video failed for moment %d", channel, moment_id)
-        _chat_videos[moment_id] = dashboard_view.CHAT_VIDEO_FAILED
+        _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT_FAILED, "early": early}
         return
-    _chat_videos.pop(moment_id, None)
-    logger.info("[%s] chat video saved for moment %d: %s (%d frames)", channel, moment_id, output.name, frames)
+    _trims[moment_id] = {"early": early}
+    logger.info("[%s] chat video saved for moment %d: %s (%d frames)", channel, moment_id, chat.name, frames)
 
 
 def _moment_window(row) -> tuple[datetime, datetime]:
@@ -917,9 +962,18 @@ def _open_moment(conn, row, today: date) -> dict:
             if row["clip_path"] and strip and strip["has_chat"]
             else None
         ),
-        # The chat as a video to lay over the clip: where there is a clip of
-        # known length and chat to put in it.
-        "chat_video": _chat_video(row) if row["clip_path"] and row["clip_duration"] and chat else None,
+        # Cutting a stretch of the footage out for an editor: where there is
+        # a clip to cut from and a timeline to choose the stretch on.
+        "trim": (
+            {
+                "last": dashboard_view.number_words(clip_trim.footage(row)[1], 2),
+                "min_seconds": dashboard_view.number_words(clip_trim.MIN_SECONDS),
+                "chat": bool(chat),
+                "chat_shift_limit": dashboard_view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS),
+            }
+            if row["clip_path"] and row["clip_duration"] and strip
+            else None
+        ),
     }
 
 
@@ -1152,41 +1206,66 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     return {"moment_id": moment_id, "rating": value or None}
 
 
-@app.post("/moments/{moment_id}/chat_video")
-async def render_chat_video(moment_id: int):
-    """Starts rendering a moment's chat as a video with a transparent
-    background (see chat_video.py). It is made when asked for - it takes a
-    while and most clips never need one - and again when asked again, with
-    chat placed as the channel's chat delay now has it."""
+@app.post("/moments/{moment_id}/trim")
+async def trim_moment(moment_id: int, request: Request):
+    """Starts cutting a stretch of a moment's footage out as a video of its
+    own (see clip_trim.py), and with `chat` its chat as a video to lay over
+    it (chat_video.py). `start` and `end` are clip time; `chat_shift` moves
+    the chat video's lines that many seconds later than the channel's chat
+    delay has them. What was cut for the moment before is replaced."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="the service is shutting down")
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="expected start, end, chat and chat_shift as JSON")
+
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
         row = await _with_clip_length(conn, row)
-        if not row["clip_path"] or not row["clip_duration"]:
-            raise HTTPException(status_code=409, detail="the moment has no clip to render chat for")
-        _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
+        if not row["clip_path"] or not row["clip_duration"] or not (CLIPS_DIR / row["clip_path"]).exists():
+            raise HTTPException(status_code=409, detail="the moment has no clip to trim")
+        try:
+            span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
+            shift = clip_trim.chat_shift(asked.get("chat_shift"))
+        except clip_trim.TrimError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        lines = None
+        if asked.get("chat"):
+            _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
+            if not lines:
+                raise HTTPException(status_code=409, detail="no chat was stored for this moment")
     finally:
         conn.close()
-    if not lines:
-        raise HTTPException(status_code=409, detail="no chat was stored for this moment")
 
-    if _chat_videos.get(moment_id) != dashboard_view.CHAT_VIDEO_RENDERING:
-        _chat_videos[moment_id] = dashboard_view.CHAT_VIDEO_RENDERING
-        output = CLIPS_DIR / _chat_video_path(row["clip_path"])
+    if _trims.get(moment_id, {}).get("state") not in dashboard_view.TRIM_BUSY:
+        _trims[moment_id] = {"state": dashboard_view.TRIM_CUTTING}
+        video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
         _track_task(
-            _render_chat_video_background(moment_id, row["channel_slug"], lines, row["clip_duration"], output)
+            _trim_background(
+                moment_id,
+                row["channel_slug"],
+                CLIPS_DIR / row["clip_path"],
+                span,
+                row["context_before"] or 0.0,
+                lines,
+                shift,
+                video,
+                chat,
+            )
         )
-    return {"moment_id": moment_id, "state": dashboard_view.CHAT_VIDEO_RENDERING}
+    return {"moment_id": moment_id, **_trim(row)}
 
 
-@app.get("/moments/{moment_id}/chat_video")
-async def chat_video_state(moment_id: int):
-    """Where a moment's chat video stands - what the page asks while one
-    is being rendered."""
+@app.get("/moments/{moment_id}/trim")
+async def trim_state(moment_id: int):
+    """Where the stretch cut out of a moment's footage stands - what the
+    Trim dialog asks when it is opened and while one is being made."""
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -1195,9 +1274,15 @@ async def chat_video_state(moment_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
     if not row["clip_path"]:
-        return {"moment_id": moment_id, "state": dashboard_view.CHAT_VIDEO_NONE, "url": None}
-    video = _chat_video(row)
-    return {"moment_id": moment_id, "state": video["state"], "url": video["url"]}
+        state = dashboard_view.TRIM_NONE
+        return {
+            "moment_id": moment_id,
+            "state": state,
+            "words": dashboard_view.trim_words(state),
+            "video_url": None,
+            "chat_url": None,
+        }
+    return {"moment_id": moment_id, **_trim(row)}
 
 
 @app.post("/moments/{moment_id}/stream_type")

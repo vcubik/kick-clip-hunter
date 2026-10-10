@@ -131,7 +131,9 @@ straddles a break cut from its longer side instead of stitched across it? Is the
 after the clip in the same file, with nothing repeated and nothing missing, and left out where it lies
 beyond a break? Can the clip be cut back out of its file for the analysis steps, starting on its own
 first picture? Do an older moment's separate context clips join into the file that would be cut today
-(with the scripts that use this in `integration/test_clip_scripts.py`)?
+(with the scripts that use this in `integration/test_clip_scripts.py`)? Is a stretch trimmed out of a
+file playable, begun on the last frame a cut can begin on before the start asked for and ended where
+it was asked to, with the file it came from untouched?
 
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
@@ -142,7 +144,8 @@ raw output turned into what gets stored (hallucinated subtitle credits dropped, 
 top labels above the confidence floor)?
 
 **8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`,
-`unit/test_dashboard_view.py`, `unit/test_chat_trace.py`
+`unit/test_dashboard_view.py`, `unit/test_chat_trace.py`, `unit/test_clip_trim.py`,
+`unit/test_chat_video.py`, `integration/test_chat_video.py`
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
 the right one open, with its chat and its clip, started where the clip begins in its file? Is chat put on the clip's own time axis
@@ -153,7 +156,10 @@ only its? Does an empty queue say what the service
 is doing? Is everything a Kick user can type - chat, usernames, emote names - escaped? Do the file
 routes refuse to serve anything outside their directories? Are dates, counts and detector reasons
 worded as intended? Do rating, tags and notes validate and persist; do the switches survive a
-restart; does shutdown wait for work in flight and stop recorders before exiting?
+restart; does shutdown wait for work in flight and stop recorders before exiting? Is a stretch asked
+for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
+its chat video hold the stretch's chat counted from where the video really begins, moved by what was
+asked for; does a new cut replace the one before, and is each state said in words?
 
 **9. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
 `unit/test_scripts.py`, `unit/test_replay_chat.py`
@@ -242,6 +248,7 @@ Some things only exist against the real Kick, and faking them would only test th
 |---|---|
 | `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser against kick.com, whose pages only load in a headed browser. |
 | `chat_video.capture_frames`, `static/chat_video.js` | They are a headless browser drawing the chat video's page frame by frame. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, and the encoding of its frames with real ffmpeg (step 9 below). |
+| `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (step 9 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
@@ -281,12 +288,19 @@ Run this on a live channel after changing any of the above, or the code right ne
    is saved under `data/hls_debug/`, and segments keep arriving afterwards. The recording's start
    line says whether a VOD was found; if it was, a moment right after the ad logs `footage from
    the VOD used` and nowhere in its file - not in the clip, not in the footage before it - is the ad.
-9. **Render a chat video.** Under the chat of a moment with a clip, press Render. The row says it
-   is rendering and, a minute or two later and without a reload, offers a download; the log says
-   `chat video saved for moment N`. Laid over the clip in an editor (or with ffmpeg's `overlay`
-   filter) from the clip's first frame, the file is as long as the clip, has nothing behind the
-   text, and its lines appear when the same lines do beside the clip on the review page.
-9. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
+9. **Trim a clip.** Press Trim next to the clip's controls. The dialog opens on the clip as it was
+   cut, on a copy of the strip; dragging a handle moves that end of the stretch and the picture
+   with it, as far as the footage goes and no closer to the other handle than a second. `I` and
+   `O` put the start and the end where the player is, `Space` plays and stops at the end of the
+   stretch, and a number key rates nothing. Tick the chat box: chat appears beside the picture and
+   follows it, and the slider moves it earlier or later. Export: the dialog says it is cutting,
+   then that the video is ready while its chat is rendered, and a minute or two later offers both
+   to download - and how much before the start that was set the video begins. The log says `moment
+   N trimmed` and `chat video saved for moment N`. Laid over the video in an editor (or with
+   ffmpeg's `overlay` filter) from its first frame, the chat video is as long as the video, has
+   nothing behind the text, and its lines appear when they did beside the picture in the dialog.
+   Closed and opened again, the dialog still has the stretch and the downloads.
+10. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
    how much work is still in flight, and the process exits on its own once that is done, and not
    before.
 

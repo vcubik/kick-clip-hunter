@@ -3,8 +3,9 @@
 // The pages are rendered on the server and work as plain pages. This script
 // makes them quick to use: it opens a moment from the queue without loading
 // the page again, saves a rating, tag or note as it is set, drives the clip
-// player from the strip under it, replays chat in step with the clip, and
-// runs the review from the keyboard (1 to 5 rate, J and K move, Space plays).
+// player from the strip under it, replays chat in step with the clip, runs
+// the review from the keyboard (1 to 5 rate, J and K move, Space plays), and
+// has the dialog a stretch of the footage is cut out for an editor in.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -308,10 +309,9 @@
     if (play) video.play().catch(() => {});
   }
 
-  // Chat lines appear as the clip reaches them, the newest at the bottom.
-  function syncChat(article, time, words) {
-    const box = one("[data-chat]", article);
-    if (!box) return;
+  // Shows the lines of a box of chat that had arrived by a clip time and
+  // no others, the newest at the bottom.
+  function reveal(box, time) {
     let changed = false;
     for (const line of box.children) {
       if (line.dataset.at === undefined) continue;
@@ -322,6 +322,13 @@
       }
     }
     if (changed) box.scrollTop = box.scrollHeight;
+  }
+
+  // Chat lines appear as the clip reaches them.
+  function syncChat(article, time, words) {
+    const box = one("[data-chat]", article);
+    if (!box) return;
+    reveal(box, time);
     one("[data-chat-foot]", article).textContent = box.querySelector("[data-at]") ? `In step with the clip, at ${words}` : "";
   }
 
@@ -495,67 +502,295 @@
     if (video) paint(video);
   }
 
-  // ---- The chat video ---------------------------------------------------
+  // ---- Trimming ---------------------------------------------------------
+  //
+  // The Trim dialog cuts a stretch of the footage out for an editor, with
+  // its chat as a video to lay over it if that is wanted. It has a player
+  // of its own on the same file and a copy of the strip, with a handle at
+  // either end of the stretch. Times are clip time here too. The cutting is
+  // done on the server and takes a while with chat; the dialog asks now and
+  // then how far it has got, for as long as it is open.
 
-  // The chat as a video for an editor is rendered on the server when asked
-  // for and takes a minute or two. Its row under the chat says where that
-  // stands; while it is being rendered the server is asked now and then,
-  // and the row is drawn again once it has something else to say.
-  const CHAT_VIDEO_POLL_MS = 3000;
-  let chatVideoWatch = null;
+  const TRIM_POLL_MS = 2000;
+  const TRIM_BUSY = ["cutting", "chat"];
+  // Past its end by less than this, the player ran there; by more, it was put there.
+  const TRIM_RAN_PAST_SECONDS = 1;
+  let trimWatch = null;
+  let trimDrag = null; // the handle that is held: "from" or "to"
+  let trimGrab = 0; // how far from the handle's time it was taken hold of
+  let trimWas = 0; // where the dialog's player was when last looked at
 
-  async function renderChatVideo(button) {
-    const article = button.closest(".moment");
-    button.disabled = true;
-    const started = await post(`/moments/${article.dataset.moment}/chat_video`);
-    if (!article.isConnected) return; // another moment was opened meanwhile
-    if (!started || !started.ok) {
-      button.disabled = false;
-      say(article, "Could not start rendering the chat video. Try again.");
+  const trimOf = (control) => control.closest("[data-trim]");
+  const trimClip = (dialog) => one("[data-trim-clip]", dialog);
+  const clamp = (value, least, most) => Math.min(Math.max(value, least), most);
+
+  // What the dialog's strip covers, where the clip lies on it, and how far
+  // the footage - what there is to cut from - reaches either way.
+  function trimSpan(dialog) {
+    const trace = one("[data-trace]", dialog.closest(".moment"));
+    const video = trimClip(dialog);
+    const lead = Number(dialog.dataset.lead) || 0;
+    const start = Number(trace.dataset.start);
+    const end = Number(trace.dataset.end);
+    const last = Number.isFinite(video.duration) ? video.duration - lead : Number(dialog.dataset.last);
+    return { start, end, lead, clip: Number(trace.dataset.clipSeconds), first: Math.max(-lead, start), last: Math.min(last, end) };
+  }
+
+  // The stretch that is set, and where the dialog's player is.
+  const trimAt = (dialog) => ({ from: Number(dialog.dataset.from), to: Number(dialog.dataset.to) });
+  const trimTime = (dialog) => trimClip(dialog).currentTime - (Number(dialog.dataset.lead) || 0);
+
+  // A clip time to the tenth of a second, the way the page writes clip times.
+  function trimWords(time, clip) {
+    const outside = time < 0 ? "−" : time > clip ? "+" : "";
+    const tenths = Math.round(Math.abs(outside === "+" ? time - clip : time) * 10);
+    return `${outside}${Math.floor(tenths / 600)}:${String(Math.floor(tenths / 10) % 60).padStart(2, "0")}.${tenths % 10}`;
+  }
+
+  // The clip time under the pointer on the dialog's strip - or beyond it,
+  // for a pointer that has been dragged off its end.
+  function trimPoint(strip, event) {
+    const box = strip.getBoundingClientRect();
+    const span = trimSpan(trimOf(strip));
+    return span.start + ((event.clientX - box.left) / box.width) * (span.end - span.start);
+  }
+
+  function seekTrim(dialog, time) {
+    const span = trimSpan(dialog);
+    trimClip(dialog).currentTime = clamp(time, span.first, span.last) + span.lead;
+  }
+
+  // Moves one end of the stretch, and the player with it, so the picture
+  // shows what the stretch now starts or ends on. The ends keep to the
+  // footage and stay the shortest stretch apart.
+  function moveTrim(dialog, which, time) {
+    const span = trimSpan(dialog);
+    const least = Number(dialog.dataset.min);
+    let { from, to } = trimAt(dialog);
+    if (which === "from") from = Math.max(span.first, Math.min(time, to - least));
+    else to = Math.min(span.last, Math.max(time, from + least));
+    dialog.dataset.from = from.toFixed(2);
+    dialog.dataset.to = to.toFixed(2);
+    const video = trimClip(dialog);
+    video.pause();
+    video.currentTime = (which === "from" ? from : to) + span.lead;
+    paintTrim(dialog);
+  }
+
+  // Brings the dialog's strip, its readouts and its chat in line with the
+  // stretch that is set and with the player.
+  function paintTrim(dialog) {
+    const span = trimSpan(dialog);
+    const video = trimClip(dialog);
+    const time = trimTime(dialog);
+    let { from, to } = trimAt(dialog);
+    // The file can turn out a little shorter than it was said to be.
+    if (to > span.last) {
+      to = span.last;
+      dialog.dataset.to = to.toFixed(2);
+    }
+
+    const share = (at) => `${clamp((at - span.start) / (span.end - span.start), 0, 1) * 100}%`;
+    const strip = one("[data-trim-strip]", dialog);
+    strip.style.setProperty("--from", share(from));
+    strip.style.setProperty("--to", share(to));
+    strip.style.setProperty("--at", share(time));
+    for (const [which, at, least, most] of [["from", from, span.first, to], ["to", to, from, span.last]]) {
+      const handle = one(`[data-trim-handle="${which}"]`, strip);
+      handle.setAttribute("aria-valuemin", least.toFixed(1));
+      handle.setAttribute("aria-valuemax", most.toFixed(1));
+      handle.setAttribute("aria-valuenow", at.toFixed(1));
+      handle.setAttribute("aria-valuetext", trimWords(at, span.clip));
+    }
+    one("[data-trim-from]", dialog).textContent = trimWords(from, span.clip);
+    one("[data-trim-to]", dialog).textContent = trimWords(to, span.clip);
+    one("[data-trim-length]", dialog).textContent = `${(to - from).toFixed(1)} s`;
+    one("[data-trim-now]", dialog).textContent = trimWords(time, span.clip);
+
+    const playing = !video.paused && !video.ended;
+    const play = one("[data-trim-play]", dialog);
+    play.classList.toggle("is-playing", playing);
+    play.setAttribute("aria-label", playing ? "Pause" : "Play");
+
+    // Chat as its video will have it: each line where it stands on the
+    // review page, moved by what the slider says.
+    const pane = one("[data-trim-chat-pane]", dialog);
+    if (pane && !pane.hidden) reveal(one("[data-trim-lines]", pane), time - Number(one("[data-trim-shift]", dialog).value));
+  }
+
+  // Played, the stretch stops at its end.
+  function trimTick(video) {
+    const dialog = trimOf(video);
+    const time = trimTime(dialog);
+    const { to } = trimAt(dialog);
+    const ranPast = trimWas < to && time >= to && time - to < TRIM_RAN_PAST_SECONDS;
+    trimWas = time;
+    if (ranPast && !video.paused) {
+      video.pause();
+      video.currentTime = to + (Number(dialog.dataset.lead) || 0);
+      trimWas = to;
+    }
+    paintTrim(dialog);
+  }
+
+  // Plays from where the player is - which can be outside the stretch, to
+  // see what leads up to it or follows. From its end it starts over.
+  function toggleTrimPlay(dialog) {
+    const video = trimClip(dialog);
+    if (!video.paused && !video.ended) {
+      video.pause();
       return;
     }
-    say(article, "");
-    await redrawChatVideo(article);
-  }
-
-  async function redrawChatVideo(article) {
-    try {
-      const response = await fetch(`/dashboard/moments/${article.dataset.moment}`);
-      if (response.ok && article.isConnected) {
-        const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
-        const now = one("[data-chat-video]", fresh);
-        const old = one("[data-chat-video]", article);
-        if (now && old) old.replaceWith(now);
-      }
-    } catch {
-      // the row stays as it is and is asked about again below
+    const { from, to } = trimAt(dialog);
+    if (video.ended || Math.abs(trimTime(dialog) - to) < 0.05) {
+      video.currentTime = from + (Number(dialog.dataset.lead) || 0);
+      trimWas = from;
     }
-    watchChatVideo();
+    video.play().catch(() => {});
   }
 
-  function watchChatVideo() {
-    clearTimeout(chatVideoWatch);
-    const row = one('[data-chat-video="rendering"]');
-    if (!row) return;
-    const article = row.closest(".moment");
-    chatVideoWatch = setTimeout(async () => {
-      let state = "rendering";
-      try {
-        const response = await fetch(`/moments/${article.dataset.moment}/chat_video`);
-        if (response.ok) state = (await response.json()).state;
-      } catch {
-        // not reachable just now; asked again
-      }
-      if (!article.isConnected) return;
-      if (state === "rendering") watchChatVideo();
-      else redrawChatVideo(article);
-    }, CHAT_VIDEO_POLL_MS);
+  // Arrow keys nudge the handle that has the focus; I and O put the start
+  // and the end where the player is; Space plays.
+  const TRIM_KEYS = { ArrowLeft: -1, ArrowRight: 1, ArrowDown: -1, ArrowUp: 1 };
+
+  function trimKey(dialog, event) {
+    const target = event.target;
+    const handle = target.closest("[data-trim-handle]");
+    if (handle && event.key in TRIM_KEYS) {
+      event.preventDefault();
+      const which = handle.dataset.trimHandle;
+      moveTrim(dialog, which, trimAt(dialog)[which] + TRIM_KEYS[event.key] * (event.shiftKey ? 1 : 0.1));
+      return;
+    }
+    if (event.repeat || target.matches("input")) return;
+    const key = event.key.toLowerCase();
+    if (key === "i") moveTrim(dialog, "from", trimTime(dialog));
+    else if (key === "o") moveTrim(dialog, "to", trimTime(dialog));
+    else if (key === " " && !target.matches("button, a")) {
+      event.preventDefault();
+      toggleTrimPlay(dialog);
+    }
+  }
+
+  function openTrim(button) {
+    const article = button.closest(".moment");
+    const dialog = one("[data-trim]", article);
+    const strip = one("[data-strip]", article);
+    if (!dialog || !strip) return;
+    one("[data-clip]", article).pause();
+
+    const video = trimClip(dialog);
+    if (!video.getAttribute("src")) {
+      video.preload = "auto";
+      video.src = video.dataset.src;
+    }
+    video.volume = volume;
+    video.muted = muted;
+
+    // The strip and the chat in the dialog are copies of the ones on the
+    // page, taken now: where chat sits may have been moved since last time.
+    // The strip's note on the moment is left out - a handle would cut it.
+    const copies = (parts) => parts.map((part) => part.cloneNode(true));
+    const drawn = all(":scope > *", strip).filter((part) => !part.matches("[data-hover], [data-playhead], [data-flag], .ch-note"));
+    one("[data-trim-drawing]", dialog).replaceChildren(...copies(drawn));
+    one("[data-trim-axis]", dialog).replaceChildren(...copies(all("[data-trace] .ch-axis > *", article)));
+    one("[data-trim-lines]", dialog)?.replaceChildren(...copies(all("[data-chat] > [data-at]", article)));
+
+    dialog.showModal();
+    // To begin with the stretch is the clip, as it was cut.
+    const span = trimSpan(dialog);
+    if (dialog.dataset.from === undefined) {
+      dialog.dataset.from = "0";
+      dialog.dataset.to = Math.min(span.clip, span.last).toFixed(2);
+    }
+    trimWas = Number(dialog.dataset.from);
+    video.currentTime = trimWas + span.lead;
+    paintTrim(dialog);
+    askTrim(dialog);
+  }
+
+  function leaveTrim(dialog) {
+    trimClip(dialog).pause();
+    clearTimeout(trimWatch);
+  }
+
+  // Whether the chat goes with the video: its lines are then shown beside
+  // the picture, and can be moved against it.
+  function wantTrimChat(box) {
+    const dialog = trimOf(box);
+    one("[data-trim-chat-pane]", dialog).hidden = !box.checked;
+    one("[data-trim-shift]", dialog).disabled = !box.checked;
+    paintTrim(dialog);
+  }
+
+  function shiftTrimChat(slider) {
+    const dialog = trimOf(slider);
+    const seconds = Number(slider.value);
+    one("[data-trim-shift-words]", dialog).textContent = seconds
+      ? `Chat ${Math.abs(seconds)} s ${seconds > 0 ? "later" : "earlier"}`
+      : "Chat where the review page has it";
+    paintTrim(dialog);
+  }
+
+  // Says where the cut stands and offers what there is to download.
+  function showTrim(dialog, trim) {
+    const busy = TRIM_BUSY.includes(trim.state);
+    one("[data-trim-state]", dialog).textContent = trim.words;
+    for (const [part, url] of [["[data-trim-video]", trim.video_url], ["[data-trim-chat-video]", trim.chat_url]]) {
+      const link = one(part, dialog);
+      link.hidden = !url;
+      if (url) link.href = url;
+      else link.removeAttribute("href");
+    }
+    one("[data-trim-go]", dialog).disabled = busy;
+    clearTimeout(trimWatch);
+    if (busy) trimWatch = setTimeout(() => askTrim(dialog), TRIM_POLL_MS);
+  }
+
+  async function askTrim(dialog) {
+    const still = () => dialog.isConnected && dialog.open;
+    if (!still()) return;
+    let trim = null;
+    try {
+      const response = await fetch(`/moments/${dialog.closest(".moment").dataset.moment}/trim`);
+      if (response.ok) trim = await response.json();
+    } catch {
+      // not reachable just now
+    }
+    if (!still()) return;
+    if (trim) showTrim(dialog, trim);
+    else if (one("[data-trim-go]", dialog).disabled) {
+      // One is being made: asked again.
+      clearTimeout(trimWatch);
+      trimWatch = setTimeout(() => askTrim(dialog), TRIM_POLL_MS);
+    }
+  }
+
+  async function exportTrim(button) {
+    const dialog = trimOf(button);
+    const { from, to } = trimAt(dialog);
+    const chat = one("[data-trim-chat]", dialog);
+    const shift = one("[data-trim-shift]", dialog);
+    button.disabled = true;
+    const response = await post(`/moments/${dialog.closest(".moment").dataset.moment}/trim`, {
+      start: from,
+      end: to,
+      chat: Boolean(chat && chat.checked),
+      chat_shift: shift ? Number(shift.value) : 0,
+    });
+    if (!dialog.isConnected) return; // another moment was opened meanwhile
+    if (!response || !response.ok) {
+      button.disabled = false;
+      one("[data-trim-state]", dialog).textContent = "Could not start the cut. Try again.";
+      return;
+    }
+    showTrim(dialog, await response.json());
   }
 
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
-    watchChatVideo();
     for (const field of all("[data-note]")) grow(field);
+    for (const button of all("[data-trim-open]")) button.hidden = false;
     const video = one("[data-clip]");
     if (!video) return;
     video.defaultPlaybackRate = speed;
@@ -630,7 +865,11 @@
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
     ["[data-chat-shift]", shiftChat],
-    ["[data-chat-video-render]", renderChatVideo],
+    ["[data-trim-open]", openTrim],
+    ["[data-trim-close]", (button) => trimOf(button).close()],
+    ["[data-trim-play]", (button) => toggleTrimPlay(trimOf(button))],
+    ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
+    ["[data-trim-go]", exportTrim],
     ["[data-switch] button", flip],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
@@ -676,14 +915,56 @@
     if (strip && !strip.contains(event.relatedTarget)) stopReadOut(strip);
   });
 
+  // In the Trim dialog: pressing a handle takes hold of it, pressing the
+  // strip anywhere else goes there, and dragging does either along it.
+  document.addEventListener("pointerdown", (event) => {
+    const strip = event.target.closest("[data-trim-strip]");
+    if (!strip || event.button !== 0) return;
+    const dialog = trimOf(strip);
+    const handle = event.target.closest("[data-trim-handle]");
+    const time = trimPoint(strip, event);
+    strip.setPointerCapture(event.pointerId);
+    trimDrag = handle ? handle.dataset.trimHandle : null;
+    // A handle is as wide as a finger, and is held wherever it was pressed.
+    if (trimDrag) trimGrab = time - trimAt(dialog)[trimDrag];
+    else seekTrim(dialog, time);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    const strip = event.target.closest("[data-trim-strip]");
+    if (!strip || !strip.hasPointerCapture(event.pointerId)) return;
+    const time = trimPoint(strip, event);
+    if (trimDrag) moveTrim(trimOf(strip), trimDrag, time - trimGrab);
+    else seekTrim(trimOf(strip), time);
+  });
+
+  for (const type of ["pointerup", "pointercancel"]) {
+    document.addEventListener(type, () => {
+      trimDrag = null;
+    });
+  }
+
   document.addEventListener("dblclick", (event) => {
     const video = event.target.closest("[data-clip]");
     if (video) toggleFullScreen(video);
+    // Chat's slider rests in the middle, and goes back there when asked.
+    const shift = event.target.closest("[data-trim-shift]");
+    if (shift && !shift.disabled) {
+      shift.value = "0";
+      shiftTrimChat(shift);
+    }
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
+    // With the Trim dialog open the keys are its own: a number must not
+    // rate the moment underneath.
+    const dialog = one("[data-trim][open]");
+    if (dialog) {
+      trimKey(dialog, event);
+      return;
+    }
     if (target.matches("[data-title]")) {
       // Enter finishes the name and so does Escape; leaving the field saves it.
       if (event.key === "Escape" || event.key === "Enter") {
@@ -721,6 +1002,8 @@
       say(target, "");
     } else if (target.matches("[data-volume]")) {
       setVolume(clipOf(target), Number(target.value));
+    } else if (target.matches("[data-trim-shift]")) {
+      shiftTrimChat(target);
     }
   });
 
@@ -734,6 +1017,7 @@
     const target = event.target;
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
+    else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
   });
 
@@ -744,12 +1028,16 @@
     addChannel(form);
   });
 
-  // Media events do not bubble, so they are caught on the way down.
-  const onMedia = (type, handle) =>
-    document.addEventListener(type, (event) => event.target.matches?.("[data-clip]") && handle(event.target), true);
-  for (const type of ["loadedmetadata", "durationchange", "timeupdate", "seeked", "play", "pause", "ended", "emptied", "volumechange", "ratechange"]) {
-    onMedia(type, paint);
-  }
+  // Media events do not bubble, so they are caught on the way down - and
+  // neither does a dialog's closing.
+  const onMedia = (selector, handle) => {
+    for (const type of ["loadedmetadata", "durationchange", "timeupdate", "seeked", "play", "pause", "ended", "emptied", "volumechange", "ratechange"]) {
+      document.addEventListener(type, (event) => event.target.matches?.(selector) && handle(event.target), true);
+    }
+  };
+  onMedia("[data-clip]", paint);
+  onMedia("[data-trim-clip]", trimTick);
+  document.addEventListener("close", (event) => event.target.matches?.("[data-trim]") && leaveTrim(event.target), true);
 
   // The page's own transport is not on screen in full screen, so the
   // browser's controls stand in for it for as long as that lasts.

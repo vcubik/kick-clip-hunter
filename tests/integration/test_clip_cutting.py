@@ -648,3 +648,115 @@ class TestMeasuringAClip:
 
     def test_neither_has_a_file_that_is_not_there(self, tmp_path):
         assert recorder.probe_duration(tmp_path / "gone.mp4") is None
+
+
+class TestTrimming:
+    """A stretch of a moment's file cut out as a file of its own, for an
+    editor: where it starts and ends is theirs to say."""
+
+    @pytest.fixture
+    def clip(self, rec, monkeypatch) -> recorder.CutClip:
+        """A file of 6 s before a clip, the clip, and 8 s after it, with a
+        frame a cut can begin on every second."""
+        monkeypatch.setattr(recorder, "CONTEXT_BEFORE_SECONDS", 6)
+        monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", 8)
+        return recorder.extract_clip(rec, chat_time(15), chat_time(22), "moment_7.mp4", 0, 0)
+
+    @pytest.fixture
+    def alone(self, rec, monkeypatch) -> recorder.CutClip:
+        """The same clip cut with nothing around it: it begins on the
+        picture that is 6 s into the file with context."""
+        monkeypatch.setattr(recorder, "CONTEXT_BEFORE_SECONDS", 0)
+        monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", 0)
+        return recorder.extract_clip(rec, chat_time(15), chat_time(22), "alone.mp4", 0, 0)
+
+    def trimmed(self, clip) -> Path:
+        return clip.path.with_name("moment_7_trim.mp4")
+
+    def test_a_stretch_is_cut_out_as_a_playable_file(self, clip):
+        output = self.trimmed(clip)
+
+        begins, duration = recorder.trim_clip(clip.path, 3.0, 12.0, output)
+
+        assert begins == pytest.approx(3, abs=0.1)
+        assert duration == pytest.approx(9, abs=TOLERANCE)
+        assert probe(output) == {"duration": pytest.approx(duration, abs=0.01), "streams": ["audio", "video"]}
+        assert decodes_cleanly(output)
+
+    def test_it_begins_on_the_last_frame_a_cut_can_begin_on_before_the_start(self, clip, alone):
+        output = self.trimmed(clip)
+
+        # Asked to start 0.6 s into the clip; the frame before that is the
+        # clip's first.
+        begins, duration = recorder.trim_clip(clip.path, 6.6, 10.0, output)
+
+        assert begins == pytest.approx(6, abs=0.1)
+        assert duration == pytest.approx(4, abs=TOLERANCE)
+        assert first_frame(output) == first_frame(alone.path) != first_frame(clip.path)
+
+    def test_a_start_a_hair_before_such_a_frame_begins_on_it_not_a_second_earlier(self, clip, alone):
+        output = self.trimmed(clip)
+
+        begins, _duration = recorder.trim_clip(clip.path, 6.0 - recorder.KEYFRAME_SLACK_SECONDS / 2, 10.0, output)
+
+        assert begins == pytest.approx(6, abs=0.1)
+        assert first_frame(output) == first_frame(alone.path)
+
+    def test_from_the_very_start_of_the_file_it_begins_with_the_file(self, clip):
+        output = self.trimmed(clip)
+
+        begins, duration = recorder.trim_clip(clip.path, 0.0, 5.0, output)
+
+        assert begins == pytest.approx(0, abs=0.1)
+        assert duration == pytest.approx(5, abs=TOLERANCE)
+        assert first_frame(output) == first_frame(clip.path)
+
+    def test_it_ends_where_it_was_asked_to(self, clip):
+        _begins, short = recorder.trim_clip(clip.path, 4.0, 7.3, self.trimmed(clip))
+        _begins, longer = recorder.trim_clip(clip.path, 4.0, 9.8, self.trimmed(clip))
+
+        assert short == pytest.approx(3.3, abs=TOLERANCE)
+        assert longer == pytest.approx(5.8, abs=TOLERANCE)
+
+    def test_the_file_it_was_cut_from_is_as_it_was_and_nothing_else_is_left(self, clip):
+        content = clip.path.read_bytes()
+
+        recorder.trim_clip(clip.path, 3.0, 12.0, self.trimmed(clip))
+
+        assert clip.path.read_bytes() == content
+        assert sorted(path.name for path in clip.path.parent.iterdir()) == ["moment_7.mp4", "moment_7_trim.mp4"]
+
+    def test_its_folder_is_made_if_it_is_not_there(self, clip, tmp_path):
+        output = tmp_path / "taken" / "away" / "cut.mp4"
+
+        recorder.trim_clip(clip.path, 3.0, 6.0, output)
+
+        assert decodes_cleanly(output)
+
+    def test_a_file_that_cannot_be_cut_is_an_error_and_leaves_nothing(self, tmp_path):
+        broken = tmp_path / "moment_1.mp4"
+        broken.write_bytes(b"not really video")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            recorder.trim_clip(broken, 1.0, 5.0, tmp_path / "moment_1_trim.mp4")
+
+        assert [path.name for path in tmp_path.iterdir()] == ["moment_1.mp4"]
+
+    def test_a_stretch_the_file_does_not_reach_is_an_error_and_leaves_nothing(self, clip):
+        with pytest.raises(RuntimeError, match=r"moment_7\.mp4 is \d+\.\d s long"):
+            recorder.trim_clip(clip.path, 500.0, 510.0, self.trimmed(clip))
+
+        assert [path.name for path in clip.path.parent.iterdir()] == ["moment_7.mp4"]
+
+    def test_a_failed_cut_keeps_the_one_there_was(self, clip):
+        output = self.trimmed(clip)
+        recorder.trim_clip(clip.path, 3.0, 12.0, output)
+        content = output.read_bytes()
+
+        with pytest.raises(RuntimeError):
+            recorder.trim_clip(clip.path, 500.0, 510.0, output)
+
+        assert output.read_bytes() == content
+
+    def test_a_file_that_cannot_be_asked_where_its_frames_are_is_cut_where_it_was_told(self, tmp_path):
+        assert recorder._keyframe_before(tmp_path / "not_there.mp4", 6.0) == 6.0

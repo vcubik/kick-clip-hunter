@@ -124,7 +124,7 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     assert row.attrs["data-moment"] == str(moment["id"])
     article = page.one("article", class_="moment")
     assert article.one("h1").text == CHANNEL
-    video = article.one("video")
+    video = article.one("video", data_clip=True)
     assert video.attrs["src"] == f"/clips/{CHANNEL}/{clip_name}#t={CONTEXT_BEFORE}"
     assert video.attrs["data-lead"] == str(CONTEXT_BEFORE)
     trace = article.one("figure", class_="trace")

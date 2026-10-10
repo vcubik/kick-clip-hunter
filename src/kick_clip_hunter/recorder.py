@@ -132,6 +132,9 @@ VOD_WAIT_SECONDS = 45
 # is asked to start so that rounding can't put it before the frame.
 KEYFRAME_SEARCH_SECONDS = 6.0
 KEYFRAME_MARGIN_SECONDS = 0.01
+# A cut asked to start this little before such a frame starts on it, not on
+# the one before - which is seconds earlier.
+KEYFRAME_SLACK_SECONDS = 0.05
 # How far the length of a file joined from a clip and its context clips may
 # be from the sum of theirs before the join is taken to have gone wrong.
 JOIN_TOLERANCE_SECONDS = 1.0
@@ -687,17 +690,16 @@ def extract_clip(
     )
 
 
-def _keyframe_near(path: Path, second: float) -> float:
-    """When the frame a cut without re-encoding can start on is shown, for
-    the one nearest to `second` of a video - or `second` itself if the file
-    can't be asked."""
-    first = max(second - KEYFRAME_SEARCH_SECONDS, 0.0)
+def _keyframes(path: Path, first: float, last: float) -> list[float]:
+    """When the frames a cut without re-encoding can start on are shown,
+    for the ones between two times of a video - none if the file can't be
+    asked."""
     try:
         result = subprocess.run(
             [
                 FFPROBE_BIN, "-v", "error",
                 "-select_streams", "v:0", "-skip_frame", "nokey",
-                "-read_intervals", f"{first:.3f}%{second + KEYFRAME_SEARCH_SECONDS:.3f}",
+                "-read_intervals", f"{max(first, 0.0):.3f}%{last:.3f}",
                 "-show_entries", "frame=pts_time",
                 "-of", "csv=p=0",
                 str(path),
@@ -707,10 +709,26 @@ def _keyframe_near(path: Path, second: float) -> float:
             text=True,
             timeout=PROBE_TIMEOUT_SECONDS,
         )
-        times = [float(line.strip().strip(",")) for line in result.stdout.splitlines() if line.strip().strip(",")]
+        return [float(line.strip().strip(",")) for line in result.stdout.splitlines() if line.strip().strip(",")]
     except (OSError, subprocess.SubprocessError, ValueError):
-        return second
+        return []
+
+
+def _keyframe_near(path: Path, second: float) -> float:
+    """When the frame a cut without re-encoding can start on is shown, for
+    the one nearest to `second` of a video - or `second` itself if the file
+    can't be asked."""
+    times = _keyframes(path, second - KEYFRAME_SEARCH_SECONDS, second + KEYFRAME_SEARCH_SECONDS)
     return min(times, key=lambda time: abs(time - second), default=second)
+
+
+def _keyframe_before(path: Path, second: float) -> float:
+    """The same for the last such frame at or before `second`: where a cut
+    asked to start there really starts. Before a file's first one there is
+    nothing to start on, so that one it is."""
+    times = _keyframes(path, second - KEYFRAME_SEARCH_SECONDS, second + KEYFRAME_SEARCH_SECONDS)
+    before = [time for time in times if time <= second + KEYFRAME_SLACK_SECONDS]
+    return max(before, default=min(times, default=second))
 
 
 @contextmanager
@@ -742,6 +760,50 @@ def clip_part(path: Path, start: float, duration: float) -> Iterator[Path]:
             stderr=subprocess.DEVNULL,
         )
         yield part
+
+
+def trim_clip(path: Path, start: float, end: float, output: Path) -> tuple[float, float]:
+    """The stretch of a video file from `start` to `end` seconds as a file
+    of its own, for an editor to take away. Returns where in `path` the new
+    file really begins, and how long it runs.
+
+    Nothing is re-encoded: it takes a moment and what comes out is the
+    stream's own picture. But a cut like that can only begin on a frame that
+    is whole in itself, and those come a couple of seconds apart - so the
+    file begins on the last one at or before `start`, up to that much
+    earlier than asked, and ends where it was asked to. Whatever is laid
+    over it has to be lined up with where it really begins, hence the
+    return value. The file appears under its name only once it is complete.
+    """
+    # Asked for a start past its end, ffmpeg hands back the file's last
+    # couple of seconds as if nothing were wrong.
+    length = probe_duration(path)
+    if length is not None and start >= length:
+        raise RuntimeError(f"{path.name} is {length:.1f} s long: nothing of it can be cut out from {start:.1f} s on")
+    begins = _keyframe_before(path, start)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    unfinished = output.with_name(f"{output.stem}.part{output.suffix}")
+    try:
+        subprocess.run(
+            [
+                FFMPEG_BIN, "-y",
+                "-ss", f"{begins + KEYFRAME_MARGIN_SECONDS:.3f}", "-t", f"{end - begins:.3f}",
+                "-i", str(path),
+                "-c", "copy", "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart",
+                str(unfinished),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        duration = probe_duration(unfinished)
+        if not duration:
+            raise RuntimeError(f"nothing came of cutting {path.name} from {start:.1f} s to {end:.1f} s")
+        unfinished.replace(output)
+    finally:
+        unfinished.unlink(missing_ok=True)
+    return begins, duration
 
 
 def probe_duration(path: Path) -> float | None:

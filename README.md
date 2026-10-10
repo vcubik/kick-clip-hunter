@@ -30,6 +30,9 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   time: the clip, a trace of what chat did around it - which doubles as the scrubber - the chat
   itself replayed in step with the picture, and a 1-5 rating, tags and a note, all reachable from
   the keyboard. Those ratings are what detector tuning is checked against.
+- **Hands the footage to an editor.** From the open moment a stretch of the file can be trimmed
+  out - start and end set on the same timeline - without re-encoding, and its chat rendered as a
+  transparent video to lay over it, moved against the picture if it does not sit right.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -115,7 +118,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
-| `chat_video.py` | A moment's chat rendered as a transparent video (ProRes 4444) to lay over the clip in an editor. |
+| `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
 | `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps. |
 

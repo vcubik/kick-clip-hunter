@@ -44,6 +44,7 @@
   --veil: #0000001A;      /* laid over a fill on hover, twice when pressed */
   --rec: #FF4A3D;         /* the dot of a recording lamp, nothing else */
   --video: #000000;
+  --shade: #000000B3;     /* over the page while a dialog is open */
 
   /* Chart paper: what chat did is drawn on it, in ink and one red pen. */
   --paper: #F5F6F2;
@@ -85,6 +86,9 @@
   --h-strip: 96px;
   --w-queue: 400px;
   --w-chat: 340px;
+  --w-dialog: 1120px;
+  --w-trim-chat: 300px;
+  --w-handle: 12px;
 
   /* One family; its width axis carries role. */
   --font-sans: Archivo, "Segoe UI", system-ui, sans-serif;
@@ -97,6 +101,8 @@
      sits above and below the clip. The clip is sized so that all of it fits
      one screen without scrolling. */
   --stage-rest: 512px;
+  /* The same for the Trim dialog: all of it but its picture. */
+  --trim-rest: 480px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -283,6 +289,21 @@ a { color: inherit; }
 .ch-volume::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
 .ch-volume::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
 
+/* A slider that rests in the middle, where a notch is. */
+.ch-shift { appearance: none; width: 240px; height: var(--h-compact); margin: 0; background: linear-gradient(var(--text-2), var(--text-2)) center / 2px 14px no-repeat; cursor: pointer; }
+.ch-shift::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-control); background: var(--inset); }
+.ch-shift::-moz-range-track { height: 4px; border-radius: var(--radius-control); background: var(--inset); }
+.ch-shift::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-shift::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-shift:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Dialog: one job done over the page, which waits under a shade. Square and
+   flat like a pane, with a `sunk` edge. */
+.ch-dialog { width: min(var(--w-dialog), calc(100vw - var(--space-48))); max-height: calc(100vh - var(--space-48)); padding: var(--space-16); border: 1px solid var(--sunk); background: var(--field); color: var(--text); overflow-y: auto; }
+.ch-dialog::backdrop { background: var(--shade); }
+.ch-dialog-head { display: flex; align-items: center; gap: var(--space-16); margin-bottom: var(--space-12); }
+.ch-dialog-head .ch-btn { margin-left: auto; }
+
 /* Banner: one sentence about the whole page. In the queue it offers what is
    new; under the top bar, on `sunk`, it says the service is going down. */
 .ch-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); padding: var(--space-8) var(--space-12); background: var(--quiet); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 13px; line-height: 16px; }
@@ -361,9 +382,45 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .chat-empty { padding-left: 10px; color: var(--text-2); }
 .chat-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
 .chat-foot > p:first-child { min-height: 16px; }
-.chat-delay, .chat-video { display: flex; align-items: center; gap: var(--space-4); margin-top: var(--space-8); }
-.chat-delay span, .chat-video span { margin-right: auto; }
+.chat-delay { display: flex; align-items: center; gap: var(--space-4); margin-top: var(--space-8); }
+.chat-delay span { margin-right: auto; }
 .chat-delay span { font-variant-numeric: tabular-nums; }
+
+/* ---- Trim: a stretch of the footage, cut out for an editor --------- */
+
+/* The picture, with chat beside it once chat is to go with the video; the
+   picture is as tall as leaves room for the rest of the dialog. */
+.trim-view { display: flex; gap: var(--space-12); }
+.trim-view .player { flex: 1 1 0; min-width: 0; max-height: max(200px, calc(100vh - var(--trim-rest))); }
+.trim-chat { display: flex; flex-direction: column; flex: none; width: var(--w-trim-chat); padding-top: var(--space-8); border: 1px solid var(--line); }
+.trim-range { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+.trim-range b { font-weight: 600; color: var(--text); }
+
+/* The strip again, with the stretch that is kept framed in `lit` - it is
+   what you set - and the rest of the footage under a wash of ink. A handle
+   stands outside either end of the frame, so the track is inset by a
+   handle's width to leave room for them. */
+.trim-track { margin-top: var(--space-8); padding: 0 var(--w-handle); }
+.trim-strip { --from: 0%; --to: 100%; --at: 0%; cursor: pointer; }
+.trim-drawing { position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; }
+.trim-out { position: absolute; top: 0; bottom: 0; background: var(--ink); opacity: 0.5; pointer-events: none; }
+.trim-out.is-before { left: 0; width: var(--from); }
+.trim-out.is-after { left: var(--to); right: 0; }
+.trim-keep { position: absolute; top: -3px; bottom: -3px; left: var(--from); width: calc(var(--to) - var(--from)); border-top: 3px solid var(--lit); border-bottom: 3px solid var(--lit); pointer-events: none; }
+.trim-strip .ch-playhead { left: var(--at); }
+.trim-handle { position: absolute; top: -3px; bottom: -3px; width: var(--w-handle); border-radius: var(--radius-control); background: var(--lit); cursor: ew-resize; touch-action: none; }
+.trim-handle::after { content: ""; position: absolute; top: calc(50% - 10px); left: calc(50% - 1px); width: 2px; height: 20px; background: var(--on-lit); }
+.trim-handle.is-from { left: calc(var(--from) - var(--w-handle)); }
+.trim-handle.is-to { left: var(--to); }
+
+.trim-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); min-height: var(--h-control); margin-top: var(--space-8); }
+.trim-check { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: 600; cursor: pointer; }
+.trim-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lit); }
+.trim-shift { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.trim-shift-words { font-size: 13px; font-variant-numeric: tabular-nums; }
+.trim-note { max-width: 100ch; margin-top: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.trim-foot { display: flex; align-items: center; gap: var(--space-8); margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
+.trim-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
 
 /* A page that is a statement: nothing new, nothing yet. */
 .statement { min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
@@ -403,5 +460,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .verdict { flex-wrap: wrap; }
   .note { flex-basis: 100%; }
   .chat { border-left: 0; border-top: 1px solid var(--line); }
+  .trim-view { flex-direction: column; }
+  .trim-chat { width: auto; height: 200px; }
+  .trim-chat .chat-lines { max-height: none; flex: 1 1 0; }
+  .trim-foot { flex-wrap: wrap; }
+  .trim-foot .status-line { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
 }
