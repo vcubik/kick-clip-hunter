@@ -568,7 +568,13 @@ MOMENT_SESSION_POLL_SECONDS = 3
 # running to the cap at around two minutes. 12s is the middle ground now
 # that staying "active" takes a fresh crowd-sized reaction (see
 # detector.reaction_active) rather than one straggler.
-MOMENT_SESSION_QUIET_SECONDS = 12
+#
+# 30s since the dashboard got the chat trace: a longer clip costs little when
+# the trace shows where in it chat erupted and the reviewer goes straight
+# there. It equals detector.COOLDOWN_SECONDS on purpose, so there is no gap
+# between the two - a fresh reaction within 30s of the last one extends this
+# clip, and one after a longer lull opens a moment of its own.
+MOMENT_SESSION_QUIET_SECONDS = 30
 # Hard cap on how long a moment stays open: with the trigger window, pre-roll
 # and post-roll around it, the longest possible clip is about 95s.
 MOMENT_SESSION_MAX_SECONDS = 60
