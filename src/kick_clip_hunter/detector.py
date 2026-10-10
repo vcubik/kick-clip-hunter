@@ -68,7 +68,14 @@ from dataclasses import dataclass
 
 SHORT_WINDOW_SECONDS = 10
 BASELINE_WINDOW_SECONDS = 300
-COOLDOWN_SECONDS = 60
+# How long after a moment fires nothing new can. While the moment is still
+# open a further burst only extends it (main.py's moment session), so this
+# matters once it has closed: 60s left the detector blind for most of a
+# minute after a typical moment, and a second, separate reaction in that time
+# ended up only in the first clip's "after" footage. At 30s it gets a moment
+# of its own, whose clip may overlap the end of the first. Replayed over
+# stored chat this fired about a tenth more moments.
+COOLDOWN_SECONDS = 30
 
 # Once a moment has fired, main.py keeps it "open" and extends the clip while
 # the reaction is still going (see its moment session). "Still going" is
