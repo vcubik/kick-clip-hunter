@@ -172,6 +172,7 @@ def _reset_module_state() -> None:
         main._moment_sessions.clear()
         main._background_tasks.clear()
         main._channel_keywords_cache.clear()
+        main._chat_videos.clear()
         main._chat_identity_cache.clear()
         main._stream_start_cache.clear()
         main._shutdown_requested = False
@@ -238,9 +239,10 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture(autouse=True)
 def no_browser(monkeypatch: pytest.MonkeyPatch):
     """The real stream-URL capture and clip publishing drive a visible
-    browser against kick.com. Tests replace the functions that need it; this
-    makes forgetting to do so a failure rather than a window popping up."""
-    from kick_clip_hunter import clip_creator, kick_stream
+    browser against kick.com, and rendering a chat video drives one without
+    a window. Tests replace the functions that need it; this makes
+    forgetting to do so a failure rather than a browser starting."""
+    from kick_clip_hunter import chat_video, clip_creator, kick_stream
 
     launches: list[str] = []
 
@@ -250,6 +252,7 @@ def no_browser(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(kick_stream, "sync_playwright", refuse)
     monkeypatch.setattr(clip_creator, "sync_playwright", refuse)
+    monkeypatch.setattr(chat_video, "sync_playwright", refuse)
     yield launches
     if launches:
         pytest.fail("a browser launch was attempted")

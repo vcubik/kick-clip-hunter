@@ -2,6 +2,7 @@
     that set it off. Part of the review page, and also served on its own
     (/dashboard/moments/<id>) so the page can open another moment without
     loading the queue around it again. -#}
+{% from "_chat_line.html" import chat_line with context -%}
 <article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-status-scope>
 <div class="stage">
 <div class="stage-in">
@@ -140,13 +141,7 @@
   <div class="chat-head"><h2>Chat</h2> <span>{{ "replayed with the clip" if moment.clip_url and moment.chat else "around the moment" }}</span></div>
   <div class="chat-lines" data-chat>
     {% for line in moment.chat %}
-    <p class="ch-chat{% if line.in_moment %} is-moment{% endif %}" data-at="{{ line.at }}"><b class="ch-nick-{{ line.colour }}"{% if line.own_colour %} style="color: {{ line.own_colour }}"{% endif %}>
-      {%- for badge in line.badges %}<img class="ch-badge" src="/static/badges/{{ badge.icon }}.svg?v={{ asset_version }}" alt="{{ badge.words }}" title="{{ badge.words }}" width="16" height="16">{% endfor -%}
-      {{ line.nick }}</b> <span>
-      {%- for part in line.parts -%}
-      {%- if part.emote %}<img class="ch-emote" src="{{ part.image }}" alt="{{ part.emote }}" title="{{ part.emote }}" width="{{ part.width }}" height="20" loading="lazy">{% else %}{{ part.text }}{% endif -%}
-      {%- endfor -%}
-    </span></p>
+    {{ chat_line(line) }}
     {% else %}
     <p class="chat-empty">No chat was stored for this moment.</p>
     {% endfor %}
@@ -161,6 +156,17 @@
       <span>{% if delay.seconds > 0 %}Chat {{ delay.seconds }} s earlier{% elif delay.seconds < 0 %}Chat {{ -delay.seconds }} s later{% else %}Chat as it arrived{% endif %}</span>
       <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat earlier" data-chat-shift="1"{% if delay.seconds >= delay.most %} disabled{% endif %}>Earlier</button>
       <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat later" data-chat-shift="-1"{% if delay.seconds <= delay.least %} disabled{% endif %}>Later</button>
+    </p>
+    {% endif %}
+    {#- The same chat as a video with nothing behind it, for an editor to lay
+        over the clip. Made when asked for: it takes a while, and most clips
+        never need one. -#}
+    {% if moment.chat_video %}
+    {% set video = moment.chat_video %}
+    <p class="chat-video" data-chat-video="{{ video.state }}">
+      <span>{{ video.words }}</span>
+      {% if video.url %}<a class="ch-btn ch-btn-compact" href="{{ video.url }}" download>Download</a>{% endif %}
+      <button type="button" class="ch-btn ch-btn-compact" data-chat-video-render{% if video.state == "rendering" %} disabled{% endif %}>{{ "Render again" if video.url else "Render" }}</button>
     </p>
     {% endif %}
   </div>
