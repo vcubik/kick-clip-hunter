@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS channel_keywords (
     PRIMARY KEY (broadcaster_user_id, keyword)
 );
 
+-- A channel's 7TV emotes as chat types them: the exact name (7TV names are
+-- case-sensitive, and a channel can rename an emote in its own set) and the
+-- emote it stands for there. channel_keywords above is what the detector
+-- listens for; this is what the dashboard draws.
+CREATE TABLE IF NOT EXISTS channel_emotes (
+    broadcaster_user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    emote_id TEXT NOT NULL,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (broadcaster_user_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -244,6 +257,27 @@ def get_channel_keywords(conn: sqlite3.Connection, broadcaster_user_id: int) -> 
         "SELECT keyword, weight FROM channel_keywords WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
     ).fetchall()
     return {row[0]: row[1] for row in rows}
+
+
+def replace_channel_emotes(
+    conn: sqlite3.Connection, broadcaster_user_id: int, emotes: dict[str, tuple[str, int, int]]
+) -> None:
+    """Stores a channel's 7TV emotes - (emote id, width, height) by the
+    name chat types - in place of whatever was stored for it before."""
+    conn.execute("DELETE FROM channel_emotes WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.executemany(
+        "INSERT INTO channel_emotes (broadcaster_user_id, name, emote_id, width, height) VALUES (?, ?, ?, ?, ?)",
+        [(broadcaster_user_id, name, *emote) for name, emote in emotes.items()],
+    )
+    conn.commit()
+
+
+def get_channel_emotes(conn: sqlite3.Connection, broadcaster_user_id: int) -> dict[str, tuple[str, int, int]]:
+    rows = conn.execute(
+        "SELECT name, emote_id, width, height FROM channel_emotes WHERE broadcaster_user_id = ?",
+        (broadcaster_user_id,),
+    ).fetchall()
+    return {row[0]: (row[1], row[2], row[3]) for row in rows}
 
 
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -14,8 +14,9 @@ import logging
 
 import pytest
 
-from kick_clip_hunter import recording_manager
+from kick_clip_hunter import db, recording_manager
 from tests.support.data import add_streamer
+from tests.support.kick_api import seventv_emote_id
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -165,6 +166,70 @@ class TestLifespan:
             )
 
         assert not any(recorder.is_active for recorder in recording_manager._recorders.values())
+
+
+class TestEmotePictures:
+    """Channels change their 7TV emote sets all the time; a start brings
+    the pictures chat is drawn with up to date."""
+
+    def pictures(self, broadcaster_user_id: int) -> dict:
+        conn = db.get_connection()
+        try:
+            return db.get_channel_emotes(conn, broadcaster_user_id)
+        finally:
+            conn.close()
+
+    async def test_every_watched_channel_gets_its_current_emotes(self, service):
+        first = service.watch("channel_a")
+        second = service.watch("channel_b")
+        service.api.channels["channel_a"].seventv_emotes = ["KEKW", "Sadge"]
+        service.api.channels["channel_b"].seventv_emotes = ["KEKW"]
+        service.api.channels["channel_b"].seventv_ids = {"KEKW": "ANOTHERKEKW"}
+
+        await service.main._refresh_emote_pictures()
+
+        assert self.pictures(first) == {
+            "KEKW": (seventv_emote_id("KEKW"), 32, 32),
+            "Sadge": (seventv_emote_id("Sadge"), 32, 32),
+        }
+        assert self.pictures(second) == {"KEKW": ("ANOTHERKEKW", 32, 32)}
+
+    async def test_what_the_detector_listens_for_is_left_alone(self, service):
+        user_id = service.watch("channel_a", keywords={"kekw": 3.5})
+        service.api.channels["channel_a"].seventv_emotes = ["OMEGALUL"]
+
+        await service.main._refresh_emote_pictures()
+
+        conn = db.get_connection()
+        try:
+            assert db.get_channel_keywords(conn, user_id) == {"kekw": 3.5}
+        finally:
+            conn.close()
+
+    async def test_a_7tv_outage_keeps_the_pictures_there_were(self, service, caplog):
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].seventv_emotes = ["KEKW"]
+        await service.main._refresh_emote_pictures()
+        service.api.failures["7tv.io"] = 503
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await service.main._refresh_emote_pictures()
+
+        assert set(self.pictures(user_id)) == {"KEKW"}
+        assert any("could not refresh the 7TV emote pictures of channel_a" in r.getMessage() for r in caplog.records)
+
+    async def test_it_happens_on_startup_without_holding_it_up(self, service, monkeypatch):
+        async def no_recording(*_args):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", no_recording)
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].seventv_emotes = ["KEKW"]
+
+        async with service.main.lifespan(service.main.app):
+            await async_wait_until(lambda: self.pictures(user_id), "the channel's emote pictures to be stored")
+
+        assert set(self.pictures(user_id)) == {"KEKW"}
 
 
 class TestWatchlistViews:

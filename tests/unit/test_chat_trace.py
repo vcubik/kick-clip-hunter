@@ -354,6 +354,14 @@ class TestChatReplay:
         assert (line["nick"], line["colour"]) == ("bob", chat_trace.nick_colour("bob"))
         assert [part.get("text") or part["emote"] for part in line["parts"]] == ["no way ", "KEKW"]
 
+    def test_the_channels_7tv_emotes_are_emotes_in_a_line_too(self):
+        emotes = {"KEKW": ("ID1", 32, 32)}
+
+        (line,) = chat_trace.chat_replay([message(5, "no way KEKW", "bob")], TIMELINE, self.WINDOW, emotes)
+
+        assert [part.get("text") or part["emote"] for part in line["parts"]] == ["no way ", "KEKW"]
+        assert line["parts"][1]["image"] == "https://cdn.7tv.app/emote/ID1/2x.webp"
+
     def test_a_message_from_nobody_with_nothing_in_it_still_makes_a_line(self):
         nothing = {"received_at": chat_at(1).isoformat(), "sender_username": None, "content": None}
 

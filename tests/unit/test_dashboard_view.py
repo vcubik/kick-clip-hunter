@@ -199,6 +199,10 @@ class TestSummary:
         assert view.summary_words(imported) == "Imported clip. No chat was measured for it."
 
 
+# One channel's 7TV emotes, as stored: (emote id, width, height) by name.
+EMOTES = {"KEKW": ("ID1", 32, 32), "WideHard": ("ID2", 96, 32), "re": ("ID3", 32, 32)}
+
+
 class TestChat:
     def test_a_name_always_gets_the_same_colour(self):
         assert view.nick_colour("alice") == view.nick_colour("alice")
@@ -213,7 +217,7 @@ class TestChat:
 
     def test_a_native_emote_becomes_its_name_and_where_its_picture_is(self):
         assert view.chat_parts("[emote:37226:KEKW]") == [
-            {"emote": "KEKW", "image": "https://files.kick.com/emotes/37226/fullsize"}
+            {"emote": "KEKW", "image": "https://files.kick.com/emotes/37226/fullsize", "width": view.EMOTE_HEIGHT}
         ]
 
     def test_text_and_emotes_keep_their_order(self):
@@ -239,6 +243,73 @@ class TestChat:
 
     def test_an_empty_message_has_no_parts(self):
         assert view.chat_parts("") == []
+        assert view.chat_parts("", EMOTES) == []
+
+    def words(self, content: str, emotes=None) -> list:
+        """Text parts as strings, emotes as (name,) tuples."""
+        parts = view.chat_parts(content, EMOTES if emotes is None else emotes)
+        return [part["text"] if "text" in part else (part["emote"],) for part in parts]
+
+    def test_a_channels_7tv_emote_becomes_its_picture(self):
+        assert view.chat_parts("KEKW", EMOTES) == [
+            {"emote": "KEKW", "image": "https://cdn.7tv.app/emote/ID1/2x.webp", "width": view.EMOTE_HEIGHT}
+        ]
+
+    def test_the_same_word_is_whatever_emote_the_channel_has_under_it(self):
+        (here,) = view.chat_parts("KEKW", {"KEKW": ("HERE", 32, 32)})
+        (there,) = view.chat_parts("KEKW", {"KEKW": ("THERE", 32, 32)})
+
+        assert here["image"] == view.SEVENTV_EMOTE_IMAGE.format(id="HERE")
+        assert there["image"] == view.SEVENTV_EMOTE_IMAGE.format(id="THERE")
+
+    def test_without_the_channels_emotes_the_word_stays_a_word(self):
+        assert view.chat_parts("KEKW") == [{"text": "KEKW"}]
+        assert view.chat_parts("KEKW", {}) == [{"text": "KEKW"}]
+
+    def test_7tv_emotes_are_picked_out_of_the_text_around_them(self):
+        assert self.words("he fell KEKW off the chair KEKW") == ["he fell ", ("KEKW",), " off the chair ", ("KEKW",)]
+
+    def test_emotes_in_a_row_keep_the_spaces_between_them(self):
+        assert self.words("KEKW KEKW  WideHard") == [("KEKW",), " ", ("KEKW",), "  ", ("WideHard",)]
+
+    def test_an_emote_is_a_whole_word_spelled_exactly_like_its_name(self):
+        # "re" is a real emote of the channel, and a part of ordinary words.
+        for content in ("kekw", "Kekw", "KEKW!", "KEKWW", "xKEKW", "treba", "re:"):
+            assert self.words(content) == [content]
+        assert self.words("re") == [("re",)]
+
+    def test_native_and_7tv_emotes_keep_their_order(self):
+        assert self.words("[emote:1:emojiLol] KEKW ha [emote:2:KEKW]KEKW") == [
+            ("emojiLol",),
+            " ",
+            ("KEKW",),
+            " ha ",
+            ("KEKW",),
+            ("KEKW",),
+        ]
+
+    def test_a_native_emotes_own_name_is_not_looked_up_as_a_7tv_one(self):
+        (part,) = view.chat_parts("[emote:5:KEKW]", EMOTES)
+
+        assert part["image"] == view.KICK_EMOTE_IMAGE.format(id=5)
+
+    def test_an_emote_is_as_wide_as_its_shape_makes_it(self):
+        def width(size: tuple[int, int]) -> int:
+            (part,) = view.chat_parts("KEKW", {"KEKW": ("ID", *size)})
+            return part["width"]
+
+        assert width((32, 32)) == view.EMOTE_HEIGHT
+        assert width((96, 32)) == 3 * view.EMOTE_HEIGHT
+        assert width((16, 32)) == view.EMOTE_HEIGHT // 2
+        # Unknown shape: square.
+        assert width((0, 0)) == width((32, 0)) == width((0, 32)) == view.EMOTE_HEIGHT
+
+    def test_a_very_wide_emote_does_not_take_over_the_line(self):
+        (part,) = view.chat_parts("KEKW", {"KEKW": ("ID", 3200, 32)})
+        (sliver,) = view.chat_parts("KEKW", {"KEKW": ("ID", 1, 3200)})
+
+        assert part["width"] == view.EMOTE_MAX_WIDTH
+        assert sliver["width"] == 1
 
 
 class TestQueueGroups:

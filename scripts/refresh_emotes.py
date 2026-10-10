@@ -1,5 +1,6 @@
-"""CLI to refresh a watched channel's 7TV emote keywords without touching
-its Kick event subscription at all.
+"""CLI to refresh a watched channel's 7TV emotes - the keywords the detector
+listens for and the pictures the dashboard shows - without touching its
+Kick event subscription at all.
 
 Usage: python scripts/refresh_emotes.py <channel_slug>
 """
@@ -12,10 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from kick_clip_hunter.config import load_settings
-from kick_clip_hunter.db import get_connection, replace_channel_keywords
-from kick_clip_hunter.detector import EMOTE_MENTION_LAUGH_WEIGHT, classify_emote_names
+from kick_clip_hunter.db import get_connection
 from kick_clip_hunter.kick_client import get_app_access_token, get_channel_by_slug
-from kick_clip_hunter.seventv_client import get_channel_emote_names
+from kick_clip_hunter.seventv_client import get_channel_emotes
+from kick_clip_hunter.watchlist import store_channel_emotes
 
 
 async def main(slug: str) -> None:
@@ -25,19 +26,17 @@ async def main(slug: str) -> None:
     channel = await get_channel_by_slug(slug, token)
     broadcaster_id = channel["broadcaster_user_id"]
 
-    emote_names = await get_channel_emote_names(broadcaster_id)
-    keyword_weights = classify_emote_names(emote_names)
-    laugh_count = sum(1 for weight in keyword_weights.values() if weight == EMOTE_MENTION_LAUGH_WEIGHT)
-    print(
-        f"Fetched {len(emote_names)} 7TV emote name(s) for {slug!r} "
-        f"({laugh_count} classified as laugh-related)"
-    )
+    emotes = await get_channel_emotes(broadcaster_id)
 
     conn = get_connection()
     try:
-        replace_channel_keywords(conn, broadcaster_id, keyword_weights)
+        laugh_count = store_channel_emotes(conn, broadcaster_id, emotes)
     finally:
         conn.close()
+    print(
+        f"Fetched {len(emotes)} 7TV emote name(s) for {slug!r} "
+        f"({laugh_count} classified as laugh-related)"
+    )
     print(f"Refreshed keywords for {slug!r}.")
 
 

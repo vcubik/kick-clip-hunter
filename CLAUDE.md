@@ -50,11 +50,11 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   A quick `cloudflared tunnel --url http://localhost:8000` also works as a fallback, but
   its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
-  - `subscribe.py <slug>` — add a channel to the watchlist (fetches and stores its 7TV emote
-    keywords, and subscribes to `chat.message.sent` on Kick's side unless a subscription is
+  - `subscribe.py <slug>` — add a channel to the watchlist (fetches and stores its 7TV emotes -
+    the keywords the detector listens for and the pictures the dashboard draws - and subscribes to `chat.message.sent` on Kick's side unless a subscription is
     already there - so re-running it is safe and repairs a dropped subscription)
   - `refresh_emotes.py <slug>` — re-fetch and re-classify an already-watched channel's 7TV
-    emotes without talking to Kick's subscription API at all
+    emotes (keywords and pictures) without talking to Kick's subscription API at all
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
   - `create_clip.py <slug>` — manually publish an official Kick clip for a channel's
@@ -87,7 +87,8 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   messages a second and how many of them were laughing, on the clip's own time axis, from
   30s before the clip to 60s after it. It is also the scrubber - one timeline over the
   clip and its two context files - and chat is replayed beside it in step with the
-  picture. `GET /dashboard/channels` has the
+  picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
+  straight from their CDNs). `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
@@ -108,7 +109,7 @@ Watchlist (streamers)
        subscribe to any channel's chat without that streamer's consent)
     -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Detection engine (rolling window per channel; see detector.py)
-    -> SQLite: streamers, chat_messages, moments, channel_keywords
+    -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
        clip from that buffer, path stored back on the moment
@@ -118,7 +119,12 @@ Watchlist (streamers)
 
 Module map (`src/kick_clip_hunter/`):
 - `kick_client.py` — app access token + channel lookup + event subscription
-- `seventv_client.py` — fetches a channel's 7TV emote set (public API)
+- `seventv_client.py` — fetches a channel's 7TV emote set (public API): each emote's name
+  in that channel, its id and the shape of its picture. Stored twice over, for two uses:
+  `channel_keywords` is what the detector listens for (lowercased, filtered, weighted) and
+  only changes when asked (`subscribe.py`, `refresh_emotes.py`); `channel_emotes` is what
+  the dashboard draws (every emote, exact case - the same word is a different picture in
+  another channel) and is also refreshed in the background on every start
 - `webhook_security.py` — verifies Kick's RSA-signed webhook payloads
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
   `ALTER TABLE`s in `get_connection()`, not a migration framework

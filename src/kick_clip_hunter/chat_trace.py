@@ -365,10 +365,14 @@ def _during(message: Row, window: tuple[datetime, datetime] | None) -> bool:
 
 
 def chat_replay(
-    messages: Iterable[Row], timeline: Timeline, window: tuple[datetime, datetime] | None
+    messages: Iterable[Row],
+    timeline: Timeline,
+    window: tuple[datetime, datetime] | None,
+    emotes: Mapping[str, tuple[str, int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """The chat lines to show beside a clip, each with the clip time it
-    belongs to and whether it was sent during the moment."""
+    belongs to and whether it was sent during the moment. `emotes` are the
+    channel's 7TV emotes, drawn as pictures (see dashboard_view.chat_parts)."""
     lines = []
     for message in messages:
         nick = message["sender_username"] or ""
@@ -376,7 +380,7 @@ def chat_replay(
             {
                 "nick": nick,
                 "colour": nick_colour(nick),
-                "parts": chat_parts(message["content"] or ""),
+                "parts": chat_parts(message["content"] or "", emotes),
                 "at": number_words(timeline.at(_arrived(message)), 1),
                 "in_moment": _during(message, window),
             }

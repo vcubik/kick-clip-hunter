@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import chat_trace, recorder, recording_manager
+from kick_clip_hunter import chat_trace, db, recorder, recording_manager
 from kick_clip_hunter import dashboard_view as view
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
@@ -94,6 +94,15 @@ def chat(article: Element) -> list[tuple[str, str]]:
         words = [part if isinstance(part, str) else part.attrs["alt"] for part in said.children]
         lines.append((who.text, " ".join(" ".join(words).split())))
     return lines
+
+
+def store_emotes(broadcaster_user_id: int, emotes: dict[str, tuple[str, int, int]]) -> None:
+    """Gives a channel its 7TV emotes, as adding it to the watchlist does."""
+    conn = db.get_connection()
+    try:
+        db.replace_channel_emotes(conn, broadcaster_user_id, emotes)
+    finally:
+        conn.close()
 
 
 def clip_cut_at(chat_start: datetime, seconds: float = 40.0) -> dict:
@@ -531,6 +540,48 @@ class TestOpenMoment:
             ("KEKW", "https://files.kick.com/emotes/37226/fullsize"),
             ("emojiLol", "https://files.kick.com/emotes/1730752/fullsize"),
         ]
+
+    async def test_a_channels_7tv_emotes_are_shown_as_pictures(self, service):
+        store_emotes(1, {"KEKW": ("EMOTEA", 32, 32), "WideHard": ("WIDE", 96, 32)})
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "no way KEKW he did it WideHard", T0 - timedelta(seconds=2))
+
+        article = open_moment(await review(service))
+
+        assert chat(article) == [("alice", "no way KEKW he did it WideHard")]
+        emotes = article.find("img", class_="ch-emote")
+        assert [(emote.attrs["alt"], emote.attrs["src"], emote.attrs["width"]) for emote in emotes] == [
+            ("KEKW", "https://cdn.7tv.app/emote/EMOTEA/2x.webp", str(view.EMOTE_HEIGHT)),
+            ("WideHard", "https://cdn.7tv.app/emote/WIDE/2x.webp", str(3 * view.EMOTE_HEIGHT)),
+        ]
+
+    async def test_the_same_word_is_a_different_picture_in_another_channel(self, service):
+        store_emotes(1, {"KEKW": ("EMOTEA", 32, 32)})
+        store_emotes(2, {"KEKW": ("EMOTEB", 32, 32)})
+        add_moment("channel_a", detected_at=T0, broadcaster_user_id=1)
+        other = add_moment("channel_b", detected_at=T0 + minutes(5), broadcaster_user_id=2)
+        add_chat("channel_a", "alice", "KEKW", T0 - timedelta(seconds=2), broadcaster_user_id=1)
+        add_chat("channel_b", "bob", "KEKW", T0 + minutes(5) - timedelta(seconds=2), broadcaster_user_id=2)
+
+        def pictures(article: Element) -> list[str]:
+            return [emote.attrs["src"] for emote in article.find("img", class_="ch-emote")]
+
+        response = await service.client.get(f"/dashboard/moments/{other}")
+
+        assert pictures(open_moment(await review(service, show="all", moment=1))) == [
+            view.SEVENTV_EMOTE_IMAGE.format(id="EMOTEA")
+        ]
+        assert pictures(parse(response.text)) == [view.SEVENTV_EMOTE_IMAGE.format(id="EMOTEB")]
+
+    async def test_a_word_no_emote_of_the_channel_is_named_stays_a_word(self, service):
+        store_emotes(2, {"KEKW": ("EMOTEB", 32, 32)})  # another channel's
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "KEKW", T0 - timedelta(seconds=2))
+
+        article = open_moment(await review(service))
+
+        assert article.find("img", class_="ch-emote") == []
+        assert article.one("p", class_="ch-chat").text.split() == ["alice", "KEKW"]
 
     async def test_says_so_when_no_chat_was_stored_for_the_window(self, service):
         add_moment("channel_a")

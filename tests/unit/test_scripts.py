@@ -320,7 +320,22 @@ class TestWatchlistCommands:
             "pogchamp": detector.EMOTE_MENTION_OTHER_WEIGHT,
         }
         assert len(kick_api.calls("POST", "/events/subscriptions")) == 1  # the original one only
-        assert "Refreshed keywords for 'some_channel'." in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Fetched 2 7TV emote name(s)" in output and "(1 classified as laugh-related)" in output
+        assert "Refreshed keywords for 'some_channel'." in output
+
+    def test_refreshing_emotes_replaces_their_pictures_too(self, kick_api, capsys):
+        channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
+        asyncio.run(subscribe.main("some_channel"))
+        channel.seventv_emotes = ["OMEGALUL", "PogChamp"]
+
+        asyncio.run(refresh_emotes.main("some_channel"))
+
+        connection = db.get_connection()
+        try:
+            assert set(db.get_channel_emotes(connection, 4242)) == {"OMEGALUL", "PogChamp"}
+        finally:
+            connection.close()
 
 
 class TestCheckScript:
