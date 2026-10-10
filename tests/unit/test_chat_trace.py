@@ -44,7 +44,10 @@ def moment_row(**overrides) -> dict:
 
 
 def timeline_of(row: dict, **overrides) -> Timeline | None:
-    settings = {"pre_roll": 15, "post_roll": 10, "playback_delay": 10, "context_before": 30, "context_after": 60}
+    # Chat is taken to run as far behind as the recorder reached back for,
+    # unless a test says otherwise.
+    settings = {"pre_roll": 15, "post_roll": 10, "playback_delay": 10, "chat_delay": 10}
+    settings.update({"context_before": 30, "context_after": 60})
     settings.update(overrides)
     return chat_trace.clip_timeline(row, **settings)
 
@@ -56,12 +59,33 @@ TIMELINE = Timeline(CLIP_START, 40.0, 30.0, 60.0)
 class TestWhereAClipSitsAgainstChat:
     def test_a_stored_start_is_on_the_streams_clock_which_chat_runs_behind(self):
         # The clip's first frame was broadcast at 19:59:50; viewers, and so
-        # chat, saw it ten seconds later.
+        # chat, are taken to have seen it ten seconds later.
         row = moment_row(clip_start=(CLIP_START - timedelta(seconds=10)).isoformat(), clip_duration=38.0)
 
-        timeline = timeline_of(row, playback_delay=10)
+        timeline = timeline_of(row, chat_delay=10)
 
         assert timeline == Timeline(CLIP_START, 38.0, 30, 60)
+
+    def test_a_shorter_delay_puts_the_same_message_later_in_the_clip(self):
+        row = moment_row(clip_start=(CLIP_START - timedelta(seconds=10)).isoformat(), clip_duration=38.0)
+
+        assumed, corrected = timeline_of(row, chat_delay=10), timeline_of(row, chat_delay=4)
+
+        assert corrected.at(chat_at(20)) == assumed.at(chat_at(20)) + 6
+
+    def test_with_no_delay_a_message_sits_on_the_frame_broadcast_as_it_arrived(self):
+        # Which is where a streamer's own on-screen chat shows it.
+        row = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0)
+
+        assert timeline_of(row, chat_delay=0).at(CLIP_START + timedelta(seconds=7)) == 7
+
+    def test_how_far_the_recorder_reached_back_does_not_move_a_clip_whose_start_is_known(self):
+        row = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0)
+
+        assert timeline_of(row, playback_delay=10) == timeline_of(row, playback_delay=25)
+
+    def test_the_delay_channels_start_out_with_is_one_the_page_can_set(self):
+        assert 0 <= chat_trace.CHAT_DELAY_SECONDS <= chat_trace.CHAT_DELAY_MAX_SECONDS
 
     def test_the_strip_runs_from_the_context_before_to_the_context_after(self):
         timeline = timeline_of(moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0))
@@ -80,6 +104,14 @@ class TestWhereAClipSitsAgainstChat:
 
         assert timeline.clip_seconds == 39.0
         assert timeline.chat_start == chat_at(3)
+
+    def test_a_clip_placed_by_its_length_follows_the_delay_too(self):
+        # Its first frame is taken to have been broadcast ten seconds before
+        # chat time 3 - how far the recorder reached back - and chat to have
+        # seen it four seconds after that.
+        timeline = timeline_of(moment_row(clip_duration=39.0), playback_delay=10, chat_delay=4)
+
+        assert timeline.chat_start == chat_at(3 - 10 + 4)
 
     def test_a_clip_shorter_than_asked_for_is_centred_the_same_way(self):
         timeline = timeline_of(moment_row(clip_duration=31.0))

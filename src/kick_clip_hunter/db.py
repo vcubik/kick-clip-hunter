@@ -560,3 +560,25 @@ def set_flag(conn: sqlite3.Connection, key: str, value: bool) -> None:
         (key, "1" if value else "0"),
     )
     conn.commit()
+
+
+def _chat_delay_key(channel_slug: str) -> str:
+    return f"chat_delay:{channel_slug}"
+
+
+def get_chat_delay(conn: sqlite3.Connection, channel_slug: str) -> int | None:
+    """How many seconds behind its broadcast a channel's chat is taken to
+    run when it is shown against a clip - or None if that was never set for
+    the channel. Kept by channel name rather than with the watchlist, so it
+    outlasts the channel being on it, as its moments do."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (_chat_delay_key(channel_slug),)).fetchone()
+    return int(row[0]) if row else None
+
+
+def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_chat_delay_key(channel_slug), str(seconds)),
+    )
+    conn.commit()

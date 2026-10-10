@@ -435,6 +435,50 @@
     return true;
   }
 
+  // ---- Where chat sits against the picture ------------------------------
+
+  let shifting = false;
+
+  // Moves a channel's chat earlier or later against its clips, by changing
+  // how far behind the broadcast its viewers are taken to be. The trace and
+  // the chat lines are drawn on the server, so the moment is fetched again
+  // and those parts of it swapped in around the player, which plays on.
+  async function shiftChat(button) {
+    if (shifting) return;
+    shifting = true;
+    const article = button.closest(".moment");
+    const seconds = Number(button.closest("[data-chat-delay]").dataset.chatDelay) + Number(button.dataset.chatShift);
+    let markup = null;
+    try {
+      const saved = await post(`/channels/${encodeURIComponent(article.dataset.channel)}/chat_delay?seconds=${seconds}`);
+      if (saved && saved.ok) {
+        const response = await fetch(`/dashboard/moments/${article.dataset.moment}`);
+        if (response.ok) markup = await response.text();
+      }
+    } catch {
+      // handled below, like any other answer that is not the moment
+    } finally {
+      shifting = false;
+    }
+    if (!article.isConnected) return; // another moment was opened meanwhile
+    if (markup === null) {
+      say(article, "Could not move the chat. Try again.");
+      return;
+    }
+    say(article, "");
+
+    const held = document.activeElement === button;
+    const fresh = new DOMParser().parseFromString(markup, "text/html");
+    for (const part of ["[data-trace]", "[data-chat]", "[data-chat-delay]"]) {
+      const now = one(part, fresh);
+      const old = one(part, article);
+      if (now && old) old.replaceWith(now);
+    }
+    if (held) one(`[data-chat-shift="${button.dataset.chatShift}"]`, article)?.focus();
+    const video = one("[data-clip]", article);
+    if (video) paint(video);
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
@@ -513,6 +557,7 @@
     ["a.ch-row", (row, event) => isPlainClick(event) && (event.preventDefault(), openMoment(row, { play: true }))],
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
+    ["[data-chat-shift]", shiftChat],
     ["[data-switch] button", flip],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],

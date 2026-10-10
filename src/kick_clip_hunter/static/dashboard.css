@@ -345,7 +345,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .chat-lines { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 0 var(--space-12) var(--space-8) var(--space-2); }
 .chat-lines::before { content: ""; flex: 1 1 0; }
 .chat-empty { padding-left: 10px; color: var(--text-2); }
-.chat-foot { min-height: 33px; padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.chat-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.chat-foot > p:first-child { min-height: 16px; }
+.chat-delay { display: flex; align-items: center; gap: var(--space-4); margin-top: var(--space-8); }
+.chat-delay span { margin-right: auto; font-variant-numeric: tabular-nums; }
 
 /* A page that is a statement: nothing new, nothing yet. */
 .statement { min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
