@@ -30,6 +30,9 @@
     </button>
     <span class="ch-now"><span data-now>0:00</span><span class="ch-of"> / <span data-length>0:00</span></span></span>
     <button type="button" class="ch-btn ch-btn-compact" aria-label="Playback speed" data-speed>1×</button>
+    {#- Opens the Trim dialog at the foot of this file, which only the
+        script can: shown once the script is there. -#}
+    {% if moment.trim %}<button type="button" class="ch-btn ch-btn-compact" hidden data-trim-open>Trim</button>{% endif %}
     <span class="ch-gap"></span>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Mute" aria-pressed="false" data-mute>
       <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M2 6h2.5L8 3v10L4.5 10H2z" fill="currentColor"></path><path d="M10.5 5.5c1.3 1.3 1.3 3.7 0 5M12.5 3.5c2.4 2.4 2.4 6.6 0 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
@@ -159,17 +162,73 @@
       <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat later" data-chat-shift="-1"{% if delay.seconds <= delay.least %} disabled{% endif %}>Later</button>
     </p>
     {% endif %}
-    {#- The same chat as a video with nothing behind it, for an editor to lay
-        over the clip. Made when asked for: it takes a while, and most clips
-        never need one. -#}
-    {% if moment.chat_video %}
-    {% set video = moment.chat_video %}
-    <p class="chat-video" data-chat-video="{{ video.state }}">
-      <span>{{ video.words }}</span>
-      {% if video.url %}<a class="ch-btn ch-btn-compact" href="{{ video.url }}" download>Download</a>{% endif %}
-      <button type="button" class="ch-btn ch-btn-compact" data-chat-video-render{% if video.state == "rendering" %} disabled{% endif %}>{{ "Render again" if video.url else "Render" }}</button>
-    </p>
-    {% endif %}
   </div>
 </aside>
+
+{#- Cutting a stretch of the footage out for an editor. Where it starts and
+    ends is set on a copy of the strip, with a handle at either end; its
+    chat can go with it as a video to lay over it, moved against the
+    picture if it does not sit right. The script opens this, and draws the
+    strip and the chat in it from the ones above. -#}
+{% if moment.trim %}
+{% set trim = moment.trim %}
+<dialog class="ch-dialog trim" aria-labelledby="trim-title-{{ moment.id }}" data-trim data-lead="{{ moment.clip_lead }}" data-last="{{ trim.last }}" data-min="{{ trim.min_seconds }}">
+  <div class="ch-dialog-head">
+    <h2 class="title" id="trim-title-{{ moment.id }}">Trim</h2>
+    <p class="ch-keys-hint">
+      <span><kbd>I</kbd> start here</span>
+      <span><kbd>O</kbd> end here</span>
+      <span><kbd>Space</kbd> play</span>
+    </p>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-trim-close>Close</button>
+  </div>
+  <div class="trim-view">
+    <div class="player"><video preload="none" playsinline data-trim-clip data-src="{{ moment.clip_url }}"></video></div>
+    {% if trim.chat %}
+    <div class="trim-chat" role="group" aria-label="Chat as its video will show it" hidden data-trim-chat-pane>
+      <div class="chat-lines" data-trim-lines></div>
+    </div>
+    {% endif %}
+  </div>
+  <div class="ch-transport">
+    <button type="button" class="ch-btn ch-btn-icon play" aria-label="Play" data-trim-play>
+      <svg class="icon-play" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
+      <svg class="icon-pause" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" fill="currentColor"></path></svg>
+    </button>
+    <span class="ch-now" data-trim-now>0:00.0</span>
+    <span class="ch-gap"></span>
+    <span class="trim-range">From <b data-trim-from>0:00.0</b> to <b data-trim-to>0:00.0</b>, <b data-trim-length>0.0 s</b></span>
+  </div>
+  <div class="trim-track">
+    <div class="ch-strip trim-strip" data-trim-strip>
+      <div class="trim-drawing" data-trim-drawing></div>
+      <div class="trim-out is-before"></div>
+      <div class="trim-out is-after"></div>
+      <div class="trim-keep"></div>
+      <div class="ch-playhead"></div>
+      <div class="trim-handle is-from" role="slider" tabindex="0" aria-label="Start of the cut" data-trim-handle="from"></div>
+      <div class="trim-handle is-to" role="slider" tabindex="0" aria-label="End of the cut" data-trim-handle="to"></div>
+    </div>
+    <div class="ch-axis" data-trim-axis></div>
+  </div>
+  {% if trim.chat %}
+  <div class="trim-options">
+    <label class="trim-check"><input type="checkbox" data-trim-chat> Chat as a video to lay over it</label>
+    <label class="trim-shift" title="Where a message is placed against the picture is a guess. This moves all of them, for this video only. Double-click to put it back.">
+      <span>earlier</span>
+      <input type="range" class="ch-shift" min="-{{ trim.chat_shift_limit }}" max="{{ trim.chat_shift_limit }}" step="0.5" value="0" aria-label="Move chat against the picture" disabled data-trim-shift>
+      <span>later</span>
+    </label>
+    <output class="trim-shift-words" data-trim-shift-words>Chat where the review page has it</output>
+  </div>
+  {% endif %}
+  <p class="trim-note">Cut without re-encoding, so the video begins on the last frame a cut can begin on before the start you set: up to a couple of seconds earlier.{% if trim.chat %} Its chat is lined up with where it really begins.{% endif %}</p>
+  <div class="trim-foot">
+    <p class="status-line" role="status" data-trim-state></p>
+    <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
+    <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
+    <button type="button" class="ch-btn ch-btn-primary" data-trim-go>Export</button>
+  </div>
+</dialog>
+{% endif %}
 </article>

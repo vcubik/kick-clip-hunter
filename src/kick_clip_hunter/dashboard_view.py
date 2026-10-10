@@ -154,22 +154,36 @@ def stream_time_words(seconds: int | None) -> str | None:
     return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
-# Where a moment's chat video stands (see chat_video.py), and what the
-# page says about each.
-CHAT_VIDEO_NONE = "none"
-CHAT_VIDEO_RENDERING = "rendering"
-CHAT_VIDEO_READY = "ready"
-CHAT_VIDEO_FAILED = "failed"
-CHAT_VIDEO_WORDS = {
-    CHAT_VIDEO_NONE: "Chat as a video to lay over the clip",
-    CHAT_VIDEO_RENDERING: "Rendering the chat video. That takes a minute or two.",
-    CHAT_VIDEO_READY: "Chat video is ready",
-    CHAT_VIDEO_FAILED: "The chat video could not be rendered. The server log says why.",
+# Where the stretch of a moment's footage that was cut out for an editor
+# stands (see clip_trim.py), and what the Trim dialog says about each.
+TRIM_NONE = "none"
+TRIM_CUTTING = "cutting"
+TRIM_CHAT = "chat"
+TRIM_READY = "ready"
+TRIM_FAILED = "failed"
+TRIM_CHAT_FAILED = "chat_failed"
+TRIM_WORDS = {
+    TRIM_NONE: "",
+    TRIM_CUTTING: "Cutting the video.",
+    TRIM_CHAT: "The video is ready. Rendering its chat, which takes about twice as long as the video runs.",
+    TRIM_READY: "Ready to download.",
+    TRIM_FAILED: "The video could not be cut. The server log says why.",
+    TRIM_CHAT_FAILED: "The video is ready, but its chat could not be rendered. The server log says why.",
 }
+# The states in which more is still to come.
+TRIM_BUSY = frozenset({TRIM_CUTTING, TRIM_CHAT})
+# A video that begins less than this before the start that was set is not
+# worth a sentence.
+TRIM_EARLY_SECONDS = 0.1
 
 
-def chat_video_words(state: str) -> str:
-    return CHAT_VIDEO_WORDS[state]
+def trim_words(state: str, early: float = 0.0) -> str:
+    """What the Trim dialog says of a cut. `early` is how long before the
+    start that was set the video begins (see recorder.trim_clip)."""
+    words = TRIM_WORDS[state]
+    if early >= TRIM_EARLY_SECONDS and state in (TRIM_CHAT, TRIM_READY, TRIM_CHAT_FAILED):
+        words += f" It begins {number_words(early, 1)} s before the start you set, on a frame a cut can begin on."
+    return words
 
 
 def rating_words(rating: int | None) -> str:

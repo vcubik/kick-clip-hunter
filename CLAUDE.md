@@ -98,7 +98,9 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
   their badges in front of it. Where a message belongs against the picture is a guess (to
   start with, the frame broadcast as it arrived), so under the chat are Earlier/Later
-  buttons that correct it for the open moment's channel. `GET /dashboard/channels` has the
+  buttons that correct it for the open moment's channel. Trim, next to the clip's controls,
+  opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
+  below). `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
@@ -172,10 +174,23 @@ Module map (`src/kick_clip_hunter/`):
   the page's grey is lightened until it can be read. The badge pictures in
   `static/badges/` are placeholders drawn for this project, one per badge type plus
   `other.svg` for types without one; a channel's own subscriber badges are not fetched
-- `chat_video.py` — a moment's chat as a video with a transparent background (ProRes
-  4444, `moment_<id>_chat.mov` next to the clip), for an editor to lay over the clip. Made
-  only when asked for (the Render button under the chat, `POST /moments/{id}/chat_video`):
-  it takes about twice the clip's length and most clips never need one. A headless
+- `clip_trim.py` — a stretch of a moment's footage cut out for an editor, from the review
+  page's Trim dialog: a player of its own and a copy of the strip with a handle at either
+  end, anywhere in the file (the clip to begin with). `POST /moments/{id}/trim` takes the
+  stretch in clip time and writes `moment_<id>_trim.mp4` next to the clip, replacing the
+  one before; `GET` says where that stands, which is what the dialog polls. This module
+  is the pure part - names, limits, clip time to file time; the cut is
+  `recorder.trim_clip`. Nothing is re-encoded, so the video begins on the last keyframe at
+  or before the start that was set (a couple of seconds earlier at most on a real stream)
+  and the dialog says by how much. With "chat" ticked the stretch's chat is rendered as a
+  video to lay over it (`chat_video.py`), lined up with where the video really begins;
+  the dialog's slider moves its lines up to 10s either way against the picture, for that
+  one video, on top of the channel's chat delay - and shows them beside the picture as
+  they will be. What state a cut is in is kept in memory while one is being made and told
+  from the files otherwise
+- `chat_video.py` — chat as a video with a transparent background (ProRes 4444,
+  `moment_<id>_trim_chat.mov`), for an editor to lay over the video cut out with Trim.
+  Made only when asked for there: it takes about twice the video's length. A headless
   `patchright` browser opens a page with the clip's chat lines and is stepped through the
   clip a frame at a time - the page is told the second, shows chat as it stood then, a
   screenshot is taken without the background - and ffmpeg joins the PNGs. Nothing runs on
@@ -193,7 +208,9 @@ Module map (`src/kick_clip_hunter/`):
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
-  open moment's markup gets replaced) and the bundled typeface, Archivo, with its licence;
+  open moment's markup gets replaced; it also runs the Trim dialog, whose strip and chat
+  are copied from the page's when it is opened) and the bundled typeface, Archivo, with its
+  licence;
   `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
@@ -216,7 +233,8 @@ Module map (`src/kick_clip_hunter/`):
   around it, NULL where the file is the clip alone). Everything in a file comes from one
   group of segments, the one the clip is best cut from, so context beyond a break in the
   stream is left out. The analysis steps are given the clip without its context
-  (`clip_alone`), cut out of the file for as long as they run.
+  (`clip_alone`), cut out of the file for as long as they run. `trim_clip` cuts any
+  stretch of a file out as a file of its own (see `clip_trim.py`).
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's

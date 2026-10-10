@@ -172,7 +172,7 @@ def _reset_module_state() -> None:
         main._moment_sessions.clear()
         main._background_tasks.clear()
         main._channel_keywords_cache.clear()
-        main._chat_videos.clear()
+        main._trims.clear()
         main._chat_identity_cache.clear()
         main._stream_start_cache.clear()
         main._shutdown_requested = False

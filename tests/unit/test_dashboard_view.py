@@ -541,3 +541,36 @@ class TestTheServiceInWords:
     )
     def test_what_a_shutdown_is_waiting_for(self, pending, words):
         assert view.shutdown_words(pending) == words
+
+
+class TestACutInWords:
+    """What the Trim dialog says of the stretch it was asked to cut out."""
+
+    def test_nothing_is_said_before_one_was_asked_for(self):
+        assert view.trim_words(view.TRIM_NONE) == ""
+
+    @pytest.mark.parametrize(
+        "state",
+        [view.TRIM_CUTTING, view.TRIM_CHAT, view.TRIM_READY, view.TRIM_FAILED, view.TRIM_CHAT_FAILED],
+    )
+    def test_every_other_state_is_a_sentence(self, state):
+        words = view.trim_words(state)
+
+        assert words[0].isupper() and words.endswith(".")
+
+    def test_the_states_in_which_more_is_to_come(self):
+        assert view.TRIM_BUSY == {view.TRIM_CUTTING, view.TRIM_CHAT}
+
+    @pytest.mark.parametrize("state", [view.TRIM_CHAT, view.TRIM_READY, view.TRIM_CHAT_FAILED])
+    def test_a_video_that_begins_before_the_start_that_was_set_says_by_how_much(self, state):
+        words = view.trim_words(state, early=1.26)
+
+        assert words.startswith(view.trim_words(state))
+        assert words.endswith(" It begins 1.3 s before the start you set, on a frame a cut can begin on.")
+
+    def test_one_that_begins_where_it_was_set_says_nothing_of_it(self):
+        assert view.trim_words(view.TRIM_READY, early=0.04) == view.trim_words(view.TRIM_READY)
+
+    @pytest.mark.parametrize("state", [view.TRIM_NONE, view.TRIM_CUTTING, view.TRIM_FAILED])
+    def test_nor_does_a_state_in_which_there_is_no_video(self, state):
+        assert view.trim_words(state, early=3.0) == view.trim_words(state)

@@ -60,6 +60,46 @@ class TestLines:
         assert chat_video.lines_for_clip([], 40.0) == []
 
 
+class TestLinesOfAVideoCutOutOfTheFootage:
+    """A chat video is made for a stretch cut out of a moment's footage,
+    which starts where the editor put it, not where the clip does."""
+
+    def test_lines_are_counted_from_where_the_video_starts(self):
+        lines = [line(-4), line(0), line(12.5)]
+
+        assert ats(chat_video.lines_from(lines, 10.0)) == [-14, -10, 2.5]
+
+    def test_a_video_that_starts_before_the_clip_has_the_clips_lines_later(self):
+        assert ats(chat_video.lines_from([line(-4), line(0)], -6.0)) == [2, 6]
+
+    def test_chat_can_be_shown_later_than_where_it_stands_or_earlier(self):
+        lines = [line(3), line(8)]
+
+        assert ats(chat_video.lines_from(lines, 2.0, later=1.5)) == [2.5, 7.5]
+        assert ats(chat_video.lines_from(lines, 2.0, later=-1.5)) == [-0.5, 4.5]
+
+    def test_the_lines_are_otherwise_as_they_were_and_the_ones_given_are_untouched(self):
+        given = [line(3, nick="bob", text="KEKW", in_moment=True)]
+
+        (shown,) = chat_video.lines_from(given, 1.0)
+
+        assert shown == {**given[0], "at": "2"}
+        assert given[0]["at"] == "3"
+
+    def test_times_are_written_as_the_page_writes_them(self):
+        (shown,) = chat_video.lines_from([line(0.1)], 0.2, later=0.3)
+
+        assert shown["at"] == "0.2"
+
+    def test_what_arrives_while_the_cut_runs_is_what_its_video_shows(self):
+        lines = [line(-20), line(-3), line(0), line(9), line(30)]
+
+        # Cut from 5 s before the clip, 12 s long.
+        shown = chat_video.lines_for_clip(chat_video.lines_from(lines, -5.0), 12.0)
+
+        assert ats(shown) == [-15, 2, 5]
+
+
 class TestFrames:
     def test_one_frame_every_thirtieth_of_a_second_from_the_first(self):
         times = chat_video.frame_times(2.0)
