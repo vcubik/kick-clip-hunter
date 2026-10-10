@@ -13,8 +13,10 @@ rendering takes has no bearing on the result. The one thing that does run
 on the browser's own clock is an animated emote: it moves, but not in time
 with anything.
 
-The video starts on the clip's first frame and is as long as the clip, so
-in an editor it goes on the track above the clip, aligned to its start.
+A chat video is made for a stretch of a moment's footage that was cut out
+for an editor (see clip_trim.py): it starts on that video's first frame and
+is as long as it, so in an editor it goes on the track above it, aligned to
+its start. "Clip" below is whatever video the chat is for.
 
 The browser only ever opens this project's own page: it is given the page,
 the stylesheet, the script and the badge pictures from memory and from
@@ -88,6 +90,14 @@ def lines_for_clip(lines: Sequence[Mapping[str, Any]], duration: float) -> list[
     before = [line for line in lines if float(line["at"]) < 0]
     during = [line for line in lines if 0 <= float(line["at"]) <= duration]
     return before[-PREFILL_LINES:] + during
+
+
+def lines_from(lines: Sequence[Mapping[str, Any]], start: float, later: float = 0.0) -> list[dict[str, Any]]:
+    """The chat lines of a clip as the lines of a video that starts `start`
+    seconds into it - before its first frame, if negative - with every line
+    `later` seconds after where it stands against the picture (before, if
+    negative)."""
+    return [{**line, "at": f"{round(float(line['at']) - start + later, 2):g}"} for line in lines]
 
 
 def frame_times(duration: float, fps: int = FPS) -> list[float]:
