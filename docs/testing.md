@@ -263,8 +263,8 @@ Run this on a live channel after changing any of the above, or the code right ne
    the picture and chat line up: the laughing on the trace should start a few seconds after what
    caused it on screen. If it is clearly off, move the channel's chat with Earlier/Later under the
    chat lines - the trace and the lines follow while the clip plays on, and the setting is still
-   there after a reload. On a stream that shows its own chat, "Stream delay 0 s" should make the
-   two match. `Space` plays and
+   there after a reload. On a stream that shows its own chat, "Chat as it arrived" should have a
+   message appear beside the clip within a few seconds of appearing in the picture. `Space` plays and
    pauses; a number key rates the moment and moves on to the next unrated one. Reload: the rating
    sticks.
 7. **Try one analysis step.** Turn `Transcript` on (Channels page); the next clip gets a transcript

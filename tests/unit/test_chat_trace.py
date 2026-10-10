@@ -85,7 +85,14 @@ class TestWhereAClipSitsAgainstChat:
         assert timeline_of(row, playback_delay=10) == timeline_of(row, playback_delay=25)
 
     def test_the_delay_channels_start_out_with_is_one_the_page_can_set(self):
-        assert 0 <= chat_trace.CHAT_DELAY_SECONDS <= chat_trace.CHAT_DELAY_MAX_SECONDS
+        least, most = chat_trace.CHAT_DELAY_MIN_SECONDS, chat_trace.CHAT_DELAY_MAX_SECONDS
+
+        assert least <= chat_trace.CHAT_DELAY_SECONDS <= most
+
+    def test_a_delay_below_zero_puts_a_message_after_the_frame_it_arrived_with(self):
+        row = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0)
+
+        assert timeline_of(row, chat_delay=-3).at(CLIP_START + timedelta(seconds=7)) == 10
 
     def test_the_strip_runs_from_the_context_before_to_the_context_after(self):
         timeline = timeline_of(moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0))
