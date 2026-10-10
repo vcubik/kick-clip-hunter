@@ -14,14 +14,20 @@ things end up on the page.
 from __future__ import annotations
 
 import json
+import logging
+import threading
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import chat_trace, db, recorder, recording_manager
+from kick_clip_hunter import chat_trace, chat_video, db, recorder, recording_manager
 from kick_clip_hunter import dashboard_view as view
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
+from tests.support.media import png_frame, require_ffmpeg, video_stream
+from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
 
@@ -1662,3 +1668,262 @@ class TestShuttingDown:
         assert all("disabled" in half.attrs for half in watching.find("button"))
         button = page.one("button", data_shutdown_open=True)
         assert "disabled" in button.attrs and button.text == "Shutting down"
+
+
+class FakeBrowser:
+    """Stands in for the browser a chat video is drawn with: remembers the
+    pages it was given and hands back a picture for every frame asked for.
+    `hold()` makes it wait before the first picture until `release()`."""
+
+    def __init__(self) -> None:
+        self.pages: list[str] = []
+        self.frames: list[int] = []
+        self.failure: Exception | None = None
+        self._waiting = threading.Event()
+        self._waiting.set()
+
+    def hold(self) -> None:
+        self._waiting.clear()
+
+    def release(self) -> None:
+        self._waiting.set()
+
+    def capture_frames(self, html, times):
+        self.pages.append(html)
+        self.frames.append(len(times))
+        assert self._waiting.wait(timeout=20), "the test never released the browser"
+        if self.failure is not None:
+            raise self.failure
+        for _ in times:
+            yield png_frame(rgba=(255, 255, 255, 128))
+
+
+class TestChatVideo:
+    """The chat beside a clip, rendered on request as a video an editor can
+    lay over the clip."""
+
+    CLIP_SECONDS = 2.0
+    CLIP = "channel_a/moment_1.mp4"
+    VIDEO = Path("data/clips/channel_a/moment_1_chat.mov")
+
+    @pytest.fixture
+    def browser(self, monkeypatch) -> Iterator[FakeBrowser]:
+        require_ffmpeg()
+        fake = FakeBrowser()
+        monkeypatch.setattr(chat_video, "capture_frames", fake.capture_frames)
+        yield fake
+        fake.release()
+
+    def clip_with_chat(self, **columns) -> int:
+        """A moment whose two-second clip chat saw from T0 on, with a line
+        before it, two during it and one after it."""
+        moment_id = add_moment(
+            "channel_a", detected_at=T0, clip_path=self.CLIP, **{**clip_cut_at(T0, self.CLIP_SECONDS), **columns}
+        )
+        add_chat("channel_a", "alice", "before the clip", T0 - timedelta(seconds=4))
+        add_chat("channel_a", "bob", "as it starts", T0 + timedelta(seconds=0.5))
+        add_chat("channel_a", "carol", "near its end", T0 + timedelta(seconds=1.5))
+        add_chat("channel_a", "dave", "after the clip", T0 + timedelta(seconds=30))
+        return moment_id
+
+    async def row(self, service, **params) -> Element | None:
+        rows = open_moment(await review(service, **params)).find("p", class_="chat-video")
+        return rows[0] if rows else None
+
+    async def state(self, service, moment_id: int) -> dict:
+        return (await service.client.get(f"/moments/{moment_id}/chat_video")).json()
+
+    async def test_a_clip_with_chat_can_have_its_chat_rendered(self, service):
+        self.clip_with_chat()
+
+        row = await self.row(service)
+
+        assert row.attrs["data-chat-video"] == "none"
+        assert row.one("span").text == view.chat_video_words(view.CHAT_VIDEO_NONE)
+        assert [button.text for button in row.find("button")] == ["Render"]
+        assert row.find("a") == []
+
+    async def test_nothing_is_offered_where_there_is_no_clip_or_no_chat(self, service):
+        add_moment("channel_a", detected_at=T0)  # no clip
+        add_moment("channel_a", detected_at=T0 + minutes(10), clip_path="channel_a/moment_2.mp4")  # length unknown
+        silent = {"clip_path": "channel_a/moment_3.mp4", **clip_cut_at(T0 + minutes(20), 2.0)}
+        add_moment("channel_a", detected_at=T0 + minutes(20), **silent)  # no chat
+        add_chat("channel_a", "alice", "hello", T0 - timedelta(seconds=2))
+
+        for moment_id in (1, 2, 3):
+            assert await self.row(service, show="all", moment=moment_id) is None, moment_id
+
+    async def test_asking_starts_the_rendering_and_the_page_says_so(self, service, browser):
+        moment_id = self.clip_with_chat()
+        browser.hold()
+
+        response = await service.client.post(f"/moments/{moment_id}/chat_video")
+
+        assert response.status_code == 200
+        assert response.json() == {"moment_id": moment_id, "state": "rendering"}
+        assert await self.state(service, moment_id) == {"moment_id": moment_id, "state": "rendering", "url": None}
+        row = await self.row(service)
+        assert row.attrs["data-chat-video"] == "rendering"
+        assert row.one("span").text == view.chat_video_words(view.CHAT_VIDEO_RENDERING)
+        assert "disabled" in row.one("button").attrs and row.find("a") == []
+        assert not self.VIDEO.exists()
+
+    async def test_once_rendered_the_video_is_there_to_download(self, service, browser):
+        moment_id = self.clip_with_chat()
+
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+
+        stream = video_stream(self.VIDEO)
+        assert (stream["codec_name"], stream["profile"]) == ("prores", "4444")
+        assert stream["pix_fmt"].startswith("yuva444p")
+        assert int(stream["nb_frames"]) == round(self.CLIP_SECONDS * chat_video.FPS)
+
+        state = await self.state(service, moment_id)
+        row = await self.row(service)
+        (link,) = row.find("a")
+        assert state["state"] == row.attrs["data-chat-video"] == "ready"
+        assert link.attrs["href"] == state["url"] and "download" in link.attrs
+        assert state["url"].startswith("/clips/channel_a/moment_1_chat.mov?v=")
+        assert [button.text for button in row.find("button")] == ["Render again"]
+        assert "disabled" not in row.one("button").attrs
+
+        served = await service.client.get(state["url"])
+        assert served.status_code == 200 and served.content == self.VIDEO.read_bytes()
+
+    async def test_the_video_holds_the_chat_of_the_clip_as_the_page_shows_it(self, service, browser):
+        store_emotes(1, {"KEKW": ("EMOTEA", 32, 32)})
+        store_identity(1, "bob", "#9ad8ff", [{"type": "moderator", "text": "Moderator"}])
+        moment_id = self.clip_with_chat()
+        add_chat("channel_a", "bob", "KEKW", T0 + timedelta(seconds=1))
+
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+
+        (page,) = [parse(html) for html in browser.pages]
+        lines = page.find("p", class_="ch-chat")
+        assert [(line.one("b").text, line.attrs["data-at"]) for line in lines] == [
+            ("alice", "-4"),
+            ("bob", "0.5"),
+            ("bob", "1"),
+            ("carol", "1.5"),
+        ]
+        assert browser.frames == [round(self.CLIP_SECONDS * chat_video.FPS)]
+        (emote,) = page.find("img", class_="ch-emote")
+        assert emote.attrs["src"] == view.SEVENTV_EMOTE_IMAGE.format(id="EMOTEA")
+        assert lines[1].one("b").attrs["style"] == "color: #9ad8ff"
+        assert [badge.attrs["alt"] for badge in lines[1].find("img", class_="ch-badge")] == ["Moderator"]
+
+    async def test_chat_is_placed_where_the_channels_chat_delay_puts_it(self, service, browser):
+        moment_id = self.clip_with_chat()
+        delay = chat_trace.CHAT_DELAY_SECONDS + 1
+        await service.client.post("/channels/channel_a/chat_delay", params={"seconds": delay})
+
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+
+        (page,) = [parse(html) for html in browser.pages]
+        # A second earlier against the picture; the last line is still in.
+        assert [line.attrs["data-at"] for line in page.find("p", class_="ch-chat")] == ["-5", "-0.5", "0.5"]
+
+    async def test_asking_again_while_it_is_being_rendered_starts_nothing_more(self, service, browser):
+        moment_id = self.clip_with_chat()
+        browser.hold()
+
+        for _ in range(3):
+            response = await service.client.post(f"/moments/{moment_id}/chat_video")
+            assert response.json()["state"] == "rendering"
+        await async_wait_until(lambda: browser.pages, "the rendering to reach the browser")
+        browser.release()
+        await service.settle()
+
+        assert len(browser.pages) == 1
+        assert (await self.state(service, moment_id))["state"] == "ready"
+
+    async def test_it_can_be_rendered_again(self, service, browser):
+        moment_id = self.clip_with_chat()
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+        add_chat("channel_a", "erin", "found later", T0 + timedelta(seconds=1.2))
+        browser.hold()
+
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+
+        # The one there was is not offered while its replacement is made.
+        row = await self.row(service)
+        assert row.attrs["data-chat-video"] == "rendering" and row.find("a") == []
+        browser.release()
+        await service.settle()
+
+        assert len(browser.pages) == 2 and "found later" in browser.pages[1]
+        assert (await self.state(service, moment_id))["state"] == "ready"
+
+    async def test_a_rendering_that_fails_is_said_in_words_and_can_be_tried_again(self, service, browser, caplog):
+        moment_id = self.clip_with_chat()
+        browser.failure = RuntimeError("the browser would not start")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await service.client.post(f"/moments/{moment_id}/chat_video")
+            await service.settle()
+
+        row = await self.row(service)
+        assert row.attrs["data-chat-video"] == "failed"
+        assert row.one("span").text == view.chat_video_words(view.CHAT_VIDEO_FAILED)
+        assert [button.text for button in row.find("button")] == ["Render"]
+        assert "disabled" not in row.one("button").attrs
+        assert not self.VIDEO.exists()
+        assert any("rendering the chat video failed for moment 1" in r.getMessage() for r in caplog.records)
+
+        browser.failure = None
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+
+        assert (await self.state(service, moment_id))["state"] == "ready"
+
+    async def test_a_video_rendered_before_a_restart_is_still_offered(self, service, browser):
+        moment_id = self.clip_with_chat()
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+        await service.settle()
+
+        service.main._chat_videos.clear()  # all that a restart forgets
+
+        assert (await self.state(service, moment_id))["state"] == "ready"
+
+    async def test_there_is_nothing_to_render_without_a_clip_or_without_chat(self, service, browser):
+        no_clip = add_moment("channel_a", detected_at=T0)
+        silent = add_moment(
+            "channel_b", detected_at=T0, clip_path="channel_b/moment_2.mp4", **clip_cut_at(T0, self.CLIP_SECONDS)
+        )
+
+        for moment_id in (no_clip, silent):
+            response = await service.client.post(f"/moments/{moment_id}/chat_video")
+
+            assert response.status_code == 409, moment_id
+            assert (await self.state(service, moment_id))["state"] == "none"
+        assert browser.pages == []
+
+    async def test_an_unknown_moment_is_not_found(self, service, browser):
+        assert (await service.client.post("/moments/999/chat_video")).status_code == 404
+        assert (await service.client.get("/moments/999/chat_video")).status_code == 404
+
+    async def test_none_is_started_once_the_service_is_shutting_down(self, service, browser, process_exits):
+        moment_id = self.clip_with_chat()
+        await service.client.post("/shutdown")
+
+        response = await service.client.post(f"/moments/{moment_id}/chat_video")
+
+        assert response.status_code == 409
+        assert browser.pages == []
+
+    async def test_a_shutdown_waits_for_one_that_is_being_rendered(self, service, browser, process_exits):
+        moment_id = self.clip_with_chat()
+        browser.hold()
+        await service.client.post(f"/moments/{moment_id}/chat_video")
+
+        await service.client.post("/shutdown")
+
+        assert process_exits == []
+        assert service.main._background_tasks
+        browser.release()
+        await service.settle()
+        assert self.VIDEO.exists()

@@ -237,6 +237,7 @@ Some things only exist against the real Kick, and faking them would only test th
 | Not covered by the suite | Why |
 |---|---|
 | `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser against kick.com, whose pages only load in a headed browser. |
+| `chat_video.capture_frames`, `static/chat_video.js` | They are a headless browser drawing the chat video's page frame by frame. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, and the encoding of its frames with real ffmpeg (step 9 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
@@ -273,6 +274,11 @@ Run this on a live channel after changing any of the above, or the code right ne
    is saved under `data/hls_debug/`, and segments keep arriving afterwards. The recording's start
    line says whether a VOD was found; if it was, a moment right after the ad logs `footage from
    the VOD used` and neither its clip nor its "before" context shows the ad.
+9. **Render a chat video.** Under the chat of a moment with a clip, press Render. The row says it
+   is rendering and, a minute or two later and without a reload, offers a download; the log says
+   `chat video saved for moment N`. Laid over the clip in an editor (or with ffmpeg's `overlay`
+   filter) from the clip's first frame, the file is as long as the clip, has nothing behind the
+   text, and its lines appear when the same lines do beside the clip on the review page.
 9. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
    how much work is still in flight, and the process exits on its own once that is done, and not
    before.

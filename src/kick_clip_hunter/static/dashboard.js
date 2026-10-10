@@ -536,8 +536,66 @@
     if (video) paint(video);
   }
 
+  // ---- The chat video ---------------------------------------------------
+
+  // The chat as a video for an editor is rendered on the server when asked
+  // for and takes a minute or two. Its row under the chat says where that
+  // stands; while it is being rendered the server is asked now and then,
+  // and the row is drawn again once it has something else to say.
+  const CHAT_VIDEO_POLL_MS = 3000;
+  let chatVideoWatch = null;
+
+  async function renderChatVideo(button) {
+    const article = button.closest(".moment");
+    button.disabled = true;
+    const started = await post(`/moments/${article.dataset.moment}/chat_video`);
+    if (!article.isConnected) return; // another moment was opened meanwhile
+    if (!started || !started.ok) {
+      button.disabled = false;
+      say(article, "Could not start rendering the chat video. Try again.");
+      return;
+    }
+    say(article, "");
+    await redrawChatVideo(article);
+  }
+
+  async function redrawChatVideo(article) {
+    try {
+      const response = await fetch(`/dashboard/moments/${article.dataset.moment}`);
+      if (response.ok && article.isConnected) {
+        const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
+        const now = one("[data-chat-video]", fresh);
+        const old = one("[data-chat-video]", article);
+        if (now && old) old.replaceWith(now);
+      }
+    } catch {
+      // the row stays as it is and is asked about again below
+    }
+    watchChatVideo();
+  }
+
+  function watchChatVideo() {
+    clearTimeout(chatVideoWatch);
+    const row = one('[data-chat-video="rendering"]');
+    if (!row) return;
+    const article = row.closest(".moment");
+    chatVideoWatch = setTimeout(async () => {
+      let state = "rendering";
+      try {
+        const response = await fetch(`/moments/${article.dataset.moment}/chat_video`);
+        if (response.ok) state = (await response.json()).state;
+      } catch {
+        // not reachable just now; asked again
+      }
+      if (!article.isConnected) return;
+      if (state === "rendering") watchChatVideo();
+      else redrawChatVideo(article);
+    }, CHAT_VIDEO_POLL_MS);
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
+    watchChatVideo();
     for (const field of all("[data-note]")) grow(field);
     const video = one("[data-clip]");
     clipAddress = video ? video.getAttribute("src") : null;
@@ -616,6 +674,7 @@
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
     ["[data-chat-shift]", shiftChat],
+    ["[data-chat-video-render]", renderChatVideo],
     ["[data-switch] button", flip],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],

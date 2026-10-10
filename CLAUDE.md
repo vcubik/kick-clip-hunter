@@ -165,14 +165,29 @@ Module map (`src/kick_clip_hunter/`):
   the page's grey is lightened until it can be read. The badge pictures in
   `static/badges/` are placeholders drawn for this project, one per badge type plus
   `other.svg` for types without one; a channel's own subscriber badges are not fetched
+- `chat_video.py` — a moment's chat as a video with a transparent background (ProRes
+  4444, `moment_<id>_chat.mov` next to the clip), for an editor to lay over the clip. Made
+  only when asked for (the Render button under the chat, `POST /moments/{id}/chat_video`):
+  it takes about twice the clip's length and most clips never need one. A headless
+  `patchright` browser opens a page with the clip's chat lines and is stepped through the
+  clip a frame at a time - the page is told the second, shows chat as it stood then, a
+  screenshot is taken without the background - and ffmpeg joins the PNGs. Nothing runs on
+  a clock except animated emotes, which move but out of step. The browser is served the
+  page and `static/` from memory under a made-up address, may fetch emote pictures from
+  the two CDNs and is refused everything else; it never opens kick.com, which is why
+  headless works here. `patchright` runs `page.evaluate` in an isolated world by default,
+  where the page's own script is not visible - hence `isolated_context=False`. The file
+  is large by nature (roughly 3-4 MB per second of clip)
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
-  without reloading
+  without reloading. `_chat_line.html` is one line of chat, shared by the review page and
+  by `chat_video.html`, the page a chat video is made from
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
-  open moment's markup gets replaced) and the bundled typeface, Archivo, with its licence
+  open moment's markup gets replaced) and the bundled typeface, Archivo, with its licence;
+  `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
@@ -261,6 +276,7 @@ run what, the manual live checklist). What matters when changing code:
 - `tests/` is kept formatter-clean (`python -m ruff format tests`); application code is only
   linted.
 - Not covered, and why: the browser-driven parts (`kick_stream.py`, `clip_creator.create_clip`,
+  `chat_video.capture_frames`,
   the login script) and actually running the ML models. After touching those or the code next
   to them, go through the live checklist in docs/testing.md.
 
