@@ -225,6 +225,8 @@
   // where in it, follows from the clip time asked for.
 
   const SPEEDS = [1, 1.5, 2, 0.5];
+  // How far past the clip's end counts as being in the footage after it.
+  const RUN_ON_SECONDS = 0.01;
   // Kept from one moment to the next.
   let speed = 1;
   let muted = false;
@@ -366,7 +368,10 @@
 
   function togglePlay(video) {
     if (!video) return;
-    if (video.paused || video.ended) video.play().catch(() => {});
+    // Played to the end of the footage after the clip, it starts over at
+    // the clip, not at the file the player happens to hold.
+    if (video.ended && footage === "after") goTo(video, 0, { play: true });
+    else if (video.paused || video.ended) video.play().catch(() => {});
     else video.pause();
   }
 
@@ -664,9 +669,12 @@
     arrive(video);
     paint(video);
   });
-  // The footage before the clip runs on into the clip; the clip stops at its end.
+  // One file runs on into the next: the footage before the clip into the
+  // clip, and the clip into the footage after it, where there is any.
   onMedia("ended", (video) => {
+    const span = spanOf(video);
     if (footage === "before") goTo(video, 0, { play: true });
+    else if (footage === "clip" && span && span.after) goTo(video, span.clip + RUN_ON_SECONDS, { play: true });
     paint(video);
   });
 
