@@ -89,9 +89,9 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   clip and its two context files - and chat is replayed beside it in step with the
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
-  their badges in front of it. How far behind the broadcast viewers were is a guess (5s to
-  start with), so under the chat are Earlier/Later buttons that correct it for the open
-  moment's channel. `GET /dashboard/channels` has the
+  their badges in front of it. Where a message belongs against the picture is a guess (to
+  start with, the frame broadcast as it arrived), so under the chat are Earlier/Later
+  buttons that correct it for the open moment's channel. `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
@@ -150,8 +150,9 @@ Module map (`src/kick_clip_hunter/`):
   each frame `CHAT_DELAY_SECONDS` later - an assumption, since the real figure is the
   player's buffer plus any delay the streamer has set, so it can be set per channel from
   the review page (`POST /channels/{slug}/chat_delay`, kept in `app_settings`). It is not
-  the recorder's `PLAYBACK_DELAY_SECONDS`, which frames clips and is on the long side. At
-  0 chat sits where a streamer's own on-screen chat shows it. Clips cut before those
+  the recorder's `PLAYBACK_DELAY_SECONDS`, which frames clips and is on the long side. It
+  starts at 0 - chat where it arrived, the one placement a streamer's own on-screen chat
+  lets you check - and can go a little below. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
   are placed by estimate: centred on the window they were cut for
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick

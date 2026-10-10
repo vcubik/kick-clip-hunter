@@ -882,6 +882,7 @@ class TestMovingChat:
     open moment lets it be corrected - for that channel."""
 
     START = chat_trace.CHAT_DELAY_SECONDS
+    LEAST = chat_trace.CHAT_DELAY_MIN_SECONDS
     MOST = chat_trace.CHAT_DELAY_MAX_SECONDS
 
     def clip(self, channel: str = "channel_a") -> int:
@@ -905,6 +906,15 @@ class TestMovingChat:
     def control(self, article: Element) -> Element:
         return article.one("p", class_="chat-delay")
 
+    def words(self, article: Element) -> str:
+        return self.control(article).one("span").text
+
+    @staticmethod
+    def worded(seconds: int) -> str:
+        if seconds == 0:
+            return "Chat as it arrived"
+        return f"Chat {abs(seconds)} s {'earlier' if seconds > 0 else 'later'}"
+
     def can_go(self, article: Element) -> list[str]:
         return [button.text for button in self.control(article).find("button") if "disabled" not in button.attrs]
 
@@ -913,7 +923,7 @@ class TestMovingChat:
 
         article = await self.article(service)
 
-        assert self.control(article).one("span").text == f"Stream delay {self.START} s"
+        assert self.words(article) == self.worded(self.START)
         assert self.control(article).attrs["data-chat-delay"] == str(self.START)
         assert self.can_go(article) == ["Earlier", "Later"]
         # Whoever wrote the message was watching the picture that was
@@ -928,7 +938,7 @@ class TestMovingChat:
         assert response.json() == {"slug": "channel_a", "chat_delay_seconds": 2}
         article = await self.article(service)
         assert self.said_at(article) == "18"
-        assert self.control(article).one("span").text == "Stream delay 2 s"
+        assert self.words(article) == "Chat 2 s earlier"
         assert self.control(article).attrs["data-chat-delay"] == "2"
 
     async def test_the_trace_moves_with_the_chat_lines(self, service):
@@ -948,14 +958,31 @@ class TestMovingChat:
 
         assert self.said_at(alone) == "18" and self.control(alone).attrs["data-chat-delay"] == "2"
 
-    async def test_with_no_delay_chat_sits_where_it_arrived_and_can_go_no_later(self, service):
+    async def test_with_no_delay_chat_sits_where_it_arrived(self, service):
         self.clip()
         await service.client.post("/channels/channel_a/chat_delay?seconds=0")
 
         article = await self.article(service)
 
         assert self.said_at(article) == "20"
-        assert self.can_go(article) == ["Earlier"]
+        assert self.words(article) == "Chat as it arrived"
+
+    async def test_chat_can_be_put_after_where_it_arrived(self, service):
+        # The stream's clock and a message's arrival are not measured at the
+        # same point, so even "as it arrived" can be a little early.
+        self.clip()
+        await service.client.post("/channels/channel_a/chat_delay?seconds=-3")
+
+        article = await self.article(service)
+
+        assert self.said_at(article) == "23"
+        assert self.words(article) == "Chat 3 s later"
+
+    async def test_at_the_shortest_delay_chat_can_go_no_later(self, service):
+        self.clip()
+        await service.client.post(f"/channels/channel_a/chat_delay?seconds={self.LEAST}")
+
+        assert self.can_go(await self.article(service)) == ["Earlier"]
 
     async def test_at_the_longest_delay_chat_can_go_no_earlier(self, service):
         self.clip()
@@ -973,7 +1000,7 @@ class TestMovingChat:
         assert self.control(article).attrs["data-chat-delay"] == str(self.START)
         assert self.said_at(article) == str(20 - self.START)
 
-    @pytest.mark.parametrize("seconds", [-1, MOST + 1])
+    @pytest.mark.parametrize("seconds", [LEAST - 1, MOST + 1])
     async def test_a_delay_out_of_range_is_refused(self, service, seconds):
         self.clip()
 

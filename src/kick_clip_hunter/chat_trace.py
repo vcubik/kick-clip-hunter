@@ -49,12 +49,19 @@ MOMENT_PADDING_SECONDS = 2
 # caused it. It can't be measured from here: it is the player's buffer,
 # usually a few seconds, plus any delay the streamer has set. So this is only
 # where a channel starts out, and the review page moves a channel's chat
-# either way, up to the maximum. At 0 chat sits where it arrived, which is
-# where a streamer's own on-screen chat shows it.
+# either way, between the two limits.
+#
+# It starts out at 0: chat where it arrived. That is the one placement there
+# is something to check against - a streamer's own on-screen chat shows a
+# message as it arrives - and against it both 10s and 5s put chat visibly
+# early. Even at 0 a message turned up two or three seconds before it did in
+# the picture (the stream's clock and the arrival of a chat message are not
+# measured at the same point), which is why the delay can go below 0.
 #
 # Not recorder.PLAYBACK_DELAY_SECONDS on purpose: that one frames the clip,
 # where reaching back too far costs nothing, and is on the long side.
-CHAT_DELAY_SECONDS = 5
+CHAT_DELAY_SECONDS = 0
+CHAT_DELAY_MIN_SECONDS = -10
 CHAT_DELAY_MAX_SECONDS = 60
 
 # The small trace in a queue row: this many steps of this many seconds,

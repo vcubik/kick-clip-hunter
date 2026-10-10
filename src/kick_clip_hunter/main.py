@@ -867,7 +867,11 @@ def _open_moment(conn, row, today: date) -> dict:
         # Moving chat against the picture is offered where there is a picture
         # for it to be out of step with.
         "chat_delay": (
-            {"seconds": chat_delay, "most": chat_trace.CHAT_DELAY_MAX_SECONDS}
+            {
+                "seconds": chat_delay,
+                "least": chat_trace.CHAT_DELAY_MIN_SECONDS,
+                "most": chat_trace.CHAT_DELAY_MAX_SECONDS,
+            }
             if row["clip_path"] and strip and strip["has_chat"]
             else None
         ),
@@ -1221,9 +1225,9 @@ async def set_channel_chat_delay(slug: str, seconds: int):
     """Sets how far behind its broadcast a channel's chat is taken to run
     when it is shown against a clip (see chat_trace.CHAT_DELAY_SECONDS). Any
     channel there are moments from, on the watchlist or not."""
-    most = chat_trace.CHAT_DELAY_MAX_SECONDS
-    if not 0 <= seconds <= most:
-        raise HTTPException(status_code=400, detail=f"seconds must be from 0 to {most}")
+    least, most = chat_trace.CHAT_DELAY_MIN_SECONDS, chat_trace.CHAT_DELAY_MAX_SECONDS
+    if not least <= seconds <= most:
+        raise HTTPException(status_code=400, detail=f"seconds must be from {least} to {most}")
 
     conn = get_connection()
     try:
