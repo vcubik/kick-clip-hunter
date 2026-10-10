@@ -182,8 +182,11 @@ class Service:
         headers.update(header_overrides)
         return await self.client.post("/webhooks/kick", content=body, headers=headers)
 
-    async def chat(self, channel: str, sender: str, content: str, *, emote_positions: int = 0):
-        return await self.deliver(chat_payload(channel, self.user_id(channel), sender, content, emote_positions))
+    async def chat(
+        self, channel: str, sender: str, content: str, *, emote_positions: int = 0, identity: dict | None = None
+    ):
+        payload = chat_payload(channel, self.user_id(channel), sender, content, emote_positions, identity)
+        return await self.deliver(payload)
 
     def warm_up(self, channel: str, chatters: int = 10) -> None:
         """Gives the detector five minutes of ordinary history for a channel,

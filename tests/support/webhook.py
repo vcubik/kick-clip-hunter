@@ -56,14 +56,17 @@ def chat_payload(
     sender: str,
     content: str,
     emote_positions: int = 0,
+    identity: dict | None = None,
 ) -> dict:
-    """A `chat.message.sent` payload with the fields the service reads."""
+    """A `chat.message.sent` payload with the fields the service reads.
+    `identity` is the sender's name colour and badges as Kick sends them
+    ({"username_color": ..., "badges": [...]})."""
     message_id = f"chat-{next(_message_ids)}"
     emotes = [{"emote_id": "1", "positions": [{"s": i, "e": i + 1} for i in range(emote_positions)]}]
     return {
         "message_id": message_id,
         "broadcaster": {"user_id": broadcaster_user_id, "channel_slug": channel_slug},
-        "sender": {"user_id": abs(hash(sender)) % 10_000_000, "username": sender},
+        "sender": {"user_id": abs(hash(sender)) % 10_000_000, "username": sender, "identity": identity},
         "content": content,
         "emotes": emotes if emote_positions else [],
         "created_at": datetime.now(timezone.utc).isoformat(),

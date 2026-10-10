@@ -90,6 +90,7 @@ class TestSchema:
             "moments",
             "channel_keywords",
             "channel_emotes",
+            "chat_identities",
             "app_settings",
         }
 
@@ -400,6 +401,45 @@ class TestChannelEmotes:
             assert db.get_channel_emotes(connection, 1) == {}
         finally:
             connection.close()
+
+
+class TestChatIdentities:
+    MOD = '[{"text":"Moderator","type":"moderator"}]'
+
+    def test_a_chatter_is_stored_with_their_colour_and_badges(self, conn):
+        db.set_chat_identity(conn, 1, "alice", "#ff5733", self.MOD)
+
+        assert db.get_chat_identities(conn, 1, ["alice"]) == {"alice": ("#ff5733", self.MOD)}
+
+    def test_storing_again_replaces_what_was_known(self, conn):
+        db.set_chat_identity(conn, 1, "alice", "#ff5733", self.MOD)
+
+        db.set_chat_identity(conn, 1, "alice", None, "[]")
+
+        assert db.get_chat_identities(conn, 1, ["alice"]) == {"alice": (None, "[]")}
+        assert conn.execute("SELECT COUNT(*) FROM chat_identities").fetchone()[0] == 1
+
+    def test_someone_is_who_they_are_in_each_channel_separately(self, conn):
+        db.set_chat_identity(conn, 1, "alice", "#ff5733", self.MOD)
+        db.set_chat_identity(conn, 2, "alice", "#00ff00", "[]")
+
+        assert db.get_chat_identities(conn, 1, ["alice"]) == {"alice": ("#ff5733", self.MOD)}
+        assert db.get_chat_identities(conn, 2, ["alice"]) == {"alice": ("#00ff00", "[]")}
+        assert db.get_chat_identities(conn, 3, ["alice"]) == {}
+
+    def test_only_those_asked_for_and_known_come_back(self, conn):
+        db.set_chat_identity(conn, 1, "alice", "#ff5733", "[]")
+        db.set_chat_identity(conn, 1, "bob", "#00ff00", "[]")
+
+        assert db.get_chat_identities(conn, 1, ["bob", "carol", "bob"]) == {"bob": ("#00ff00", "[]")}
+        assert db.get_chat_identities(conn, 1, []) == {}
+
+    def test_more_chatters_can_be_asked_for_than_one_statement_takes(self, conn):
+        names = [f"viewer{number}" for number in range(db._IDENTITY_LOOKUP_CHUNK * 2 + 7)]
+        for name in names[::3]:
+            db.set_chat_identity(conn, 1, name, "#ff5733", "[]")
+
+        assert set(db.get_chat_identities(conn, 1, names)) == set(names[::3])
 
 
 class TestChatMessages:

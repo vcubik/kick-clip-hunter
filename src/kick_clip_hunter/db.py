@@ -6,6 +6,7 @@ detection heuristic against before deciding what's safe to prune.
 """
 
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -103,6 +104,17 @@ CREATE TABLE IF NOT EXISTS channel_emotes (
     width INTEGER NOT NULL DEFAULT 0,
     height INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (broadcaster_user_id, name)
+);
+
+-- Who a chatter is in a channel: the colour of their name and their badges
+-- (JSON, see chat_identity.py). One row per chatter, not per message - the
+-- latest known state, rewritten only when it changes.
+CREATE TABLE IF NOT EXISTS chat_identities (
+    broadcaster_user_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    colour TEXT,
+    badges TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (broadcaster_user_id, username)
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -294,6 +306,46 @@ def get_chat_emotes(conn: sqlite3.Connection, broadcaster_user_id: int) -> dict[
         **get_channel_emotes(conn, GLOBAL_EMOTES_OWNER),
         **get_channel_emotes(conn, broadcaster_user_id),
     }
+
+
+def set_chat_identity(
+    conn: sqlite3.Connection, broadcaster_user_id: int, username: str, colour: str | None, badges: str
+) -> None:
+    """Stores a chatter's name colour and badges in a channel, in place of
+    what was known of them there."""
+    conn.execute(
+        """
+        INSERT INTO chat_identities (broadcaster_user_id, username, colour, badges) VALUES (?, ?, ?, ?)
+        ON CONFLICT (broadcaster_user_id, username) DO UPDATE SET colour = excluded.colour, badges = excluded.badges
+        """,
+        (broadcaster_user_id, username, colour, badges),
+    )
+    conn.commit()
+
+
+# How many names one lookup asks for at a time: under SQLite's limit on the
+# parameters of a statement, also the lower one of older builds.
+_IDENTITY_LOOKUP_CHUNK = 500
+
+
+def get_chat_identities(
+    conn: sqlite3.Connection, broadcaster_user_id: int, usernames: Iterable[str]
+) -> dict[str, tuple[str | None, str]]:
+    """(colour, badges) by name for those of the given chatters that are
+    known in the channel."""
+    names = sorted(set(usernames))
+    identities: dict[str, tuple[str | None, str]] = {}
+    for start in range(0, len(names), _IDENTITY_LOOKUP_CHUNK):
+        chunk = names[start : start + _IDENTITY_LOOKUP_CHUNK]
+        rows = conn.execute(
+            f"""
+            SELECT username, colour, badges FROM chat_identities
+            WHERE broadcaster_user_id = ? AND username IN ({", ".join("?" * len(chunk))})
+            """,
+            (broadcaster_user_id, *chunk),
+        ).fetchall()
+        identities.update({row[0]: (row[1], row[2]) for row in rows})
+    return identities
 
 
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:

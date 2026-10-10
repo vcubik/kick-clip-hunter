@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import chat_identity
 from .dashboard_view import IMPORT_REASON, chat_parts, count_words, nick_colour, number_words
 from .detector import NATIVE_EMOTE_TOKEN_PATTERN, is_laughing, laugh_emote_names
 
@@ -388,17 +389,25 @@ def chat_replay(
     timeline: Timeline,
     window: tuple[datetime, datetime] | None,
     emotes: Mapping[str, tuple[str, int, int]] | None = None,
+    identities: Mapping[str, chat_identity.Identity] | None = None,
 ) -> list[dict[str, Any]]:
     """The chat lines to show beside a clip, each with the clip time it
     belongs to and whether it was sent during the moment. `emotes` are the
-    channel's 7TV emotes, drawn as pictures (see dashboard_view.chat_parts)."""
+    channel's 7TV emotes, drawn as pictures (see dashboard_view.chat_parts).
+    `identities` are what is known of the chatters by name: the colour
+    their name has on Kick and their badges (see chat_identity). Someone
+    unknown, or without a colour, keeps the colour worked out from the name."""
+    identities = identities or {}
     lines = []
     for message in messages:
         nick = message["sender_username"] or ""
+        own_colour, badges = identities.get(nick, (None, chat_identity.NO_BADGES))
         lines.append(
             {
                 "nick": nick,
                 "colour": nick_colour(nick),
+                "own_colour": chat_identity.readable(own_colour) if own_colour else None,
+                "badges": chat_identity.badge_parts(badges),
                 "parts": chat_parts(message["content"] or "", emotes),
                 "at": number_words(timeline.at(_arrived(message)), 1),
                 "in_moment": _during(message, window),

@@ -394,6 +394,33 @@ class TestChatReplay:
         assert [part.get("text") or part["emote"] for part in line["parts"]] == ["no way ", "KEKW"]
         assert line["parts"][1]["image"] == "https://cdn.7tv.app/emote/ID1/2x.webp"
 
+    def test_a_known_chatter_has_their_own_colour_and_badges(self):
+        identities = {"bob": ("#9ad8ff", '[{"text":"Moderator","type":"moderator"}]')}
+        messages = [message(5, "hello", "bob"), message(6, "hi", "carol")]
+
+        known, unknown = chat_trace.chat_replay(messages, TIMELINE, self.WINDOW, None, identities)
+
+        assert known["own_colour"] == "#9ad8ff"
+        assert known["badges"] == [{"icon": "moderator", "words": "Moderator"}]
+        assert (unknown["own_colour"], unknown["badges"]) == (None, [])
+        # The colour worked out from the name is still there to fall back on.
+        assert unknown["colour"] == chat_trace.nick_colour("carol")
+
+    def test_a_colour_too_dark_for_the_page_is_drawn_lighter(self):
+        identities = {"bob": ("#00008b", "[]")}
+
+        (line,) = chat_trace.chat_replay([message(5, "hello", "bob")], TIMELINE, self.WINDOW, None, identities)
+
+        assert line["own_colour"] == chat_trace.chat_identity.readable("#00008b") != "#00008b"
+
+    def test_a_known_chatter_without_a_colour_keeps_the_worked_out_one(self):
+        identities = {"bob": (None, '[{"text":"VIP","type":"vip"}]')}
+
+        (line,) = chat_trace.chat_replay([message(5, "hello", "bob")], TIMELINE, self.WINDOW, None, identities)
+
+        assert line["own_colour"] is None
+        assert line["badges"] == [{"icon": "vip", "words": "VIP"}]
+
     def test_a_message_from_nobody_with_nothing_in_it_still_makes_a_line(self):
         nothing = {"received_at": chat_at(1).isoformat(), "sender_username": None, "content": None}
 

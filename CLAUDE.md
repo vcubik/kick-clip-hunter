@@ -88,7 +88,8 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   30s before the clip to 60s after it. It is also the scrubber - one timeline over the
   clip and its two context files - and chat is replayed beside it in step with the
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
-  straight from their CDNs). How far behind the broadcast viewers were is a guess (5s to
+  straight from their CDNs) and each chatter's name in the colour it has on Kick, with
+  their badges in front of it. How far behind the broadcast viewers were is a guess (5s to
   start with), so under the chat are Earlier/Later buttons that correct it for the open
   moment's channel. `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
@@ -111,7 +112,8 @@ Watchlist (streamers)
        subscribe to any channel's chat without that streamer's consent)
     -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Detection engine (rolling window per channel; see detector.py)
-    -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes
+    -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
+       chat_identities
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
        clip from that buffer, path stored back on the moment
@@ -152,6 +154,16 @@ Module map (`src/kick_clip_hunter/`):
   0 chat sits where a streamer's own on-screen chat shows it. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
   are placed by estimate: centred on the window they were cut for
+- `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
+  sends with every chat message (`sender.identity`). Kept once per chatter per channel
+  (`chat_identities`), not per message: the webhook receiver remembers what it last stored
+  and writes only when that changes, so what the dashboard shows is the latest known
+  state, and chatters not seen since this was added keep the colour worked out from their
+  name. Pure, and the place where everything a chatter controls is checked (the colour
+  goes into a style attribute, a badge's type into a file name). A colour too dark for
+  the page's grey is lightened until it can be read. The badge pictures in
+  `static/badges/` are placeholders drawn for this project, one per badge type plus
+  `other.svg` for types without one; a channel's own subscriber badges are not fetched
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
