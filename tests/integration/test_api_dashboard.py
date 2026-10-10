@@ -951,7 +951,7 @@ class TestMovingChat:
         return article.one("p", class_="chat-delay")
 
     def words(self, article: Element) -> str:
-        return self.control(article).one("span").text
+        return self.control(article).one("span", data_chat_delay_words=True).text
 
     @staticmethod
     def worded(seconds: int) -> str:
@@ -959,8 +959,8 @@ class TestMovingChat:
             return "Chat as it arrived"
         return f"Chat {abs(seconds)} s {'earlier' if seconds > 0 else 'later'}"
 
-    def can_go(self, article: Element) -> list[str]:
-        return [button.text for button in self.control(article).find("button") if "disabled" not in button.attrs]
+    def slider(self, article: Element) -> dict:
+        return self.control(article).one("input", type="range").attrs
 
     async def test_a_channel_starts_out_with_the_usual_delay(self, service):
         self.clip()
@@ -969,7 +969,14 @@ class TestMovingChat:
 
         assert self.words(article) == self.worded(self.START)
         assert self.control(article).attrs["data-chat-delay"] == str(self.START)
-        assert self.can_go(article) == ["Earlier", "Later"]
+        # Later is to the right, so the slider runs the other way.
+        slider = self.slider(article)
+        assert (slider["min"], slider["max"], slider["step"]) == (str(-self.MOST), str(-self.LEAST), "1")
+        assert slider["value"] == str(-self.START)
+        # Its notch is where chat is as it arrived.
+        assert float(slider["style"].removeprefix("--rest: ")) == pytest.approx(
+            self.MOST / (self.MOST - self.LEAST), abs=0.001
+        )
         # Whoever wrote the message was watching the picture that was
         # broadcast that long before it arrived.
         assert self.said_at(article) == str(20 - self.START)
@@ -1027,13 +1034,15 @@ class TestMovingChat:
         self.clip()
         await service.client.post(f"/channels/channel_a/chat_delay?seconds={self.LEAST}")
 
-        assert self.can_go(await self.article(service)) == ["Earlier"]
+        slider = self.slider(await self.article(service))
+        assert slider["value"] == slider["max"]
 
     async def test_at_the_longest_delay_chat_can_go_no_earlier(self, service):
         self.clip()
         await service.client.post(f"/channels/channel_a/chat_delay?seconds={self.MOST}")
 
-        assert self.can_go(await self.article(service)) == ["Later"]
+        slider = self.slider(await self.article(service))
+        assert slider["value"] == slider["min"]
 
     async def test_it_is_kept_for_the_one_channel(self, service):
         self.clip("channel_a")

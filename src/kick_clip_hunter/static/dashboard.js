@@ -324,11 +324,15 @@
     if (changed) box.scrollTop = box.scrollHeight;
   }
 
-  // Chat lines appear as the clip reaches them.
+  // Chat lines appear as the clip reaches them - moved by however far the
+  // slider under them has been dragged from what is saved, so where chat
+  // will sit shows while it is being set.
   function syncChat(article, time, words) {
     const box = one("[data-chat]", article);
     if (!box) return;
-    reveal(box, time);
+    const delay = one("[data-chat-delay]", article);
+    const later = delay ? Number(one("[data-chat-delay-slider]", delay).value) + Number(delay.dataset.chatDelay) : 0;
+    reveal(box, time - later);
     one("[data-chat-foot]", article).textContent = box.querySelector("[data-at]") ? `In step with the clip, at ${words}` : "";
   }
 
@@ -462,15 +466,28 @@
 
   let shifting = false;
 
+  // What the slider under the chat says while it is dragged: the lines
+  // follow at once, the words say where they are being put.
+  function previewChatShift(slider) {
+    const later = Number(slider.value);
+    one("[data-chat-delay-words]", slider.closest("[data-chat-delay]")).textContent = later
+      ? `Chat ${Math.abs(later)} s ${later > 0 ? "later" : "earlier"}`
+      : "Chat as it arrived";
+    const video = clipOf(slider);
+    if (video) paint(video);
+  }
+
   // Moves a channel's chat earlier or later against its clips, by changing
-  // how far behind the broadcast its viewers are taken to be. The trace and
-  // the chat lines are drawn on the server, so the moment is fetched again
-  // and those parts of it swapped in around the player, which plays on.
-  async function shiftChat(button) {
+  // how far behind the broadcast its viewers are taken to be - once the
+  // slider is let go of. The trace and the chat lines are drawn on the
+  // server, so the moment is fetched again and those parts of it swapped in
+  // around the player, which plays on.
+  async function shiftChat(slider) {
     if (shifting) return;
     shifting = true;
-    const article = button.closest(".moment");
-    const seconds = Number(button.closest("[data-chat-delay]").dataset.chatDelay) + Number(button.dataset.chatShift);
+    const article = slider.closest(".moment");
+    // Later is to the right; the delay is how much earlier chat is put.
+    const seconds = -Number(slider.value);
     let markup = null;
     try {
       const saved = await post(`/channels/${encodeURIComponent(article.dataset.channel)}/chat_delay?seconds=${seconds}`);
@@ -490,14 +507,14 @@
     }
     say(article, "");
 
-    const held = document.activeElement === button;
+    const held = document.activeElement === slider;
     const fresh = new DOMParser().parseFromString(markup, "text/html");
     for (const part of ["[data-trace]", "[data-chat]", "[data-chat-delay]"]) {
       const now = one(part, fresh);
       const old = one(part, article);
       if (now && old) old.replaceWith(now);
     }
-    if (held) one(`[data-chat-shift="${button.dataset.chatShift}"]`, article)?.focus();
+    if (held) one("[data-chat-delay-slider]", article)?.focus();
     const video = one("[data-clip]", article);
     if (video) paint(video);
   }
@@ -864,7 +881,6 @@
     ["a.ch-row", (row, event) => isPlainClick(event) && (event.preventDefault(), openMoment(row, { play: true }))],
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
-    ["[data-chat-shift]", shiftChat],
     ["[data-trim-open]", openTrim],
     ["[data-trim-close]", (button) => trimOf(button).close()],
     ["[data-trim-play]", (button) => toggleTrimPlay(trimOf(button))],
@@ -1004,13 +1020,15 @@
       setVolume(clipOf(target), Number(target.value));
     } else if (target.matches("[data-trim-shift]")) {
       shiftTrimChat(target);
+    } else if (target.matches("[data-chat-delay-slider]")) {
+      previewChatShift(target);
     }
   });
 
   // A slider let go of with the mouse does not keep the focus, so Space goes
   // back to playing the clip.
   document.addEventListener("pointerup", (event) => {
-    if (event.target.matches?.("[data-volume]")) event.target.blur();
+    if (event.target.matches?.("[data-volume], [data-chat-delay-slider]")) event.target.blur();
   });
 
   document.addEventListener("change", (event) => {
@@ -1018,6 +1036,7 @@
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
+    else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
   });
 

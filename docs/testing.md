@@ -276,8 +276,8 @@ Run this on a live channel after changing any of the above, or the code right ne
    times); played on, the clip runs into the footage after it, and played again from the very end
    it starts over at the clip. Chat lines appear beside the clip as it reaches them. This is the check that
    the picture and chat line up: the laughing on the trace should start a few seconds after what
-   caused it on screen. If it is clearly off, move the channel's chat with Earlier/Later under the
-   chat lines - the trace and the lines follow while the clip plays on, and the setting is still
+   caused it on screen. If it is clearly off, move the channel's chat with the slider under the
+   chat lines - the lines follow as it is dragged, the trace once it is let go of, the clip plays on, and the setting is still
    there after a reload. On a stream that shows its own chat, "Chat as it arrived" should have a
    message appear beside the clip within a few seconds of appearing in the picture. `Space` plays and
    pauses; a number key rates the moment and moves on to the next unrated one. Reload: the rating

@@ -97,8 +97,8 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
   their badges in front of it. Where a message belongs against the picture is a guess (to
-  start with, the frame broadcast as it arrived), so under the chat are Earlier/Later
-  buttons that correct it for the open moment's channel. Trim, next to the clip's controls,
+  start with, the frame broadcast as it arrived), so under the chat is a slider that
+  corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below). `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
