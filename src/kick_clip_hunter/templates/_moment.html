@@ -157,9 +157,15 @@
     {% if moment.chat_delay %}
     {% set delay = moment.chat_delay %}
     <p class="chat-delay" role="group" aria-label="Where chat sits against the picture" title="Where each message is placed against the picture, counted from the frame that was being broadcast as it arrived. Viewers see the stream a little late, so earlier puts a message on what its writer was watching. Kept for this channel." data-chat-delay="{{ delay.seconds }}">
-      <span>{% if delay.seconds > 0 %}Chat {{ delay.seconds }} s earlier{% elif delay.seconds < 0 %}Chat {{ -delay.seconds }} s later{% else %}Chat as it arrived{% endif %}</span>
-      <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat earlier" data-chat-shift="1"{% if delay.seconds >= delay.most %} disabled{% endif %}>Earlier</button>
-      <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat later" data-chat-shift="-1"{% if delay.seconds <= delay.least %} disabled{% endif %}>Later</button>
+      <span data-chat-delay-words>{% if delay.seconds > 0 %}Chat {{ delay.seconds }} s earlier{% elif delay.seconds < 0 %}Chat {{ -delay.seconds }} s later{% else %}Chat as it arrived{% endif %}</span>
+      {#- Later is to the right, as in the Trim dialog, so the slider runs
+          the other way from the delay; its notch is where chat is as it
+          arrived. -#}
+      <label class="chat-delay-slider">
+        <span>earlier</span>
+        <input type="range" class="ch-shift" min="{{ -delay.most }}" max="{{ -delay.least }}" step="1" value="{{ -delay.seconds }}" style="--rest: {{ delay.rest }}" aria-label="Move chat against the picture" data-chat-delay-slider>
+        <span>later</span>
+      </label>
     </p>
     {% endif %}
   </div>

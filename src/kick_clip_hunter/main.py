@@ -958,6 +958,12 @@ def _open_moment(conn, row, today: date) -> dict:
                 "seconds": chat_delay,
                 "least": chat_trace.CHAT_DELAY_MIN_SECONDS,
                 "most": chat_trace.CHAT_DELAY_MAX_SECONDS,
+                # How far along the slider "as it arrived" is.
+                "rest": dashboard_view.number_words(
+                    chat_trace.CHAT_DELAY_MAX_SECONDS
+                    / (chat_trace.CHAT_DELAY_MAX_SECONDS - chat_trace.CHAT_DELAY_MIN_SECONDS),
+                    4,
+                ),
             }
             if row["clip_path"] and strip and strip["has_chat"]
             else None
