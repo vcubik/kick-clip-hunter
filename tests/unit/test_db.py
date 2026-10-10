@@ -759,6 +759,21 @@ class TestFlags:
         finally:
             other.close()
 
+    def test_a_channels_chat_delay_is_unset_until_it_is_set(self, conn):
+        assert db.get_chat_delay(conn, "channel_a") is None
+
+        db.set_chat_delay(conn, "channel_a", 7)
+        db.set_chat_delay(conn, "channel_b", 0)
+
+        assert (db.get_chat_delay(conn, "channel_a"), db.get_chat_delay(conn, "channel_b")) == (7, 0)
+        assert db.get_chat_delay(conn, "channel_c") is None
+
+    def test_setting_a_channels_chat_delay_again_replaces_it(self, conn):
+        db.set_chat_delay(conn, "channel_a", 7)
+        db.set_chat_delay(conn, "channel_a", 3)
+
+        assert db.get_chat_delay(conn, "channel_a") == 3
+
     def test_setting_a_flag_twice_keeps_one_row(self, conn):
         db.set_flag(conn, "watching_enabled", True)
         db.set_flag(conn, "watching_enabled", False)

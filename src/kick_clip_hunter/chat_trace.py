@@ -11,7 +11,8 @@ said most.
 "Clip time" is seconds from the first frame of the clip, negative before it.
 Chat's clock and the clip's are not the same: where a clip starts is stored
 on the stream's program clock, and viewers - so chat - saw each frame some
-seconds later (recorder.PLAYBACK_DELAY_SECONDS).
+seconds later. How many is an assumption rather than a measurement (see
+CHAT_DELAY_SECONDS), and one the review page lets be corrected per channel.
 
 Nothing here touches the database or the wall clock, so all of it is tested
 with plain lists of messages.
@@ -40,6 +41,20 @@ TRACE_MIN_TOP = 12
 # worked on arrival order - delivery jitter can leave a message that was part
 # of the burst a little outside the stored bounds.
 MOMENT_PADDING_SECONDS = 2
+
+# How long after a frame was broadcast the people in chat are taken to have
+# seen it. A message is put this far back from when it arrived, onto the
+# picture its writer was looking at - so that a laugh lands just after what
+# caused it. It can't be measured from here: it is the player's buffer,
+# usually a few seconds, plus any delay the streamer has set. So this is only
+# where a channel starts out, and the review page moves a channel's chat
+# either way, up to the maximum. At 0 chat sits where it arrived, which is
+# where a streamer's own on-screen chat shows it.
+#
+# Not recorder.PLAYBACK_DELAY_SECONDS on purpose: that one frames the clip,
+# where reaching back too far costs nothing, and is on the long side.
+CHAT_DELAY_SECONDS = 5
+CHAT_DELAY_MAX_SECONDS = 60
 
 # The small trace in a queue row: this many steps of this many seconds,
 # starting this long before the moment's window does - so the eruption rises
@@ -96,15 +111,19 @@ def clip_timeline(
     pre_roll: float,
     post_roll: float,
     playback_delay: float,
+    chat_delay: float,
     context_before: float,
     context_after: float,
 ) -> Timeline | None:
     """Where a moment's clip sits against chat, from what is stored of it.
 
-    Exact when the clip's start was stored with it. For a clip cut before
-    that was recorded only its length is known, so it is assumed to sit
-    centred on the window it was cut for; with no clip at all, the window
-    that would have been cut stands in for it - chat reacted either way.
+    When the clip's first frame was broadcast is exact if that was stored
+    with it. For a clip cut before that was recorded only its length is
+    known, so it is assumed to sit centred on the window it was cut for -
+    which the recorder reached back `playback_delay` seconds for; with no
+    clip at all, the window that would have been cut stands in for it, since
+    chat reacted either way. Chat is taken to have seen that frame
+    `chat_delay` seconds later (see CHAT_DELAY_SECONDS).
     None for an imported clip of unknown length, which has nothing to draw.
     """
     duration = row["clip_duration"]
@@ -112,14 +131,14 @@ def clip_timeline(
         return Timeline(None, duration) if duration else None
 
     if row["clip_start"] and duration:
-        chat_start = datetime.fromisoformat(row["clip_start"]) + timedelta(seconds=playback_delay)
+        broadcast_start = datetime.fromisoformat(row["clip_start"])
     else:
         window_start = datetime.fromisoformat(row["window_start"])
         window_end = datetime.fromisoformat(row["window_end"])
         asked = (window_end - window_start).total_seconds() + pre_roll + post_roll
         duration = duration or asked
-        chat_start = window_start - timedelta(seconds=pre_roll + (duration - asked) / 2)
-    return Timeline(chat_start, duration, context_before, context_after)
+        broadcast_start = window_start - timedelta(seconds=playback_delay + pre_roll + (duration - asked) / 2)
+    return Timeline(broadcast_start + timedelta(seconds=chat_delay), duration, context_before, context_after)
 
 
 def _arrived(message: Row) -> datetime:

@@ -148,6 +148,18 @@
     <p class="chat-empty">No chat was stored for this moment.</p>
     {% endfor %}
   </div>
-  <p class="chat-foot" data-chat-foot></p>
+  <div class="chat-foot">
+    <p data-chat-foot></p>
+    {#- Viewers see the stream a little after it is broadcast, and how long
+        after differs from one channel to the next. -#}
+    {% if moment.chat_delay %}
+    {% set delay = moment.chat_delay %}
+    <p class="chat-delay" role="group" aria-label="Where chat sits against the picture" title="Viewers see the stream a little after it is broadcast, so each message is placed this long before it arrived: on the picture its writer was watching. Kept for this channel." data-chat-delay="{{ delay.seconds }}">
+      <span>Stream delay {{ delay.seconds }} s</span>
+      <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat earlier" data-chat-shift="1"{% if delay.seconds >= delay.most %} disabled{% endif %}>Earlier</button>
+      <button type="button" class="ch-btn ch-btn-compact" aria-label="Show chat later" data-chat-shift="-1"{% if delay.seconds <= 0 %} disabled{% endif %}>Later</button>
+    </p>
+    {% endif %}
+  </div>
 </aside>
 </article>
