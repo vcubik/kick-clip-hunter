@@ -458,6 +458,46 @@ def shutdown_words(pending: int) -> str:
     )
 
 
+def own_settings_words(channels: list[str]) -> str | None:
+    """Which channels the settings for all channels do not hold for in
+    everything, said on the page those are set on - or None if they hold
+    for all of them."""
+    if not channels:
+        return None
+    have = "has settings of its own" if len(channels) == 1 else "have settings of their own"
+    return f"{list_words(channels)} {have} on top of these."
+
+
+def trial_words(
+    messages: int, hours: float, first: datetime, last: datetime, today: date, rows: list[tuple[str, Any]]
+) -> dict[str, Any]:
+    """What trying settings on stored chat came to: what was replayed, and
+    for each set of settings (a label and a replay.Summary) how many moments
+    it would have made and how long their clips would have been."""
+
+    def seconds(value: float | None) -> str:
+        return "-" if value is None else f"{value:.0f} s"
+
+    long = number_words(hours, 1)
+    return {
+        "summary": (
+            f"{count_words(messages, 'message')} over {long} {'hour' if long == '1' else 'hours'} of chat, "
+            f"from {since_words(first, today)} to {since_words(last, today)}."
+        ),
+        "rows": [
+            {
+                "label": label,
+                "moments": str(summary.moments),
+                "per_hour": number_words(summary.per_hour, 1),
+                "not_extended": str(summary.not_extended),
+                "median": seconds(summary.median_clip_seconds),
+                "longest": seconds(summary.longest_clip_seconds),
+            }
+            for label, summary in rows
+        ],
+    }
+
+
 # What each per-clip analysis step does, said beside the switch that turns
 # it on. Keyed like main.ANALYSIS_SETTINGS.
 ANALYSIS_CAPTIONS = {

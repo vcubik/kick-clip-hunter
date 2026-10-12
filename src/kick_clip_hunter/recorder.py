@@ -588,7 +588,14 @@ def _window_segments(recorder: ChannelRecorder, start: datetime, end: datetime) 
 
 
 def _moment_segments(
-    recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: int, post_roll_seconds: int
+    recorder: ChannelRecorder,
+    start: datetime,
+    end: datetime,
+    pre_roll_seconds: float,
+    post_roll_seconds: float,
+    playback_delay_seconds: float | None = None,
+    context_before_seconds: float | None = None,
+    context_after_seconds: float | None = None,
 ) -> tuple[list[_StoredSegment], list[_StoredSegment], list[_StoredSegment]]:
     """The segments of a moment's file, in three runs: the context before
     the clip, the clip, and the context after it.
@@ -599,12 +606,19 @@ def _moment_segments(
     group lying (by their midpoint) within CONTEXT_BEFORE_SECONDS before the
     clip's first segment and CONTEXT_AFTER_SECONDS after its last, so the
     three runs meet without a gap or a repeat.
+
+    The shift onto the stream's clock and the two lengths of context are
+    the constants unless they are given - a channel can have its own (see
+    tuning.py).
     """
-    clip_start = start - timedelta(seconds=pre_roll_seconds + PLAYBACK_DELAY_SECONDS)
-    clip_end = end + timedelta(seconds=post_roll_seconds - PLAYBACK_DELAY_SECONDS)
+    playback_delay = PLAYBACK_DELAY_SECONDS if playback_delay_seconds is None else playback_delay_seconds
+    context_before = CONTEXT_BEFORE_SECONDS if context_before_seconds is None else context_before_seconds
+    context_after = CONTEXT_AFTER_SECONDS if context_after_seconds is None else context_after_seconds
+    clip_start = start - timedelta(seconds=pre_roll_seconds + playback_delay)
+    clip_end = end + timedelta(seconds=post_roll_seconds - playback_delay)
     widest = (
-        clip_start - timedelta(seconds=CONTEXT_BEFORE_SECONDS),
-        clip_end + timedelta(seconds=CONTEXT_AFTER_SECONDS),
+        clip_start - timedelta(seconds=context_before),
+        clip_end + timedelta(seconds=context_after),
     )
     buffered = _window_segments(recorder, *widest)
     inside = [s for s in buffered if s.ended_at >= clip_start and s.started_at <= clip_end]
@@ -622,13 +636,13 @@ def _moment_segments(
         return segment.started_at + timedelta(seconds=segment.duration / 2)
 
     same = [s for s in buffered if s.group == group]
-    before = [s for s in same if first - timedelta(seconds=CONTEXT_BEFORE_SECONDS) <= middle(s) < first]
-    after = [s for s in same if last <= middle(s) < last + timedelta(seconds=CONTEXT_AFTER_SECONDS)]
+    before = [s for s in same if first - timedelta(seconds=context_before) <= middle(s) < first]
+    after = [s for s in same if last <= middle(s) < last + timedelta(seconds=context_after)]
     return before, clip, after
 
 
 def _clip_segments(
-    recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: int, post_roll_seconds: int
+    recorder: ChannelRecorder, start: datetime, end: datetime, pre_roll_seconds: float, post_roll_seconds: float
 ) -> list[_StoredSegment]:
     """The segments of the clip itself, without the context around it."""
     return _moment_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)[1]
@@ -669,16 +683,32 @@ def extract_clip(
     start: datetime,
     end: datetime,
     output_name: str,
-    pre_roll_seconds: int = PRE_ROLL_SECONDS,
-    post_roll_seconds: int = POST_ROLL_SECONDS,
+    pre_roll_seconds: float = PRE_ROLL_SECONDS,
+    post_roll_seconds: float = POST_ROLL_SECONDS,
+    *,
+    playback_delay_seconds: float | None = None,
+    context_before_seconds: float | None = None,
+    context_after_seconds: float | None = None,
 ) -> CutClip:
     """Cut a moment's file: its clip with the context either side of it.
 
     The context after the clip has to have been broadcast and downloaded by
     the time this is called (see CONTEXT_AFTER_SECONDS); whatever of it is
     not there yet is simply not in the file.
+
+    How the clip is framed - the two rolls, the shift onto the stream's
+    clock, the context - is the constants' to say unless it is given.
     """
-    before, clip, after = _moment_segments(recorder, start, end, pre_roll_seconds, post_roll_seconds)
+    before, clip, after = _moment_segments(
+        recorder,
+        start,
+        end,
+        pre_roll_seconds,
+        post_roll_seconds,
+        playback_delay_seconds,
+        context_before_seconds,
+        context_after_seconds,
+    )
     path = _write_clip(recorder, [*before, *clip, *after], output_name)
     first, last = clip[0].started_at, clip[-1].ended_at
     return CutClip(

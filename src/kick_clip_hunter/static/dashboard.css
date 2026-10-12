@@ -1,6 +1,6 @@
 /* Clip Hunter dashboard.
 
-   One stylesheet for both pages: the design tokens first - every colour,
+   One stylesheet for all the pages: the design tokens first - every colour,
    size and space below is one of them - then the components, then the layout
    of the pages.
 
@@ -192,6 +192,7 @@ a { color: inherit; }
 /* Fields */
 .ch-input { height: var(--h-control); padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); color: var(--text); font-size: 13px; }
 .ch-input::placeholder { color: var(--placeholder); opacity: 1; }
+.ch-input:disabled { opacity: 0.45; cursor: not-allowed; }
 .ch-select { height: var(--h-tab); padding: 0 var(--space-8); border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); color: var(--text); font-size: 13px; }
 
 /* Queue rows, grouped under the stream they came from. An unrated row is
@@ -432,7 +433,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .statement .lead { margin-top: var(--space-8); }
 .statement .ch-btn { margin-top: var(--space-24); }
 
-/* ---- Channels ------------------------------------------------------ */
+/* ---- Channels and Settings: a page of sections --------------------- */
 
 .channels { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
 .channels-in { display: flex; flex-direction: column; gap: var(--space-36); max-width: 760px; }
@@ -449,6 +450,46 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .add-channel .ch-input { width: 220px; }
 
 .settings { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--space-8) var(--space-12); }
+
+/* ---- Settings ------------------------------------------------------ */
+
+.set-form, .set-fields { display: flex; flex-direction: column; gap: var(--space-36); }
+.set-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.set-whose { margin: var(--space-12) 0 0; }
+
+/* A setting: its name, what it is set to with the button that puts back
+   what it would be if it were left alone, and under them what it does. One
+   that was set to something else has a `lit` edge - it is what you set. */
+.set-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: var(--space-4) var(--space-16); padding: var(--space-8) 0 var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); border-left: 2px solid transparent; }
+.set-row.is-set { border-left-color: var(--lit); }
+.set-name { font-weight: 600; }
+/* What it is set with, its unit and the button, in columns that line up
+   from one setting to the next. */
+.set-value { display: grid; grid-template-columns: max-content 56px 168px; align-items: center; justify-items: end; column-gap: var(--space-8); }
+.set-value > .ch-cap { justify-self: start; }
+.set-row > .ch-cap { grid-column: 1 / -1; max-width: 76ch; }
+.set-number { width: 96px; font-variant-numeric: tabular-nums; }
+.set-list { width: 260px; }
+.set-rest { width: 100%; height: var(--h-compact); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 12px; font-stretch: var(--width-compact); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-rest:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.set-rest:disabled { background: none; color: var(--text-2); cursor: default; }
+/* The settings few will touch are folded away, unless one of them is set. */
+.set-more { border-top: 1px solid var(--quiet); }
+.set-more summary { padding: 10px var(--space-12); font-size: 13px; font-weight: 600; font-stretch: var(--width-compact); cursor: pointer; }
+.set-more summary:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+/* Saving stays in reach however far down the form has been scrolled: the
+   foot keeps to the bottom edge of the page, over its padding. */
+.set-foot { position: sticky; bottom: calc(-1 * var(--space-36)); padding: var(--space-12) 0; border-top: 1px solid var(--line); background: var(--field); }
+.set-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
+
+/* What a trial on stored chat came to: one row for the settings as they
+   are saved, one for what is in the form. */
+.trial-result { margin-top: var(--space-8); border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.trial-result caption { padding-bottom: var(--space-8); text-align: left; font-size: 13px; color: var(--text-2); }
+.trial-result th, .trial-result td { height: var(--h-compact); padding: 0 var(--space-24) 0 0; border-top: 1px solid var(--quiet); text-align: right; }
+.trial-result thead th { border-top: 0; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
+.trial-result th:first-child { text-align: left; }
+.trial-result tbody th { font-weight: 700; }
 
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 
@@ -471,4 +512,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .trim-foot { flex-wrap: wrap; }
   .trim-foot .status-line { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
+  .set-row { grid-template-columns: minmax(0, 1fr); }
+  .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
+  .set-list { width: 100%; }
+  .set-foot { bottom: 0; }
 }

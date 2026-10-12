@@ -92,6 +92,7 @@ class TestSchema:
             "channel_emotes",
             "chat_identities",
             "app_settings",
+            "tuning",
         }
 
     def test_the_database_file_and_its_directory_are_created_on_first_use(self):
@@ -271,6 +272,23 @@ class TestUpgradingOlderDatabases:
         finally:
             connection.close()
 
+    def test_channels_watched_before_settings_of_their_own_existed_go_by_the_ones_for_all(self):
+        legacy_database(
+            "CREATE TABLE streamers (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "broadcaster_user_id INTEGER UNIQUE NOT NULL, slug TEXT UNIQUE NOT NULL, "
+            "added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), "
+            "tracking_enabled INTEGER NOT NULL DEFAULT 1)",
+            "INSERT INTO streamers (broadcaster_user_id, slug, tracking_enabled) VALUES (7, 'old_channel', 0)",
+        )
+
+        connection = db.get_connection()
+        try:
+            (row,) = db.get_streamers(connection)
+            assert (row["slug"], row["tracking_enabled"], row["own_tuning"]) == ("old_channel", 0, 0)
+            assert db.get_tuning_in_force(connection) == {}
+        finally:
+            connection.close()
+
 
 class TestStreamers:
     def test_added_channels_are_listed_in_the_order_they_were_added(self, conn):
@@ -320,6 +338,80 @@ class TestStreamers:
     def test_a_broadcaster_that_is_not_on_the_watchlist_counts_as_tracked(self, conn):
         # Messages for an unknown channel are processed, not silently dropped.
         assert db.get_streamer_tracking_enabled(conn, 999) is True
+
+    def test_a_new_channel_goes_by_the_settings_for_all_channels(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        assert db.get_streamer_by_slug(conn, "some_channel")["own_tuning"] == 0
+        assert [row["own_tuning"] for row in db.get_streamers(conn)] == [0]
+
+    def test_a_channel_can_be_switched_to_settings_of_its_own_and_back(self, conn):
+        db.add_streamer(conn, 1, "its_own")
+        db.add_streamer(conn, 2, "like_the_rest")
+
+        db.set_streamer_own_tuning(conn, 1, True)
+
+        assert {row["slug"]: row["own_tuning"] for row in db.get_streamers(conn)} == {"its_own": 1, "like_the_rest": 0}
+        db.set_streamer_own_tuning(conn, 1, False)
+        assert db.get_streamer_by_slug(conn, "its_own")["own_tuning"] == 0
+
+
+class TestTuning:
+    """What was set on the Settings page, as it is stored: text by name,
+    under the channel it was set for or under the owner that stands for all
+    of them. What the text means is tuning.py's business."""
+
+    def test_nothing_is_set_to_begin_with(self, conn):
+        assert db.get_tuning(conn) == {}
+        assert db.get_tuning(conn, 7) == {}
+        assert db.get_tuning_in_force(conn) == {}
+
+    def test_values_are_kept_by_owner(self, conn):
+        db.replace_tuning(conn, db.TUNING_FOR_ALL, {"reacting_share": "0.2", "laugh_signal": "false"})
+        db.replace_tuning(conn, 7, {"reacting_share": "0.4"})
+
+        assert db.get_tuning(conn) == {"reacting_share": "0.2", "laugh_signal": "false"}
+        assert db.get_tuning(conn, db.TUNING_FOR_ALL) == db.get_tuning(conn)
+        assert db.get_tuning(conn, 7) == {"reacting_share": "0.4"}
+        assert db.get_tuning(conn, 8) == {}
+
+    def test_storing_an_owners_values_replaces_all_it_had(self, conn):
+        db.replace_tuning(conn, 7, {"reacting_share": "0.4", "lull_seconds": "40"})
+        db.replace_tuning(conn, 8, {"lull_seconds": "50"})
+
+        db.replace_tuning(conn, 7, {"reacting_least": "5"})
+
+        assert db.get_tuning(conn, 7) == {"reacting_least": "5"}
+        assert db.get_tuning(conn, 8) == {"lull_seconds": "50"}
+        db.replace_tuning(conn, 7, {})
+        assert db.get_tuning(conn, 7) == {}
+
+    def test_the_owner_that_stands_for_all_channels_is_no_channel(self, conn):
+        # Like the owner of 7TV's global emotes: Kick's user ids start above it.
+        assert db.TUNING_FOR_ALL == 0
+
+    def test_what_is_in_force_is_what_holds_for_all_and_for_the_channels_going_by_their_own(self, conn):
+        db.add_streamer(conn, 7, "its_own")
+        db.add_streamer(conn, 8, "like_the_rest")
+        db.set_streamer_own_tuning(conn, 7, True)
+        db.replace_tuning(conn, db.TUNING_FOR_ALL, {"reacting_share": "0.2"})
+        db.replace_tuning(conn, 7, {"reacting_share": "0.4"})
+        db.replace_tuning(conn, 8, {"reacting_share": "0.6"})  # kept, but not gone by
+        db.replace_tuning(conn, 9, {"reacting_share": "0.8"})  # a channel no longer watched
+
+        assert db.get_tuning_in_force(conn) == {
+            db.TUNING_FOR_ALL: {"reacting_share": "0.2"},
+            7: {"reacting_share": "0.4"},
+        }
+
+    def test_values_persist_across_connections(self, conn):
+        db.replace_tuning(conn, 7, {"reacting_share": "0.4"})
+
+        other = db.get_connection()
+        try:
+            assert db.get_tuning(other, 7) == {"reacting_share": "0.4"}
+        finally:
+            other.close()
 
 
 class TestChannelKeywords:

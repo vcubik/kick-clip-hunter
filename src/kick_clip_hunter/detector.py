@@ -58,7 +58,15 @@ State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
 history-length check below). Multipliers are a first pass, expected to
 keep being tuned once we've watched detections against real streams.
+
+The constants below are what is recommended for a channel, not what every
+channel has to live with: how big a reaction has to be, what counts as one
+and for how much can be set from the dashboard, for all channels or for one
+(see Settings, and tuning.py for what is offered). The windows, the
+message_rate booster and how a score is worked out are the same everywhere.
 """
+
+from __future__ import annotations
 
 import re
 import time
@@ -124,17 +132,22 @@ MIN_REACTION_UNIQUE_FRACTION = 0.10
 MIN_REACTION_UNIQUE_CEILING = 12
 
 
-def _dynamic_min_count(baseline_unique_senders: int) -> int:
+def _dynamic_min_count(baseline_unique_senders: int, settings: Settings | None = None) -> int:
+    settings = settings or recommended()
     return min(
-        MIN_ABSOLUTE_COUNT_CEILING,
-        max(MIN_ABSOLUTE_COUNT_FLOOR, round(baseline_unique_senders * MIN_ABSOLUTE_COUNT_FRACTION)),
+        settings.min_absolute_count_ceiling,
+        max(
+            settings.min_absolute_count_floor,
+            round(baseline_unique_senders * settings.min_absolute_count_fraction),
+        ),
     )
 
 
-def _dynamic_min_reaction_unique(baseline_unique_senders: int) -> int:
+def _dynamic_min_reaction_unique(baseline_unique_senders: int, settings: Settings | None = None) -> int:
+    settings = settings or recommended()
     return min(
-        MIN_REACTION_UNIQUE_CEILING,
-        max(MIN_ABSOLUTE_UNIQUE, round(baseline_unique_senders * MIN_REACTION_UNIQUE_FRACTION)),
+        settings.min_reaction_unique_ceiling,
+        max(settings.min_absolute_unique, round(baseline_unique_senders * settings.min_reaction_unique_fraction)),
     )
 
 
@@ -209,9 +222,11 @@ LAUGH_WEAK_PATTERN = re.compile(r"\bxd\b", re.IGNORECASE)
 LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy")
 
 
-def is_laugh_emote_name(emote_name: str) -> bool:
+def is_laugh_emote_name(emote_name: str, added_patterns: Iterable[str] = ()) -> bool:
+    """`added_patterns` are the ones a channel has on top of the list above
+    (see Settings), lowercased like it."""
     lowered = emote_name.lower()
-    return any(pattern in lowered for pattern in LAUGH_EMOTE_NAME_PATTERNS)
+    return any(pattern in lowered for pattern in (*LAUGH_EMOTE_NAME_PATTERNS, *added_patterns))
 
 
 # Substrings marking an emote as the "dancing/vibing to music" convention
@@ -229,13 +244,23 @@ def is_dance_emote_name(emote_name: str) -> bool:
     return any(pattern in lowered for pattern in DANCE_EMOTE_NAME_PATTERNS)
 
 
-def _emote_name_weight(emote_name: str) -> float:
-    """Classifies a single emote name as laugh > dance (excluded) > other."""
-    if is_laugh_emote_name(emote_name):
-        return EMOTE_LAUGH_WEIGHT
+def _is_ignored_emote_name(emote_name: str, settings: Settings) -> bool:
+    """Whether a channel was told to ignore the emote, whatever it is called."""
+    lowered = emote_name.lower()
+    return any(pattern in lowered for pattern in settings.added_ignored_emote_patterns)
+
+
+def _emote_name_weight(emote_name: str, settings: Settings) -> float:
+    """Classifies a single emote name as laugh > dance (excluded) > other -
+    unless the channel was told to ignore it, which comes before any of
+    that: it is the one thing said about this emote in particular."""
+    if _is_ignored_emote_name(emote_name, settings):
+        return 0.0
+    if is_laugh_emote_name(emote_name, settings.added_laugh_emote_patterns):
+        return settings.emote_laugh_weight
     if is_dance_emote_name(emote_name):
         return 0.0
-    return EMOTE_OTHER_WEIGHT
+    return settings.emote_other_weight
 
 
 # Kick embeds native emotes as "[emote:12345:emojiLol]" tokens directly in
@@ -243,12 +268,13 @@ def _emote_name_weight(emote_name: str) -> float:
 NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:\d+:([^\]]+)\]")
 
 
-def classify_native_emotes(content: str) -> float:
+def classify_native_emotes(content: str, settings: Settings | None = None) -> float:
     """Returns the highest emote weight among any native Kick emotes in content, or 0.0 if none."""
     names = NATIVE_EMOTE_TOKEN_PATTERN.findall(content)
     if not names:
         return 0.0
-    return max(_emote_name_weight(name) for name in names)
+    settings = settings or recommended()
+    return max(_emote_name_weight(name, settings) for name in names)
 
 
 # Real 7TV emote sets include very short names (e.g. "lo", "re", "xd",
@@ -266,11 +292,36 @@ def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     names (see is_dance_emote_name), are skipped entirely - typing one as
     plain text is no more a sign of comedy than posting it as a native
     emote is.
+
+    This is what is stored for a channel when its emote set is fetched: the
+    names it is listened for, weighed as recommended. What each of them
+    weighs for the channel from then on is keyword_weights' to say.
     """
     return {
         name.lower(): EMOTE_MENTION_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_MENTION_OTHER_WEIGHT
         for name in emote_names
         if len(name) >= MIN_EMOTE_NAME_LENGTH and not is_dance_emote_name(name)
+    }
+
+
+def keyword_weights(keywords: Iterable[str], settings: Settings | None = None) -> dict[str, float]:
+    """What a channel's stored emote keywords weigh under its settings: the
+    mention weight of a laughing emote or of any other, and nothing at all -
+    the keyword is left out - for one the channel was told to ignore.
+
+    The names are taken as they were stored (see classify_emote_names);
+    which of an emote set's names are listened for is decided there, when
+    the set is fetched, and is not gone over again here.
+    """
+    settings = settings or recommended()
+    return {
+        name: (
+            settings.emote_mention_laugh_weight
+            if is_laugh_emote_name(name, settings.added_laugh_emote_patterns)
+            else settings.emote_mention_other_weight
+        )
+        for name in keywords
+        if not _is_ignored_emote_name(name, settings)
     }
 
 
@@ -285,6 +336,79 @@ VOTE_MESSAGES = frozenset({"1", "2"})
 
 def is_vote_message(content: str) -> bool:
     return content.strip() in VOTE_MESSAGES
+
+
+def is_ignored_message(content: str, added: frozenset[str] = frozenset()) -> bool:
+    """Whether the detector leaves a message out altogether: a vote, or one
+    of the messages a channel was told to ignore (`added`, lowercased - see
+    Settings). Like a vote, such a message is compared whole."""
+    return is_vote_message(content) or content.strip().lower() in added
+
+
+@dataclass(frozen=True)
+class Settings:
+    """The part of the above that can be set, for all channels or for one.
+
+    Every number is the constant of the same name unless something else was
+    set for the channel; `recommended()` is the constants as they stand.
+    A signal that is switched off never fires a moment and never holds one
+    open. The three collections come on top of what is built in: emote name
+    patterns that also mean laughing (see LAUGH_EMOTE_NAME_PATTERNS), ones
+    that mean an emote is no reaction at all (as the dance emotes are), and
+    whole messages to leave out the way votes are - all lowercased.
+    """
+
+    cooldown_seconds: float
+    sustain_fraction: float
+    min_absolute_count_floor: int
+    min_absolute_count_fraction: float
+    min_absolute_count_ceiling: int
+    min_absolute_unique: int
+    min_reaction_unique_fraction: float
+    min_reaction_unique_ceiling: int
+    emote_spike_multiplier: float
+    laugh_multiplier: float
+    laugh_unique_sender_multiplier: float
+    emote_mention_multiplier: float
+    emote_mention_unique_sender_multiplier: float
+    laugh_strong_weight: float
+    laugh_weak_weight: float
+    emote_laugh_weight: float
+    emote_other_weight: float
+    emote_mention_laugh_weight: float
+    emote_mention_other_weight: float
+    laugh_enabled: bool = True
+    emotes_enabled: bool = True
+    emote_mention_enabled: bool = True
+    added_laugh_emote_patterns: tuple[str, ...] = ()
+    added_ignored_emote_patterns: tuple[str, ...] = ()
+    added_ignored_messages: frozenset[str] = frozenset()
+
+
+def recommended() -> Settings:
+    """The settings a channel has when nothing was set for it: the constants
+    above, read as they stand when this is called."""
+    return Settings(
+        cooldown_seconds=COOLDOWN_SECONDS,
+        sustain_fraction=SUSTAIN_FRACTION,
+        min_absolute_count_floor=MIN_ABSOLUTE_COUNT_FLOOR,
+        min_absolute_count_fraction=MIN_ABSOLUTE_COUNT_FRACTION,
+        min_absolute_count_ceiling=MIN_ABSOLUTE_COUNT_CEILING,
+        min_absolute_unique=MIN_ABSOLUTE_UNIQUE,
+        min_reaction_unique_fraction=MIN_REACTION_UNIQUE_FRACTION,
+        min_reaction_unique_ceiling=MIN_REACTION_UNIQUE_CEILING,
+        emote_spike_multiplier=EMOTE_SPIKE_MULTIPLIER,
+        laugh_multiplier=LAUGH_MULTIPLIER,
+        laugh_unique_sender_multiplier=LAUGH_UNIQUE_SENDER_MULTIPLIER,
+        emote_mention_multiplier=EMOTE_MENTION_MULTIPLIER,
+        emote_mention_unique_sender_multiplier=EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER,
+        laugh_strong_weight=LAUGH_STRONG_WEIGHT,
+        laugh_weak_weight=LAUGH_WEAK_WEIGHT,
+        emote_laugh_weight=EMOTE_LAUGH_WEIGHT,
+        emote_other_weight=EMOTE_OTHER_WEIGHT,
+        emote_mention_laugh_weight=EMOTE_MENTION_LAUGH_WEIGHT,
+        emote_mention_other_weight=EMOTE_MENTION_OTHER_WEIGHT,
+    )
 
 
 # each entry: (timestamp, sender, normalized_content, emote_count, emote_weight, laugh_weight, mention_weight)
@@ -303,21 +427,25 @@ class Spike:
     keyword_hits: int  # laughs + emote mentions combined, for display/storage
 
 
-def classify_message(content: str, channel_keyword_weights: dict[str, float] | None = None) -> tuple[float, float]:
+def classify_message(
+    content: str, channel_keyword_weights: dict[str, float] | None = None, settings: Settings | None = None
+) -> tuple[float, float]:
     """Returns (laugh_weight, mention_weight) for a chat message's text.
 
-    laugh_weight is 0.0 (no match), LAUGH_WEAK_WEIGHT (bare "xd"), or
-    LAUGH_STRONG_WEIGHT ("xddd" or more d's).
+    laugh_weight is 0.0 (no match), the weak laugh's weight (bare "xd"), or
+    the strong one's ("xddd" or more d's) - LAUGH_WEAK_WEIGHT and
+    LAUGH_STRONG_WEIGHT unless the channel's settings say otherwise.
 
     mention_weight is 0.0 if no channel keyword matched, otherwise the
     highest weight among the keywords that did (channel_keyword_weights
-    maps each 7TV emote name to EMOTE_MENTION_LAUGH_WEIGHT or
-    EMOTE_MENTION_OTHER_WEIGHT, set when the channel was subscribed).
+    maps each 7TV emote name the channel is listened for to what it weighs
+    there, see keyword_weights).
     """
+    settings = settings or recommended()
     if LAUGH_STRONG_PATTERN.search(content):
-        laugh_weight = LAUGH_STRONG_WEIGHT
+        laugh_weight = settings.laugh_strong_weight
     elif LAUGH_WEAK_PATTERN.search(content):
-        laugh_weight = LAUGH_WEAK_WEIGHT
+        laugh_weight = settings.laugh_weak_weight
     else:
         laugh_weight = 0.0
 
@@ -327,17 +455,20 @@ def classify_message(content: str, channel_keyword_weights: dict[str, float] | N
     return laugh_weight, mention_weight
 
 
-def laugh_emote_names(emote_names: Iterable[str]) -> list[str]:
+def laugh_emote_names(emote_names: Iterable[str], added_patterns: Iterable[str] = ()) -> list[str]:
     """Those of a channel's 7TV emote names (the keys of its keyword
-    weights, lowercased) that signal laughing."""
-    return [name for name in emote_names if is_laugh_emote_name(name)]
+    weights, lowercased) that signal laughing - by the patterns built in and
+    the ones the channel has on top of them (`added_patterns`)."""
+    added_patterns = tuple(added_patterns)
+    return [name for name in emote_names if is_laugh_emote_name(name, added_patterns)]
 
 
-def is_laughing(content: str, laugh_names: Iterable[str] = ()) -> bool:
+def is_laughing(content: str, laugh_names: Iterable[str] = (), added_patterns: Iterable[str] = ()) -> bool:
     """Whether a chat message is someone laughing, by any of the signs the
     detector listens for: the typed laugh, a native laugh emote, or one of
     the channel's laugh emotes named in the text (`laugh_names`, see
-    laugh_emote_names).
+    laugh_emote_names). `added_patterns` are the channel's own additions to
+    what makes an emote a laughing one.
 
     Unlike the weights above this is a plain yes or no. It is for showing
     what chat was doing - the laughing line on the dashboard's trace - not
@@ -345,7 +476,7 @@ def is_laughing(content: str, laugh_names: Iterable[str] = ()) -> bool:
     """
     if LAUGH_WEAK_PATTERN.search(content) or LAUGH_STRONG_PATTERN.search(content):
         return True
-    if any(is_laugh_emote_name(name) for name in NATIVE_EMOTE_TOKEN_PATTERN.findall(content)):
+    if any(is_laugh_emote_name(name, added_patterns) for name in NATIVE_EMOTE_TOKEN_PATTERN.findall(content)):
         return True
     lowered = content.lower()
     return any(name in lowered for name in laugh_names)
@@ -402,9 +533,12 @@ def _spike_ratio(
     return short_count / min_absolute
 
 
-def reaction_active(channel_slug: str, now: float | None = None, since: float | None = None) -> bool:
+def reaction_active(
+    channel_slug: str, now: float | None = None, since: float | None = None, settings: Settings | None = None
+) -> bool:
     """Whether the channel's short window still shows a laugh/emote reaction
-    at SUSTAIN_FRACTION of the firing bar.
+    at SUSTAIN_FRACTION of the firing bar - the bar the channel's `settings`
+    put it at, where it has its own.
 
     `since` (same monotonic clock) limits that to messages newer than it.
     A moment session passes the instant its moment fired: the laughs that
@@ -418,6 +552,7 @@ def reaction_active(channel_slug: str, now: float | None = None, since: float | 
     moment. Uses the same monotonic clock as record_message, so as real time
     passes with no new messages the short window empties and this goes False.
     """
+    settings = settings or recommended()
     now = now if now is not None else time.monotonic()
     entries = _entries.get(channel_slug)
     if not entries:
@@ -437,25 +572,28 @@ def reaction_active(channel_slug: str, now: float | None = None, since: float | 
     # two-minute clips came from.
     min_unique = max(
         MIN_SUSTAIN_UNIQUE,
-        round(_dynamic_min_reaction_unique(len({e[1] for e in baseline})) * SUSTAIN_FRACTION),
+        round(_dynamic_min_reaction_unique(len({e[1] for e in baseline}), settings) * settings.sustain_fraction),
     )
 
-    # (entry index, absolute floor, firing multiplier) for each reaction
-    # signal - emote_weight (4), laugh_weight (5), mention_weight (6).
-    # message_rate is intentionally not a sustain signal: volume alone
+    # (entry index, listened for at all, firing multiplier) for each
+    # reaction signal - emote_weight (4), laugh_weight (5), mention_weight
+    # (6). message_rate is intentionally not a sustain signal: volume alone
     # shouldn't hold a moment open.
     signals = (
-        (5, MIN_ABSOLUTE_LAUGHS, LAUGH_MULTIPLIER),
-        (4, MIN_ABSOLUTE_LAUGHS, EMOTE_SPIKE_MULTIPLIER),
-        (6, MIN_ABSOLUTE_LAUGHS, EMOTE_MENTION_MULTIPLIER),
+        (5, settings.laugh_enabled, settings.laugh_multiplier),
+        (4, settings.emotes_enabled, settings.emote_spike_multiplier),
+        (6, settings.emote_mention_enabled, settings.emote_mention_multiplier),
     )
-    for index, min_absolute, multiplier in signals:
-        if len({e[1] for e in short if e[index] > 0}) < min_unique:
+    for index, enabled, multiplier in signals:
+        if not enabled or len({e[1] for e in short if e[index] > 0}) < min_unique:
             continue
         ratio = _spike_ratio(
-            _short_reaction_weight(short, index), _reaction_weight(baseline, index), baseline_seconds, min_absolute
+            _short_reaction_weight(short, index),
+            _reaction_weight(baseline, index),
+            baseline_seconds,
+            MIN_ABSOLUTE_LAUGHS,
         )
-        if ratio is not None and ratio >= multiplier * SUSTAIN_FRACTION:
+        if ratio is not None and ratio >= multiplier * settings.sustain_fraction:
             return True
     return False
 
@@ -470,8 +608,10 @@ def record_message(
     laugh_weight: float = 0.0,
     mention_weight: float = 0.0,
     now: float | None = None,
+    settings: Settings | None = None,
 ) -> Spike | None:
-    if is_vote_message(content):
+    settings = settings or recommended()
+    if is_ignored_message(content, settings.added_ignored_messages):
         return None
 
     now = now if now is not None else time.monotonic()
@@ -487,7 +627,7 @@ def record_message(
         return None  # not enough history yet to trust a baseline
 
     last_moment_at = _last_moment_at.get(channel_slug)
-    if last_moment_at is not None and now - last_moment_at < COOLDOWN_SECONDS:
+    if last_moment_at is not None and now - last_moment_at < settings.cooldown_seconds:
         return None
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
@@ -520,8 +660,9 @@ def record_message(
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
-    dynamic_min_count = _dynamic_min_count(baseline_unique_senders)
-    min_reaction_unique = _dynamic_min_reaction_unique(baseline_unique_senders)
+    dynamic_min_count = _dynamic_min_count(baseline_unique_senders, settings)
+    min_reaction_unique = _dynamic_min_reaction_unique(baseline_unique_senders, settings)
+    min_unique = settings.min_absolute_unique
 
     reasons = []
     scores = []
@@ -529,8 +670,8 @@ def record_message(
     # Evaluated up front but held back: message_rate is only folded in below,
     # and only if a laugh/emote signal also fired (it never stands alone).
     message_ratio = _spike_ratio(short_message_count, baseline_message_count, baseline_seconds, dynamic_min_count)
-    sender_ratio = _spike_ratio(short_unique_senders, baseline_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
-    content_ratio = _spike_ratio(short_unique_contents, baseline_unique_contents, baseline_seconds, MIN_ABSOLUTE_UNIQUE)
+    sender_ratio = _spike_ratio(short_unique_senders, baseline_unique_senders, baseline_seconds, min_unique)
+    content_ratio = _spike_ratio(short_unique_contents, baseline_unique_contents, baseline_seconds, min_unique)
     message_rate_fired = (
         message_ratio is not None
         and message_ratio >= MESSAGE_SPIKE_MULTIPLIER
@@ -548,13 +689,14 @@ def record_message(
     # classify_native_emotes and _reaction_weight).
     emote_ratio = _spike_ratio(short_emote_weight, baseline_emote_weight, baseline_seconds, dynamic_min_count)
     emote_sender_ratio = _spike_ratio(
-        short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+        short_emote_unique_senders, baseline_emote_unique_senders, baseline_seconds, min_unique
     )
     if (
-        emote_ratio is not None
-        and emote_ratio >= EMOTE_SPIKE_MULTIPLIER
+        settings.emotes_enabled
+        and emote_ratio is not None
+        and emote_ratio >= settings.emote_spike_multiplier
         and emote_sender_ratio is not None
-        and emote_sender_ratio >= EMOTE_SPIKE_MULTIPLIER
+        and emote_sender_ratio >= settings.emote_spike_multiplier
         and short_emote_unique_senders >= min_reaction_unique
     ):
         reasons.append("emotes")
@@ -565,13 +707,14 @@ def record_message(
     # equal number of bare "xd"s would.
     laugh_ratio = _spike_ratio(short_laugh_weight, baseline_laugh_weight, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
     laugh_sender_ratio = _spike_ratio(
-        short_laugh_unique_senders, baseline_laugh_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+        short_laugh_unique_senders, baseline_laugh_unique_senders, baseline_seconds, min_unique
     )
     if (
-        laugh_ratio is not None
-        and laugh_ratio >= LAUGH_MULTIPLIER
+        settings.laugh_enabled
+        and laugh_ratio is not None
+        and laugh_ratio >= settings.laugh_multiplier
         and laugh_sender_ratio is not None
-        and laugh_sender_ratio >= LAUGH_UNIQUE_SENDER_MULTIPLIER
+        and laugh_sender_ratio >= settings.laugh_unique_sender_multiplier
         and short_laugh_unique_senders >= min_reaction_unique
     ):
         reasons.append("laugh")
@@ -582,13 +725,14 @@ def record_message(
     # faster than an equal number of other-emote mentions would.
     mention_ratio = _spike_ratio(short_mention_weight, baseline_mention_weight, baseline_seconds, dynamic_min_count)
     mention_sender_ratio = _spike_ratio(
-        short_mention_unique_senders, baseline_mention_unique_senders, baseline_seconds, MIN_ABSOLUTE_UNIQUE
+        short_mention_unique_senders, baseline_mention_unique_senders, baseline_seconds, min_unique
     )
     if (
-        mention_ratio is not None
-        and mention_ratio >= EMOTE_MENTION_MULTIPLIER
+        settings.emote_mention_enabled
+        and mention_ratio is not None
+        and mention_ratio >= settings.emote_mention_multiplier
         and mention_sender_ratio is not None
-        and mention_sender_ratio >= EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER
+        and mention_sender_ratio >= settings.emote_mention_unique_sender_multiplier
         and short_mention_unique_senders >= min_reaction_unique
     ):
         reasons.append("emote_mention")

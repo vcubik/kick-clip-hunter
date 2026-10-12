@@ -121,12 +121,26 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- What was set on the dashboard's Settings page (see tuning.py), by the
+-- setting's name, as JSON: under TUNING_FOR_ALL the values for every
+-- channel, under a channel's id the ones it has of its own. A setting
+-- nobody gave a value has no row.
+CREATE TABLE IF NOT EXISTS tuning (
+    broadcaster_user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (broadcaster_user_id, name)
+);
 """
 
 
 # The broadcaster_user_id 7TV's global emotes are stored under in
 # channel_emotes. No channel has it.
 GLOBAL_EMOTES_OWNER = 0
+
+# The same for the settings that hold for every channel, in tuning.
+TUNING_FOR_ALL = 0
 
 
 def get_connection() -> sqlite3.Connection:
@@ -266,6 +280,12 @@ def get_connection() -> sqlite3.Connection:
     if "tracking_enabled" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN tracking_enabled INTEGER NOT NULL DEFAULT 1")
 
+    # Whether a channel goes by settings of its own where it has them (see
+    # tuning.py) or by the ones for all channels. Off to begin with, and
+    # switching it off again leaves the channel's values where they are.
+    if "own_tuning" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN own_tuning INTEGER NOT NULL DEFAULT 0")
+
     return conn
 
 
@@ -369,14 +389,14 @@ def get_chat_identities(
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled FROM streamers ORDER BY added_at"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning FROM streamers ORDER BY added_at"
     ).fetchall()
 
 
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled FROM streamers WHERE slug = ?", (slug,)
+        "SELECT broadcaster_user_id, tracking_enabled, own_tuning FROM streamers WHERE slug = ?", (slug,)
     ).fetchone()
 
 
@@ -391,6 +411,51 @@ def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, en
     conn.execute(
         "UPDATE streamers SET tracking_enabled = ? WHERE broadcaster_user_id = ?",
         (1 if enabled else 0, broadcaster_user_id),
+    )
+    conn.commit()
+
+
+def set_streamer_own_tuning(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+    conn.execute(
+        "UPDATE streamers SET own_tuning = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, broadcaster_user_id),
+    )
+    conn.commit()
+
+
+def get_tuning(conn: sqlite3.Connection, owner: int = TUNING_FOR_ALL) -> dict[str, str]:
+    """The settings that were given a value, as stored (JSON by name): the
+    ones for every channel, or with a channel's id that channel's own -
+    whether or not it goes by them right now."""
+    rows = conn.execute("SELECT name, value FROM tuning WHERE broadcaster_user_id = ?", (owner,)).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def get_tuning_in_force(conn: sqlite3.Connection) -> dict[int, dict[str, str]]:
+    """Everything stored that the service is to go by, by owner: the
+    settings for every channel (TUNING_FOR_ALL) and, by channel id, those of
+    the channels that go by their own."""
+    rows = conn.execute(
+        """
+        SELECT tuning.broadcaster_user_id, tuning.name, tuning.value FROM tuning
+        LEFT JOIN streamers ON streamers.broadcaster_user_id = tuning.broadcaster_user_id
+        WHERE tuning.broadcaster_user_id = ? OR streamers.own_tuning = 1
+        """,
+        (TUNING_FOR_ALL,),
+    ).fetchall()
+    in_force: dict[int, dict[str, str]] = {}
+    for owner, name, value in rows:
+        in_force.setdefault(owner, {})[name] = value
+    return in_force
+
+
+def replace_tuning(conn: sqlite3.Connection, owner: int, values: dict[str, str]) -> None:
+    """Stores an owner's settings in place of whatever it had: a setting
+    that is not among them goes back to having no value of its own."""
+    conn.execute("DELETE FROM tuning WHERE broadcaster_user_id = ?", (owner,))
+    conn.executemany(
+        "INSERT INTO tuning (broadcaster_user_id, name, value) VALUES (?, ?, ?)",
+        [(owner, name, value) for name, value in values.items()],
     )
     conn.commit()
 

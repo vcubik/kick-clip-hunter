@@ -1,5 +1,5 @@
 {#- The frame every dashboard page shares: the bar across the top with the
-    two pages, what the service is doing right now and the switch that pauses
+    pages, what the service is doing right now and the switch that pauses
     it, and the banner that takes over once a shutdown has been asked for. -#}
 {%- from "_macros.html" import switch -%}
 <!DOCTYPE html>
@@ -17,6 +17,7 @@
   <nav class="bar-nav" aria-label="Pages">
     <a href="/dashboard"{% if nav == "review" %} aria-current="page"{% endif %}>Review</a>
     <a href="/dashboard/channels"{% if nav == "channels" %} aria-current="page"{% endif %}>Channels</a>
+    <a href="/dashboard/settings"{% if nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>
   <div class="bar-state">
     <span class="ch-lamp{% if recording %} ch-lamp-rec{% endif %}">{{ "Recording" if recording else "Not recording" }}</span>

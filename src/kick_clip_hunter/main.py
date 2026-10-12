@@ -28,14 +28,17 @@ from . import (
     frame_encoder,
     recorder,
     recording_manager,
+    replay,
     sound_events,
     transcriber,
+    tuning,
     win_console,
 )
 from .config import load_settings
 from .db import (
     MOMENT_TYPES,
     STREAM_TYPES,
+    TUNING_FOR_ALL,
     count_moments,
     count_moments_with_clip,
     get_channel_keywords,
@@ -51,11 +54,15 @@ from .db import (
     get_streamer_by_slug,
     get_streamer_tracking_enabled,
     get_streamers,
+    get_tuning,
+    get_tuning_in_force,
     insert_chat_message,
     insert_moment,
+    replace_tuning,
     set_chat_delay,
     set_chat_identity,
     set_flag,
+    set_streamer_own_tuning,
     set_streamer_tracking,
     update_moment_audio_events,
     update_moment_clip_duration,
@@ -375,9 +382,15 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 Path("data/clips").mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory="data/clips"), name="clips")
 
+# What is stored of the Settings page's values (see tuning.py), by owner:
+# the ones for every channel and those of each channel that goes by its own.
+# The webhook asks for a channel's settings with every message, so they are
+# read once and kept; saving a setting drops them.
+_tuning_values: dict[int, dict[str, tuning.Value]] | None = None
+
 # Channel keyword weights rarely change (only when re-subscribing/refreshing
-# emotes), so we cache them per-process instead of hitting the DB on every
-# single chat message.
+# emotes, or when the channel's settings do), so we cache them per-process
+# instead of hitting the DB on every single chat message.
 _channel_keywords_cache: dict[int, dict[str, float]] = {}
 
 # Stream start times don't need to be looked up on every message - only when
@@ -410,9 +423,32 @@ def _remember_chat_identity(conn, broadcaster_user_id: int, username: str, sende
     _chat_identity_cache[key] = identity
 
 
+def _tuning(conn, broadcaster_user_id: int) -> tuning.Tuning:
+    """The settings the service goes by for a channel: what was set for all
+    channels, the channel's own on top where it goes by them, and the
+    constants for everything nobody set (see tuning.py)."""
+    global _tuning_values
+    if _tuning_values is None:
+        _tuning_values = {owner: tuning.stored(texts) for owner, texts in get_tuning_in_force(conn).items()}
+    own = _tuning_values.get(broadcaster_user_id) if broadcaster_user_id != TUNING_FOR_ALL else None
+    return tuning.tuned(_tuning_values.get(TUNING_FOR_ALL, {}), own)
+
+
+def _forget_tuning() -> None:
+    """Has the settings read again the next time they are asked for - and
+    the keyword weights, which are worked out from them."""
+    global _tuning_values
+    _tuning_values = None
+    _channel_keywords_cache.clear()
+
+
 def _channel_keywords(conn, broadcaster_user_id: int) -> dict[str, float]:
+    """The channel's 7TV emote names the detector listens for, with what
+    each weighs under the channel's settings."""
     if broadcaster_user_id not in _channel_keywords_cache:
-        _channel_keywords_cache[broadcaster_user_id] = get_channel_keywords(conn, broadcaster_user_id)
+        _channel_keywords_cache[broadcaster_user_id] = detector.keyword_weights(
+            get_channel_keywords(conn, broadcaster_user_id), _tuning(conn, broadcaster_user_id).detector
+        )
     return _channel_keywords_cache[broadcaster_user_id]
 
 
@@ -439,18 +475,21 @@ async def _create_clip_background(
     channel: str,
     window_start: datetime,
     window_end: datetime,
-    post_roll_seconds: int = recorder.POST_ROLL_SECONDS,
+    tuned: tuning.Tuning,
 ) -> None:
+    # `tuned` is how the channel was set up when the moment fired: how far
+    # the clip reaches either side of the reaction and how much footage goes
+    # into its file around it.
+    #
     # Neither the post-roll footage nor the context that goes into the file
     # after the clip exists yet at the instant a moment closes - wait for it
     # to actually be published and downloaded before looking for it, or the
     # file comes out truncated: without its context, or cut off right at the
     # exciting part.
-    await asyncio.sleep(post_roll_seconds + recorder.CONTEXT_AFTER_SECONDS + recorder.CLIP_SETTLE_SECONDS)
+    await asyncio.sleep(tuned.post_roll_seconds + tuned.context_after_seconds + recorder.CLIP_SETTLE_SECONDS)
     try:
         clip = await recording_manager.create_clip_for_moment(
-            channel, window_start, window_end, f"moment_{moment_id}.mp4",
-            post_roll_seconds=post_roll_seconds,
+            channel, window_start, window_end, f"moment_{moment_id}.mp4", **tuned.framing()
         )
     except RecorderError:
         logger.info("[%s] no buffered footage yet for moment %d", channel, moment_id)
@@ -591,31 +630,10 @@ async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: 
 # short while, and if new people keep piling into the reaction after it fired
 # (detector.reaction_active) its end is pushed out, so a reaction that really
 # does keep going gets one clip covering all of it. Most moments don't earn
-# that and close at their base length (pre-roll + trigger window + post-roll,
-# about 35s) once MOMENT_SESSION_QUIET_SECONDS pass; MOMENT_SESSION_MAX_SECONDS
-# is the hard cap either way. Only then is the clip cut.
-MOMENT_SESSION_POLL_SECONDS = 3
-# 8s was too tight - a normal lull in chat (reading, catching a breath)
-# regularly closed the session early, and a fresh burst soon after opened a
-# brand new moment with its own 25s pre-roll reaching back into the first
-# clip's tail, producing two overlapping clips instead of one continuous
-# one. 20s fixed that but, together with a weak sustain bar, left most clips
-# running to the cap at around two minutes. 12s is the middle ground now
-# that staying "active" takes a fresh crowd-sized reaction (see
-# detector.reaction_active) rather than one straggler.
-#
-# 30s since the dashboard got the chat trace: a longer clip costs little when
-# the trace shows where in it chat erupted and the reviewer goes straight
-# there. It equals detector.COOLDOWN_SECONDS on purpose, so there is no gap
-# between the two - a fresh reaction within 30s of the last one extends this
-# clip, and one after a longer lull opens a moment of its own.
-MOMENT_SESSION_QUIET_SECONDS = 30
-# Hard cap on how long a moment stays open: with the trigger window, pre-roll
-# and post-roll around it, the longest possible clip is about 95s.
-MOMENT_SESSION_MAX_SECONDS = 60
-# The dynamic window already extends over the reaction itself, so the clip
-# needs far less trailing padding than a fixed-window cut would.
-DYNAMIC_POST_ROLL_SECONDS = 10
+# that and close at their base length once chat has been quiet for a while;
+# there is a hard cap either way. Only then is the clip cut. How long quiet,
+# how hard a cap and how long a clip are the channel's settings - see
+# tuning.py for what they are recommended to be, and why.
 
 
 @dataclass
@@ -629,6 +647,10 @@ class _MomentSession:
     # When the moment fired on the detector's (monotonic) clock - only
     # reactions newer than this can extend it.
     triggered_at: float
+    # The channel's settings as they stood when the moment fired. It is seen
+    # through under these - how long it may stay open, what keeps it open,
+    # how its clip is cut - whatever is saved in the meantime.
+    tuned: tuning.Tuning
 
 
 # One open moment per channel at a time.
@@ -642,17 +664,19 @@ def _session_should_close(session: _MomentSession, reaction_is_active: bool, now
     if reaction_is_active:
         session.last_active = now
         session.window_end = now
-    if (now - session.trigger_time).total_seconds() >= MOMENT_SESSION_MAX_SECONDS:
+    if (now - session.trigger_time).total_seconds() >= session.tuned.max_open_seconds:
         return True
-    return (now - session.last_active).total_seconds() >= MOMENT_SESSION_QUIET_SECONDS
+    return (now - session.last_active).total_seconds() >= session.tuned.quiet_seconds
 
 
 async def _run_moment_session(session: _MomentSession) -> None:
     try:
         while True:
-            await asyncio.sleep(MOMENT_SESSION_POLL_SECONDS)
+            await asyncio.sleep(tuning.MOMENT_SESSION_POLL_SECONDS)
             now = datetime.now(timezone.utc)
-            still_reacting = detector.reaction_active(session.channel, since=session.triggered_at)
+            still_reacting = detector.reaction_active(
+                session.channel, since=session.triggered_at, settings=session.tuned.detector
+            )
             if _session_should_close(session, still_reacting, now):
                 break
     finally:
@@ -673,8 +697,7 @@ async def _run_moment_session(session: _MomentSession) -> None:
     )
     _track_task(
         _create_clip_background(
-            session.moment_id, session.channel, session.window_start, session.window_end,
-            post_roll_seconds=DYNAMIC_POST_ROLL_SECONDS,
+            session.moment_id, session.channel, session.window_start, session.window_end, session.tuned
         )
     )
 
@@ -702,11 +725,11 @@ ANALYSIS_PENDING_SECONDS = 600
 # embeddings are stored but there is nothing of them to read).
 ANALYSIS_TEXT_RESULTS = ("transcript", "audio_events", "sound_events")
 # How long after detection a moment without a clip is still shown as having
-# one on the way. A moment stays open for up to MOMENT_SESSION_MAX_SECONDS,
-# then waits for its post-roll and the context after it to be broadcast, and
-# a cut that has to come from the VOD waits for that to be written; past
-# this, no clip is coming.
-CLIP_PENDING_SECONDS = 360
+# one on the way: for as long as the channel's settings let a moment stay
+# open and have it wait for its post-roll and the context after it to be
+# broadcast, and this much on top - for the cut itself, and for the VOD to
+# be written where the cut has to come from that. Past it, no clip is coming.
+CLIP_PENDING_MARGIN_SECONDS = 230
 # The most chat lines read for one moment: for the trace and the replay
 # beside an open clip, and for a queue row's spark. Two minutes of a chat
 # posting ten messages a second stays under the first.
@@ -737,12 +760,21 @@ def _pending_analysis(row) -> set[str]:
     }
 
 
-def _clip_state(row) -> str:
+def _clip_pending_seconds(tuned: tuning.Tuning) -> float:
+    return (
+        tuned.max_open_seconds
+        + tuned.post_roll_seconds
+        + tuned.context_after_seconds
+        + CLIP_PENDING_MARGIN_SECONDS
+    )
+
+
+def _clip_state(row, tuned: tuning.Tuning) -> str:
     """Whether a moment's clip is there to play ("ready"), is still being cut
     ("pending") or is not coming ("missing")."""
     if row["clip_path"]:
         return "ready"
-    return "pending" if _moment_age_seconds(row) <= CLIP_PENDING_SECONDS else "missing"
+    return "pending" if _moment_age_seconds(row) <= _clip_pending_seconds(tuned) else "missing"
 
 
 def _clip_url(clip_path: str) -> str:
@@ -873,14 +905,15 @@ def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[di
     chat was doing from a little before the clip to a little after it, on
     the clip's own time axis. No strip when the clip can't be placed at all
     (see chat_trace.clip_timeline)."""
+    tuned = _tuning(conn, row["broadcaster_user_id"])
     timeline = chat_trace.clip_timeline(
         row,
-        pre_roll=recorder.PRE_ROLL_SECONDS,
-        post_roll=DYNAMIC_POST_ROLL_SECONDS,
-        playback_delay=recorder.PLAYBACK_DELAY_SECONDS,
+        pre_roll=tuned.pre_roll_seconds,
+        post_roll=tuned.post_roll_seconds,
+        playback_delay=tuned.playback_delay_seconds,
         chat_delay=chat_delay,
-        context_before=recorder.CONTEXT_BEFORE_SECONDS,
-        context_after=recorder.CONTEXT_AFTER_SECONDS,
+        context_before=tuned.context_before_seconds,
+        context_after=tuned.context_after_seconds,
     )
     if timeline is None:
         return None, []
@@ -895,8 +928,9 @@ def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[di
         CHAT_REPLAY_LIMIT,
     )
     window = _moment_window(row)
-    laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]))
-    everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names)
+    laughing_too = tuned.detector.added_laugh_emote_patterns
+    laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]), laughing_too)
+    everything, laughing = chat_trace.message_counts(messages, timeline, laugh_names, laughing_too)
     strip = chat_trace.trace(timeline, everything, laughing, usual=row["baseline_message_rate"], window=window)
     emotes = get_chat_emotes(conn, row["broadcaster_user_id"])
     chatters = {message["sender_username"] for message in messages if message["sender_username"]}
@@ -917,7 +951,10 @@ def _queue_activity(conn, rows) -> dict[int, dict]:
         end = max(end, window[1] + timedelta(seconds=chat_trace.MOMENT_PADDING_SECONDS))
         messages = get_chat_between(conn, row["channel_slug"], start, end, QUEUE_CHAT_LIMIT)
         activity[row["id"]] = chat_trace.queue_activity(
-            messages, window, _channel_keywords(conn, row["broadcaster_user_id"])
+            messages,
+            window,
+            _channel_keywords(conn, row["broadcaster_user_id"]),
+            _tuning(conn, row["broadcaster_user_id"]).detector.added_laugh_emote_patterns,
         )
     return activity
 
@@ -933,7 +970,7 @@ def _open_moment(conn, row, today: date) -> dict:
         "when": dashboard_view.when_words(to_local_datetime(row["detected_at"]), today),
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"]) if row["clip_path"] else None,
-        "clip_state": _clip_state(row),
+        "clip_state": _clip_state(row, _tuning(conn, row["broadcaster_user_id"])),
         # How far into its file the clip begins: the footage that led up to
         # it comes first. The page starts the player there.
         "clip_lead": dashboard_view.number_words(row["context_before"] or 0.0, 3),
@@ -1184,6 +1221,60 @@ async def dashboard_channels(request: Request):
         conn.close()
 
     return templates.TemplateResponse(request, "channels.html", context)
+
+
+@app.get("/dashboard/settings", response_class=HTMLResponse)
+async def dashboard_settings(request: Request, channel: str | None = None):
+    """The Settings page: what of detection and of clips can be set (see
+    tuning.py) - for all channels, or with `channel` for one of the
+    watchlist's, which then shows what it has of its own."""
+    channel = channel or None
+    conn = get_connection()
+    try:
+        streamers = get_streamers(conn)
+        row = next((streamer for streamer in streamers if streamer["slug"] == channel), None)
+        if channel and row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {channel!r}")
+
+        for_all = tuning.stored(get_tuning(conn))
+        own = bool(row and row["own_tuning"])
+        if row is None:
+            every, rest, rest_label = tuning.values(for_all), tuning.recommended_values(), "Recommended"
+            address = "/tuning"
+        else:
+            # A channel that does not go by its own settings is shown the
+            # ones it does go by.
+            mine = tuning.stored(get_tuning(conn, row["broadcaster_user_id"])) if own else {}
+            every, rest, rest_label = tuning.values(for_all, mine), tuning.values(for_all), "All channels"
+            address = f"/channels/{quote(channel)}/tuning"
+
+        context = _page_context(conn, "settings")
+        context.update(
+            {
+                "channel": channel,
+                "channels": [
+                    {"slug": streamer["slug"], "own": bool(streamer["own_tuning"])} for streamer in streamers
+                ],
+                "own": own,
+                "editable": row is None or own,
+                "sections": tuning.form(every, rest, rest_label),
+                "save_url": address,
+                "trial_url": f"{address}/trial",
+                "own_url": f"/channels/{quote(channel)}/own_tuning" if channel else None,
+                "own_words": (
+                    dashboard_view.own_settings_words(
+                        [streamer["slug"] for streamer in streamers if streamer["own_tuning"]]
+                    )
+                    if row is None
+                    else None
+                ),
+                "trial_messages": dashboard_view.count_words(TRIAL_MESSAGE_LIMIT, "message"),
+            }
+        )
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(request, "settings.html", context)
 
 
 def _moment_status(conn) -> dict[str, int]:
@@ -1443,6 +1534,191 @@ async def set_channel_chat_delay(slug: str, seconds: int):
     return {"slug": slug, "chat_delay_seconds": seconds}
 
 
+async def _posted_values(request: Request) -> dict[str, tuning.Value]:
+    """The settings' values a request brings (`values`, by name), each as
+    the value its setting takes. One that can't be taken is a 400 that says
+    why in words for the page."""
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    posted = asked.get("values") if isinstance(asked, dict) else None
+    if not isinstance(posted, dict):
+        raise HTTPException(status_code=400, detail="expected the settings' values as JSON")
+    try:
+        return tuning.cleaned(posted)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+def _checked(every: dict[str, tuning.Value], whose: str | None = None) -> None:
+    """Refuses, with a 400, values that contradict each other - a channel's
+    (`whose`) when it is not the ones being saved that do."""
+    try:
+        tuning.check(every)
+    except ValueError as e:
+        about = f" That is what {whose}'s own settings would then come to." if whose else ""
+        raise HTTPException(status_code=400, detail=f"{e}{about}") from None
+
+
+def _saved_words(kept: dict[str, tuning.Value]) -> str:
+    """What was stored, for the log."""
+    return ", ".join(f"{name}={value!r}" for name, value in sorted(kept.items())) or "nothing set"
+
+
+@app.post("/tuning")
+async def set_tuning(request: Request):
+    """Saves settings for all channels (see tuning.py): `values`, by name.
+    One given what is recommended goes back to following the code, and one
+    that is not mentioned stays as it is. Chat is judged by them from the
+    next message on; a moment that is open keeps the ones it fired with."""
+    given = await _posted_values(request)
+    conn = get_connection()
+    try:
+        for_all = {**tuning.stored(get_tuning(conn)), **given}
+        _checked(tuning.values(for_all))
+        # A channel with a value of its own for one half of a pair must not
+        # be left with the pair the wrong way round.
+        for row in get_streamers(conn):
+            if row["own_tuning"]:
+                mine = tuning.stored(get_tuning(conn, row["broadcaster_user_id"]))
+                _checked(tuning.values(for_all, mine), whose=row["slug"])
+        kept = tuning.differing(for_all, tuning.recommended_values())
+        replace_tuning(conn, TUNING_FOR_ALL, tuning.encoded(kept))
+    finally:
+        conn.close()
+    _forget_tuning()
+    logger.info("settings for all channels -> %s", _saved_words(kept))
+    return {"channel": None, "set": sorted(kept)}
+
+
+@app.post("/channels/{slug}/tuning")
+async def set_channel_tuning(slug: str, request: Request):
+    """Saves a channel's own settings: `values`, by name. One given what
+    all channels have goes back to following them. They are in force while
+    the channel goes by its own settings (see set_channel_own_tuning), and
+    kept either way."""
+    given = await _posted_values(request)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        for_all = tuning.stored(get_tuning(conn))
+        mine = {**tuning.stored(get_tuning(conn, row["broadcaster_user_id"])), **given}
+        _checked(tuning.values(for_all, mine))
+        kept = tuning.differing(mine, tuning.values(for_all))
+        replace_tuning(conn, row["broadcaster_user_id"], tuning.encoded(kept))
+    finally:
+        conn.close()
+    _forget_tuning()
+    logger.info("settings of %s -> %s", slug, _saved_words(kept))
+    return {"channel": slug, "set": sorted(kept)}
+
+
+@app.post("/channels/{slug}/own_tuning")
+async def set_channel_own_tuning(slug: str, enabled: int = 1):
+    """Whether a channel goes by settings of its own where it has them, or
+    by the ones for all channels in everything. Switching it off leaves the
+    channel's values where they are, for when it is switched on again."""
+    value = bool(enabled)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        set_streamer_own_tuning(conn, row["broadcaster_user_id"], value)
+    finally:
+        conn.close()
+    _forget_tuning()
+    logger.info("own settings for %s -> %s", slug, "on" if value else "off")
+    return {"slug": slug, "own_tuning": value}
+
+
+# How much of a channel's newest stored chat settings are tried on. A replay
+# takes about half a second per thousand messages, and a trial is two.
+TRIAL_MESSAGE_LIMIT = 10_000
+# One at a time: a trial keeps a processor busy for several seconds, next to
+# a service that has chat to keep up with.
+_trial_running = False
+
+
+def _replay_both(slug: str, saved: tuning.Tuning, proposed: tuning.Tuning) -> dict | None:
+    """A channel's newest stored chat replayed under two sets of settings,
+    as the page shows it - or None if there is no chat to replay. Runs in a
+    thread of its own, so with a connection of its own."""
+    conn = get_connection()
+    try:
+        messages, keywords = replay.load_messages(conn, slug, limit=TRIAL_MESSAGE_LIMIT)
+    finally:
+        conn.close()
+    if not messages:
+        return None
+    hours = replay.chat_hours(messages)
+    rows = [
+        (label, replay.summarise(replay.replay(messages, keywords, tuned), hours, tuned))
+        for label, tuned in (("As saved", saved), ("With these values", proposed))
+    ]
+    first, last = (datetime.fromtimestamp(message.time).astimezone() for message in (messages[0], messages[-1]))
+    return dashboard_view.trial_words(len(messages), hours, first, last, _today(), rows)
+
+
+async def _trial(slug: str, saved: tuning.Tuning, proposed: tuning.Tuning) -> dict:
+    global _trial_running
+    if _trial_running:
+        raise HTTPException(status_code=409, detail="Another trial is still running. Try again in a moment.")
+    _trial_running = True
+    try:
+        result = await asyncio.to_thread(_replay_both, slug, saved, proposed)
+    finally:
+        _trial_running = False
+    if result is None:
+        raise HTTPException(status_code=409, detail=f"No chat is stored for {slug} yet.")
+    return result
+
+
+@app.post("/tuning/trial")
+async def try_tuning(request: Request, chat: str):
+    """What `values` would do if they were saved for all channels, shown on
+    the newest stored chat of the channel `chat`: how many moments it would
+    have made with the settings as they are saved, and with these. Nothing
+    is saved."""
+    given = await _posted_values(request)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, chat)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {chat!r}")
+        owner = row["broadcaster_user_id"]
+        for_all = {**tuning.stored(get_tuning(conn)), **given}
+        mine = tuning.stored(get_tuning(conn, owner)) if row["own_tuning"] else {}
+        _checked(tuning.values(for_all))
+        _checked(tuning.values(for_all, mine), whose=chat)
+        saved = _tuning(conn, owner)
+    finally:
+        conn.close()
+    return await _trial(chat, saved, tuning.tuned(for_all, mine))
+
+
+@app.post("/channels/{slug}/tuning/trial")
+async def try_channel_tuning(slug: str, request: Request):
+    """The same for a channel's own settings, on its own stored chat."""
+    given = await _posted_values(request)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        owner = row["broadcaster_user_id"]
+        for_all = tuning.stored(get_tuning(conn))
+        mine = {**tuning.stored(get_tuning(conn, owner)), **given}
+        _checked(tuning.values(for_all, mine))
+        saved = _tuning(conn, owner)
+    finally:
+        conn.close()
+    return await _trial(slug, saved, tuning.tuned(for_all, mine))
+
+
 @app.post("/webhooks/kick")
 async def kick_webhook(
     request: Request,
@@ -1476,7 +1752,6 @@ async def kick_webhook(
         sender_username = sender.get("username", "")
         emotes = payload.get("emotes", [])
         emote_count = sum(len(e.get("positions", [])) for e in emotes)
-        emote_weight = detector.classify_native_emotes(content)
 
         conn = get_connection()
         try:
@@ -1486,8 +1761,12 @@ async def kick_webhook(
                 return {"status": "channel tracking disabled"}
 
             logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
+            # Everything from here on is judged by the channel's settings as
+            # they stand for this message.
+            tuned = _tuning(conn, broadcaster_user_id)
+            emote_weight = detector.classify_native_emotes(content, tuned.detector)
             laugh_weight, mention_weight = detector.classify_message(
-                content, _channel_keywords(conn, broadcaster_user_id)
+                content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
             )
 
             is_new = insert_chat_message(
@@ -1519,6 +1798,7 @@ async def kick_webhook(
                 emote_weight=emote_weight,
                 laugh_weight=laugh_weight,
                 mention_weight=mention_weight,
+                settings=tuned.detector,
             )
             if spike is not None and channel in _moment_sessions:
                 # A moment is already open for this channel (a re-fire past the
@@ -1562,6 +1842,7 @@ async def kick_webhook(
                     window_end=window_end,
                     last_active=window_end,
                     triggered_at=time.monotonic(),
+                    tuned=tuned,
                 )
                 _moment_sessions[channel] = session
                 # Tracked (not just held via _moment_sessions) so there's no
