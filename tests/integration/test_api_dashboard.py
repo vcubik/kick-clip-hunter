@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import chat_trace, chat_video, clip_trim, db, recorder, recording_manager
+from kick_clip_hunter import chat_trace, chat_video, clip_trim, db, recorder, recording_manager, tuning
 from kick_clip_hunter import dashboard_view as view
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
@@ -175,7 +175,7 @@ class TestEmptyInstallation:
         assert "hidden" in news.attrs
         assert (news.attrs["data-moments"], news.attrs["data-clips"]) == ("0", "0")
 
-    @pytest.mark.parametrize("path", ["/dashboard", "/dashboard/channels"])
+    @pytest.mark.parametrize("path", ["/dashboard", "/dashboard/channels", "/dashboard/settings"])
     async def test_the_stylesheet_and_the_script_a_page_asks_for_are_served(self, service, path):
         page = await page_at(service, path)
 
@@ -189,12 +189,16 @@ class TestEmptyInstallation:
 
 
 class TestTheBarAcrossTheTop:
-    @pytest.mark.parametrize(("path", "name"), [("/dashboard", "Review"), ("/dashboard/channels", "Channels")])
+    @pytest.mark.parametrize(
+        ("path", "name"),
+        [("/dashboard", "Review"), ("/dashboard/channels", "Channels"), ("/dashboard/settings", "Settings")],
+    )
     async def test_marks_the_page_you_are_on(self, service, path, name):
         page = await page_at(service, path)
 
         links = page.one("nav", class_="bar-nav").find("a")
-        assert [link.text for link in links] == ["Review", "Channels"]
+        assert [link.text for link in links] == ["Review", "Channels", "Settings"]
+        assert [link.attrs["href"] for link in links] == ["/dashboard", "/dashboard/channels", "/dashboard/settings"]
         assert [link.text for link in links if link.attrs.get("aria-current") == "page"] == [name]
 
     async def test_says_when_nothing_is_being_recorded(self, service):
@@ -894,7 +898,7 @@ class TestTrace:
         article = open_moment(await review(service))
 
         assert article.one("figure", class_="trace").attrs["data-clip-seconds"] == "39"
-        slack = (39 - (10 + pre_roll + service.main.DYNAMIC_POST_ROLL_SECONDS)) / 2
+        slack = (39 - (10 + pre_roll + tuning.DYNAMIC_POST_ROLL_SECONDS)) / 2
         # The recorder reached back further for the clip than chat is taken
         # to run behind, which puts chat that much later in it.
         later = recorder.PLAYBACK_DELAY_SECONDS - chat_trace.CHAT_DELAY_SECONDS
@@ -1276,7 +1280,8 @@ class TestClips:
         assert article.one("p", class_="no-clip").text == "The clip is still being cut. That takes about two minutes."
 
     async def test_an_older_one_says_there_is_none(self, service):
-        long_ago = datetime.now(timezone.utc) - timedelta(seconds=service.main.CLIP_PENDING_SECONDS + 60)
+        pending = service.main._clip_pending_seconds(tuning.recommended())
+        long_ago = datetime.now(timezone.utc) - timedelta(seconds=pending + 60)
         add_moment(detected_at=long_ago)
 
         article = open_moment(await review(service))

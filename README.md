@@ -30,6 +30,10 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   time: the clip, a trace of what chat did around it - which doubles as the scrubber - the chat
   itself replayed in step with the picture, and a 1-5 rating, tags and a note, all reachable from
   the keyboard. Those ratings are what detector tuning is checked against.
+- **Lets you tune it.** How big a reaction has to be, what counts as one and how a clip is framed
+  around it are set on the dashboard's Settings page - for all channels, and for one channel on its
+  own where its chat needs something else. What is in the form can be replayed on a channel's
+  stored chat before it is saved, to see how many moments it would have made.
 - **Hands the footage to an editor.** From the open moment a stretch of the file can be trimmed
   out - start and end set on the same timeline - without re-encoding, and its chat rendered as a
   transparent video to lay over it, moved against the picture if it does not sit right.
@@ -89,7 +93,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 |---|---|
 | `refresh_emotes.py <slug>` | Re-fetch a watched channel's 7TV emotes: what the detector listens for and the pictures chat is drawn with. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
-| `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. |
+| `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. The Settings page does the same with the values in its form. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |
 | `join_context_clips.py` | One-off: join older moments' separate context clips into the clip's file. |
 | `backfill_taste.py` | Run the clip analysis steps for clips that are missing them. |
@@ -103,7 +107,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-More than 700 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
+More than 1700 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
 no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
 every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
@@ -115,6 +119,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `main.py` | FastAPI app: webhook receiver, moment sessions, dashboard and its controls. |
 | `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip, their markup, stylesheet and script. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
+| `tuning.py`, `replay.py` | What of detection and of clips can be set from the dashboard, for all channels or for one; and stored chat replayed through the detector, to try settings out before they are saved. |
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
@@ -134,7 +139,8 @@ Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
   therefore uses the stream URL the site's own player requests, captured through an automated
   browser session - unofficial behaviour that can stop working whenever the site changes.
 - The laugh patterns are tuned for the chat conventions of the channels this was built on (Czech
-  and Slovak); the emote-based signals are language-independent.
+  and Slovak); the emote-based signals are language-independent, and which emotes count as
+  laughing can be added to per channel.
 - Detector state lives in memory, so a channel needs about five minutes of chat after a restart
   before it can fire.
 - A single-user tool: one SQLite file, no authentication on the dashboard. Expose only the webhook

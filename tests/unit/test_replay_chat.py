@@ -1,52 +1,26 @@
-"""scripts/replay_chat.py: replaying stored chat through the detector.
+"""Replaying stored chat through the detector: replay.py, and the script
+that puts it on the command line (scripts/replay_chat.py).
 
-The script exists to answer "what would this tuning change have done on a
-real stream" - which is only worth anything if a replay behaves like the
-live service. So besides its own logic, the tests here hold it to the same
-results the detector gives when the very same chat is fed to it directly.
+A replay exists to answer "what would these settings have done on a real
+stream" - which is only worth anything if it behaves like the live service.
+So besides its own logic, the tests here hold it to the same results the
+detector gives when the very same chat is fed to it directly.
 """
 
 from __future__ import annotations
 
-import itertools
-import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import replay_chat
-from kick_clip_hunter import db, detector, main, recorder
-from tests.support.chat import ChatSim, people
-from tests.support.data import add_chat
+from kick_clip_hunter import db, detector, recorder, replay, tuning
+from tests.support.chat import ChatSim, StoredStream, exact_crowd, people, typical_evening
+from tests.support.data import add_chat, add_streamer
 
 START = datetime(2026, 3, 1, 18, 0, 0, tzinfo=timezone.utc)
 CHANNEL = "some_channel"
-
-
-@dataclass
-class StoredStream(ChatSim):
-    """A `ChatSim` whose messages go into the database, stamped with the
-    simulated clock, instead of into the detector - what the service leaves
-    behind after a stream. The same script can therefore be run live
-    (`ChatSim`) and stored-then-replayed (`StoredStream`) and compared."""
-
-    conn: sqlite3.Connection | None = None
-    _ids: itertools.count = field(default_factory=itertools.count)
-
-    def say(self, sender: str, content: str) -> None:
-        received_at = datetime.fromtimestamp(self.now, timezone.utc).isoformat()
-        db.insert_chat_message(
-            self.conn,
-            message_id=f"stored-{next(self._ids)}",
-            broadcaster_user_id=1,
-            channel_slug=self.channel,
-            sender_username=sender,
-            content=content,
-            emotes_json="[]",
-            created_at=received_at,
-            received_at=received_at,
-        )
 
 
 @pytest.fixture
@@ -56,49 +30,30 @@ def stream():
     connection.close()
 
 
-def exact_crowd() -> list[str]:
-    """Just enough people to fire a moment on a ten-chatter channel - so the
-    reaction stops at the trigger and the moment isn't extended."""
-    return people(detector._dynamic_min_reaction_unique(10))
-
-
-def typical_evening(chat: ChatSim) -> None:
-    """Five minutes of chat with one stray laugh in it, then two real
-    reactions three minutes apart: the first is over as soon as it fires,
-    the second keeps drawing in new people."""
-    chat.chatter(150)
-    chat.say("viewer1", "xd")
-    chat.chatter(150)
-    chat.burst(exact_crowd(), "xDDD")
-    chat.chatter(180)
-    chat.burst(people(8, "second_wave"), "xDDD")
-    chat.wait(3)
-    chat.burst(people(8, "still_laughing"), "xDDD")
-    chat.chatter(60)
-
-
 def load(channel: str = CHANNEL, **kwargs):
     conn = db.get_connection()
     try:
-        return replay_chat.load_messages(conn, channel, **kwargs)
+        return replay.load_messages(conn, channel, **kwargs)
     finally:
         conn.close()
 
 
-def replayed(**session) -> list[replay_chat.ReplayedMoment]:
+def replayed(**changed) -> list[replay.ReplayedMoment]:
+    """The stored chat replayed under what is recommended, with `changed`."""
     messages, keywords = load()
-    return replay_chat.replay(messages, keywords, replay_chat.SessionSettings(**session))
+    return replay.replay(messages, keywords, replace(tuning.recommended(), **changed))
 
 
-class TestSettingsStayInStep:
-    def test_the_session_timing_is_the_services(self):
-        # replay_chat can't import main.py, so it carries a copy.
-        defaults = replay_chat.SessionSettings()
+def with_detector(**changed) -> detector.Settings:
+    return replace(detector.recommended(), **changed)
 
-        assert defaults.poll_seconds == main.MOMENT_SESSION_POLL_SECONDS
-        assert defaults.quiet_seconds == main.MOMENT_SESSION_QUIET_SECONDS
-        assert defaults.max_seconds == main.MOMENT_SESSION_MAX_SECONDS
-        assert defaults.post_roll_seconds == main.DYNAMIC_POST_ROLL_SECONDS
+
+def store_tuning(owner: int, **values) -> None:
+    conn = db.get_connection()
+    try:
+        db.replace_tuning(conn, owner, tuning.encoded(values))
+    finally:
+        conn.close()
 
 
 class TestLoadingStoredChat:
@@ -126,6 +81,14 @@ class TestLoadingStoredChat:
         messages, _keywords = load(since="2026-03-01T18:01:00", until="2026-03-01T18:03:00+00:00")
 
         assert [message.sender for message in messages] == ["minute1", "minute2"]
+
+    def test_with_a_limit_it_is_the_newest_that_many_still_in_arrival_order(self):
+        for minute in (2, 0, 3, 1):
+            add_chat(CHANNEL, f"minute{minute}", "x", START + timedelta(minutes=minute))
+
+        assert [message.sender for message in load(limit=2)[0]] == ["minute2", "minute3"]
+        assert [message.sender for message in load(limit=10)[0]] == ["minute0", "minute1", "minute2", "minute3"]
+        assert load(limit=0)[0] == []
 
     def test_both_timestamp_spellings_found_in_real_databases_are_understood(self):
         # Rows written by SQLite's default carry a "Z", rows written by the
@@ -190,6 +153,36 @@ class TestLoadingStoredChat:
         assert load("nobody") == ([], {})
 
 
+class TestHowLongChatWasGoing:
+    def message(self, seconds: float) -> replay.Message:
+        return replay.Message(START.timestamp() + seconds, "viewer", "x", 0)
+
+    def test_chat_without_a_hole_in_it_ran_from_its_first_message_to_its_last(self):
+        messages = [self.message(second) for second in range(0, 7201, 30)]
+
+        assert replay.chat_hours(messages) == pytest.approx(2.0)
+
+    def test_a_hole_the_detector_would_have_forgotten_everything_over_does_not_count(self):
+        # Two one-hour streams a day apart are two hours of chat, not 26.
+        hole = detector.BASELINE_WINDOW_SECONDS + 1
+        day = 86400
+        messages = [self.message(second) for second in range(0, 3601, 60)]
+        messages += [self.message(day + second) for second in range(0, 3601, 60)]
+        assert day > hole
+
+        assert replay.chat_hours(messages) == pytest.approx(2.0)
+
+    def test_a_lull_shorter_than_that_does(self):
+        lull = detector.BASELINE_WINDOW_SECONDS
+        messages = [self.message(0), self.message(lull), self.message(lull + 60)]
+
+        assert replay.chat_hours(messages) == pytest.approx((lull + 60) / 3600)
+
+    def test_no_chat_or_a_single_message_ran_for_no_time_at_all(self):
+        assert replay.chat_hours([]) == 0.0
+        assert replay.chat_hours([self.message(0)]) == 0.0
+
+
 class TestReplay:
     def test_finds_the_moments_of_a_stored_stream(self, stream):
         typical_evening(stream)
@@ -219,33 +212,85 @@ class TestReplay:
 
     def test_a_reaction_that_stops_at_the_trigger_gets_a_clip_of_the_base_length(self, stream):
         typical_evening(stream)
-        session = replay_chat.SessionSettings()
 
         brief, _sustained = replayed()
 
         assert brief.extension_seconds == 0
-        assert brief.clip_seconds(session) == (
-            recorder.PRE_ROLL_SECONDS + detector.SHORT_WINDOW_SECONDS + main.DYNAMIC_POST_ROLL_SECONDS
+        assert brief.clip_seconds(tuning.recommended()) == (
+            recorder.PRE_ROLL_SECONDS + detector.SHORT_WINDOW_SECONDS + tuning.DYNAMIC_POST_ROLL_SECONDS
         )
 
     def test_a_reaction_that_keeps_going_gets_a_longer_one_capped_by_the_session(self, stream):
         typical_evening(stream)
-        session = replay_chat.SessionSettings()
+        recommended = tuning.recommended()
 
         brief, sustained = replayed()
 
         assert sustained.extension_seconds > brief.extension_seconds
-        assert sustained.extension_seconds <= session.max_seconds + session.poll_seconds
-        assert sustained.clip_seconds(session) > brief.clip_seconds(session)
+        assert sustained.extension_seconds <= recommended.max_open_seconds + tuning.MOMENT_SESSION_POLL_SECONDS
+        assert sustained.clip_seconds(recommended) > brief.clip_seconds(recommended)
 
     def test_a_shorter_cap_shortens_the_long_clips_only(self, stream):
         typical_evening(stream)
 
         default_brief, default_sustained = replayed()
-        capped_brief, capped_sustained = replayed(max_seconds=6.0)
+        capped_brief, capped_sustained = replayed(max_open_seconds=6.0)
 
         assert capped_sustained.extension_seconds < default_sustained.extension_seconds
         assert capped_brief.extension_seconds == default_brief.extension_seconds
+
+    def test_the_clip_is_as_long_as_the_settings_it_is_asked_about_make_it(self, stream):
+        typical_evening(stream)
+        longer = replace(tuning.recommended(), pre_roll_seconds=40, post_roll_seconds=25)
+
+        brief, _sustained = replayed()
+
+        assert brief.clip_seconds(longer) == 40 + detector.SHORT_WINDOW_SECONDS + 25
+
+    def test_it_is_the_settings_it_is_given_that_the_detector_goes_by(self, stream):
+        typical_evening(stream)
+        impossible = with_detector(min_absolute_unique=999, min_reaction_unique_ceiling=999)
+
+        assert len(replayed()) == 2
+        assert replayed(detector=impossible) == []
+        assert replayed(detector=with_detector(laugh_enabled=False)) == []
+
+    def test_a_longer_cooldown_merges_what_a_shorter_one_keeps_apart(self, stream):
+        typical_evening(stream)
+        long = with_detector(cooldown_seconds=600)
+
+        assert len(replayed(detector=long, quiet_seconds=5.0)) == 1
+
+    def test_a_reaction_that_fires_again_while_its_moment_is_open_stays_one_moment(self, stream):
+        # Two bursts twenty seconds apart, under a cooldown short enough for
+        # the second to fire: with the first moment still open it only keeps
+        # that one alive, as in the service; once it has closed, it is a
+        # moment of its own.
+        stream.chatter(150)
+        stream.say("viewer1", "xd")
+        stream.chatter(150)
+        stream.burst(exact_crowd(), "xDDD")
+        stream.chatter(20)
+        stream.burst(people(8, "second_wave"), "xDDD")
+        stream.chatter(60)
+        refiring = with_detector(cooldown_seconds=15)
+
+        assert len(replayed(detector=refiring, quiet_seconds=30.0)) == 1
+        assert len(replayed(detector=refiring, quiet_seconds=5.0)) == 2
+
+    def test_the_stored_keywords_weigh_what_the_settings_say(self, stream):
+        stream.chatter(150)
+        stream.say("viewer1", "Sadge")
+        stream.chatter(150)
+        stream.burst(people(8), "Sadge")
+        messages, _keywords = load()
+        keywords = detector.classify_emote_names(["Sadge"])
+
+        listened = replay.replay(messages, keywords, tuning.recommended())
+        ignored = replay.replay(messages, keywords, tuning.tuned({"ignored_emote_words": ("sadge",)}))
+
+        assert [moment.reasons for moment in listened] == [("emote_mention",)]
+        assert ignored == []
 
     def test_replaying_twice_gives_the_same_answer(self, stream):
         # Each replay starts from a clean detector, not the previous one's state.
@@ -253,8 +298,36 @@ class TestReplay:
 
         assert replayed() == replayed()
 
+    def test_it_leaves_the_detector_as_it_found_it(self, stream):
+        # The Settings page replays inside the running service: a channel
+        # that is live must not notice, and nothing may be left behind.
+        typical_evening(stream)
+        live = ChatSim(channel=CHANNEL)
+        live.warm_up()
+        entries_before = list(detector._entries[CHANNEL])
+        cooldowns_before = dict(detector._last_moment_at)
+
+        assert len(replayed()) == 2
+
+        assert list(detector._entries) == [CHANNEL]
+        assert list(detector._entries[CHANNEL]) == entries_before
+        assert detector._last_moment_at == cooldowns_before
+
+    def test_nor_does_a_replay_that_fails_half_way(self, stream, monkeypatch):
+        typical_evening(stream)
+        messages, keywords = load()
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("out of luck")
+
+        monkeypatch.setattr(detector, "reaction_active", explode)
+        with pytest.raises(RuntimeError, match="out of luck"):
+            replay.replay(messages, keywords, tuning.recommended())
+
+        assert dict(detector._entries) == {} and detector._last_moment_at == {}
+
     def test_no_chat_no_moments(self):
-        assert replay_chat.replay([], {}, replay_chat.SessionSettings()) == []
+        assert replay.replay([], {}, tuning.recommended()) == []
 
     def test_a_moment_still_open_when_the_chat_log_ends_is_counted(self, stream):
         stream.chatter(150)
@@ -263,6 +336,70 @@ class TestReplay:
         stream.burst(people(8), "xDDD")  # the log ends mid-reaction
 
         assert len(replayed()) == 1
+
+
+class TestWhatAReplayComesTo:
+    def moment(self, extension: float) -> replay.ReplayedMoment:
+        return replay.ReplayedMoment(time=0.0, reasons=("laugh",), score=5.0, extension_seconds=extension)
+
+    def test_how_many_how_often_and_how_long(self):
+        recommended = tuning.recommended()
+        base = recommended.pre_roll_seconds + detector.SHORT_WINDOW_SECONDS + recommended.post_roll_seconds
+        moments = [self.moment(0), self.moment(0.5), self.moment(12), self.moment(40)]
+
+        summary = replay.summarise(moments, hours=2.0, tuning=recommended)
+
+        assert (summary.moments, summary.per_hour, summary.not_extended) == (4, 2.0, 2)
+        assert summary.median_clip_seconds == pytest.approx(base + (0.5 + 12) / 2)
+        assert summary.longest_clip_seconds == base + 40
+
+    def test_no_moments_have_no_clips_to_measure(self):
+        summary = replay.summarise([], hours=3.0, tuning=tuning.recommended())
+
+        assert (summary.moments, summary.per_hour, summary.not_extended) == (0, 0.0, 0)
+        assert summary.median_clip_seconds is None and summary.longest_clip_seconds is None
+
+    def test_chat_that_ran_for_no_time_has_no_rate(self):
+        assert replay.summarise([self.moment(0)], hours=0.0, tuning=tuning.recommended()).per_hour == 0.0
+
+
+class TestTheSettingsInForce:
+    def in_force(self, channel: str = CHANNEL) -> tuning.Tuning:
+        conn = db.get_connection()
+        try:
+            return replay.tuning_in_force(conn, channel)
+        finally:
+            conn.close()
+
+    def set_own(self, broadcaster_user_id: int, enabled: bool = True) -> None:
+        conn = db.get_connection()
+        try:
+            db.set_streamer_own_tuning(conn, broadcaster_user_id, enabled)
+        finally:
+            conn.close()
+
+    def test_with_nothing_set_they_are_what_is_recommended(self):
+        assert self.in_force() == tuning.recommended()
+
+    def test_what_was_set_for_all_channels_holds_for_any_channel(self):
+        store_tuning(db.TUNING_FOR_ALL, reacting_share=0.4)
+
+        assert self.in_force().detector.min_reaction_unique_fraction == 0.4
+        assert self.in_force("never_heard_of").detector.min_reaction_unique_fraction == 0.4
+
+    def test_a_channels_own_hold_once_it_goes_by_them(self):
+        add_streamer(CHANNEL, 7)
+        store_tuning(db.TUNING_FOR_ALL, reacting_share=0.4, reacting_least=5)
+        store_tuning(7, reacting_share=0.6)
+
+        assert self.in_force().detector.min_reaction_unique_fraction == 0.4
+
+        self.set_own(7)
+
+        assert self.in_force().detector.min_reaction_unique_fraction == 0.6
+        assert self.in_force().detector.min_absolute_unique == 5
+        assert self.in_force("Some_Channel").detector.min_reaction_unique_fraction == 0.6
+        assert self.in_force("another_channel").detector.min_reaction_unique_fraction == 0.4
 
 
 class TestCommandLine:
@@ -278,10 +415,19 @@ class TestCommandLine:
         header, columns, current = output.splitlines()
         assert code == 0
         assert header.startswith(f"{CHANNEL}: ") and "2026-03-01 18:00" in header
+        assert "h of chat" in header
         assert columns.split() == ["moments", "per", "hour", "not", "extended", "median", "clip", "longest"]
         label, moments, per_hour, not_extended, _median, _longest = current.rsplit(maxsplit=5)
         assert (label.strip(), moments, not_extended) == ("current settings", "2", "1")
         assert float(per_hour) > 0
+
+    def test_current_settings_are_the_ones_saved_on_the_settings_page(self, stream, capsys):
+        typical_evening(stream)
+        store_tuning(db.TUNING_FOR_ALL, reacting_least=50, reacting_most=50)
+
+        _code, output = self.run(capsys)
+
+        assert output.splitlines()[2].split()[2] == "0"
 
     def test_an_override_adds_a_comparison_row(self, stream, capsys):
         typical_evening(stream)
@@ -294,13 +440,32 @@ class TestCommandLine:
         assert current.split()[2] == "2"
         assert overridden.startswith("with overrides") and overridden.split()[2] == "0"
 
+    def test_an_override_wins_over_what_was_saved_for_that_constant(self, stream, capsys):
+        typical_evening(stream)
+        store_tuning(db.TUNING_FOR_ALL, reacting_least=50, reacting_most=50)
+
+        _code, output = self.run(capsys, "--set", f"MIN_ABSOLUTE_UNIQUE={detector.MIN_ABSOLUTE_UNIQUE}")
+
+        current, overridden = output.splitlines()[2:]
+        assert (current.split()[2], overridden.split()[2]) == ("0", "2")
+
+    def test_a_constant_that_is_not_a_setting_can_be_overridden_too(self, stream, capsys):
+        # Nobody can keep a moment open against this, so none is extended.
+        typical_evening(stream)
+
+        _code, output = self.run(capsys, "--set", "MIN_SUSTAIN_UNIQUE=999")
+
+        current, overridden = output.splitlines()[2:]
+        assert (current.split()[4], overridden.split()[4]) == ("1", "2")
+
     def test_overrides_do_not_leak_out_of_the_comparison(self, stream, capsys):
         typical_evening(stream)
-        before = detector.MIN_ABSOLUTE_UNIQUE
+        before = detector.MIN_ABSOLUTE_UNIQUE, detector.MIN_SUSTAIN_UNIQUE
 
-        self.run(capsys, "--set", "MIN_ABSOLUTE_UNIQUE=999")
+        self.run(capsys, "--set", "MIN_ABSOLUTE_UNIQUE=999", "--set", "MIN_SUSTAIN_UNIQUE=999")
 
-        assert detector.MIN_ABSOLUTE_UNIQUE == before
+        assert (detector.MIN_ABSOLUTE_UNIQUE, detector.MIN_SUSTAIN_UNIQUE) == before
+        assert detector.recommended().min_absolute_unique == before[0]
 
     def test_session_limits_can_be_overridden_too(self, stream, capsys):
         typical_evening(stream)
@@ -339,7 +504,9 @@ class TestCommandLine:
             before = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0], db.count_moments(conn)
             self.run(capsys, "--set", "COOLDOWN_SECONDS=30")
             after = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0], db.count_moments(conn)
+            stored = db.get_tuning_in_force(conn)
         finally:
             conn.close()
 
         assert after == before
+        assert stored == {}

@@ -293,3 +293,28 @@ class TestClipRequests:
 
         assert path == Path("data/clips/channel_a/moment_1.mp4")
         assert calls == [("channel_a", self.START, self.END, "moment_1.mp4", PRE_ROLL_SECONDS, 7)]
+
+    async def test_a_channels_own_framing_is_handed_on_to_the_cut(self, monkeypatch):
+        calls = []
+
+        def extract_clip(recorder, start, end, name, pre_roll, post_roll, **framing):
+            calls.append((pre_roll, post_roll, framing))
+            return Path("data/clips/channel_a") / name
+
+        monkeypatch.setattr(recording_manager, "extract_clip", extract_clip)
+
+        await recording_manager.create_clip_for_moment(
+            "channel_a",
+            self.START,
+            self.END,
+            "moment_1.mp4",
+            pre_roll_seconds=20,
+            post_roll_seconds=3,
+            playback_delay_seconds=4,
+            context_before_seconds=0,
+            context_after_seconds=90,
+        )
+
+        assert calls == [
+            (20, 3, {"playback_delay_seconds": 4, "context_before_seconds": 0, "context_after_seconds": 90})
+        ]

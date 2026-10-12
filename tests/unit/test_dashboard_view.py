@@ -10,6 +10,7 @@ clock, so nothing here depends on which zone the suite runs in.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -574,3 +575,64 @@ class TestACutInWords:
     @pytest.mark.parametrize("state", [view.TRIM_NONE, view.TRIM_CUTTING, view.TRIM_FAILED])
     def test_nor_does_a_state_in_which_there_is_no_video(self, state):
         assert view.trim_words(state, early=3.0) == view.trim_words(state)
+
+
+class TestSettingsInWords:
+    def test_nothing_is_said_while_every_channel_goes_by_the_settings_for_all(self):
+        assert view.own_settings_words([]) is None
+
+    def test_one_channel_with_its_own_is_named(self):
+        assert view.own_settings_words(["channel_a"]) == "channel_a has settings of its own on top of these."
+
+    def test_so_are_several(self):
+        assert view.own_settings_words(["channel_a", "channel_b", "channel_c"]) == (
+            "channel_a, channel_b and channel_c have settings of their own on top of these."
+        )
+
+
+class TestATrialInWords:
+    FIRST = datetime(2026, 3, 1, 18, 2)
+    LAST = datetime(2026, 3, 1, 21, 31)
+    TODAY = date(2026, 3, 2)
+
+    @dataclass
+    class Came:
+        """What a replay came to (see replay.Summary)."""
+
+        moments: int = 12
+        per_hour: float = 3.4286
+        not_extended: int = 7
+        median_clip_seconds: float | None = 35.0
+        longest_clip_seconds: float | None = 58.6
+
+    def words(self, *rows, messages: int = 8000, hours: float = 3.5) -> dict:
+        return view.trial_words(messages, hours, self.FIRST, self.LAST, self.TODAY, list(rows))
+
+    def test_says_how_much_chat_was_replayed_and_from_when(self):
+        assert (
+            self.words()["summary"]
+            == "8000 messages over 3.5 hours of chat, from yesterday, 18:02 to yesterday, 21:31."
+        )
+
+    def test_an_hour_is_an_hour(self):
+        assert "1 message over 1 hour of chat" in self.words(messages=1, hours=1.0)["summary"]
+
+    def test_each_set_of_settings_is_a_row_of_what_it_came_to(self):
+        (row,) = self.words(("As saved", self.Came()))["rows"]
+
+        assert row == {
+            "label": "As saved",
+            "moments": "12",
+            "per_hour": "3.4",
+            "not_extended": "7",
+            "median": "35 s",
+            "longest": "59 s",
+        }
+
+    def test_settings_that_make_no_moment_have_no_clip_to_measure(self):
+        none = self.Came(moments=0, per_hour=0.0, not_extended=0, median_clip_seconds=None, longest_clip_seconds=None)
+
+        rows = self.words(("As saved", self.Came()), ("With these values", none))["rows"]
+
+        assert [row["label"] for row in rows] == ["As saved", "With these values"]
+        assert (rows[1]["moments"], rows[1]["per_hour"], rows[1]["median"], rows[1]["longest"]) == ("0", "0", "-", "-")

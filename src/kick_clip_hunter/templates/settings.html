@@ -1,0 +1,130 @@
+{#- What of detection and of clips can be set (see tuning.py): for all
+    channels, or for one of the watchlist's. One form, saved as a whole. Each
+    setting has a button beside it that puts back what it would be if it
+    were left alone - what is recommended, or for a channel what all
+    channels have - and what is in the form can be tried on stored chat
+    before it is saved. -#}
+{% extends "base.html" %}
+{% from "_macros.html" import switch %}
+{% block title %}Settings{% endblock %}
+
+{% macro setting(field) -%}
+<div class="set-row{% if not field.at_rest %} is-set{% endif %}">
+  {% if field.kind == "switch" -%}
+  <span class="set-name" id="set-{{ field.name }}">{{ field.label }}</span>
+  <span class="set-value">
+    <span class="ch-switch" role="group" aria-labelledby="set-{{ field.name }}" data-setting="{{ field.name }}" data-kind="switch">
+      <button type="button" aria-pressed="{{ 'false' if field.on else 'true' }}" data-enabled="0">Off</button>
+      <button type="button" aria-pressed="{{ 'true' if field.on else 'false' }}" data-enabled="1">On</button>
+    </span>
+    <span class="ch-cap"></span>
+    <button type="button" class="set-rest" data-rest="{{ '1' if field.rest == 'On' else '0' }}"{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
+  </span>
+  {%- else -%}
+  <label class="set-name" for="set-{{ field.name }}">{{ field.label }}</label>
+  <span class="set-value">
+    {% if field.kind in ("words", "phrases") -%}
+    <input type="text" class="ch-input set-list" id="set-{{ field.name }}" value="{{ field.value }}" autocomplete="off" spellcheck="false" data-setting="{{ field.name }}" data-kind="{{ field.kind }}">
+    {%- else -%}
+    {#- A text field, not a number one: a browser writes a number field's
+        value in its own language's way, with a comma where the page writes
+        a point. -#}
+    <input type="text" inputmode="{{ 'numeric' if field.kind == 'whole' else 'decimal' }}" class="ch-input set-number" id="set-{{ field.name }}" value="{{ field.value }}" title="{{ field.range_words }}" autocomplete="off" data-setting="{{ field.name }}" data-kind="{{ field.kind }}">
+    {%- endif %}
+    <span class="ch-cap">{{ field.unit }}</span>
+    <button type="button" class="set-rest" data-rest="{{ field.rest }}"{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
+  </span>
+  {%- endif %}
+  <p class="ch-cap">{{ field.caption }}</p>
+</div>
+{%- endmacro %}
+
+{% block main %}
+<main class="channels" data-settings>
+<div class="channels-in">
+  <h1 class="visually-hidden">Settings</h1>
+
+  <section aria-labelledby="whose-title" data-status-scope>
+    <h2 class="title" id="whose-title">{{ "Settings of " ~ channel if channel else "Settings for all channels" }}</h2>
+    <div class="ch-line">
+      <form method="get" action="/dashboard/settings">
+        <select class="ch-select" name="channel" aria-label="Whose settings" data-submit-on-change>
+          <option value=""{% if not channel %} selected{% endif %}>All channels</option>
+          {% for item in channels %}
+          <option value="{{ item.slug }}"{% if item.slug == channel %} selected{% endif %}>{{ item.slug }}{% if item.own %} - has its own{% endif %}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% if channel %}
+      <span class="bar-switch">
+        <span aria-hidden="true">Own settings</span>
+        {{ switch("Own settings for " ~ channel, own_url, own, reloads=true) }}
+      </span>
+      {% endif %}
+    </div>
+    <p class="section-lead set-whose">
+      {%- if not channel -%}
+      These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code.{% if own_words %} {{ own_words }}{% endif %}
+      {%- elif own -%}
+      {{ channel }} goes by the settings below. Whatever is the same as for all channels keeps following them.
+      {%- else -%}
+      {{ channel }} goes by the settings for all channels, shown below. Switch its own settings on to change any of them for this channel only.
+      {%- endif -%}
+    </p>
+    <p class="status-line" role="status" data-status></p>
+  </section>
+
+  <form class="set-form" data-tuning="{{ save_url }}" data-trial="{{ trial_url }}" data-status-scope novalidate>
+    <fieldset class="set-fields"{% if not editable %} disabled{% endif %}>
+      {% for section in sections %}
+      <section aria-labelledby="set-title-{{ loop.index }}">
+        <h2 class="title" id="set-title-{{ loop.index }}">{{ section.title }}</h2>
+        <p class="section-lead">{{ section.lead }}</p>
+        {% for field in section.fields %}
+        {{ setting(field) }}
+        {% endfor %}
+        {% if section.advanced %}
+        <details class="set-more"{% if section.advanced_set %} open{% endif %}>
+          <summary>More</summary>
+          {% for field in section.advanced %}
+          {{ setting(field) }}
+          {% endfor %}
+        </details>
+        {% endif %}
+      </section>
+      {% endfor %}
+      <div class="ch-line set-foot">
+        <button type="submit" class="ch-btn ch-btn-primary">Save</button>
+        <button type="button" class="ch-btn ch-btn-quiet" data-rest-all>{{ "Put back what all channels have" if channel else "Put back what is recommended" }}</button>
+        <p class="status-line" role="status" data-status></p>
+      </div>
+    </fieldset>
+  </form>
+
+  {% if editable and (channel or channels) %}
+  <section aria-labelledby="trial-title" data-status-scope>
+    <h2 class="title" id="trial-title">Try it on stored chat</h2>
+    <p class="section-lead">Replays the newest {{ trial_messages }} of {{ channel ~ "'s" if channel else "a channel's" }} stored chat twice - with the settings as they are saved, and with what is in the form now - and counts the moments each would have made. Nothing is saved. It tells how many there would be, not whether they would be the right ones.</p>
+    <div class="ch-line">
+      {% if not channel %}
+      <select class="ch-select" aria-label="Whose chat" data-trial-chat>
+        {% for item in channels %}
+        <option value="{{ item.slug }}">{{ item.slug }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <button type="button" class="ch-btn" data-trial-go>Try on stored chat</button>
+    </div>
+    <p class="status-line" role="status" data-status></p>
+    <table class="trial-result" hidden data-trial-result>
+      <caption data-trial-summary></caption>
+      <thead>
+        <tr><th scope="col">Settings</th><th scope="col">Moments</th><th scope="col">An hour</th><th scope="col">Not extended</th><th scope="col">Median clip</th><th scope="col">Longest clip</th></tr>
+      </thead>
+      <tbody data-trial-rows></tbody>
+    </table>
+  </section>
+  {% endif %}
+</div>
+</main>
+{% endblock %}

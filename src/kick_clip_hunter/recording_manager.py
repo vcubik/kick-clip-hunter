@@ -99,12 +99,17 @@ async def create_clip_for_moment(
     window_start: datetime,
     window_end: datetime,
     output_name: str,
-    post_roll_seconds: int = POST_ROLL_SECONDS,
+    pre_roll_seconds: float = PRE_ROLL_SECONDS,
+    post_roll_seconds: float = POST_ROLL_SECONDS,
+    **framing: float,
 ) -> CutClip:
+    """Cuts a moment's file from the channel's buffer. `framing` is whatever
+    else of how the clip is framed was set for the channel, as
+    recorder.extract_clip takes it."""
     recorder = _get_recorder(channel_slug)
     return await asyncio.to_thread(
         extract_clip, recorder, window_start, window_end, output_name,
-        PRE_ROLL_SECONDS, post_roll_seconds,
+        pre_roll_seconds, post_roll_seconds, **framing,
     )
 
 

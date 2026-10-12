@@ -4,8 +4,9 @@
 // makes them quick to use: it opens a moment from the queue without loading
 // the page again, saves a rating, tag or note as it is set, drives the clip
 // player from the strip under it, replays chat in step with the clip, runs
-// the review from the keyboard (1 to 5 rate, J and K move, Space plays), and
-// has the dialog a stretch of the footage is cut out for an editor in.
+// the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
+// the dialog a stretch of the footage is cut out for an editor in, and saves
+// the Settings page's form.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -847,6 +848,8 @@
     }
     say(group, "");
     for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === half));
+    // Some switches change what the page around them says.
+    if (group.hasAttribute("data-switch-reloads")) reloadSettings();
   }
 
   async function addChannel(form) {
@@ -892,6 +895,146 @@
     );
   }
 
+  // ---- Settings ---------------------------------------------------------
+
+  // The Settings page is one form, saved as a whole. Each setting has a
+  // button beside it that puts back what it would be if it were left alone
+  // (what is recommended, or for a channel what all channels have), and
+  // what is in the form can be tried on stored chat before it is saved.
+
+  const settingsOf = (control) => control.closest("[data-tuning]");
+  const isList = (field) => field.dataset.kind === "words" || field.dataset.kind === "phrases";
+
+  // What a setting's field says, the way the service takes it. A number
+  // typed with a comma is the same number; one that is no number at all is
+  // sent as nothing, and the service says what the field takes.
+  function settingValue(field) {
+    if (field.dataset.kind === "switch") return one('[aria-pressed="true"]', field).dataset.enabled === "1";
+    if (isList(field)) return field.value;
+    const typed = field.value.trim().replace(",", ".");
+    return typed === "" || Number.isNaN(Number(typed)) ? null : Number(typed);
+  }
+
+  const settingValues = (form) =>
+    Object.fromEntries(all("[data-setting]", form).map((field) => [field.dataset.setting, settingValue(field)]));
+
+  // Marks the settings that are not what they would be if left alone, and
+  // lets those be put back.
+  function markSettings(form) {
+    for (const field of all("[data-setting]", form)) {
+      const row = field.closest(".set-row");
+      const rest = one("[data-rest]", row);
+      const value = settingValue(field);
+      let atRest;
+      if (field.dataset.kind === "switch") atRest = value === (rest.dataset.rest === "1");
+      else if (isList(field)) atRest = value.trim() === rest.dataset.rest;
+      else atRest = value === Number(rest.dataset.rest);
+      row.classList.toggle("is-set", !atRest);
+      rest.disabled = atRest;
+    }
+  }
+
+  function settingsEdited(form) {
+    markSettings(form);
+    say(form, "Not saved yet.");
+  }
+
+  function putBack(rest) {
+    const field = one("[data-setting]", rest.closest(".set-row"));
+    if (field.dataset.kind === "switch") {
+      for (const half of all("button", field)) half.setAttribute("aria-pressed", String(half.dataset.enabled === rest.dataset.rest));
+    } else {
+      field.value = rest.dataset.rest;
+    }
+  }
+
+  // A switch among the settings is set like any other field: it is saved
+  // with the form, not as it is pressed.
+  function chooseSetting(half) {
+    for (const other of all("button", half.closest("[data-setting]"))) other.setAttribute("aria-pressed", String(other === half));
+    settingsEdited(settingsOf(half));
+  }
+
+  // What the service said was wrong, in its own words where it gave any.
+  async function problem(response, otherwise) {
+    try {
+      const detail = (await response.json()).detail;
+      return typeof detail === "string" ? detail : otherwise;
+    } catch {
+      return otherwise;
+    }
+  }
+
+  // The page as the service has it now, in place of the one on screen:
+  // after a save, or after a channel was switched to settings of its own.
+  async function reloadSettings() {
+    const page = one("[data-settings]");
+    let fresh;
+    try {
+      const response = await fetch(location.href);
+      if (!response.ok) return;
+      fresh = one("[data-settings]", new DOMParser().parseFromString(await response.text(), "text/html"));
+    } catch {
+      return; // what is on screen stays, and still says what was typed
+    }
+    if (!fresh) return;
+    const scrolled = page.scrollTop;
+    page.replaceWith(fresh);
+    fresh.scrollTop = scrolled;
+  }
+
+  async function saveSettings(form) {
+    say(form, "Saving.");
+    const response = await post(form.dataset.tuning, { values: settingValues(form) });
+    if (!response) {
+      say(form, "Could not reach the service. Nothing was saved.");
+      return;
+    }
+    if (!response.ok) {
+      say(form, await problem(response, "Could not save the settings."));
+      return;
+    }
+    await reloadSettings();
+    say(one("[data-tuning]"), "Saved. Chat is judged by these from the next message on.");
+  }
+
+  // Replays stored chat under the settings as they are saved and as the
+  // form has them, and puts what each came to in the table.
+  async function trySettings(button) {
+    const form = one("[data-tuning]");
+    const chat = one("[data-trial-chat]");
+    const url = chat ? `${form.dataset.trial}?chat=${encodeURIComponent(chat.value)}` : form.dataset.trial;
+    button.disabled = true;
+    say(button, "Replaying stored chat. This takes a few seconds.");
+    const response = await post(url, { values: settingValues(form) });
+    button.disabled = false;
+    if (!response) {
+      say(button, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(button, await problem(response, "Could not replay the chat."));
+      return;
+    }
+    const result = await response.json();
+    const table = one("[data-trial-result]");
+    one("[data-trial-summary]", table).textContent = result.summary;
+    one("[data-trial-rows]", table).replaceChildren(
+      ...result.rows.map((row) => {
+        const line = document.createElement("tr");
+        for (const key of ["label", "moments", "per_hour", "not_extended", "median", "longest"]) {
+          const cell = document.createElement(key === "label" ? "th" : "td");
+          if (key === "label") cell.scope = "row";
+          cell.textContent = row[key];
+          line.append(cell);
+        }
+        return line;
+      }),
+    );
+    table.hidden = false;
+    say(button, "");
+  }
+
   // ---- Wiring -----------------------------------------------------------
 
   const onClick = [
@@ -904,6 +1047,17 @@
     ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
     ["[data-trim-go]", exportTrim],
     ["[data-switch] button", flip],
+    ["[data-setting] button", chooseSetting],
+    ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
+    [
+      "[data-rest-all]",
+      (button) => {
+        const form = settingsOf(button);
+        for (const rest of all("[data-rest]", form)) putBack(rest);
+        settingsEdited(form);
+      },
+    ],
+    ["[data-trial-go]", trySettings],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
     ["[data-mute]", (button) => toggleMute(clipOf(button))],
@@ -1041,6 +1195,8 @@
       previewChatShift(target);
     } else if (target.matches("[data-trim-background-colour]")) {
       paintTrimBackground(trimOf(target));
+    } else if (target.matches("[data-setting]")) {
+      settingsEdited(settingsOf(target));
     }
   });
 
@@ -1061,10 +1217,11 @@
   });
 
   document.addEventListener("submit", (event) => {
-    const form = event.target.closest("[data-add-channel]");
+    const form = event.target.closest("[data-add-channel], [data-tuning]");
     if (!form) return;
     event.preventDefault();
-    addChannel(form);
+    if (form.matches("[data-tuning]")) saveSettings(form);
+    else addChannel(form);
   });
 
   // Media events do not bubble, so they are caught on the way down - and

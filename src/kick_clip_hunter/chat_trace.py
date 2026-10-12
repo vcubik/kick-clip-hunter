@@ -232,18 +232,22 @@ def _percent(part: float, whole: float) -> str:
 
 
 def message_counts(
-    messages: Iterable[Row], timeline: Timeline, laugh_names: Iterable[str] = ()
+    messages: Iterable[Row],
+    timeline: Timeline,
+    laugh_names: Iterable[str] = (),
+    laugh_patterns: Iterable[str] = (),
 ) -> tuple[list[int], list[int]]:
     """Messages in each second of the timeline: all of them, and the
-    laughing ones (see detector.is_laughing)."""
-    laugh_names = tuple(laugh_names)
+    laughing ones (see detector.is_laughing). `laugh_patterns` are what the
+    channel has of its own to tell a laughing emote by."""
+    laugh_names, laugh_patterns = tuple(laugh_names), tuple(laugh_patterns)
     size = max(1, math.ceil(timeline.seconds))
     everything, laughing = [0] * size, [0] * size
     for message in messages:
         second = math.floor(timeline.at(_arrived(message)) - timeline.start)
         if 0 <= second < size:
             everything[second] += 1
-            if is_laughing(message["content"] or "", laugh_names):
+            if is_laughing(message["content"] or "", laugh_names, laugh_patterns):
                 laughing[second] += 1
     return everything, laughing
 
@@ -449,17 +453,20 @@ def spark_span(window_start: datetime) -> tuple[datetime, datetime]:
 
 
 def spark_counts(
-    messages: Iterable[Row], window_start: datetime, laugh_names: Iterable[str] = ()
+    messages: Iterable[Row],
+    window_start: datetime,
+    laugh_names: Iterable[str] = (),
+    laugh_patterns: Iterable[str] = (),
 ) -> tuple[list[int], list[int]]:
     """Messages in each step of a spark: all of them, and the laughing ones."""
-    laugh_names = tuple(laugh_names)
+    laugh_names, laugh_patterns = tuple(laugh_names), tuple(laugh_patterns)
     start, _end = spark_span(window_start)
     everything, laughing = [0] * SPARK_STEPS, [0] * SPARK_STEPS
     for message in messages:
         step = math.floor((_arrived(message) - start).total_seconds() / SPARK_STEP_SECONDS)
         if 0 <= step < SPARK_STEPS:
             everything[step] += 1
-            if is_laughing(message["content"] or "", laugh_names):
+            if is_laughing(message["content"] or "", laugh_names, laugh_patterns):
                 laughing[step] += 1
     return everything, laughing
 
@@ -484,14 +491,19 @@ def spark_paths(everything: list[int], laughing: list[int], top: int) -> dict[st
 
 
 def queue_activity(
-    messages: Iterable[Row], window: tuple[datetime, datetime], emote_names: Iterable[str] = ()
+    messages: Iterable[Row],
+    window: tuple[datetime, datetime],
+    emote_names: Iterable[str] = (),
+    laugh_patterns: Iterable[str] = (),
 ) -> dict[str, Any]:
     """What a queue row shows of chat around its moment: the two series of
     its spark, and what was said most while the moment lasted. `emote_names`
-    are the channel's own 7TV emote names, lowercased."""
+    are the channel's own 7TV emote names, lowercased, and `laugh_patterns`
+    what it has of its own to tell a laughing emote by."""
     messages = list(messages)
-    emote_names = tuple(emote_names)
-    everything, laughing = spark_counts(messages, window[0], laugh_emote_names(emote_names))
+    emote_names, laugh_patterns = tuple(emote_names), tuple(laugh_patterns)
+    laugh_names = laugh_emote_names(emote_names, laugh_patterns)
+    everything, laughing = spark_counts(messages, window[0], laugh_names, laugh_patterns)
     said = reaction_words((message for message in messages if _during(message, window)), emote_names)
     return {"all": everything, "laugh": laughing, "said": said}
 

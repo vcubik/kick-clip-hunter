@@ -12,6 +12,7 @@ import asyncio
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -146,6 +147,12 @@ class Service:
         self.api = api
         self.signer = signer
         self._user_ids: dict[str, int] = {}
+        # The two limits a moment session measures on the wall clock, in real
+        # seconds (see the `service` fixture). A test that needs a moment to
+        # stay open longer, or to reach its cap sooner, sets them before chat
+        # reacts.
+        self.quiet_seconds = 0.05
+        self.max_open_seconds = 2.0
 
     def watch(
         self,
@@ -250,13 +257,23 @@ async def service(kick_api: FakeKickApi, signer: WebhookSigner, monkeypatch: pyt
 
     # main.py's waits are real seconds in production (post-roll footage,
     # session polling); run them a thousand times faster here. The two limits
-    # it measures on the wall clock are shortened to match.
+    # a moment session measures on the wall clock can't be compressed that
+    # way, so every session the service opens has them shortened to match -
+    # whatever the channel's settings, which are otherwise left as they are.
     monkeypatch.setattr(main, "asyncio", FastSleep(speedup=1000))
-    monkeypatch.setattr(main, "MOMENT_SESSION_QUIET_SECONDS", 0.05)
-    monkeypatch.setattr(main, "MOMENT_SESSION_MAX_SECONDS", 2.0)
     transport = httpx.ASGITransport(app=main.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield Service(main, client, kick_api, signer)
+        service = Service(main, client, kick_api, signer)
+        open_session = main._MomentSession
+
+        def quick_session(**fields):
+            fields["tuned"] = replace(
+                fields["tuned"], quiet_seconds=service.quiet_seconds, max_open_seconds=service.max_open_seconds
+            )
+            return open_session(**fields)
+
+        monkeypatch.setattr(main, "_MomentSession", quick_session)
+        yield service
         # Nothing the test started may outlive it on this event loop.
         leftovers = list(main._background_tasks)
         for task in leftovers:

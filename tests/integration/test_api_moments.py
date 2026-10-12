@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, detector, recorder
+from kick_clip_hunter import db, detector, recorder, tuning
 from kick_clip_hunter.kick_stream import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
 
@@ -156,9 +157,9 @@ class TestDetection:
 
 
 class TestMomentSession:
-    async def test_a_moment_stays_open_until_the_reaction_has_been_quiet(self, service, monkeypatch):
+    async def test_a_moment_stays_open_until_the_reaction_has_been_quiet(self, service):
         # Long enough that the session is certainly still open when checked.
-        monkeypatch.setattr(service.main, "MOMENT_SESSION_QUIET_SECONDS", 0.5)
+        service.quiet_seconds = 0.5
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
 
@@ -178,12 +179,12 @@ class TestMomentSession:
         (moment,) = service.moments()
         assert window(moment) == WINDOW
 
-    async def test_new_people_joining_in_after_the_trigger_extend_it(self, service, monkeypatch):
+    async def test_new_people_joining_in_after_the_trigger_extend_it(self, service):
         # A fresh crowd keeps the reaction "active" for as long as their
         # laughs stay in the detector's short window, so this session ends at
         # its hard cap - which is shortened here to keep the test quick.
-        monkeypatch.setattr(service.main, "MOMENT_SESSION_QUIET_SECONDS", 5.0)
-        monkeypatch.setattr(service.main, "MOMENT_SESSION_MAX_SECONDS", 1.0)
+        service.quiet_seconds = 5.0
+        service.max_open_seconds = 1.0
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -196,8 +197,8 @@ class TestMomentSession:
         (moment,) = service.moments()
         assert window(moment) > WINDOW
 
-    async def test_one_straggler_does_not_extend_it(self, service, monkeypatch):
-        monkeypatch.setattr(service.main, "MOMENT_SESSION_QUIET_SECONDS", 0.2)
+    async def test_one_straggler_does_not_extend_it(self, service):
+        service.quiet_seconds = 0.2
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -211,7 +212,7 @@ class TestMomentSession:
 
     async def test_a_re_fire_while_a_moment_is_open_does_not_open_a_second_one(self, service, monkeypatch):
         monkeypatch.setattr(detector, "COOLDOWN_SECONDS", 0)  # let every further laugh re-fire
-        monkeypatch.setattr(service.main, "MOMENT_SESSION_QUIET_SECONDS", 1.0)
+        service.quiet_seconds = 1.0
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
 
@@ -286,6 +287,8 @@ def clip_cutter(service, monkeypatch):
         def __init__(self) -> None:
             self.clip_error: Exception | None = None
             self.clip_calls: list = []
+            # How each clip was asked to be framed, as the recorder takes it.
+            self.framings: list[dict] = []
             # Seconds of footage the file is said to hold before and after
             # the clip. None by default: the placeholder is not a video a
             # clip could be cut out of for the analysis steps.
@@ -293,8 +296,9 @@ def clip_cutter(service, monkeypatch):
 
     cutter = Cutter()
 
-    async def create_clip(channel, start, end, name, post_roll_seconds):
-        cutter.clip_calls.append((channel, start, end, name, post_roll_seconds))
+    async def create_clip(channel, start, end, name, **framing):
+        cutter.clip_calls.append((channel, start, end, name, framing["post_roll_seconds"]))
+        cutter.framings.append(framing)
         if cutter.clip_error is not None:
             raise cutter.clip_error
         path = recorder.CLIPS_DIR / channel / name
@@ -307,8 +311,9 @@ def clip_cutter(service, monkeypatch):
 
 
 class TestCuttingTheClip:
-    async def cut(self, service, moment_id: int, post_roll: int = 10) -> None:
-        await service.main._create_clip_background(moment_id, CHANNEL, START, END, post_roll_seconds=post_roll)
+    async def cut(self, service, moment_id: int, post_roll: int = 10, **settings) -> None:
+        tuned = replace(tuning.recommended(), post_roll_seconds=post_roll, **settings)
+        await service.main._create_clip_background(moment_id, CHANNEL, START, END, tuned)
         await service.settle()
 
     async def test_the_clip_is_cut_for_the_moments_window_and_recorded_on_it(self, service, moment, clip_cutter):
@@ -422,7 +427,7 @@ class TestPerClipAnalysis:
         return ran, results
 
     async def cut(self, service, moment_id: int):
-        await service.main._create_clip_background(moment_id, CHANNEL, START, END, post_roll_seconds=10)
+        await service.main._create_clip_background(moment_id, CHANNEL, START, END, tuning.recommended())
         await service.settle()
         (row,) = service.moments()
         return row

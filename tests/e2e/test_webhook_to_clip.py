@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import detector, recorder, recording_manager
+from kick_clip_hunter import detector, recorder, recording_manager, tuning
 from tests.support.hls import Segment
 from tests.support.html import parse
 from tests.support.media import decodes_cleanly, probe
@@ -36,8 +36,8 @@ CONTEXT_BEFORE, CONTEXT_AFTER = 3, 4
 def scaled_down_clip_geometry(service, monkeypatch):
     """Production keeps 15s before a reaction, 10s after and 30s/60s of
     context; the test stream is 40s long."""
-    monkeypatch.setattr(recording_manager, "PRE_ROLL_SECONDS", PRE_ROLL)
-    monkeypatch.setattr(service.main, "DYNAMIC_POST_ROLL_SECONDS", POST_ROLL)
+    monkeypatch.setattr(recorder, "PRE_ROLL_SECONDS", PRE_ROLL)
+    monkeypatch.setattr(tuning, "DYNAMIC_POST_ROLL_SECONDS", POST_ROLL)
     monkeypatch.setattr(recorder, "PLAYBACK_DELAY_SECONDS", DELAY)
     monkeypatch.setattr(recorder, "CONTEXT_BEFORE_SECONDS", CONTEXT_BEFORE)
     monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", CONTEXT_AFTER)

@@ -165,6 +165,55 @@ class TestClipWindow:
 
         assert segments[-1].started_at < at(110)
 
+    def test_a_channel_can_have_a_playback_delay_of_its_own(self, rec):
+        fill(rec, 0, 200)
+        own = recorder.PLAYBACK_DELAY_SECONDS + 20
+
+        _before, usual, _after = recorder._moment_segments(rec, at(100), at(110), 0, 0)
+        _before, shifted, _after = recorder._moment_segments(rec, at(100), at(110), 0, 0, playback_delay_seconds=own)
+
+        assert offsets(shifted) == [offset - 20 for offset in offsets(usual)]
+
+    def test_a_delay_of_nothing_is_a_delay_too(self, rec):
+        # None means "what is recommended"; 0 means the clip is cut where
+        # chat reacted.
+        fill(rec, 0, 200)
+
+        _before, clip, _after = recorder._moment_segments(rec, at(101), at(109), 0, 0, playback_delay_seconds=0)
+
+        assert offsets(clip) == [100, 102, 104, 106, 108]
+
+    def test_and_context_as_long_as_it_wants_either_side(self, rec):
+        fill(rec, 0, 400)
+        delay = recorder.PLAYBACK_DELAY_SECONDS
+
+        before, clip, after = recorder._moment_segments(
+            rec, at(200 + delay), at(210 + delay), 0, 0, context_before_seconds=8, context_after_seconds=4
+        )
+
+        first, last = offsets(clip)[0], offsets(clip)[-1] + 2
+        assert offsets(before) == [first - 8, first - 6, first - 4, first - 2]
+        assert offsets(after) == [last, last + 2]
+
+    def test_or_none_at_all(self, rec):
+        fill(rec, 0, 400)
+
+        before, clip, after = recorder._moment_segments(
+            rec, at(200), at(210), 5, 5, context_before_seconds=0, context_after_seconds=0
+        )
+
+        assert (before, after) == ([], [])
+        assert clip
+
+    def test_left_unsaid_they_are_what_the_constants_say(self, rec, monkeypatch):
+        fill(rec, 0, 400)
+        monkeypatch.setattr(recorder, "CONTEXT_BEFORE_SECONDS", 6)
+        monkeypatch.setattr(recorder, "CONTEXT_AFTER_SECONDS", 2)
+
+        before, _clip, after = recorder._moment_segments(rec, at(200), at(210), 0, 0)
+
+        assert (len(before), len(after)) == (3, 1)
+
     def test_no_footage_for_the_window_is_an_error(self, rec):
         fill(rec, 0, 20)
 

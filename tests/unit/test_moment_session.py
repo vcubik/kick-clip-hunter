@@ -8,15 +8,16 @@ can be walked through here second by second without waiting for any of it.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import main
+from kick_clip_hunter import main, tuning
 
 TRIGGER = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-QUIET = main.MOMENT_SESSION_QUIET_SECONDS
-MAX = main.MOMENT_SESSION_MAX_SECONDS
+QUIET = tuning.MOMENT_SESSION_QUIET_SECONDS
+MAX = tuning.MOMENT_SESSION_MAX_SECONDS
 
 
 def after(seconds: float) -> datetime:
@@ -33,6 +34,7 @@ def session() -> main._MomentSession:
         window_end=TRIGGER,
         last_active=TRIGGER,
         triggered_at=0.0,
+        tuned=tuning.recommended(),
     )
 
 
@@ -91,14 +93,28 @@ def test_the_cap_is_measured_from_the_trigger_not_from_the_last_activity(session
     assert main._session_should_close(session, False, after(MAX)) is True
 
 
+def test_a_channel_with_limits_of_its_own_is_held_to_those(session):
+    session.tuned = replace(session.tuned, quiet_seconds=QUIET * 2, max_open_seconds=MAX * 3)
+
+    assert main._session_should_close(session, False, after(QUIET * 2 - 0.1)) is False
+    assert main._session_should_close(session, False, after(QUIET * 2)) is True
+
+
+def test_and_so_is_its_cap(session):
+    session.tuned = replace(session.tuned, quiet_seconds=QUIET, max_open_seconds=MAX / 2)
+
+    assert main._session_should_close(session, True, after(MAX / 2 - 1)) is False
+    assert main._session_should_close(session, True, after(MAX / 2)) is True
+
+
 def test_the_quiet_period_fits_inside_the_cap():
     # Otherwise every moment would run to the cap and "quiet" would mean nothing.
-    assert 0 < main.MOMENT_SESSION_POLL_SECONDS < QUIET < MAX
+    assert 0 < tuning.MOMENT_SESSION_POLL_SECONDS < QUIET < MAX
 
 
 def test_walking_through_a_typical_extended_moment(session):
     """Chat keeps reacting for nine seconds after the trigger, then stops."""
-    poll = main.MOMENT_SESSION_POLL_SECONDS
+    poll = tuning.MOMENT_SESSION_POLL_SECONDS
     reacting_until = 9
     second = 0.0
     while True:

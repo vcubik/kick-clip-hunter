@@ -206,6 +206,14 @@ class TestMessageCounts:
 
         assert sum(chat_trace.message_counts(messages, TIMELINE)[1]) == 0
 
+    def test_an_emote_the_channel_tells_laughing_by_counts_too(self):
+        messages = [message(5, "[emote:1:pepeSmich]"), message(6, "[emote:2:asmonSmash]")]
+
+        without = chat_trace.message_counts(messages, TIMELINE)[1]
+        added = chat_trace.message_counts(messages, TIMELINE, laugh_patterns=["smich"])[1]
+
+        assert (sum(without), added[35], added[36]) == (0, 1, 0)
+
     def test_a_message_without_text_is_still_a_message(self):
         messages = [{"received_at": chat_at(2).isoformat(), "sender_username": None, "content": None}]
 
@@ -575,6 +583,16 @@ class TestAQueueRowsActivity:
         assert sum(activity["all"]) == 6
         assert sum(activity["laugh"]) == 2
         assert activity["said"] == f"KEKW {TIMES}2"
+
+    def test_the_spark_counts_what_the_channel_tells_laughing_by(self):
+        # The channel's own emote, typed by name and posted as Kick's.
+        messages = [message(21, "pepeSmich"), message(22, "[emote:1:pepeSmich]"), message(23, "sadge")]
+
+        usual = chat_trace.queue_activity(messages, self.WINDOW, ["pepesmich", "sadge"])
+        added = chat_trace.queue_activity(messages, self.WINDOW, ["pepesmich", "sadge"], ["smich"])
+
+        assert (sum(usual["laugh"]), sum(added["laugh"])) == (0, 2)
+        assert sum(added["all"]) == 3
 
     def test_a_quiet_moment_has_a_flat_spark_and_no_word(self):
         activity = chat_trace.queue_activity([], self.WINDOW)

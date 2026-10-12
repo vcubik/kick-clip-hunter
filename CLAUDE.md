@@ -15,6 +15,8 @@ them, and a clip is automatically cut from a rolling local recording buffer. See
 Core pipeline is working end-to-end: webhook ingestion, SQLite storage, the detection
 heuristic, automated clip recording, and a web dashboard. The detector is still being
 actively tuned against real streams — expect its thresholds/weights to keep changing.
+The constants in the code are what is recommended; what a channel really runs on can be
+set from the dashboard's Settings page (see `tuning.py` below).
 
 ## Setup & running
 
@@ -70,9 +72,11 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
     exactly what CI runs; the one command before opening a PR for a larger change
   - `replay_chat.py <slug> [--since ISO] [--until ISO] [--set NAME=VALUE ...]` — replays a
     channel's stored chat through the detector on the messages' own clock and reports how
-    many moments would have fired and how long their clips would have been, optionally
-    with detector constants overridden for comparison. The way to check a threshold change
-    against a real stream before running it live; read-only.
+    many moments would have fired and how long their clips would have been - under the
+    settings saved for the channel, and optionally with detector constants overridden for
+    comparison. The way to check a threshold change against a real stream before running
+    it live; read-only. The Settings page's "Try on stored chat" is the same replay
+    (`replay.py`) run on the values in its form.
   - `join_context_clips.py [--dry-run]` — one-off for moments from before a moment had
     one video file: joins each clip with the `_before`/`_after` context clips next to it
     into one file, in the clip's place, without re-encoding, and records where the clip
@@ -101,7 +105,13 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below). `GET /dashboard/channels` has the
-  watchlist, the per-clip analysis switches and shutdown. Neither reloads on its own; the
+  watchlist, the per-clip analysis switches and shutdown. `GET /dashboard/settings` is where
+  detection and clips are tuned: one form of settings (see `tuning.py`), for all channels
+  or - chosen at the top - for one of the watchlist's, which goes by its own values once
+  its "Own settings" switch is on. Each setting has a button that puts back what it would
+  be if left alone (what is recommended, or for a channel what all channels have), the form
+  is saved as a whole, and "Try on stored chat" replays a channel's newest chat under the
+  saved settings and under the form's, without saving anything. No page reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`). An empty queue is the normal state, so that page
   then says what the service is doing instead.
@@ -122,7 +132,7 @@ Watchlist (streamers)
     -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
-       chat_identities
+       chat_identities, tuning
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
        clip from that buffer, path stored back on the moment
@@ -144,10 +154,35 @@ Module map (`src/kick_clip_hunter/`):
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
   `ALTER TABLE`s in `get_connection()`, not a migration framework
 - `detector.py` — the heuristic engine; its module docstring is the source of truth for
-  how detection works, don't duplicate that explanation here
+  how detection works, don't duplicate that explanation here. Its constants are the
+  recommended values; what can differ per channel is passed in as `detector.Settings`
+  (`recommended()` is the constants, read when it is called)
+- `tuning.py` — what can be set from the Settings page, for all channels or for one. Pure.
+  `Tuning` is everything a setting can change for a channel: the detector's settings, how
+  long a moment stays open, how its clip is framed. `SETTINGS` is the list on offer - what
+  each is called on the page, what it may be, which fields of a `Tuning` it sets (one
+  setting can set two: the lull that ends a moment is also the detector's cooldown) - and
+  the rest is values on their way in and out: checked as posted, read back from the
+  `tuning` table (JSON by name; owner 0 for all channels, a channel's id for its own), laid
+  over each other. Only what differs from what it would be anyway is stored, so an
+  untouched setting keeps following the code, and a channel keeps following all channels.
+  The moment session's recommended timing lives here too (`MOMENT_SESSION_*`,
+  `DYNAMIC_POST_ROLL_SECONDS`), since both `main.py` and the replay need it. Nothing is
+  applied to the past: the webhook resolves the channel's settings for every message, and
+  an open moment keeps the ones it fired with, down to how its clip is cut
+- `replay.py` — a channel's stored chat fed through the detector and the moment-session
+  rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`
+  and the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`
+  - the newest 10,000 messages, in a worker thread, one trial at a time). Each run is a
+  channel of its own to the detector, so a replay inside the running service leaves live
+  channels' state alone
 - `timeutil.py` — UTC-to-local-time display helper
 - `main.py` — FastAPI app: webhook receiver + the dashboard's routes + wires moment
-  detection to clip extraction
+  detection to clip extraction. Settings are saved through `POST /tuning` (all channels),
+  `POST /channels/{slug}/tuning` (a channel's own) and `POST
+  /channels/{slug}/own_tuning` (whether it goes by them); what is stored is kept in memory
+  (`_tuning_values`) and dropped on every save, together with the keyword weights worked
+  out from it
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page
@@ -202,7 +237,7 @@ Module map (`src/kick_clip_hunter/`):
   where the page's own script is not visible - hence `isolated_context=False`. The file
   is large by nature (roughly 3-4 MB per second of clip)
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
-  `review.html`, `channels.html`, and `_moment.html` - the open moment, which is also
+  `review.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
   without reloading. `_chat_line.html` is one line of chat, shared by the review page and
   by `chat_video.html`, the page a chat video is made from
@@ -210,7 +245,8 @@ Module map (`src/kick_clip_hunter/`):
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
   open moment's markup gets replaced; it also runs the Trim dialog, whose strip and chat
-  are copied from the page's when it is opened) and the bundled typeface, Archivo, with its
+  are copied from the page's when it is opened, and the Settings form, which it posts as a
+  whole and then fetches again) and the bundled typeface, Archivo, with its
   licence;
   `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
@@ -284,13 +320,20 @@ Module map (`src/kick_clip_hunter/`):
   rate produces technically-correct but meaningless triple-digit scores otherwise.
 - Moments should be *rare*. A low detection rate is success, not a bug — don't loosen
   thresholds just because a channel goes a long time without one.
+- A channel's stored 7TV keywords are weighed under its settings when they are loaded
+  (`detector.keyword_weights`), but which names are listened for at all is still decided
+  only when its emote set is fetched (`classify_emote_names`) - a settings change never
+  adds or drops a stored name by the built-in rules.
+- The lull setting cannot go as low as the detector's short window: laughs that arrive
+  right after a moment fired are still in that window when a cooldown no longer than it
+  runs out, and would fire a second moment by themselves (`tuning.LULL_MIN_SECONDS`).
 
 ## Testing
 
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (1400+ tests, a few minutes); `python
+- `python -m pytest` runs everything (1700+ tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -309,6 +352,12 @@ run what, the manual live checklist). What matters when changing code:
 - Detector tests are written against `detector.py`'s constants, not their current values, so
   retuning a threshold doesn't break them. If a tuning change does fail a test, it changed a
   rule, not a number - check that was intended.
+- A constant patched with `monkeypatch` still reaches the service, because what is
+  recommended is read when it is asked for (`tuning.recommended()`); a test about a channel's
+  *own* settings saves them through the API or builds a `detector.Settings` / `tuning.tuned`.
+  The `service` fixture leaves all constants alone and shortens only the two wall-clock
+  limits of the moment sessions the service opens (`service.quiet_seconds`,
+  `service.max_open_seconds`).
 - `tests/` is kept formatter-clean (`python -m ruff format tests`); application code is only
   linted.
 - Not covered, and why: the browser-driven parts (`kick_stream.py`, `clip_creator.create_clip`,

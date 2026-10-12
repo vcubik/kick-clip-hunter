@@ -1,7 +1,8 @@
 {#- A switch is two halves, Off and On; the lit half is the state. The script
-    posts the half that was pressed to `url`. -#}
-{% macro switch(label, url, enabled, disabled=false) -%}
-<span class="ch-switch" role="group" aria-label="{{ label }}" data-switch="{{ url }}">
+    posts the half that was pressed to `url` - and, where what it switches
+    changes what the page says (`reloads`), fetches the page again. -#}
+{% macro switch(label, url, enabled, disabled=false, reloads=false) -%}
+<span class="ch-switch" role="group" aria-label="{{ label }}" data-switch="{{ url }}"{% if reloads %} data-switch-reloads{% endif %}>
   <button type="button" aria-pressed="{{ 'false' if enabled else 'true' }}" data-enabled="0"{% if disabled %} disabled{% endif %}>Off</button>
   <button type="button" aria-pressed="{{ 'true' if enabled else 'false' }}" data-enabled="1"{% if disabled %} disabled{% endif %}>On</button>
 </span>
