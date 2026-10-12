@@ -216,8 +216,8 @@ tries to step outside:
 | When | What | How long |
 |---|---|---|
 | While working on one module | That module's test file (`python -m pytest tests/unit/test_recorder_buffer.py`) | seconds |
-| Before every commit | The whole suite: `python -m pytest` | under a minute |
-| Before opening a pull request | Everything CI will run: `python scripts/check.py` | about a minute |
+| Before opening a pull request for a small change | Lint (`python -m ruff check`, `python -m ruff format --check tests`) and the test files for what was changed; CI runs the rest | seconds |
+| Before opening a pull request for a larger change (the recorder, the detector, several modules at once) | Everything CI will run: `python scripts/check.py` | a few minutes |
 | On every push and pull request | Automatically, in CI: lint, then the suite with coverage on Windows and on Linux | a few minutes |
 | Every Monday | Automatically, in CI: the same run against whatever the unpinned dependencies have become | - |
 | After changing a detector threshold or weight | The suite, then [`replay_chat.py`](#checking-a-detector-change-against-a-real-stream) on a recent stream, before and after | seconds |

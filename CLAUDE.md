@@ -67,7 +67,7 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   - `import_clips_dir.py <folder> [channel_slug]` — same as `import_clip.py`, but for
     every video file in a folder at once (`channel_slug` defaults to `unknown`)
   - `check.py [pytest args]` — lint, test formatting and the test suite with coverage, i.e.
-    exactly what CI runs; the one command before opening a PR
+    exactly what CI runs; the one command before opening a PR for a larger change
   - `replay_chat.py <slug> [--since ISO] [--until ISO] [--set NAME=VALUE ...]` — replays a
     channel's stored chat through the detector on the messages' own clock and reports how
     many moments would have fired and how long their clips would have been, optionally
@@ -290,10 +290,13 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (700+ tests, well under a minute); `python
+- `python -m pytest` runs everything (1400+ tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
-  Linux, and fails under 90 % coverage. Run `check.py` before opening a PR.
+  Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
+  check`, `python -m ruff format --check tests`) and the test files for what was changed,
+  and leave the whole suite to CI - except for a larger change (the recorder, the
+  detector, anything spanning several modules), where `check.py` is run first.
 - The suite is hermetic by construction (`tests/conftest.py`): it runs in a throwaway working
   directory with its own database per test, and any attempt to reach a non-loopback host,
   launch a browser or exit the process fails the test. It is safe to run while the live
@@ -386,7 +389,9 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 
 - Every change goes on its own feature branch with a PR — don't push straight to
   `master`, and don't merge without an explicit go-ahead from the user.
-- Tests and lint pass before a PR is opened, and its CI run is green before it is merged.
+- Lint and the tests for what was changed pass before a PR is opened (the whole of
+  `check.py` for a larger change - see "Testing"), and its CI run is green before it is
+  merged.
 - Squash-merge, then delete the branch (local and remote) and sync `master`.
 - Don't hardcode the current watchlist's specific streamer names in PR descriptions or
   test plans — the watchlist changes constantly, so describe test coverage generically.
