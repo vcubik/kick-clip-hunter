@@ -46,21 +46,27 @@ MOMENT_PADDING_SECONDS = 2
 # How long after a frame was broadcast the people in chat are taken to have
 # seen it. A message is put this far back from when it arrived, onto the
 # picture its writer was looking at - so that a laugh lands just after what
-# caused it. It can't be measured from here: it is the player's buffer,
-# usually a few seconds, plus any delay the streamer has set. So this is only
-# where a channel starts out, and the review page moves a channel's chat
-# either way, between the two limits.
+# caused it. It isn't measured from here: it is the player's buffer, which
+# differs from one viewer to the next. So this is only where a channel starts
+# out, and the review page moves a channel's chat either way, between the two
+# limits. A delay the streamer has set on their own side doesn't come into
+# it: that is added before the stream's clock is stamped, so viewers are no
+# further behind that clock for it.
 #
-# It starts out at 0: chat where it arrived. That is the one placement there
-# is something to check against - a streamer's own on-screen chat shows a
-# message as it arrives - and against it both 10s and 5s put chat visibly
-# early. Even at 0 a message turned up two or three seconds before it did in
-# the picture (the stream's clock and the arrival of a chat message are not
-# measured at the same point), which is why the delay can go below 0.
+# It starts out at 3: Kick's player, in its low-latency mode, reports showing
+# a frame a little over two seconds after its place on the stream's clock,
+# and a viewer on a phone or a slower connection is further behind than that.
+# The time it then takes to react and type is not counted.
+#
+# This is not where a streamer's own on-screen chat shows the message. That
+# shows it as it arrives, and it then turned up in the picture two or three
+# seconds after its arrival (the stream's clock and the arrival of a chat
+# message are not measured at the same point) - lining chat up with that
+# takes a delay below 0, which is why the lower limit is.
 #
 # Not recorder.PLAYBACK_DELAY_SECONDS on purpose: that one frames the clip,
 # where reaching back too far costs nothing, and is on the long side.
-CHAT_DELAY_SECONDS = 0
+CHAT_DELAY_SECONDS = 3
 CHAT_DELAY_MIN_SECONDS = -10
 CHAT_DELAY_MAX_SECONDS = 60
 

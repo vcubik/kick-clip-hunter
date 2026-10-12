@@ -97,7 +97,7 @@ actively tuned against real streams — expect its thresholds/weights to keep ch
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
   their badges in front of it. Where a message belongs against the picture is a guess (to
-  start with, the frame broadcast as it arrived), so under the chat is a slider that
+  start with, the frame broadcast 3s before it arrived), so under the chat is a slider that
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below). `GET /dashboard/channels` has the
@@ -156,12 +156,12 @@ Module map (`src/kick_clip_hunter/`):
   said most in a moment ("KEKW x31"). Pure, like `dashboard_view.py`. "Clip time" is
   seconds from the clip's first frame; a clip's start is stored on the stream's program
   clock (`moments.clip_start`, with `clip_duration`), and chat is taken to have seen
-  each frame `CHAT_DELAY_SECONDS` later - an assumption, since the real figure is the
-  player's buffer plus any delay the streamer has set, so it can be set per channel from
+  each frame `CHAT_DELAY_SECONDS` later - an assumption, since the real figure is each
+  viewer's player buffer, so it can be set per channel from
   the review page (`POST /channels/{slug}/chat_delay`, kept in `app_settings`). It is not
   the recorder's `PLAYBACK_DELAY_SECONDS`, which frames clips and is on the long side. It
-  starts at 0 - chat where it arrived, the one placement a streamer's own on-screen chat
-  lets you check - and can go a little below. Clips cut before those
+  starts at 3s - about what Kick's player reports for its latency, with a little room -
+  and can go below 0, which is where a streamer's own on-screen chat lines up. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
   are placed by estimate: centred on the window they were cut for
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
