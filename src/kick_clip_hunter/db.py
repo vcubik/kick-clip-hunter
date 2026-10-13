@@ -702,6 +702,296 @@ def get_chat_name(conn: sqlite3.Connection, broadcaster_user_id: int) -> str | N
     return row[0] if row else None
 
 
+# -- a channel's stored chat as a whole (the Analyze page, see chat_stats.py) --
+#
+# A stretch of chat is given as when it starts and when it ends, and holds
+# what arrived from the start up to, but not at, the end - so two stretches
+# that follow each other share no message. The bounds are compared as text,
+# as in get_chat_between.
+
+# How many rows of a channel's chat one statement reads at a time.
+CHAT_CHUNK = 20_000
+
+
+def _folded(text: str | None) -> str:
+    return (text or "").casefold()
+
+
+def _chat_filter(
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    start: datetime,
+    end: datetime,
+    sender: str | None = None,
+    text: str | None = None,
+) -> tuple[str, list]:
+    """The WHERE clause, and its parameters, for a stretch of a channel's
+    chat - narrowed to what one chatter wrote (`sender`, in whatever case)
+    and to the messages that have `text` in them, however that is capitalised
+    in either."""
+    conditions = ["broadcaster_user_id = ?", "received_at >= ?", "received_at < ?"]
+    params: list = [broadcaster_user_id, start.astimezone(timezone.utc).isoformat()]
+    params.append(end.astimezone(timezone.utc).isoformat())
+    if sender:
+        conditions.append("sender_username = ? COLLATE NOCASE")
+        params.append(sender)
+    if text:
+        # SQLite's own LIKE folds the case of A to Z and nothing else, which
+        # is not enough for a chat that is not written in English.
+        conn.create_function("folded", 1, _folded, deterministic=True)
+        conditions.append("instr(folded(content), ?) > 0")
+        params.append(text.casefold())
+    return "WHERE " + " AND ".join(conditions), params
+
+
+def get_chat_channel_ids(conn: sqlite3.Connection) -> list[int]:
+    """The id of every channel that has chat stored, on the watchlist or not.
+
+    Asked on every load of a page, so it must not read all of the chat to
+    tell a handful of channels apart: it steps through the index from one
+    channel's first entry to the next one's."""
+    rows = conn.execute(
+        """
+        WITH RECURSIVE channel(id) AS (
+            SELECT MIN(broadcaster_user_id) FROM chat_messages
+            UNION ALL
+            SELECT (SELECT MIN(broadcaster_user_id) FROM chat_messages WHERE broadcaster_user_id > channel.id)
+            FROM channel WHERE channel.id IS NOT NULL
+        )
+        SELECT id FROM channel WHERE id IS NOT NULL
+        """
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def get_chat_span(conn: sqlite3.Connection, broadcaster_user_id: int) -> tuple[str, str] | None:
+    """When a channel's oldest and newest stored messages arrived, or None
+    if it has none."""
+    ends = [
+        conn.execute(
+            f"SELECT received_at FROM chat_messages WHERE broadcaster_user_id = ? ORDER BY received_at {order} LIMIT 1",
+            (broadcaster_user_id,),
+        ).fetchone()
+        for order in ("ASC", "DESC")
+    ]
+    return (ends[0][0], ends[1][0]) if ends[0] else None
+
+
+def get_chat_sessions(
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    *,
+    gap_seconds: float,
+    min_messages: int,
+    min_seconds: float,
+    limit: int,
+    newest: int,
+) -> list[sqlite3.Row]:
+    """A channel's chat as the sessions it came in, the newest first: when
+    the first and the last message of each arrived, and how many there were.
+    A session is chat with no silence longer than `gap_seconds` in it; one
+    of fewer than `min_messages`, or one that is over within `min_seconds`,
+    is left out, and at most `limit` are returned. Only the `newest` that
+    many messages are looked at, so that the cost does not grow with
+    everything that was ever stored."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        WITH timed AS (
+            SELECT received_at, julianday(received_at) AS day FROM (
+                SELECT received_at FROM chat_messages
+                WHERE broadcaster_user_id = ? ORDER BY received_at DESC LIMIT ?
+            )
+        ), stepped AS (
+            SELECT received_at, day - LAG(day) OVER (ORDER BY received_at) AS silence FROM timed
+        ), numbered AS (
+            SELECT received_at, SUM(silence IS NOT NULL AND silence > ?) OVER (ORDER BY received_at) AS session
+            FROM stepped
+        )
+        SELECT MIN(received_at) AS first, MAX(received_at) AS last, COUNT(*) AS messages
+        FROM numbered GROUP BY session
+        HAVING COUNT(*) >= ? AND julianday(MAX(received_at)) - julianday(MIN(received_at)) >= ?
+        ORDER BY session DESC LIMIT ?
+        """,
+        (broadcaster_user_id, newest, gap_seconds / 86400, min_messages, min_seconds / 86400, limit),
+    ).fetchall()
+
+
+def count_channel_chat(
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    sender: str | None = None,
+    text: str | None = None,
+) -> int:
+    """How many messages a stretch of a channel's chat holds (see
+    _chat_filter)."""
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end, sender, text)
+    return conn.execute(f"SELECT COUNT(*) FROM chat_messages {where}", params).fetchone()[0]
+
+
+def iter_channel_chat(
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    limit: int,
+    sender: str | None = None,
+    text: str | None = None,
+) -> Iterable[sqlite3.Row]:
+    """A stretch of a channel's chat (see _chat_filter), the newest message
+    first and at most `limit` of them.
+
+    It is read a chunk at a time, each with a statement that is over before
+    its rows are handed out: a statement left open while its rows are worked
+    through keeps the database locked against the webhook's writes for as
+    long as that takes. The stretch must not reach into the future, or a
+    message arriving meanwhile would move the ones behind it."""
+    conn.row_factory = sqlite3.Row
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end, sender, text)
+    handed_out = 0
+    while handed_out < limit:
+        rows = conn.execute(
+            f"""
+            SELECT message_id, received_at, sender_username, content FROM chat_messages {where}
+            ORDER BY received_at DESC LIMIT ? OFFSET ?
+            """,
+            (*params, min(CHAT_CHUNK, limit - handed_out), handed_out),
+        ).fetchall()
+        yield from rows
+        handed_out += len(rows)
+        if len(rows) < CHAT_CHUNK:
+            return
+
+
+def search_channel_chat(
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    sender: str | None = None,
+    text: str | None = None,
+    newest_first: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """One page of what a search of a stretch of a channel's chat finds (see
+    _chat_filter; count_channel_chat says how many that is in all)."""
+    conn.row_factory = sqlite3.Row
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end, sender, text)
+    return conn.execute(
+        f"""
+        SELECT message_id, received_at, sender_username, content FROM chat_messages {where}
+        ORDER BY received_at {"DESC" if newest_first else "ASC"} LIMIT ? OFFSET ?
+        """,
+        (*params, limit, offset),
+    ).fetchall()
+
+
+def get_chat_around(
+    conn: sqlite3.Connection, broadcaster_user_id: int, message_id: str, *, before: int, after: int
+) -> list[sqlite3.Row] | None:
+    """A message of a channel's chat with what was written around it, in the
+    order it arrived: up to `before` messages ahead of it and `after`
+    behind. None if the channel has no such message."""
+    conn.row_factory = sqlite3.Row
+    found = conn.execute(
+        "SELECT received_at FROM chat_messages WHERE message_id = ? AND broadcaster_user_id = ?",
+        (message_id, broadcaster_user_id),
+    ).fetchone()
+    if found is None:
+        return None
+    columns = "SELECT message_id, received_at, sender_username, content FROM chat_messages"
+    earlier = conn.execute(
+        f"{columns} WHERE broadcaster_user_id = ? AND received_at < ? ORDER BY received_at DESC LIMIT ?",
+        (broadcaster_user_id, found["received_at"], before),
+    ).fetchall()
+    # The message itself is the first of these, unless another arrived in
+    # the very same instant.
+    later = conn.execute(
+        f"{columns} WHERE broadcaster_user_id = ? AND received_at >= ? ORDER BY received_at LIMIT ?",
+        (broadcaster_user_id, found["received_at"], after + 1),
+    ).fetchall()
+    return [*reversed(earlier), *later]
+
+
+def get_chatter_counts(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+) -> list[tuple[str, int]]:
+    """Everyone who wrote in a stretch of a channel's chat and how many
+    messages each, the most active first."""
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end)
+    rows = conn.execute(
+        f"""
+        SELECT sender_username, COUNT(*) FROM chat_messages {where}
+        GROUP BY sender_username ORDER BY COUNT(*) DESC, sender_username
+        """,
+        params,
+    ).fetchall()
+    return [(row[0] or "", row[1]) for row in rows]
+
+
+def count_returning_chatters(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+) -> int | None:
+    """How many of those who wrote in a stretch of a channel's chat had
+    written there before it - or None if no chat is stored from before it,
+    which leaves nothing to tell a new chatter by."""
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end)
+    before = (broadcaster_user_id, start.astimezone(timezone.utc).isoformat())
+    earlier = "FROM chat_messages WHERE broadcaster_user_id = ? AND received_at < ?"
+    if conn.execute(f"SELECT 1 {earlier} LIMIT 1", before).fetchone() is None:
+        return None
+    return conn.execute(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT sender_username FROM chat_messages {where}
+            INTERSECT
+            SELECT sender_username {earlier}
+        )
+        """,
+        (*params, *before),
+    ).fetchone()[0]
+
+
+def get_first_message_time(conn: sqlite3.Connection, broadcaster_user_id: int, sender: str) -> str | None:
+    """When the oldest stored message of a chatter in a channel arrived."""
+    return conn.execute(
+        """
+        SELECT MIN(received_at) FROM chat_messages
+        WHERE broadcaster_user_id = ? AND sender_username = ? COLLATE NOCASE
+        """,
+        (broadcaster_user_id, sender),
+    ).fetchone()[0]
+
+
+def get_moment_times(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime, *, not_for: str
+) -> list[str]:
+    """When each moment of a channel in a stretch of time was detected, the
+    oldest first. Moments stored for the reason `not_for` are left out: a
+    clip imported from elsewhere is a moment in name only, "detected" when
+    it was imported."""
+    rows = conn.execute(
+        """
+        SELECT detected_at FROM moments
+        WHERE broadcaster_user_id = ? AND detected_at >= ? AND detected_at < ? AND reason != ?
+        ORDER BY detected_at
+        """,
+        (
+            broadcaster_user_id,
+            start.astimezone(timezone.utc).isoformat(),
+            end.astimezone(timezone.utc).isoformat(),
+            not_for,
+        ),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
 def insert_chat_message(
     conn: sqlite3.Connection,
     *,

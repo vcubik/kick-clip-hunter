@@ -45,6 +45,12 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   over the whole stream - hours on one timeline, with the moments that were found marked on it -
   which is how to find one's way about it. A channel can also be set to be recorded always: every
   stream of it is then recorded from when it goes live.
+- **Shows what chat did.** The Analyze page turns a channel's stored chat into figures for any
+  period - one session, the last day, week or month, or everything: messages over time with the
+  laughing and the detected moments marked, the busiest minutes, the most active chatters, the
+  most used emotes, what was said and who was addressed most. A chatter can be looked up, with
+  everything they wrote and what there is to say of them, and any message read in the chat
+  around it.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -115,7 +121,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-About 2000 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
+About 2500 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
 no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
 every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
@@ -126,6 +132,7 @@ what, and the short manual checklist for the parts that only exist against the r
 |---|---|
 | `main.py` | FastAPI app: webhook receiver, moment sessions, dashboard and its controls. |
 | `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip and over a whole recording, their markup, stylesheet and script. |
+| `chat_stats.py` | A channel's stored chat in figures, for the Analyze page: one pass over a period's messages, and the figures, chart columns and table rows made of it. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
 | `tuning.py`, `replay.py` | What of detection and of clips can be set from the dashboard, for all channels or for one; and stored chat replayed through the detector, to try settings out before they are saved. |
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting; which channels are recorded right now, and why. |

@@ -1,0 +1,359 @@
+{#- The Analyze page: a channel's stored chat in figures (see chat_stats.py).
+    On the left whose chat and of which period - a preset, any two times, or
+    one of the sessions the chat came in; beside it either the overview of
+    that period or its messages, which is also where one chatter is looked
+    up. Everything on it is a link or a form, so it needs no script. -#}
+{% extends "base.html" %}
+{% from "_chat_line.html" import chat_name, chat_text with context %}
+{% block title %}Analyze{% endblock %}
+
+{% macro emote(part) -%}
+<img class="ch-emote" src="{{ part.image }}" alt="{{ part.emote }}" title="{{ part.emote }}" width="{{ part.width }}" height="20" loading="lazy">
+{%- endmacro %}
+
+{% macro chatter(row) -%}
+{% if row.href %}<a href="{{ row.href }}">{{ chat_name(row.who) }}</a>{% else %}{{ chat_name(row.who) }}{% endif %}
+{%- endmacro %}
+
+{% macro figures(list) -%}
+<dl class="an-figures">
+  {% for figure in list %}
+  <div>
+    <dt>{{ figure.label }}</dt>
+    <dd class="an-value">{{ figure.value }}</dd>
+    <dd class="ch-cap">{% if figure.href %}<a href="{{ figure.href }}">{{ figure.caption }}</a>{% else %}{{ figure.caption }}{% endif %}</dd>
+  </div>
+  {% endfor %}
+</dl>
+{%- endmacro %}
+
+{#- Messages as columns on paper: ink for all of them, the pen for the
+    laughing ones at the foot of each, the highlighter behind a column a
+    moment was detected in. A column says what it stands for when pointed
+    at, and leads there - for the mouse only: a chart can have a couple of
+    hundred of them, which is not something to step through with Tab, and
+    the pane on the left sets any period there is. -#}
+{% macro chart(drawn) -%}
+<figure class="an-chart">
+  <figcaption class="visually-hidden">{{ drawn.label }}</figcaption>
+  <div class="an-plot">
+    {% for level in drawn.levels %}
+    <span class="an-level" style="top: {{ level.top }}%">{{ level.words }}</span>
+    {% endfor %}
+    <div class="an-columns">
+      {% for column in drawn.columns -%}
+      <{{ "a" if column.href else "span" }} class="an-column{% if column.moment %} is-moment{% endif %}"{% if column.href %} href="{{ column.href }}" tabindex="-1"{% endif %} title="{{ column.words }}" aria-label="{{ column.words }}">
+        {%- if column.all != "0" %}<i class="an-all" style="height: {{ column.all }}%"></i>{% endif -%}
+        {%- if column.laugh != "0" %}<i class="an-laugh" style="height: {{ column.laugh }}%"></i>{% endif -%}
+      </{{ "a" if column.href else "span" }}>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="ch-axis">
+    {% for tick in drawn.axis %}
+    <span style="left: {{ tick.left }}%">{{ tick.words }}</span>
+    {% endfor %}
+  </div>
+</figure>
+{%- endmacro %}
+
+{#- A stored message: when it arrived - which leads to the chat around it -
+    who wrote it, and what. -#}
+{% macro message(line) -%}
+<div class="an-line{% if line.asked %} is-asked{% endif %}"{% if line.asked %} id="asked"{% endif %}>
+  <a class="an-when" href="{{ line.around_href }}" title="The chat around this message">{{ line.when }}</a>
+  <p class="ch-chat">{% if line.chatter_href %}<a href="{{ line.chatter_href }}">{{ chat_name(line) }}</a>{% else %}{{ chat_name(line) }}{% endif %} {{ chat_text(line.parts) }}</p>
+</div>
+{%- endmacro %}
+
+{% block main %}
+<main class="analyze">
+<aside class="queue" aria-label="Channel and period">
+  <div class="queue-head">
+    <form class="queue-filter" method="get" action="/dashboard/analyze">
+      <select class="ch-select" name="channel" aria-label="Channel" data-submit-on-change{% if not channels %} disabled{% endif %}>
+        {% for name in channels %}
+        <option value="{{ name }}"{% if analysis and name == analysis.channel %} selected{% endif %}>{{ name }}</option>
+        {% else %}
+        <option value="">No channel has chat stored</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
+    </form>
+    {% if analysis %}
+    <nav class="ch-tabs" aria-label="Period">
+      {% for tab in analysis.presets %}
+      <a class="ch-tab" href="{{ tab.href }}"{% if tab.current %} aria-current="true"{% endif %}>{{ tab.label }}</a>
+      {% endfor %}
+    </nav>
+    <form class="an-range" method="get" action="/dashboard/analyze">
+      <input type="hidden" name="channel" value="{{ analysis.channel }}">
+      <label for="an-from">From</label>
+      <input type="datetime-local" class="ch-input" id="an-from" name="from" value="{{ analysis.start }}">
+      <label for="an-to">To</label>
+      <input type="datetime-local" class="ch-input" id="an-to" name="to" value="{{ analysis.end }}">
+      <button type="submit" class="ch-btn ch-btn-compact">Show</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="queue-list">
+    {% if analysis %}
+    <h2 class="ch-group"><b>Sessions</b> <span>the newest first</span></h2>
+    {% for session in analysis.sessions %}
+    <a class="rec-row" href="{{ session.href }}"{% if session.current %} aria-current="true"{% endif %}>
+      <b>{{ session.day }}</b>
+      <span class="rec-length">{{ session.length }}</span>
+      <span class="rec-when">{{ session.when }}</span>
+    </a>
+    {% else %}
+    <p class="queue-empty">No sessions yet</p>
+    {% endfor %}
+    {% endif %}
+  </div>
+  {% if analysis %}
+  <p class="queue-foot">A session is chat with no break of half an hour in it, which as a rule is one stream. {{ analysis.stored_words }}</p>
+  {% endif %}
+</aside>
+
+<div class="open">
+  {% if not analysis %}
+  <section class="statement">
+    <h1 class="heading">No chat stored yet</h1>
+    <p class="lead">A channel's chat is kept while the channel is tracked or its stream is recorded. Once some has come in, this page says who wrote it, which emotes were used and when it was busiest.</p>
+    <a class="ch-btn" href="/dashboard/channels">Go to Channels</a>
+  </section>
+  {% else %}
+  <div class="an-page">
+  <div class="an-in">
+    <header class="an-head">
+      <div>
+        <h1 class="title">{{ analysis.channel }}</h1>
+        <p class="moment-when">{{ analysis.period_words }}</p>
+      </div>
+      <nav class="ch-tabs" aria-label="What to show of the period">
+        {% for tab in analysis.views %}
+        <a class="ch-tab" href="{{ tab.href }}"{% if tab.current %} aria-current="true"{% endif %}>{{ tab.label }}</a>
+        {% endfor %}
+      </nav>
+    </header>
+
+    <form class="ch-line an-search" method="get" action="/dashboard/analyze" role="search">
+      <input type="hidden" name="channel" value="{{ analysis.channel }}">
+      {% for name, value in analysis.kept %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+      <input type="hidden" name="view" value="messages">
+      <input type="text" class="ch-input" name="chatter" value="{{ analysis.chatter }}" aria-label="Chatter" placeholder="Chatter" autocomplete="off" spellcheck="false">
+      <input type="text" class="ch-input an-text" name="q" value="{{ analysis.text }}" aria-label="Text in a message" placeholder="Text in a message" autocomplete="off">
+      <button type="submit" class="ch-btn">Search</button>
+    </form>
+
+    {% if analysis.overview %}
+    {% set overview = analysis.overview %}
+    {% if overview.counted_words %}<p class="section-lead">{{ overview.counted_words }}</p>{% endif %}
+    {{ figures(overview.figures) }}
+
+    <section aria-labelledby="an-activity">
+      <h2 class="an-title" id="an-activity">Messages over the period</h2>
+      <div class="ch-legend">
+        <span><span class="ch-chip an-chip"><i></i></span>all messages</span>
+        <span><span class="ch-chip an-chip"><i class="ch-laugh"></i></span>laughing</span>
+        <span><span class="ch-chip an-chip is-moment"></span>a moment was detected</span>
+        <span class="ch-readout">a column is {{ overview.activity.each }}</span>
+      </div>
+      {{ chart(overview.activity) }}
+    </section>
+
+    <div class="an-pair">
+      <section aria-labelledby="an-busiest">
+        <h2 class="an-title" id="an-busiest">Busiest minutes</h2>
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Minute</th><th scope="col" class="an-number">Messages</th><th scope="col">Said most</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.busiest %}
+            <tr><th scope="row"><a href="{{ row.href }}">{{ row.when }}</a></th><td class="an-number">{{ row.messages }}</td><td>{{ row.said }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      {#- Worth a chart of its own once the period has more than one day
+          in it. -#}
+      {% if overview.hours %}
+      <section aria-labelledby="an-hours">
+        <h2 class="an-title" id="an-hours">By the hour of the day</h2>
+        {{ chart(overview.hours) }}
+      </section>
+      {% endif %}
+    </div>
+
+    <div class="an-pair">
+      <section aria-labelledby="an-chatters">
+        <h2 class="an-title" id="an-chatters">Most active chatters</h2>
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col" class="an-number"><span class="visually-hidden">Place</span></th><th scope="col">Chatter</th><th scope="col" class="an-number">Messages</th><th scope="col" class="an-number">Of all</th><th scope="col">Emote used most</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.chatters %}
+            <tr><td class="an-number">{{ row.place }}</td><th scope="row">{{ chatter(row) }}</th><td class="an-number">{{ row.messages }}</td><td class="an-number">{{ row.share }}</td><td>{% if row.emote %}{{ emote(row.emote) }}{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="an-emotes">
+        <h2 class="an-title" id="an-emotes">Most used emotes</h2>
+        {% if overview.emotes %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Emote</th><th scope="col" class="an-number">Times</th><th scope="col" class="an-number">People</th><th scope="col">From</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.emotes %}
+            <tr><th scope="row">{{ emote(row) }} {{ row.emote }}</th><td class="an-number">{{ row.uses }}</td><td class="an-number">{{ row.people }}</td><td class="ch-meta">{{ row.source }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="ch-meta">No emote was used in this period.</p>
+        {% endif %}
+      </section>
+    </div>
+    {% if overview.more_href %}<p><a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ overview.more_href }}">Show 100 of each</a></p>{% endif %}
+    {% if overview.fewer_href %}<p><a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ overview.fewer_href }}">Show 25 of each</a></p>{% endif %}
+
+    <div class="an-pair">
+      <section aria-labelledby="an-said">
+        <h2 class="an-title" id="an-said">Said most often</h2>
+        <p class="ch-cap">Whole messages, emotes aside, with capitals and a longer row of the same letter making no difference.</p>
+        {% if overview.said %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Message</th><th scope="col" class="an-number">Times</th><th scope="col" class="an-number">People</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.said %}
+            <tr><th scope="row" class="an-said">{{ chat_text(row.parts) }}</th><td class="an-number">{{ row.times }}</td><td class="an-number">{{ row.people }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="ch-meta">Nothing was said twice in this period.</p>
+        {% endif %}
+      </section>
+
+      <section aria-labelledby="an-mentioned">
+        <h2 class="an-title" id="an-mentioned">Most mentioned</h2>
+        <p class="ch-cap">Whoever was addressed with an @, by the messages that did.</p>
+        {% if overview.mentioned %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Name</th><th scope="col" class="an-number">Messages</th><th scope="col" class="an-number">People</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.mentioned %}
+            <tr><th scope="row">{{ chatter(row) }}</th><td class="an-number">{{ row.messages }}</td><td class="an-number">{{ row.people }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="ch-meta">Nobody was addressed in this period.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    {% elif analysis.around %}
+    {% set around = analysis.around %}
+    <section aria-labelledby="an-around">
+      {% if around.lines %}
+      <h2 class="an-title" id="an-around">Chat around {{ around.when }}</h2>
+      {% if around.earlier_href %}<p><a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ around.earlier_href }}">Earlier</a></p>{% endif %}
+      <div class="an-lines">
+        {% for line in around.lines %}
+        {{ message(line) }}
+        {% endfor %}
+      </div>
+      {% if around.later_href %}<p><a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ around.later_href }}">Later</a></p>{% endif %}
+      {% else %}
+      <h2 class="an-title" id="an-around">That message is not in the stored chat of {{ analysis.channel }}</h2>
+      {% endif %}
+    </section>
+
+    {% elif analysis.messages and analysis.messages.nobody %}
+    <section aria-labelledby="an-nobody">
+      <h2 class="an-title" id="an-nobody">Nobody called {{ analysis.messages.nobody }} wrote in this period</h2>
+      {% if analysis.messages.alike %}
+      <p class="section-lead">These names have it in them.</p>
+      <ul class="an-alike">
+        {% for row in analysis.messages.alike %}
+        <li>{{ chatter(row) }} <span class="ch-meta">{{ row.messages }}</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    {% elif analysis.messages %}
+    {% set messages = analysis.messages %}
+    {% if messages.chatter %}
+    {% set card = messages.chatter %}
+    <section class="an-card" aria-labelledby="an-chatter">
+      <h2 class="an-title" id="an-chatter">{{ chat_name(card.who) }}</h2>
+      {{ figures(card.figures) }}
+      {{ chart(card.activity) }}
+      <dl class="an-facts">
+        {% if card.emotes %}
+        <dt>Emotes used most</dt>
+        <dd>{% for row in card.emotes %}<span class="an-fact">{{ emote(row) }} {{ row.uses }}</span>{% endfor %}</dd>
+        {% endif %}
+        {% if card.said %}
+        <dt>Says most often</dt>
+        <dd>{% for row in card.said %}<span class="an-fact">{{ chat_text(row.parts) }} <span class="ch-meta">{{ row.times }}</span></span>{% endfor %}</dd>
+        {% endif %}
+        {% if card.talks_to %}
+        <dt>Addresses most</dt>
+        <dd>{% for row in card.talks_to %}<span class="an-fact">{{ chatter(row) }} <span class="ch-meta">{{ row.messages }}</span></span>{% endfor %}</dd>
+        {% endif %}
+      </dl>
+    </section>
+    {% endif %}
+
+    <section aria-labelledby="an-found">
+      <div class="ch-line an-found">
+        <h2 class="an-title" id="an-found">{{ messages.found_words }}</h2>
+        <nav class="ch-tabs" aria-label="Order">
+          {% for tab in messages.orders %}
+          <a class="ch-tab" href="{{ tab.href }}"{% if tab.current %} aria-current="true"{% endif %}>{{ tab.label }}</a>
+          {% endfor %}
+        </nav>
+      </div>
+      <div class="an-lines">
+        {% for line in messages.lines %}
+        {{ message(line) }}
+        {% endfor %}
+      </div>
+      {% if messages.paging %}
+      <nav class="queue-pages an-pages" aria-label="Pages of the messages">
+        <span>{{ messages.paging.words }}</span>
+        {% if messages.paging.back_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ messages.paging.back_href }}" rel="prev">Back</a>{% endif %}
+        {% if messages.paging.on_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ messages.paging.on_href }}" rel="next">On</a>{% endif %}
+      </nav>
+      {% endif %}
+    </section>
+
+    {% else %}
+    <section aria-labelledby="an-empty">
+      <h2 class="heading" id="an-empty">No chat in this period</h2>
+      <p class="lead">Nobody wrote in {{ analysis.channel }}'s chat then, or it was not kept: chat is stored only while a channel is tracked or its stream is recorded. {{ analysis.stored_words }}</p>
+      <p><a class="ch-btn" href="{{ analysis.all_href }}">Show all of it</a></p>
+    </section>
+    {% endif %}
+  </div>
+  </div>
+  {% endif %}
+</div>
+</main>
+{% endblock %}

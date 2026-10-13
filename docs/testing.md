@@ -25,7 +25,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-That is the whole suite: about 2000 tests in a few minutes. It needs no `.env`, no Kick
+That is the whole suite: about 2500 tests in a few minutes. It needs no `.env`, no Kick
 account, no network, and it cannot touch the real `data/` directory - see
 [What keeps it hermetic](#what-keeps-it-hermetic). The commands are the same in PowerShell and in a
 POSIX shell; if the project's virtual environment isn't activated, call its interpreter directly
@@ -208,14 +208,32 @@ out as a video named for the stretch, one at a time, its chat told by the channe
 the recording's parts, refused where it is too long for its chat or would fill the disk, and removed
 with the recording?
 
-**11. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
+**11. The Analyze page** - `unit/test_chat_stats.py`, `integration/test_api_analyze.py`, and in
+`unit/test_db.py`
+Is the period the one that was asked for - a preset, any two times, the newest session where
+nothing was asked - and never one that reaches past now? Does one pass count a period's chat to the
+same figures in whatever order the messages come: who wrote, every use of an emote under the right
+one of two emotes of the same name, laughing exactly where the detector says so, the same thing
+said however it was capitalised or stretched, someone addressed once a message? Do a chart's
+columns begin on round times, hold every instant of the period and stay few enough to read from
+two hours to several years? Is a stretch of chat read up to but not at its end, one channel's
+whatever name its chat came under, narrowed by a chatter's name or a text however either is
+capitalised in any alphabet - and without a statement left open against the webhook's writes? Does
+chat fall into sessions where it went silent, the stray messages between them left out? Does the
+page show the right channel under its watchlist name, count the period's messages and no others,
+mark detected moments on the chart, and lead from a column, a busy minute, a chatter's name or a
+message to the right place? Does it find a chatter however the name is typed and offer the names
+that are close when nobody has it, say so when only part of a very long period was counted, do the
+counting off the event loop - and is everything chat wrote text, never markup?
+
+**12. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
 `unit/test_scripts.py`, `unit/test_replay_chat.py`
 Does a restart heal the chat subscriptions Kick silently drops - re-subscribing exactly the missing
 channels, and starting regardless when Kick is unreachable? Do the API clients send what Kick expects
 and cache the token until just before it expires? Do the command-line scripts do what they say, and
 only that (refreshing emotes must not subscribe a second time)?
 
-**12. The whole thing** - `e2e/test_webhook_to_clip.py`, `e2e/test_stream_recording.py`
+**13. The whole thing** - `e2e/test_webhook_to_clip.py`, `e2e/test_stream_recording.py`
 A stream is recorded from an HLS server, chat erupts through signed webhooks, and the resulting clip -
 one file, with its context around it - is on the dashboard, served, playable and rateable, and an
 analysis step switched on for it is handed the clip alone. Once more with an ad
@@ -224,7 +242,7 @@ asked for with tracking off, downloaded by the real recorder under the real loop
 played back on the Recordings page with the chat that arrived meanwhile on the right second -
 then once more ending by itself when the stream does.
 
-**13. The suite itself** - `unit/test_suite_isolation.py`
+**14. The suite itself** - `unit/test_suite_isolation.py`
 Are the guarantees in the next section actually in force?
 
 ### How good is it?
@@ -401,7 +419,14 @@ Run this on a live channel after changing any of the above, or the code right ne
    "Stop recording": it is saved, and no new recording begins while that stream is still on.
    Leave the switch on for a channel that is offline, and check after its next stream that the
    stream is on the Recordings page from its first minute.
-12. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
+12. **Look at the chat in figures.** The Analyze page opens on the newest session of the channel
+   that chatted last, within a second or two. Its figures agree with what the stream was like, the
+   chart shows chat rising where it did and marks the minutes moments were detected in, and the
+   emotes in the tables are pictures. A column of the chart opens that stretch on its own; a
+   chatter's name opens what they wrote, and the time beside a message the chat around it. "All",
+   on the channel with the most stored chat, answers within a few seconds - and chat lines keep
+   arriving in the log while it is being counted.
+13. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
    how much work is still in flight, and the process exits on its own once that is done, and not
    before. A stream recording that was running is ended and saved first.
 
