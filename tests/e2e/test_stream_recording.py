@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import chat_trace, recording_manager, stream_recording
+from kick_clip_hunter import chat_trace, clip_trim, recording_manager, stream_recording
 from tests.support.data import stream_recordings
 from tests.support.hls import Segment
 from tests.support.html import parse
@@ -126,10 +126,32 @@ async def test_a_stream_is_recorded_whole_and_played_back_with_its_chat(
 
     # ...with the chat beside it, each line on the picture its writer was
     # watching: what was broadcast a little before the line arrived.
-    (line,) = page.one("div", data_recording_chat=True).find("p", class_="ch-chat")
+    (line,) = page.one("aside", class_="chat").one("div", data_recording_chat=True).find("p", class_="ch-chat")
     assert line.text == "alice hello there"
     watched = (said - server.segment_start(0)).total_seconds() - chat_trace.CHAT_DELAY_SECONDS
     assert float(line.attrs["data-at"]) == pytest.approx(watched, abs=2)
+
+    # Under the video goes what chat did over the recording, which the page
+    # fetches: that one line, in the second it was watched in.
+    place = page.one("figure", data_rec_trace_load=True)
+    trace = parse((await service.client.get(place.attrs["data-rec-trace-load"])).text)
+    counts = [int(count) for count in trace.one("div", data_rec_strip=True).attrs["data-all"].split(",")]
+    # (Second by second; a file a frame over forty seconds has a 41st.)
+    assert len(counts) in (40, 41) and sum(counts) == 1
+    assert counts.index(1) == pytest.approx(watched, abs=2)
+
+    # And a stretch of it can be cut out as a video of its own, from the
+    # dialog the page has for that.
+    address = page.one("dialog", class_="trim").attrs["data-trim"]
+    asked = await service.client.post(address, json={"start": 10, "end": 22})
+    assert asked.json()["state"] == "cutting"
+    await service.settle()
+    cut = (await service.client.get(address)).json()
+    assert cut["words"].startswith("0:00:10 to 0:00:22 is ready to download.")
+    stretch = file.with_name(clip_trim.recording_video_name(file.name, 10, 22))
+    assert (await service.client.get(cut["video_url"])).content == stretch.read_bytes()
+    assert probe(stretch) == {"duration": pytest.approx(12, abs=1.2), "streams": ["audio", "video"]}
+    assert decodes_cleanly(stretch)
 
 
 async def test_a_recording_ends_and_is_saved_by_itself_when_its_stream_is_over(

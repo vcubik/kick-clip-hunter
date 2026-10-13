@@ -49,6 +49,7 @@ from .db import (
     finish_stream_recording,
     get_channel_chat_between,
     get_channel_keywords,
+    get_channel_moment_windows,
     get_chat_between,
     get_chat_delay,
     get_chat_emotes,
@@ -69,6 +70,7 @@ from .db import (
     insert_chat_message,
     insert_moment,
     insert_stream_recording,
+    iter_channel_chat_between,
     replace_tuning,
     set_chat_delay,
     set_chat_identity,
@@ -1137,13 +1139,15 @@ def _download_url(relative: Path) -> str | None:
     return f"{_clip_url(relative.as_posix())}?v={int(file.stat().st_mtime)}"
 
 
-def _trim(row) -> dict:
-    """Where the stretch cut out of a moment's footage stands: being cut,
-    its chat being rendered, there to download, failed, or never asked
-    for."""
-    known = _trims.get(row["id"], {})
+def _trim_standing(
+    known: dict, video: str | None, chat: str | None, stretch: tuple[float, float] | None = None
+) -> dict:
+    """Where a stretch cut out of some footage stands: being cut, its chat
+    being rendered, there to download, failed, or never asked for. `known`
+    is what is remembered of it, `video` and `chat` the addresses of its
+    files where those are there, `stretch` which seconds of a recording it
+    holds."""
     state = known.get("state")
-    video, chat = (_download_url(path) for path in _trim_paths(row["clip_path"]))
     if state in (dashboard_view.TRIM_CUTTING, dashboard_view.TRIM_FAILED):
         video = chat = None
     elif state in (dashboard_view.TRIM_CHAT, dashboard_view.TRIM_CHAT_FAILED):
@@ -1152,14 +1156,27 @@ def _trim(row) -> dict:
         state = dashboard_view.TRIM_READY if video else dashboard_view.TRIM_NONE
     return {
         "state": state,
-        "words": dashboard_view.trim_words(state, known.get("early", 0.0)),
+        "words": dashboard_view.trim_words(state, known.get("early", 0.0), stretch),
         "video_url": video,
         "chat_url": chat,
     }
 
 
+def _trim(row) -> dict:
+    """Where the stretch cut out of a moment's footage stands."""
+    video, chat = (_download_url(path) for path in _trim_paths(row["clip_path"]))
+    return _trim_standing(_trims.get(row["id"], {}), video, chat)
+
+
+def _trim_refused(error: clip_trim.TrimError) -> HTTPException:
+    """What was asked for can't be cut, said as the dialog shows it."""
+    return HTTPException(status_code=400, detail=f"{dashboard_view.sentence_case(str(error))}.")
+
+
 async def _trim_background(
-    moment_id: int,
+    standing: dict[int, dict],
+    key: int,
+    what: str,
     channel: str,
     clip: Path,
     span: tuple[float, float],
@@ -1169,38 +1186,41 @@ async def _trim_background(
     background: str | None,
     video: Path,
     chat: Path,
+    replaced: tuple[Path, ...] = (),
 ) -> None:
     # The cut takes a moment; the chat video drives a browser and an encoder
     # for about twice the cut's length. Both off the event loop, and as a
-    # tracked task so a shutdown waits for them.
+    # tracked task so a shutdown waits for them. Where it stands is kept in
+    # `standing` under `key`: a moment's in _trims, a recording's in
+    # _recording_trims; `what` is whose cut it is, for the log.
     try:
         # What was cut before goes first: a chat video left over from it
         # would not belong to the new video.
-        chat.unlink(missing_ok=True)
-        video.unlink(missing_ok=True)
+        for old in (chat, video, *replaced):
+            old.unlink(missing_ok=True)
         begins, duration = await asyncio.to_thread(recorder.trim_clip, clip, *span, video)
     except Exception:
-        logger.exception("[%s] trimming failed for moment %d", channel, moment_id)
-        _trims[moment_id] = {"state": dashboard_view.TRIM_FAILED}
+        logger.exception("[%s] trimming failed for %s", channel, what)
+        standing[key] = {"state": dashboard_view.TRIM_FAILED}
         return
     early = max(span[0] - begins, 0.0)
-    logger.info("[%s] moment %d trimmed: %s (%.1f s)", channel, moment_id, video.name, duration)
+    logger.info("[%s] %s trimmed: %s (%.1f s)", channel, what, video.name, duration)
     if lines is None:
-        _trims[moment_id] = {"early": early}
+        standing[key] = {"early": early}
         return
 
-    _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT, "early": early}
+    standing[key] = {"state": dashboard_view.TRIM_CHAT, "early": early}
     try:
         # The chat video starts on the trimmed video's first frame, wherever
         # in the file that turned out to be.
         shown = chat_video.lines_from(lines, begins - lead, shift)
         frames = await asyncio.to_thread(chat_video.render, shown, duration, chat, background)
     except Exception:
-        logger.exception("[%s] rendering the chat video failed for moment %d", channel, moment_id)
-        _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT_FAILED, "early": early}
+        logger.exception("[%s] rendering the chat video failed for %s", channel, what)
+        standing[key] = {"state": dashboard_view.TRIM_CHAT_FAILED, "early": early}
         return
-    _trims[moment_id] = {"early": early}
-    logger.info("[%s] chat video saved for moment %d: %s (%d frames)", channel, moment_id, chat.name, frames)
+    standing[key] = {"early": early}
+    logger.info("[%s] chat video saved for %s: %s (%d frames)", channel, what, chat.name, frames)
 
 
 def _moment_window(row) -> tuple[datetime, datetime]:
@@ -1342,15 +1362,33 @@ def _open_moment(conn, row, today: date) -> dict:
         # a clip to cut from and a timeline to choose the stretch on.
         "trim": (
             {
+                "id": str(row["id"]),
+                "url": f"/moments/{row['id']}/trim",
+                "video_url": _clip_url(row["clip_path"]),
+                "lead": dashboard_view.number_words(row["context_before"] or 0.0, 3),
                 "last": dashboard_view.number_words(clip_trim.footage(row)[1], 2),
-                "min_seconds": dashboard_view.number_words(clip_trim.MIN_SECONDS),
                 "chat": bool(chat),
-                "chat_shift_limit": dashboard_view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS),
-                "chat_background": clip_trim.DEFAULT_CHAT_BACKGROUND,
+                "chat_rest_words": "Chat where the review page has it",
+                "time_hint": (
+                    "A time in the clip, written like 0:12.5. With a minus in front it counts back "
+                    "from the clip's start, with a plus on from its end."
+                ),
+                # A moment's strip shows all of its footage at once.
+                "window": None,
+                **_trim_dialog(),
             }
             if row["clip_path"] and row["clip_duration"] and strip
             else None
         ),
+    }
+
+
+def _trim_dialog() -> dict:
+    """What every Trim dialog is told, whatever it cuts from."""
+    return {
+        "min_seconds": dashboard_view.number_words(clip_trim.MIN_SECONDS),
+        "chat_shift_limit": dashboard_view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS),
+        "chat_background": clip_trim.DEFAULT_CHAT_BACKGROUND,
     }
 
 
@@ -1666,33 +1704,43 @@ def _recording_chat_delay(conn, row) -> int:
     return _chat_delay(conn, get_chat_name(conn, row["broadcaster_user_id"]) or row["channel_slug"])
 
 
-def _recording_chat(conn, row, parts: list[stream_recording.Part], at: float) -> dict:
-    """The chat that goes with a stretch of a recording's file, around its
-    second `at`: the lines, each with the second of the file it belongs to,
-    and the stretch they cover. A message is put against the picture its
-    writer was watching, as on the review page (see chat_trace.py). The
-    channel's chat is told by the channel's id: its name on the watchlist,
-    which is the one a recording has, is not the one chat is stored under."""
-    whole = stream_recording.length(parts)
-    at = min(max(at, 0.0), whole)
-    first = max(at - RECORDING_CHAT_BEFORE_SECONDS, 0.0)
-    last = min(at + RECORDING_CHAT_AFTER_SECONDS, whole)
+def _recording_chat_lines(
+    conn, row, parts: list[stream_recording.Part], first: float, last: float, limit: int
+) -> list[dict]:
+    """The chat lines that go with the stretch of a recording's file from
+    its second `first` to its second `last`, each with the second of the
+    file it belongs to - `limit` of them at most, the earliest. A message is
+    put against the picture its writer was watching, as on the review page
+    (see chat_trace.py). The channel's chat is told by the channel's id: its
+    name on the watchlist, which is the one a recording has, is not the one
+    chat is stored under."""
     delay = timedelta(seconds=_recording_chat_delay(conn, row))
     messages = get_channel_chat_between(
         conn,
         row["broadcaster_user_id"],
         stream_recording.broadcast_time(parts, first) + delay,
         stream_recording.broadcast_time(parts, last) + delay,
-        RECORDING_CHAT_LIMIT,
+        limit,
     )
     chatters = {message["sender_username"] for message in messages if message["sender_username"]}
-    lines = chat_trace.chat_lines(
+    return chat_trace.chat_lines(
         messages,
         lambda arrived: stream_recording.file_second(parts, arrived - delay),
         get_chat_emotes(conn, row["broadcaster_user_id"]),
         get_chat_identities(conn, row["broadcaster_user_id"], chatters),
     )
-    if len(messages) == RECORDING_CHAT_LIMIT:
+
+
+def _recording_chat(conn, row, parts: list[stream_recording.Part], at: float) -> dict:
+    """The chat that goes with a stretch of a recording's file, around its
+    second `at`: the lines (see _recording_chat_lines) and the stretch they
+    cover."""
+    whole = stream_recording.length(parts)
+    at = min(max(at, 0.0), whole)
+    first = max(at - RECORDING_CHAT_BEFORE_SECONDS, 0.0)
+    last = min(at + RECORDING_CHAT_AFTER_SECONDS, whole)
+    lines = _recording_chat_lines(conn, row, parts, first, last, RECORDING_CHAT_LIMIT)
+    if len(lines) == RECORDING_CHAT_LIMIT:
         last = max(float(lines[-1]["at"]), at)
     return {
         "url": f"/dashboard/recordings/{row['id']}/chat",
@@ -1700,6 +1748,159 @@ def _recording_chat(conn, row, parts: list[stream_recording.Part], at: float) ->
         "last": dashboard_view.number_words(last, 1),
         "whole": last >= whole,
         "lines": lines,
+    }
+
+
+# Messages in each step of the trace over the whole of a recording, by
+# recording, with what they were counted under: going through the chat of a
+# stream of hours takes a second or two, and none of it changes once the
+# recording is over. A stretch of one is counted each time it is asked for -
+# that is a few minutes of chat.
+_recording_counts: dict[int, tuple[tuple, tuple[list[int], list[int]]]] = {}
+
+
+def _recording_strip(
+    row,
+    parts: list[stream_recording.Part],
+    first: float,
+    last: float,
+    delay_seconds: int,
+    laugh_names: tuple[str, ...],
+    laugh_patterns: tuple[str, ...],
+) -> dict:
+    """The strip over the stretch of a recording's file from its second
+    `first` to its second `last` (see chat_trace.stretch_trace): what chat
+    did there, where the file goes from one part to the next, and where the
+    channel's moments were. Chat is placed as beside the recording, and a
+    message from a break in the stream is not counted - the file has no
+    picture for it to belong to. Goes through all the chat of the stretch,
+    so it is run in a thread of its own, with a connection of its own."""
+    whole = (first, last) == (0.0, stream_recording.length(parts))
+    step = chat_trace.stretch_step(last - first)
+    delay = timedelta(seconds=delay_seconds)
+    arrived_from = stream_recording.broadcast_time(parts, first) + delay
+    arrived_to = stream_recording.broadcast_time(parts, last) + delay
+    counted_under = (row["parts"], delay_seconds, laugh_names, laugh_patterns)
+    kept = _recording_counts.get(row["id"]) if whole else None
+    conn = get_connection()
+    try:
+        if kept is not None and kept[0] == counted_under:
+            counts = kept[1]
+        else:
+            counts = chat_trace.stretch_counts(
+                iter_channel_chat_between(conn, row["broadcaster_user_id"], arrived_from, arrived_to),
+                lambda arrived: stream_recording.second_in_file(parts, arrived - delay),
+                first,
+                last,
+                step,
+                laugh_names,
+                laugh_patterns,
+            )
+            if whole:
+                _recording_counts[row["id"]] = (counted_under, counts)
+        windows = get_channel_moment_windows(conn, row["broadcaster_user_id"], arrived_from, arrived_to)
+    finally:
+        conn.close()
+    moments = [
+        (
+            stream_recording.file_second(parts, datetime.fromisoformat(window["window_start"]) - delay),
+            stream_recording.file_second(parts, datetime.fromisoformat(window["window_end"]) - delay),
+        )
+        for window in windows
+    ]
+    return chat_trace.stretch_trace(
+        first,
+        last,
+        step,
+        *counts,
+        breaks=stream_recording.breaks(parts),
+        moments=[(began, ended) for began, ended in moments if ended > began],
+    )
+
+
+# As _trims, for the stretches cut out of recordings: by recording id.
+_recording_trims: dict[int, dict] = {}
+
+# What the Trim dialog shows of a recording, whose strip can't hold hours at
+# a width a handle could be set on: a window of at least this much footage
+# around the stretch, which to begin with is this long either side of where
+# the recording was being watched.
+RECORDING_TRIM_WINDOW_SECONDS = 300
+RECORDING_TRIM_AROUND_SECONDS = 30
+# The most chat lines the chat video of a stretch of a recording is made of.
+RECORDING_CHAT_VIDEO_LIMIT = 20_000
+
+
+def _stream_url(file: Path) -> str | None:
+    """The address of a file under STREAMS_DIR, or None if it is not there."""
+    if not file.exists():
+        return None
+    # Made again, it is a different file under the same name.
+    return f"/streams/{quote(file.relative_to(STREAMS_DIR).as_posix())}?v={int(file.stat().st_mtime)}"
+
+
+def _recording_cuts(file: Path) -> list[tuple[Path, tuple[int, int]]]:
+    """The stretches cut out of a recording's file that are kept next to
+    it, the newest first, each with the seconds of the recording it holds
+    (see clip_trim.recording_video_name). There is one at most, unless
+    removing the one before did not work."""
+    if not file.parent.is_dir():
+        return []
+    cuts = []
+    for path in file.parent.iterdir():
+        stretch = clip_trim.recording_stretch(file.name, path.name)
+        if stretch is not None:
+            cuts.append((path, stretch))
+    return sorted(cuts, key=lambda cut: cut[0].stat().st_mtime, reverse=True)
+
+
+def _recording_cut_files(file: Path) -> tuple[Path, ...]:
+    """Every file that is a stretch cut out of a recording's file, and where
+    the chat video of each is or would be."""
+    videos = [video for video, _stretch in _recording_cuts(file)]
+    return (*videos, *(video.with_name(chat_video.video_name(video.name)) for video in videos))
+
+
+def _recording_trim(row) -> dict:
+    """Where the stretch cut out of a recording stands (see _trim_standing)."""
+    file = _stream_file(row)
+    known = _recording_trims.get(row["id"], {})
+    cuts = _recording_cuts(file) if file is not None else []
+    if not cuts:
+        return _trim_standing(known, None, None)
+    video, stretch = cuts[0]
+    chat = video.with_name(chat_video.video_name(video.name))
+    return _trim_standing(known, _stream_url(video), _stream_url(chat), stretch)
+
+
+def _recording_has_chat(conn, row, parts: list[stream_recording.Part]) -> bool:
+    """Whether any chat was stored for a recording."""
+    delay = timedelta(seconds=_recording_chat_delay(conn, row))
+    first, last = parts[0].started_at + delay, parts[-1].ended_at + delay
+    return bool(get_channel_chat_between(conn, row["broadcaster_user_id"], first, last, 1))
+
+
+def _recording_trim_dialog(conn, row, parts: list[stream_recording.Part], video_url: str) -> dict:
+    """What the Trim dialog of a recording is told (see _trim.html)."""
+    recording_id = row["id"]
+    return {
+        "id": f"recording-{recording_id}",
+        "url": f"/recordings/{recording_id}/trim",
+        "video_url": video_url,
+        # Times in it are seconds of the file, which begins where it begins.
+        "lead": "0",
+        "last": dashboard_view.number_words(stream_recording.length(parts), 2),
+        "chat": _recording_has_chat(conn, row, parts),
+        "chat_rest_words": "Chat where it is beside the recording",
+        "time_hint": "A time in the recording, written like 1:23:45 or 83:45.5.",
+        "window": {
+            "seconds": RECORDING_TRIM_WINDOW_SECONDS,
+            "around": RECORDING_TRIM_AROUND_SECONDS,
+            "strip_url": f"/dashboard/recordings/{recording_id}/trace",
+            "chat_url": f"/dashboard/recordings/{recording_id}/chat",
+            "chat_most": dashboard_view.duration_words(clip_trim.CHAT_VIDEO_MAX_SECONDS),
+        },
+        **_trim_dialog(),
     }
 
 
@@ -1715,6 +1916,7 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
         standing = "failed"
     started = to_local_datetime(row["started_at"] or row["requested_at"])
     delay = _recording_chat_delay(conn, row)
+    video_url = f"/streams/{quote(row['file_path'])}" if standing == "playable" else None
     return {
         "id": row["id"],
         "channel": row["channel_slug"],
@@ -1724,7 +1926,11 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
         ),
         "length": dashboard_view.stream_time_words(row["duration"]),
         "words": not_over["words"] if not_over else None,
-        "video_url": f"/streams/{quote(row['file_path'])}" if standing == "playable" else None,
+        "video_url": video_url,
+        # What chat did over all of it is counted once the page is there
+        # (see dashboard_recording_trace): the script fetches it from here.
+        "trace_url": f"/dashboard/recordings/{row['id']}/trace" if video_url else None,
+        "trim": _recording_trim_dialog(conn, row, parts, video_url) if video_url else None,
         # Where on this machine: what whoever wants the file itself needs.
         "file": str(file.resolve()) if file is not None else None,
         "folder": str(stream_recording.parts_folder(row["channel_slug"], row["id"]).resolve()),
@@ -1808,6 +2014,45 @@ async def dashboard_recording_chat(request: Request, recording_id: int, at: floa
     return templates.TemplateResponse(request, "_recording_chat.html", context)
 
 
+@app.get("/dashboard/recordings/{recording_id}/trace", response_class=HTMLResponse)
+async def dashboard_recording_trace(
+    request: Request, recording_id: int, first: float = 0.0, last: float | None = None
+):
+    """What chat did over a recording, as the strip the Recordings page has
+    under its video - or, with `first` and `last`, over the stretch of the
+    file between those two seconds, which is what the Trim dialog draws its
+    own strip from. The page fetches it once it is there: going through the
+    chat of a stream of hours takes a moment."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        if not parts:
+            raise HTTPException(status_code=409, detail="the recording has no footage to put chat against yet")
+        whole = stream_recording.length(parts)
+        first = min(max(first, 0.0), whole) if math.isfinite(first) else 0.0
+        last = min(max(last, 0.0), whole) if last is not None and math.isfinite(last) else whole
+        if last - first < clip_trim.MIN_SECONDS:
+            # Nothing to draw a stretch like that on: all of it, then.
+            first, last = 0.0, whole
+        # What tells a laughing message is looked up here, where what is
+        # kept of the channel's settings may be touched.
+        tuned = _tuning(conn, row["broadcaster_user_id"])
+        laugh_patterns = tuple(tuned.detector.added_laugh_emote_patterns)
+        laugh_names = tuple(
+            detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]), laugh_patterns)
+        )
+        delay = _recording_chat_delay(conn, row)
+    finally:
+        conn.close()
+    strip = await asyncio.to_thread(_recording_strip, row, parts, first, last, delay, laugh_names, laugh_patterns)
+    return templates.TemplateResponse(
+        request, "_recording_trace.html", {"strip": strip, "asset_version": _asset_version()}
+    )
+
+
 def _moment_status(conn) -> dict[str, int]:
     return {"moments": count_moments(conn), "clips": count_moments_with_clip(conn)}
 
@@ -1836,6 +2081,21 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     return {"moment_id": moment_id, "rating": value or None}
 
 
+async def _asked_trim(request: Request) -> dict:
+    """What a Trim dialog asks to have cut, as it was posted - unless the
+    service is on its way down, or what was posted says nothing of the
+    kind."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="Expected start, end, chat and chat_shift as JSON.")
+    return asked
+
+
 @app.post("/moments/{moment_id}/trim")
 async def trim_moment(moment_id: int, request: Request):
     """Starts cutting a stretch of a moment's footage out as a video of its
@@ -1844,15 +2104,7 @@ async def trim_moment(moment_id: int, request: Request):
     the chat video's lines that many seconds later than the channel's chat
     delay has them, and `chat_background` ("#rrggbb") puts a colour behind
     them instead of nothing. What was cut for the moment before is replaced."""
-    if _shutdown_requested:
-        raise HTTPException(status_code=409, detail="the service is shutting down")
-    try:
-        asked = await request.json()
-    except ValueError:
-        asked = None
-    if not isinstance(asked, dict):
-        raise HTTPException(status_code=400, detail="expected start, end, chat and chat_shift as JSON")
-
+    asked = await _asked_trim(request)
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -1860,18 +2112,20 @@ async def trim_moment(moment_id: int, request: Request):
             raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
         row = await _with_clip_length(conn, row)
         if not row["clip_path"] or not row["clip_duration"] or not (CLIPS_DIR / row["clip_path"]).exists():
-            raise HTTPException(status_code=409, detail="the moment has no clip to trim")
+            raise HTTPException(status_code=409, detail="The moment has no clip to trim.")
         try:
             span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
             shift = clip_trim.chat_shift(asked.get("chat_shift"))
             background = clip_trim.chat_background(asked.get("chat_background"))
+            if asked.get("chat"):
+                clip_trim.with_chat(span[1] - span[0])
         except clip_trim.TrimError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from None
+            raise _trim_refused(e) from None
         lines = None
         if asked.get("chat"):
             _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
             if not lines:
-                raise HTTPException(status_code=409, detail="no chat was stored for this moment")
+                raise HTTPException(status_code=409, detail="No chat was stored for this moment.")
     finally:
         conn.close()
 
@@ -1880,7 +2134,9 @@ async def trim_moment(moment_id: int, request: Request):
         video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
         _track_task(
             _trim_background(
+                _trims,
                 moment_id,
+                f"moment {moment_id}",
                 row["channel_slug"],
                 CLIPS_DIR / row["clip_path"],
                 span,
@@ -2184,9 +2440,16 @@ async def delete_recording(recording_id: int):
     conn = get_connection()
     try:
         row = _stream_recording_at_rest(conn, recording_id)
+        if _recording_trims.get(recording_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+            raise HTTPException(
+                status_code=409, detail="A stretch of this recording is being cut out. Try again once that is done."
+            )
         file = _stream_file(row)
         try:
             if file is not None:
+                # What was cut out of it goes with it.
+                for cut in _recording_cut_files(file):
+                    cut.unlink(missing_ok=True)
                 file.unlink(missing_ok=True)
             folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
             if folder.exists():
@@ -2199,8 +2462,101 @@ async def delete_recording(recording_id: int):
         delete_stream_recording(conn, recording_id)
     finally:
         conn.close()
+    _recording_trims.pop(recording_id, None)
+    _recording_counts.pop(recording_id, None)
     logger.info("[%s] stream recording %d deleted", row["channel_slug"], recording_id)
     return {"deleted": recording_id}
+
+
+@app.post("/recordings/{recording_id}/trim")
+async def trim_recording(recording_id: int, request: Request):
+    """Starts cutting a stretch of a recording out as a video of its own,
+    as trim_moment does of a moment's footage - `start` and `end` are
+    seconds of the recording's file here - and with `chat` its chat as a
+    video to lay over it, which a stretch can be too long for (see
+    clip_trim.with_chat). The file is kept next to the recording's, named
+    for the stretch it holds; what was cut out of the recording before is
+    replaced."""
+    asked = await _asked_trim(request)
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        file = _stream_file(row)
+        over = row["state"] == stream_recording.READY and recording_id not in _stream_recordings_not_over()
+        if not over or not parts or file is None or not file.exists():
+            raise HTTPException(status_code=409, detail="The recording has no file to cut from.")
+        whole = stream_recording.length(parts)
+        try:
+            start, end = clip_trim.stretch(0.0, whole, asked.get("start"), asked.get("end"))
+            shift = clip_trim.chat_shift(asked.get("chat_shift"))
+            background = clip_trim.chat_background(asked.get("chat_background"))
+            if asked.get("chat"):
+                clip_trim.with_chat(end - start)
+        except clip_trim.TrimError as e:
+            raise _trim_refused(e) from None
+        lines = None
+        if asked.get("chat"):
+            # From far enough back to fill the column the video starts out
+            # with, and on for as far as its lines can be moved.
+            lines = _recording_chat_lines(
+                conn,
+                row,
+                parts,
+                start - clip_trim.CHAT_VIDEO_LEAD_SECONDS,
+                end + clip_trim.CHAT_SHIFT_LIMIT_SECONDS,
+                RECORDING_CHAT_VIDEO_LIMIT,
+            )
+            if not lines:
+                raise HTTPException(status_code=409, detail="No chat was stored for this stretch of the recording.")
+    finally:
+        conn.close()
+    # A cut is a copy of that share of the file, on the disk recordings are
+    # kept on - which must not be what fills it under one that is running.
+    takes = (row["size_bytes"] or 0) * (end - start) / whole
+    if recording_manager.room_left() - takes < recording_manager.MIN_FREE_BYTES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"The disk is too full to cut that out: it takes about {dashboard_view.size_words(round(takes))}.",
+        )
+
+    if _recording_trims.get(recording_id, {}).get("state") not in dashboard_view.TRIM_BUSY:
+        _recording_trims[recording_id] = {"state": dashboard_view.TRIM_CUTTING}
+        video = file.with_name(clip_trim.recording_video_name(file.name, start, end))
+        _track_task(
+            _trim_background(
+                _recording_trims,
+                recording_id,
+                f"stream recording {recording_id}",
+                row["channel_slug"],
+                file,
+                (start, end),
+                0.0,
+                lines,
+                shift,
+                background,
+                video,
+                video.with_name(chat_video.video_name(video.name)),
+                _recording_cut_files(file),
+            )
+        )
+    return {"recording_id": recording_id, **_recording_trim(row)}
+
+
+@app.get("/recordings/{recording_id}/trim")
+async def recording_trim_state(recording_id: int):
+    """Where the stretch cut out of a recording stands - what its Trim
+    dialog asks when it is opened and while one is being made."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+    return {"recording_id": recording_id, **_recording_trim(row)}
 
 
 @app.post("/recordings/{recording_id}/save")

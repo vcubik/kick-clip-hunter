@@ -5,9 +5,10 @@
 // the page again, saves a rating, tag or note as it is set, drives the clip
 // player from the strip under it, replays chat in step with the clip, runs
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
-// the dialog a stretch of the footage is cut out for an editor in, saves the
-// Settings page's form, starts and stops the recording of a whole stream and
-// replays a recording's chat beside it.
+// the dialog a stretch of footage is cut out for an editor in - a moment's or
+// a recording's - saves the Settings page's form, starts and stops the
+// recording of a whole stream, replays a recording's chat beside it and puts
+// what chat did over all of it under it.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -523,17 +524,33 @@
 
   // ---- Trimming ---------------------------------------------------------
   //
-  // The Trim dialog cuts a stretch of the footage out for an editor, with
-  // its chat as a video to lay over it if that is wanted. It has a player
-  // of its own on the same file and a copy of the strip, with a handle at
-  // either end of the stretch. Times are clip time here too. The cutting is
-  // done on the server and takes a while with chat; the dialog asks now and
-  // then how far it has got, for as long as it is open.
+  // The Trim dialog cuts a stretch of footage out for an editor, with its
+  // chat as a video to lay over it if that is wanted. It has a player of
+  // its own on the same file and a strip with a handle at either end of the
+  // stretch; either end can be typed as a time as well. The cutting is done
+  // on the server and takes a while with chat; the dialog asks now and then
+  // how far it has got, for as long as it is open.
+  //
+  // A moment's dialog shows all of the moment's footage, on a copy of the
+  // strip under the clip, and its times are clip time. A recording's is
+  // "windowed": hours do not fit a strip a handle could be set on, so its
+  // strip shows a few minutes of the file around the stretch - a window,
+  // which follows the stretch wherever it is taken - and its times are
+  // seconds of the file, written as the recording's player writes them.
 
   const TRIM_POLL_MS = 2000;
   const TRIM_BUSY = ["cutting", "chat"];
   // Past its end by less than this, the player ran there; by more, it was put there.
   const TRIM_RAN_PAST_SECONDS = 1;
+  // An end of the stretch closer than this share of the window's length to
+  // an end of the window has no room left to be dragged: the window is set
+  // around the stretch again.
+  const TRIM_WINDOW_EDGE = 0.03;
+  // A window this many times as long as the stretch would be given anew is
+  // set anew: the stretch was made a good deal shorter.
+  const TRIM_WINDOW_TOO_WIDE = 2;
+  // What the dialog said of a time it could not read, while it says it.
+  let trimNotATime = "";
   let trimWatch = null;
   let trimDrag = null; // the handle that is held: "from" or "to"
   let trimGrab = 0; // how far from the handle's time it was taken hold of
@@ -542,28 +559,56 @@
   const trimOf = (control) => control.closest("[data-trim]");
   const trimClip = (dialog) => one("[data-trim-clip]", dialog);
   const clamp = (value, least, most) => Math.min(Math.max(value, least), most);
+  const twoDigits = (number) => String(number).padStart(2, "0");
 
   // What the dialog's strip covers, where the clip lies on it, and how far
-  // the footage - what there is to cut from - reaches either way.
+  // the footage - what there is to cut from - reaches either way. A window
+  // on a recording covers less than there is to cut from.
   function trimSpan(dialog) {
-    const trace = one("[data-trace]", dialog.closest(".moment"));
     const video = trimClip(dialog);
     const lead = Number(dialog.dataset.lead) || 0;
-    const start = Number(trace.dataset.start);
-    const end = Number(trace.dataset.end);
+    const start = Number(dialog.dataset.start);
+    const end = Number(dialog.dataset.end);
+    const windowed = "window" in dialog.dataset;
     const last = Number.isFinite(video.duration) ? video.duration - lead : Number(dialog.dataset.last);
-    return { start, end, lead, clip: Number(trace.dataset.clipSeconds), first: Math.max(-lead, start), last: Math.min(last, end) };
+    return {
+      start,
+      end,
+      lead,
+      windowed,
+      clip: windowed ? last : Number(dialog.dataset.clip),
+      first: windowed ? 0 : Math.max(-lead, start),
+      last: windowed ? last : Math.min(last, end),
+    };
   }
 
   // The stretch that is set, and where the dialog's player is.
   const trimAt = (dialog) => ({ from: Number(dialog.dataset.from), to: Number(dialog.dataset.to) });
   const trimTime = (dialog) => trimClip(dialog).currentTime - (Number(dialog.dataset.lead) || 0);
 
-  // A clip time to the tenth of a second, the way the page writes clip times.
-  function trimWords(time, clip) {
-    const outside = time < 0 ? "−" : time > clip ? "+" : "";
-    const tenths = Math.round(Math.abs(outside === "+" ? time - clip : time) * 10);
-    return `${outside}${Math.floor(tenths / 600)}:${String(Math.floor(tenths / 10) % 60).padStart(2, "0")}.${tenths % 10}`;
+  // A time to the tenth of a second, the way the page writes it: a clip
+  // time with a sign outside the clip, a recording's with its hours.
+  function trimWords(time, span) {
+    if (span.windowed) {
+      const tenths = Math.round(Math.max(time, 0) * 10);
+      return `${Math.floor(tenths / 36000)}:${twoDigits(Math.floor(tenths / 600) % 60)}:${twoDigits(Math.floor(tenths / 10) % 60)}.${tenths % 10}`;
+    }
+    const outside = time < 0 ? "−" : time > span.clip ? "+" : "";
+    const tenths = Math.round(Math.abs(outside === "+" ? time - span.clip : time) * 10);
+    return `${outside}${Math.floor(tenths / 600)}:${twoDigits(Math.floor(tenths / 10) % 60)}.${tenths % 10}`;
+  }
+
+  // A time as it is typed: 1:23:45, 12:05.5, 75 or 75,5 - seconds, with
+  // minutes and hours in front of them if there are any. As the page writes
+  // a clip time, a minus in front counts back from the clip's start and a
+  // plus on from its end. Null for what is not a time.
+  function typedTime(text, span) {
+    const match = /^([+\-−–]?)\s*(?:(?:(\d+):)?(\d+):)?(\d+(?:[.,]\d+)?)$/.exec(text.trim());
+    if (!match) return null;
+    const [, sign, hours, minutes, seconds] = match;
+    const time = Number(hours || 0) * 3600 + Number(minutes || 0) * 60 + Number(seconds.replace(",", "."));
+    if (sign === "+") return span.clip + time;
+    return sign ? -time : time;
   }
 
   // The clip time under the pointer on the dialog's strip - or beyond it,
@@ -594,6 +639,83 @@
     video.pause();
     video.currentTime = (which === "from" ? from : to) + span.lead;
     paintTrim(dialog);
+    // While a handle is held the strip stays as it is under it.
+    if (trimDrag === null) fitTrimWindow(dialog);
+  }
+
+  // An end of the stretch as it was typed into its field. What is not a
+  // time is said so, and the field goes back to what the end is.
+  function typeTrim(field) {
+    const dialog = trimOf(field);
+    const span = trimSpan(dialog);
+    const which = field.dataset.trimType;
+    const said = () => trimWords(trimAt(dialog)[which], span);
+    if (field.value.trim() === said()) return;
+    const time = typedTime(field.value, span);
+    const state = one("[data-trim-state]", dialog);
+    if (time === null) {
+      trimNotATime = `"${field.value.trim()}" is not a time. Write it like ${span.windowed ? "1:23:45 or 83:45.5" : "0:12.5"}.`;
+      state.textContent = trimNotATime;
+    } else {
+      moveTrim(dialog, which, time);
+      // Put right, it is no longer said - what the cut stands at is.
+      if (state.textContent === trimNotATime) askTrim(dialog);
+    }
+    field.value = said();
+  }
+
+  // The window a recording's dialog shows: as much of the file as the
+  // dialog was given to show at least, more for a long stretch, with the
+  // stretch in its middle where the file's ends allow.
+  function trimWindow(dialog, from, to) {
+    const whole = Number(dialog.dataset.last);
+    const length = Math.min(whole, Math.max(Number(dialog.dataset.window), (to - from) * 1.5 + 60));
+    const start = clamp((from + to) / 2 - length / 2, 0, whole - length);
+    return { start, end: start + length };
+  }
+
+  // Sets the window around the stretch and has it drawn - if an end of the
+  // stretch has come to an end of the window or left it, if the stretch
+  // has become so short that the window shows far more than it needs to
+  // (the handles would sit on top of each other), or `anew`.
+  function fitTrimWindow(dialog, { anew = false } = {}) {
+    if (!("window" in dialog.dataset)) return;
+    const { from, to } = trimAt(dialog);
+    const start = Number(dialog.dataset.start);
+    const end = Number(dialog.dataset.end);
+    const edge = (end - start) * TRIM_WINDOW_EDGE;
+    const roomBefore = start <= 0 || from >= start + edge;
+    const roomAfter = end >= Number(dialog.dataset.last) || to <= end - edge;
+    const fresh = trimWindow(dialog, from, to);
+    const tooWide = end - start > TRIM_WINDOW_TOO_WIDE * (fresh.end - fresh.start);
+    if (!anew && roomBefore && roomAfter && !tooWide) return;
+    dialog.dataset.start = fresh.start.toFixed(1);
+    dialog.dataset.end = fresh.end.toFixed(1);
+    one("[data-trim-drawing]", dialog).replaceChildren();
+    one("[data-trim-axis]", dialog).replaceChildren();
+    paintTrim(dialog);
+    drawTrimWindow(dialog);
+  }
+
+  // What chat did over the window, drawn by the service like the trace
+  // under the recording. Without it the strip is blank paper, and the
+  // handles work all the same.
+  async function drawTrimWindow(dialog) {
+    const { start, end } = dialog.dataset;
+    let markup = null;
+    try {
+      const response = await fetch(`${dialog.dataset.stripUrl}?first=${start}&last=${end}`);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // not reachable just now
+    }
+    // The window may have been set elsewhere while this was on its way.
+    if (!markup || dialog.dataset.start !== start || dialog.dataset.end !== end) return;
+    const figure = one("[data-rec-trace]", new DOMParser().parseFromString(markup, "text/html"));
+    if (!figure) return;
+    const drawn = all("[data-rec-strip] > *", figure).filter((part) => !part.matches("[data-hover], [data-playhead], [data-flag]"));
+    one("[data-trim-drawing]", dialog).replaceChildren(...drawn);
+    one("[data-trim-axis]", dialog).replaceChildren(...all(".ch-axis > *", figure));
   }
 
   // Brings the dialog's strip, its readouts and its chat in line with the
@@ -619,12 +741,15 @@
       handle.setAttribute("aria-valuemin", least.toFixed(1));
       handle.setAttribute("aria-valuemax", most.toFixed(1));
       handle.setAttribute("aria-valuenow", at.toFixed(1));
-      handle.setAttribute("aria-valuetext", trimWords(at, span.clip));
+      handle.setAttribute("aria-valuetext", trimWords(at, span));
+      // A field that is being typed into is left alone.
+      const field = one(`[data-trim-type="${which}"]`, dialog);
+      if (document.activeElement !== field) field.value = trimWords(at, span);
     }
-    one("[data-trim-from]", dialog).textContent = trimWords(from, span.clip);
-    one("[data-trim-to]", dialog).textContent = trimWords(to, span.clip);
-    one("[data-trim-length]", dialog).textContent = `${(to - from).toFixed(1)} s`;
-    one("[data-trim-now]", dialog).textContent = trimWords(time, span.clip);
+    const length = to - from;
+    one("[data-trim-length]", dialog).textContent =
+      length < 60 ? `${length.toFixed(1)} s` : `${Math.floor(length / 60)} min ${(length % 60).toFixed(1)} s`;
+    one("[data-trim-now]", dialog).textContent = trimWords(time, span);
 
     const playing = !video.paused && !video.ended;
     const play = one("[data-trim-play]", dialog);
@@ -632,9 +757,13 @@
     play.setAttribute("aria-label", playing ? "Pause" : "Play");
 
     // Chat as its video will have it: each line where it stands on the
-    // review page, moved by what the slider says.
+    // page, moved by what the slider says. A recording's is fetched a
+    // stretch at a time, as beside the recording.
     const pane = one("[data-trim-chat-pane]", dialog);
-    if (pane && !pane.hidden) reveal(one("[data-trim-lines]", pane), time - Number(one("[data-trim-shift]", dialog).value));
+    if (!pane || pane.hidden) return;
+    const shown = () => trimTime(dialog) - Number(one("[data-trim-shift]", dialog).value);
+    if (span.windowed) followChat(pane, shown);
+    else reveal(one("[data-trim-lines]", pane), shown());
   }
 
   // Played, the stretch stops at its end.
@@ -674,6 +803,14 @@
 
   function trimKey(dialog, event) {
     const target = event.target;
+    // In a field for a time the keys are for typing; Enter sets the end.
+    if (target.matches("[data-trim-type]")) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        typeTrim(target);
+      }
+      return;
+    }
     const handle = target.closest("[data-trim-handle]");
     if (handle && event.key in TRIM_KEYS) {
       event.preventDefault();
@@ -692,39 +829,62 @@
   }
 
   function openTrim(button) {
-    const article = button.closest(".moment");
+    const article = button.closest(".moment, .recording");
     const dialog = one("[data-trim]", article);
+    const windowed = dialog && "window" in dialog.dataset;
     const strip = one("[data-strip]", article);
-    if (!dialog || !strip) return;
-    one("[data-clip]", article).pause();
+    if (!dialog || !(windowed || strip)) return;
+    const watched = one("[data-clip], [data-recording-clip]", article);
+    watched.pause();
 
     const video = trimClip(dialog);
     if (!video.getAttribute("src")) {
       video.preload = "auto";
       video.src = video.dataset.src;
     }
-    video.volume = volume;
-    video.muted = muted;
+    video.volume = watched.volume;
+    video.muted = watched.muted;
 
-    // The strip and the chat in the dialog are copies of the ones on the
-    // page, taken now: where chat sits may have been moved since last time.
-    // The strip's note on the moment is left out - a handle would cut it.
-    const copies = (parts) => parts.map((part) => part.cloneNode(true));
-    const drawn = all(":scope > *", strip).filter((part) => !part.matches("[data-hover], [data-playhead], [data-flag], .ch-note"));
-    one("[data-trim-drawing]", dialog).replaceChildren(...copies(drawn));
-    one("[data-trim-axis]", dialog).replaceChildren(...copies(all("[data-trace] .ch-axis > *", article)));
-    one("[data-trim-lines]", dialog)?.replaceChildren(...copies(all("[data-chat] > [data-at]", article)));
+    if (windowed) {
+      // A recording: to begin with the stretch is the footage around where
+      // it was being watched. Opened again from the same place, the dialog
+      // is as it was left.
+      const at = watched.currentTime;
+      if (dialog.dataset.from === undefined || Math.abs(at - Number(dialog.dataset.openedAt)) > 1) {
+        const whole = Number(dialog.dataset.last);
+        const around = Number(dialog.dataset.around);
+        const from = clamp(at - around, 0, Math.max(whole - 2 * around, 0));
+        dialog.dataset.from = from.toFixed(2);
+        dialog.dataset.to = Math.min(from + 2 * around, whole).toFixed(2);
+      }
+      dialog.dataset.openedAt = String(at);
+    } else {
+      // A moment: the strip and the chat in the dialog are copies of the
+      // ones on the page, taken now - where chat sits may have been moved
+      // since last time. The strip's note on the moment is left out: a
+      // handle would cut it.
+      const trace = strip.closest("[data-trace]");
+      dialog.dataset.start = trace.dataset.start;
+      dialog.dataset.end = trace.dataset.end;
+      dialog.dataset.clip = trace.dataset.clipSeconds;
+      const copies = (parts) => parts.map((part) => part.cloneNode(true));
+      const drawn = all(":scope > *", strip).filter((part) => !part.matches("[data-hover], [data-playhead], [data-flag], .ch-note"));
+      one("[data-trim-drawing]", dialog).replaceChildren(...copies(drawn));
+      one("[data-trim-axis]", dialog).replaceChildren(...copies(all("[data-trace] .ch-axis > *", article)));
+      one("[data-trim-lines]", dialog)?.replaceChildren(...copies(all("[data-chat] > [data-at]", article)));
+    }
 
     dialog.showModal();
-    // To begin with the stretch is the clip, as it was cut.
-    const span = trimSpan(dialog);
+    // To begin with a moment's stretch is the clip, as it was cut.
     if (dialog.dataset.from === undefined) {
+      const span = trimSpan(dialog);
       dialog.dataset.from = "0";
       dialog.dataset.to = Math.min(span.clip, span.last).toFixed(2);
     }
     trimWas = Number(dialog.dataset.from);
-    video.currentTime = trimWas + span.lead;
-    paintTrim(dialog);
+    video.currentTime = trimWas + (Number(dialog.dataset.lead) || 0);
+    if (windowed) fitTrimWindow(dialog, { anew: true });
+    else paintTrim(dialog);
     askTrim(dialog);
   }
 
@@ -761,9 +921,8 @@
   function shiftTrimChat(slider) {
     const dialog = trimOf(slider);
     const seconds = Number(slider.value);
-    one("[data-trim-shift-words]", dialog).textContent = seconds
-      ? `Chat ${Math.abs(seconds)} s ${seconds > 0 ? "later" : "earlier"}`
-      : "Chat where the review page has it";
+    const words = one("[data-trim-shift-words]", dialog);
+    words.textContent = seconds ? `Chat ${Math.abs(seconds)} s ${seconds > 0 ? "later" : "earlier"}` : words.dataset.rest;
     paintTrim(dialog);
   }
 
@@ -787,7 +946,7 @@
     if (!still()) return;
     let trim = null;
     try {
-      const response = await fetch(`/moments/${dialog.closest(".moment").dataset.moment}/trim`);
+      const response = await fetch(dialog.dataset.trim);
       if (response.ok) trim = await response.json();
     } catch {
       // not reachable just now
@@ -807,17 +966,21 @@
     const chat = one("[data-trim-chat]", dialog);
     const shift = one("[data-trim-shift]", dialog);
     button.disabled = true;
-    const response = await post(`/moments/${dialog.closest(".moment").dataset.moment}/trim`, {
+    const response = await post(dialog.dataset.trim, {
       start: from,
       end: to,
       chat: Boolean(chat && chat.checked),
       chat_shift: shift ? Number(shift.value) : 0,
-      chat_background: trimBackground(dialog),
+      chat_background: chat ? trimBackground(dialog) : null,
     });
     if (!dialog.isConnected) return; // another moment was opened meanwhile
     if (!response || !response.ok) {
       button.disabled = false;
-      one("[data-trim-state]", dialog).textContent = "Could not start the cut. Try again.";
+      // What can't be cut is said by the service: too long for its chat to
+      // go with it, a disk too full.
+      one("[data-trim-state]", dialog).textContent = response
+        ? await problem(response, "Could not start the cut. Try again.")
+        : "Could not reach the service.";
       return;
     }
     showTrim(dialog, await response.json());
@@ -964,7 +1127,11 @@
     if (list && freshList) list.replaceWith(freshList);
     const open = one("[data-recording-open]");
     const freshOpen = one("[data-recording-open]", fresh);
-    if (open && freshOpen && !one("video", open)) open.replaceWith(freshOpen);
+    if (!open || !freshOpen || one("video", open)) return;
+    open.replaceWith(freshOpen);
+    // What has been saved meanwhile can be played, and has a trace.
+    dress();
+    loadRecordingTrace();
   }
 
   async function checkRecordings() {
@@ -1034,9 +1201,9 @@
 
   async function deleteRecording(button) {
     button.disabled = true;
-    // A file that is being played is held open, and can't be removed.
-    const video = one("[data-recording-clip]");
-    if (video) {
+    // A file that is being played is held open, and can't be removed - by
+    // the player on the page, or by the one in its Trim dialog.
+    for (const video of all("[data-recording-clip], .recording [data-trim-clip]")) {
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -1072,36 +1239,150 @@
   // How long the same place is left alone after it was asked about - for a
   // chat so busy that what came back did not reach where the video is.
   const CHAT_AGAIN_MS = 5000;
-  let chatOnItsWay = false;
-  let chatAsked = { at: -Infinity, when: 0 };
+  // What each such box was last asked for, by what it is in - the box
+  // itself is replaced with every stretch. There are two: the one beside
+  // the recording and the one in its Trim dialog.
+  const chatAsked = new WeakMap();
 
-  async function followRecordingChat(video) {
-    const box = one("[data-recording-chat]");
+  // Shows the lines of the box in `holder` up to the second of the
+  // recording that `now` gives - a function, as the answer may well be
+  // another by the time lines have been fetched.
+  async function followChat(holder, now) {
+    const box = holder && one("[data-recording-chat]", holder);
     if (!box) return;
-    const time = video.currentTime;
+    const time = now();
     reveal(box, time);
+    if (!chatAsked.has(holder)) chatAsked.set(holder, { at: -Infinity, when: 0, onItsWay: false });
+    const asked = chatAsked.get(holder);
     const outside = time < Number(box.dataset.first) || time > Number(box.dataset.last);
     const nearEnd = !("whole" in box.dataset) && time > Number(box.dataset.last) - CHAT_AHEAD_SECONDS;
-    const justAsked = Math.abs(time - chatAsked.at) < CHAT_AHEAD_SECONDS && performance.now() - chatAsked.when < CHAT_AGAIN_MS;
-    if (!(outside || nearEnd) || chatOnItsWay || justAsked) return;
+    const justAsked = Math.abs(time - asked.at) < CHAT_AHEAD_SECONDS && performance.now() - asked.when < CHAT_AGAIN_MS;
+    if (!(outside || nearEnd) || asked.onItsWay || justAsked) return;
 
-    chatOnItsWay = true;
-    chatAsked = { at: time, when: performance.now() };
+    Object.assign(asked, { at: time, when: performance.now(), onItsWay: true });
     let markup = null;
     try {
-      const response = await fetch(`${box.dataset.url}?at=${time.toFixed(1)}`);
+      const response = await fetch(`${box.dataset.url}?at=${Math.max(time, 0).toFixed(1)}`);
       if (response.ok) markup = await response.text();
     } catch {
       // the lines there are stay
     } finally {
-      chatOnItsWay = false;
+      asked.onItsWay = false;
     }
     const fresh = markup && one("[data-recording-chat]", new DOMParser().parseFromString(markup, "text/html"));
-    const current = one("[data-recording-chat]");
+    const current = one("[data-recording-chat]", holder);
     if (!fresh || !current) return;
     current.replaceWith(fresh);
     // The video may have been moved again while these were on their way.
-    followRecordingChat(video);
+    followChat(holder, now);
+  }
+
+  // Under a recording is what chat did over the whole of it (see
+  // _recording_trace.html): hours on one strip, to find one's way about
+  // them by. It is a scrubber like the strip under a clip, on the time of
+  // the recording's file. Counting that much chat takes the service a
+  // moment, so the page comes with a place for it and it is fetched here.
+
+  // A time in a recording, as its player writes it.
+  const longClock = (seconds) => {
+    const whole = Math.max(0, Math.floor(seconds || 0));
+    return `${Math.floor(whole / 3600)}:${twoDigits(Math.floor(whole / 60) % 60)}:${twoDigits(whole % 60)}`;
+  };
+
+  // Where on the trace the pointer has the recording while it is dragged
+  // along it: the player follows as fast as it can find the pictures.
+  let recordingDrag = null;
+
+  async function loadRecordingTrace() {
+    const place = one("[data-rec-trace-load]");
+    if (!place) return;
+    place.hidden = false;
+    let markup = null;
+    try {
+      const response = await fetch(place.dataset.recTraceLoad);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // said below
+    }
+    if (!place.isConnected) return; // another page of recordings by now
+    const figure = markup && one("[data-rec-trace]", new DOMParser().parseFromString(markup, "text/html"));
+    if (!figure) {
+      one("[data-rec-trace-words]", place).textContent = "What chat did over the recording could not be worked out. The server log says why.";
+      return;
+    }
+    place.replaceWith(figure);
+    const video = one("[data-recording-clip]");
+    if (video) paintRecording(video);
+  }
+
+  // Brings the chat beside a recording and the playhead on its trace in
+  // line with its player.
+  function paintRecording(video) {
+    followChat(one(".recording .chat"), () => video.currentTime);
+    const strip = one("[data-rec-strip]");
+    if (!strip) return;
+    const trace = strip.closest("[data-trace]");
+    const start = Number(trace.dataset.start);
+    const time = recordingDrag ?? video.currentTime;
+    const left = `${clamp((time - start) / (Number(trace.dataset.end) - start), 0, 1) * 100}%`;
+    one("[data-playhead]", strip).style.left = left;
+    const flag = one("[data-flag]", strip);
+    flag.style.setProperty("--at", left);
+    flag.textContent = longClock(time);
+    strip.setAttribute("aria-valuenow", time.toFixed(1));
+    strip.setAttribute("aria-valuetext", longClock(time));
+  }
+
+  // Takes the recording to where the trace is pressed or dragged to. A
+  // seek in a file of gigabytes takes a while, so one is not started
+  // before the last has landed; letting go always goes where it was let go.
+  function dragRecording(strip, event, { last = false } = {}) {
+    const video = one("[data-recording-clip]");
+    if (!video) return;
+    recordingDrag = last ? null : pointOn(strip, event).time;
+    if (last || !video.seeking) video.currentTime = pointOn(strip, event).time;
+    paintRecording(video);
+  }
+
+  // A pace the way the readout says it: whole where it is one, to a tenth
+  // where it is the average over a step.
+  function paceWords(pace, noun) {
+    const number = Number.isInteger(pace) || pace >= 10 ? String(Math.round(pace)) : pace.toFixed(1);
+    return noun ? `${number} ${noun}${number === "1" ? "" : "s"}` : number;
+  }
+
+  // Under the pointer: a hairline, and in the legend the pace of chat in
+  // the step it is over.
+  function readOutRecording(strip, event) {
+    const { share, time } = pointOn(strip, event);
+    const trace = strip.closest("[data-trace]");
+    const line = one("[data-hover]", strip);
+    line.hidden = false;
+    line.style.left = `${share * 100}%`;
+    const readout = one("[data-readout]", trace);
+    if (!readout) return;
+    const step = Number(trace.dataset.step);
+    const index = Math.floor((time - Number(trace.dataset.start)) / step);
+    const pace = (counts) => Number(counts.split(",")[index] || 0) / step;
+    const laughing = pace(strip.dataset.laugh);
+    readout.textContent = `${longClock(time)}: ${paceWords(pace(strip.dataset.all), "message")} a second${laughing ? `, ${paceWords(laughing)} laughing` : ""}`;
+  }
+
+  // Arrow keys step through the recording, Page Up and Down by the minute,
+  // Home and End go to its ends; with Shift, six times as far.
+  const RECORDING_KEYS = { ArrowLeft: -5, ArrowRight: 5, ArrowDown: -5, ArrowUp: 5, PageDown: -60, PageUp: 60 };
+
+  function recordingKey(strip, event) {
+    const video = one("[data-recording-clip]");
+    const trace = strip.closest("[data-trace]");
+    let time;
+    if (event.key === "Home") time = Number(trace.dataset.start);
+    else if (event.key === "End") time = Number(trace.dataset.end);
+    else if (event.key in RECORDING_KEYS) time = video.currentTime + RECORDING_KEYS[event.key] * (event.shiftKey ? 6 : 1);
+    else return false;
+    event.preventDefault();
+    video.currentTime = clamp(time, Number(trace.dataset.start), Number(trace.dataset.end));
+    return true;
   }
 
   // ---- Settings ---------------------------------------------------------
@@ -1313,9 +1594,32 @@
   });
 
   document.addEventListener("pointerout", (event) => {
-    const strip = event.target.closest("[data-strip]");
+    const strip = event.target.closest("[data-strip], [data-rec-strip]");
     if (strip && !strip.contains(event.relatedTarget)) stopReadOut(strip);
   });
+
+  // The trace under a recording is pressed and dragged along like the strip
+  // under a clip.
+  document.addEventListener("pointerdown", (event) => {
+    const strip = event.target.closest("[data-rec-strip]");
+    if (!strip || event.button !== 0) return;
+    strip.setPointerCapture(event.pointerId);
+    dragRecording(strip, event);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    const strip = event.target.closest("[data-rec-strip]");
+    if (!strip) return;
+    if (strip.hasPointerCapture(event.pointerId)) dragRecording(strip, event);
+    readOutRecording(strip, event);
+  });
+
+  for (const type of ["pointerup", "pointercancel"]) {
+    document.addEventListener(type, (event) => {
+      const strip = event.target.closest?.("[data-rec-strip]");
+      if (strip && recordingDrag !== null) dragRecording(strip, event, { last: true });
+    });
+  }
 
   // In the Trim dialog: pressing a handle takes hold of it, pressing the
   // strip anywhere else goes there, and dragging does either along it.
@@ -1342,7 +1646,12 @@
 
   for (const type of ["pointerup", "pointercancel"]) {
     document.addEventListener(type, () => {
+      const held = trimDrag;
       trimDrag = null;
+      // A handle let go of at an end of a recording's window: the window
+      // moves to where there is room to drag it further.
+      const dialog = held && one("[data-trim][open]");
+      if (dialog) fitTrimWindow(dialog);
     });
   }
 
@@ -1385,6 +1694,7 @@
       return;
     }
     if (target.matches("[data-strip]") && stripKey(target, event)) return;
+    if (target.matches("[data-rec-strip]") && recordingKey(target, event)) return;
     if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
 
     const key = event.key.toLowerCase();
@@ -1425,6 +1735,7 @@
     const target = event.target;
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
+    else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
@@ -1448,7 +1759,7 @@
   };
   onMedia("[data-clip]", paint);
   onMedia("[data-trim-clip]", trimTick);
-  onMedia("[data-recording-clip]", followRecordingChat);
+  onMedia("[data-recording-clip]", paintRecording);
   document.addEventListener("close", (event) => event.target.matches?.("[data-trim]") && leaveTrim(event.target), true);
 
   // The page's own transport is not on screen in full screen, so the
@@ -1466,7 +1777,8 @@
   currentRow()?.scrollIntoView({ block: "nearest" });
   if (one("[data-news]")) setInterval(checkForNew, NEWS_INTERVAL_MS);
   one('.rec-row[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
-  if (one("[data-recording-clip]")) followRecordingChat(one("[data-recording-clip]"));
+  if (one("[data-recording-clip]")) paintRecording(one("[data-recording-clip]"));
+  loadRecordingTrace();
   if (one('[data-recording-state="running"], [data-recording-state="saving"], [data-recording-row]')) watchRecordings();
   if (one("[data-always-record], [data-recordings]")) {
     setInterval(() => {

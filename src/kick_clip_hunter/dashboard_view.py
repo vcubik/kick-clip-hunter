@@ -177,10 +177,14 @@ TRIM_BUSY = frozenset({TRIM_CUTTING, TRIM_CHAT})
 TRIM_EARLY_SECONDS = 0.1
 
 
-def trim_words(state: str, early: float = 0.0) -> str:
+def trim_words(state: str, early: float = 0.0, stretch: tuple[float, float] | None = None) -> str:
     """What the Trim dialog says of a cut. `early` is how long before the
-    start that was set the video begins (see recorder.trim_clip)."""
+    start that was set the video begins (see recorder.trim_clip). `stretch`
+    is which seconds of a recording the cut holds: from hours of footage
+    more than one is cut, so one that is there to download is named."""
     words = TRIM_WORDS[state]
+    if stretch is not None and state == TRIM_READY:
+        words = f"{stream_time_words(stretch[0])} to {stream_time_words(stretch[1])} is ready to download."
     if early >= TRIM_EARLY_SECONDS and state in (TRIM_CHAT, TRIM_READY, TRIM_CHAT_FAILED):
         words += f" It begins {number_words(early, 1)} s before the start you set, on a frame a cut can begin on."
     return words

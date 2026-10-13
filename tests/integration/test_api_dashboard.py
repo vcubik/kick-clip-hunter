@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -33,9 +32,10 @@ from kick_clip_hunter import (
     tuning,
 )
 from kick_clip_hunter import dashboard_view as view
+from tests.support.browser import FakeBrowser
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
-from tests.support.media import decodes_cleanly, make_video, png_frame, probe, require_ffmpeg, video_stream
+from tests.support.media import decodes_cleanly, make_video, probe, require_ffmpeg, video_stream
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -1770,34 +1770,6 @@ class TestShuttingDown:
         assert "disabled" in button.attrs and button.text == "Shutting down"
 
 
-class FakeBrowser:
-    """Stands in for the browser a chat video is drawn with: remembers the
-    pages it was given and hands back a picture for every frame asked for.
-    `hold()` makes it wait before the first picture until `release()`."""
-
-    def __init__(self) -> None:
-        self.pages: list[str] = []
-        self.frames: list[int] = []
-        self.failure: Exception | None = None
-        self._waiting = threading.Event()
-        self._waiting.set()
-
-    def hold(self) -> None:
-        self._waiting.clear()
-
-    def release(self) -> None:
-        self._waiting.set()
-
-    def capture_frames(self, html, times):
-        self.pages.append(html)
-        self.frames.append(len(times))
-        assert self._waiting.wait(timeout=20), "the test never released the browser"
-        if self.failure is not None:
-            raise self.failure
-        for _ in times:
-            yield png_frame(rgba=(255, 255, 255, 128))
-
-
 @pytest.fixture(scope="module")
 def footage(tmp_path_factory) -> Path:
     """Twelve seconds of video with a frame a cut can begin on every two."""
@@ -1868,13 +1840,31 @@ class TestTrimming:
         # The button opens the dialog, which only the script can.
         assert "hidden" in article.one("button", **{"data-trim-open": True}).attrs
         assert "open" not in dialog.attrs
+        # Where the script asks for the cut, and about it.
+        assert dialog.attrs["data-trim"] == f"/moments/{moment_id}/trim"
         assert dialog.attrs["data-lead"] == "4" and dialog.attrs["data-last"] == "8"
+        # A moment's strip shows all of its footage: there is no window to move.
+        assert "data-window" not in dialog.attrs
         assert dialog.attrs["data-min"] == view.number_words(clip_trim.MIN_SECONDS)
         assert dialog.attrs["aria-labelledby"] == dialog.one("h2").attrs["id"] == f"trim-title-{moment_id}"
         assert dialog.one("video").attrs["data-src"] == "/clips/channel_a/moment_1.mp4"
         assert [handle.attrs["data-trim-handle"] for handle in dialog.find("div", role="slider")] == ["from", "to"]
         assert dialog.one("p", role="status").text == ""
         assert all("hidden" in link.attrs for link in dialog.find("a"))
+
+    async def test_either_end_of_the_cut_can_be_typed_as_a_time(self, service, footage):
+        self.clip_with_chat(footage)
+
+        dialog = await self.dialog(service)
+
+        fields = dialog.find("input", type="text")
+        assert [field.attrs["data-trim-type"] for field in fields] == ["from", "to"]
+        assert [field.attrs["aria-label"] for field in fields] == [
+            "Start of the cut, as a time",
+            "End of the cut, as a time",
+        ]
+        # How a clip time is written is said where the pointer rests on them.
+        assert "counts back from the clip's start" in dialog.one("span", class_="trim-range").attrs["title"]
 
     async def test_chat_can_go_with_it_and_be_moved_either_way(self, service, footage):
         self.clip_with_chat(footage)
@@ -1902,7 +1892,9 @@ class TestTrimming:
         dialog = await self.dialog(service)
 
         assert dialog is not None
-        assert dialog.find("input") == [] and dialog.find("div", class_="trim-chat") == []
+        # Nothing but the two times to type.
+        assert [field.attrs["type"] for field in dialog.find("input")] == ["text", "text"]
+        assert dialog.find("div", class_="trim-chat") == []
 
     async def test_a_file_that_is_the_clip_alone_can_be_cut_within_the_clip(self, service, footage):
         self.clip_with_chat(footage, context_before=None, context_after=None)
@@ -2202,7 +2194,9 @@ class TestTrimming:
 
         response = await self.ask(service, moment_id, **asked)
 
-        assert response.status_code == 400 and response.json()["detail"]
+        # Said as the dialog shows it: a sentence.
+        detail = response.json()["detail"]
+        assert response.status_code == 400 and detail[0].isupper() and detail.endswith(".")
         assert (await self.state(service, moment_id))["state"] == "none"
         assert service.main._background_tasks == set()
 

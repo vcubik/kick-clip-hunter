@@ -1,8 +1,9 @@
 """Trimming, before anything is cut: what the file is called, what may be
-asked for and where in a moment's file it lies.
+asked for and where in a moment's file, or a recording's, it lies.
 
 The cutting itself is in tests/integration/test_clip_cutting.py, the whole
-of it from the page's request on in tests/integration/test_api_dashboard.py.
+of it from the page's request on in tests/integration/test_api_dashboard.py
+(a moment) and tests/integration/test_api_recordings_page.py (a recording).
 """
 
 from __future__ import annotations
@@ -111,3 +112,91 @@ class TestWhatIsBehindChat:
 
     def test_what_the_dialog_starts_out_with_is_such_a_colour(self):
         assert clip_trim.chat_background(clip_trim.DEFAULT_CHAT_BACKGROUND) == clip_trim.DEFAULT_CHAT_BACKGROUND
+
+
+class TestAStretchOfAnyFootage:
+    """What a moment's stretch is checked by, on footage that is simply
+    there from one second to another - a recording's file."""
+
+    def test_it_is_the_stretch_that_was_asked_for(self):
+        assert clip_trim.stretch(0.0, 7200.0, 5025.5, 5070) == (5025.5, 5070.0)
+
+    def test_a_time_just_past_an_end_of_the_footage_is_taken_as_that_end(self):
+        slack = clip_trim.SLACK_SECONDS
+
+        assert clip_trim.stretch(0.0, 7200.0, -slack, 7200 + slack) == (0.0, 7200.0)
+
+    @pytest.mark.parametrize(("start", "end"), [(-2, 10), (7000, 7202), (9000, 9100)])
+    def test_one_beyond_the_footage_is_refused(self, start, end):
+        with pytest.raises(TrimError, match="not in the footage"):
+            clip_trim.stretch(0.0, 7200.0, start, end)
+
+    @pytest.mark.parametrize(("start", "end"), [(60, 60), (60, 60.5), (90, 30)])
+    def test_one_shorter_than_the_shortest_is_refused(self, start, end):
+        with pytest.raises(TrimError, match="at least"):
+            clip_trim.stretch(0.0, 7200.0, start, end)
+
+    def test_what_is_not_a_number_of_seconds_is_refused(self):
+        with pytest.raises(TrimError, match="start must be a number"):
+            clip_trim.stretch(0.0, 7200.0, "1:23:45", 5070)
+
+
+class TestChatGoingWithAStretch:
+    def test_a_stretch_as_long_as_the_longest_can_have_its_chat_as_a_video(self):
+        clip_trim.with_chat(clip_trim.CHAT_VIDEO_MAX_SECONDS)
+
+    def test_a_longer_one_is_refused_and_told_how_long_it_may_be(self):
+        with pytest.raises(TrimError) as refused:
+            clip_trim.with_chat(25.5 * 60)
+
+        assert str(refused.value).endswith("a stretch of up to 10 minutes, and this one is 25.5 minutes long")
+
+    def test_the_lines_a_chat_video_starts_out_with_are_looked_for_far_enough_back(self):
+        assert clip_trim.CHAT_VIDEO_LEAD_SECONDS >= 60
+
+
+class TestTheCutOfARecording:
+    """A recording's cut is named for the stretch it holds: there is more
+    than one to be had of a stream of hours."""
+
+    RECORDING = "2026-03-01_20-00_some_channel_7.mp4"
+
+    def test_it_is_named_after_the_recording_and_the_stretch(self):
+        name = clip_trim.recording_video_name(self.RECORDING, 5025.4, 5070.6)
+
+        assert name == "2026-03-01_20-00_some_channel_7_trim_1h23m45s-1h24m31s.mp4"
+
+    def test_a_stretch_in_the_first_hour_is_written_the_same_way(self):
+        assert clip_trim.recording_video_name(self.RECORDING, 0, 59.5) == (
+            "2026-03-01_20-00_some_channel_7_trim_0h00m00s-0h01m00s.mp4"
+        )
+
+    @pytest.mark.parametrize(("start", "end"), [(0, 30), (5025, 5071), (36000, 43199), (359999, 360000)])
+    def test_the_name_says_which_stretch_it_holds(self, start, end):
+        name = clip_trim.recording_video_name(self.RECORDING, start, end)
+
+        assert clip_trim.recording_stretch(self.RECORDING, name) == (start, end)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            RECORDING,
+            # Its chat video, and a cut that is not finished yet.
+            "2026-03-01_20-00_some_channel_7_trim_1h23m45s-1h24m31s_chat.mov",
+            "2026-03-01_20-00_some_channel_7_trim_1h23m45s-1h24m31s.part.mp4",
+            # Another recording's, whose name only begins the same.
+            "2026-03-01_20-00_some_channel_71_trim_0h00m00s-0h00m30s.mp4",
+            "2026-03-01_20-00_some_channel_7_trim.mp4",
+            "2026-03-01_20-00_some_channel_7_trim_1h2m3s-1h2m9s.mp4",
+            "notes.txt",
+        ],
+    )
+    def test_any_other_file_is_not_a_cut_of_the_recording(self, name):
+        assert clip_trim.recording_stretch(self.RECORDING, name) is None
+
+    def test_a_recording_whose_name_has_signs_in_it_is_matched_as_it_is_written(self):
+        recording = "a file (1) [x].mp4"
+        name = clip_trim.recording_video_name(recording, 10, 20)
+
+        assert clip_trim.recording_stretch(recording, name) == (10, 20)
+        assert clip_trim.recording_stretch("a file (2) [x].mp4", name) is None
