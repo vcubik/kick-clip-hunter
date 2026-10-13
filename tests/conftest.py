@@ -169,6 +169,7 @@ def _reset_module_state() -> None:
         kept.writer.close()
     recording_manager._stream_recordings.clear()
     recording_manager._held_bytes.clear()
+    recording_manager._held_off.clear()
     recording_manager._wake = None
 
     # Only if a test has imported the app - importing it here would make

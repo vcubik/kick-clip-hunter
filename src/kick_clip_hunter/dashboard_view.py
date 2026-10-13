@@ -544,6 +544,21 @@ RECORDING_STOPPED_WORDS = {
 }
 
 
+def recording_stopped_words(kept: bool, always: bool) -> str:
+    """What stopping a recording answers with. For a channel that is
+    recorded always it also says what stopping does not do: switch that
+    off."""
+    words = RECORDING_STOPPED_WORDS[kept]
+    return f"{words} The channel's next stream is recorded again." if always else words
+
+
+# What switching a channel to being recorded always, or back, answers with.
+ALWAYS_RECORD_WORDS = {
+    True: "Every stream of {channel} is recorded from when it goes live. Stopping a recording ends it for that stream.",
+    False: "Streams of {channel} are recorded only when you start a recording.",
+}
+
+
 def chat_delay_words(seconds: int) -> str:
     """Where chat is put against the picture, as the review page words it:
     how long before it arrived (see chat_trace.CHAT_DELAY_SECONDS)."""

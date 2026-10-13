@@ -310,6 +310,12 @@ def get_connection() -> sqlite3.Connection:
     if "own_tuning" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN own_tuning INTEGER NOT NULL DEFAULT 0")
 
+    # Whether every stream of the channel is kept whole, from when it goes
+    # live, without anyone starting the recording (see stream_recording.py).
+    # Off to begin with: a recording is big.
+    if "always_record" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN always_record INTEGER NOT NULL DEFAULT 0")
+
     return conn
 
 
@@ -413,14 +419,16 @@ def get_chat_identities(
 def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning FROM streamers ORDER BY added_at"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning, always_record"
+        " FROM streamers ORDER BY added_at"
     ).fetchall()
 
 
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled, own_tuning FROM streamers WHERE slug = ?", (slug,)
+        "SELECT broadcaster_user_id, tracking_enabled, own_tuning, always_record FROM streamers WHERE slug = ?",
+        (slug,),
     ).fetchone()
 
 
@@ -434,6 +442,14 @@ def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id:
 def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
     conn.execute(
         "UPDATE streamers SET tracking_enabled = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, broadcaster_user_id),
+    )
+    conn.commit()
+
+
+def set_streamer_always_record(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+    conn.execute(
+        "UPDATE streamers SET always_record = ? WHERE broadcaster_user_id = ?",
         (1 if enabled else 0, broadcaster_user_id),
     )
     conn.commit()

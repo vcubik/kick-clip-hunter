@@ -72,6 +72,7 @@ from .db import (
     set_chat_identity,
     set_flag,
     set_stream_recording_state,
+    set_streamer_always_record,
     set_streamer_own_tuning,
     set_streamer_tracking,
     update_moment_audio_events,
@@ -172,6 +173,18 @@ def _is_channel_tracked(slug: str) -> bool:
     try:
         row = get_streamer_by_slug(conn, slug)
         return bool(row["tracking_enabled"]) if row else False
+    finally:
+        conn.close()
+
+
+def _always_recorded_slugs() -> list[str]:
+    """The channels whose every stream is kept whole (see
+    _record_stream_by_itself). None while the service is shutting down."""
+    if _shutdown_requested:
+        return []
+    conn = get_connection()
+    try:
+        return [row["slug"] for row in get_streamers(conn) if row["always_record"]]
     finally:
         conn.close()
 
@@ -368,6 +381,8 @@ async def lifespan(app: FastAPI):
                 lambda: _flags.get("watching_enabled", True),
                 _is_channel_tracked,
                 _stream_recording_over,
+                _always_recorded_slugs,
+                _record_stream_by_itself,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -851,6 +866,11 @@ def _end_stream_recording(slug: str, ended_by: str) -> bool:
     kept = recording_manager.end_stream_recording(slug)
     if kept is None:
         return False
+    if ended_by != stream_recording.STREAM_ENDED:
+        # Its stream may well be on still. A channel that is recorded always
+        # is left alone until it is over - or stopping a recording would
+        # only start the next one.
+        recording_manager.hold_off(slug)
     writer = kept.writer
     conn = get_connection()
     try:
@@ -873,6 +893,82 @@ def _end_stream_recording(slug: str, ended_by: str) -> bool:
     )
     _save_stream_recording_soon(kept.recording_id, slug, writer.folder, writer.seconds, writer.size)
     return True
+
+
+class _NotStarted(Exception):
+    """Why a stream recording was not started, in words for whoever asked
+    for it, with the HTTP status that goes with them."""
+
+    def __init__(self, status_code: int, words: str) -> None:
+        super().__init__(words)
+        self.status_code = status_code
+        self.words = words
+
+
+def _start_stream_recording(slug: str, broadcaster_user_id: int) -> int:
+    """Starts keeping a channel's stream whole and returns the recording's
+    id - or says why not (_NotStarted): the channel is being recorded
+    already, or the disk is too full."""
+    if recording_manager.stream_recording_of(slug) is not None:
+        raise _NotStarted(409, f"{slug} is being recorded already.")
+    room = recording_manager.room_left()
+    if room < recording_manager.MIN_FREE_BYTES:
+        raise _NotStarted(
+            409,
+            "The disk is too full to start a recording: "
+            f"{dashboard_view.size_words(max(room, 0))} would be left once what is being recorded "
+            f"is saved, and it takes {dashboard_view.size_words(recording_manager.MIN_FREE_BYTES)}.",
+        )
+    conn = get_connection()
+    try:
+        recording_id = insert_stream_recording(
+            conn,
+            broadcaster_user_id=broadcaster_user_id,
+            channel_slug=slug,
+            requested_at=datetime.now(timezone.utc).isoformat(),
+            state=stream_recording.RECORDING,
+        )
+    finally:
+        conn.close()
+    try:
+        recording_manager.start_stream_recording(slug, broadcaster_user_id, recording_id)
+    except OSError:
+        # Nowhere to keep it: there is no recording, so there is no row.
+        logger.exception("[%s] stream recording %d could not be started", slug, recording_id)
+        conn = get_connection()
+        try:
+            delete_stream_recording(conn, recording_id)
+        finally:
+            conn.close()
+        raise _NotStarted(500, "Could not make a place to keep the recording. The server log says why.") from None
+    return recording_id
+
+
+async def _record_stream_by_itself(slug: str) -> None:
+    """What the recording loop calls when a channel that is recorded always
+    is live and nothing is keeping its stream (see
+    recording_manager.run_forever): a recording is started, as the button on
+    the Channels page starts one. If it can't be, the channel is left alone
+    until its next stream instead of being tried again every round."""
+    if _shutdown_requested:
+        return
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+    finally:
+        conn.close()
+    if row is None or not row["always_record"]:
+        return  # switched off since the loop last looked
+    try:
+        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"])
+    except _NotStarted as refused:
+        recording_manager.hold_off(slug)
+        logger.warning(
+            "[%s] is live and set to be recorded always, but this stream is not being recorded: %s",
+            slug, refused.words,
+        )
+        return
+    logger.info("[%s] stream recording %d started by itself - the channel is recorded always", slug, recording_id)
 
 
 async def _stream_recording_over(slug: str, why: str) -> None:
@@ -1275,21 +1371,25 @@ def _right_now(streamers) -> dict:
     recordings_status)."""
     tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
     # A channel is looked at for either reason: it is tracked for clips, or
-    # its stream is being kept whole.
+    # its stream is being kept whole - or will be once it is on. One whose
+    # recording was ended is not looked at for that until its next stream.
     whole_streams = set(recording_manager.stream_recordings())
+    awaited = {
+        row["slug"] for row in streamers if row["always_record"] and not recording_manager.is_held_off(row["slug"])
+    }
     live = set(recording_manager.recording_channels())
     watching = _flags.get("watching_enabled", True)
     return {
         "live": bool(live),
         "words": dashboard_view.now_words(live=bool(live), recorded=bool(live & whole_streams)),
-        "count": dashboard_view.channel_count_words(len(live), len(tracked | whole_streams)),
+        "count": dashboard_view.channel_count_words(len(live), len(tracked | whole_streams | awaited)),
         "channels": {
             slug: {
                 "live": slug in live,
                 "words": dashboard_view.now_words(
                     live=slug in live,
                     recorded=slug in whole_streams,
-                    looked_at=slug in whole_streams or (watching and slug in tracked),
+                    looked_at=slug in whole_streams or slug in awaited or (watching and slug in tracked),
                 ),
             }
             for slug in (row["slug"] for row in streamers)
@@ -1469,6 +1569,7 @@ async def dashboard_channels(request: Request):
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
                         "tracking_enabled": bool(row["tracking_enabled"]),
+                        "always_record": bool(row["always_record"]),
                         # Its stream being kept whole, or the last such
                         # recording still being saved - None if neither.
                         "whole_stream": whole_streams.get(row["slug"]),
@@ -1661,6 +1762,9 @@ async def dashboard_recordings(request: Request, recording: int | None = None):
                     _open_recording(conn, opened, today, not_over.get(opened["id"])) if opened is not None else None
                 ),
                 "mark": _recordings_mark(not_over, len(rows)),
+                # Whether a recording may begin without anyone on a page
+                # having started it - which the page then has to ask about.
+                "awaited": any(row["always_record"] for row in context["streamers"]),
                 "free_words": dashboard_view.free_room_words(stream_recording.free_bytes()),
             }
         )
@@ -1965,42 +2069,14 @@ async def start_channel_recording(slug: str):
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, slug)
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
-        if recording_manager.stream_recording_of(slug) is not None:
-            raise HTTPException(status_code=409, detail=f"{slug} is being recorded already.")
-        room = recording_manager.room_left()
-        if room < recording_manager.MIN_FREE_BYTES:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "The disk is too full to start a recording: "
-                    f"{dashboard_view.size_words(max(room, 0))} would be left once what is being recorded "
-                    f"is saved, and it takes {dashboard_view.size_words(recording_manager.MIN_FREE_BYTES)}."
-                ),
-            )
-        recording_id = insert_stream_recording(
-            conn,
-            broadcaster_user_id=row["broadcaster_user_id"],
-            channel_slug=slug,
-            requested_at=datetime.now(timezone.utc).isoformat(),
-            state=stream_recording.RECORDING,
-        )
     finally:
         conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
     try:
-        recording_manager.start_stream_recording(slug, row["broadcaster_user_id"], recording_id)
-    except OSError:
-        # Nowhere to keep it: there is no recording, so there is no row.
-        logger.exception("[%s] stream recording %d could not be started", slug, recording_id)
-        conn = get_connection()
-        try:
-            delete_stream_recording(conn, recording_id)
-        finally:
-            conn.close()
-        raise HTTPException(
-            status_code=500, detail="Could not make a place to keep the recording. The server log says why."
-        ) from None
+        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"])
+    except _NotStarted as refused:
+        raise HTTPException(status_code=refused.status_code, detail=refused.words) from None
     logger.info("[%s] stream recording %d started", slug, recording_id)
     return {"slug": slug, "recording": _by_channel(_stream_recordings_not_over()).get(slug)}
 
@@ -2011,17 +2087,47 @@ async def stop_channel_recording(slug: str):
     its file in the background; one that kept nothing is forgotten."""
     conn = get_connection()
     try:
-        if get_streamer_by_slug(conn, slug) is None:
-            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        row = get_streamer_by_slug(conn, slug)
     finally:
         conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
     if recording_manager.stream_recording_of(slug) is None:
         raise HTTPException(status_code=409, detail=f"{slug} is not being recorded.")
     kept = _end_stream_recording(slug, stream_recording.STOPPED)
     return {
         "slug": slug,
         "recording": _by_channel(_stream_recordings_not_over()).get(slug),
-        "said": dashboard_view.RECORDING_STOPPED_WORDS[kept],
+        "said": dashboard_view.recording_stopped_words(kept, bool(row["always_record"])),
+    }
+
+
+@app.post("/channels/{slug}/always_record")
+async def set_channel_always_record(slug: str, enabled: int = 1):
+    """Sets whether every stream of a channel is kept whole: with it on, a
+    recording is started whenever the channel is live and none is running -
+    as soon as the recording loop has looked, if it is live now. A recording
+    that is running is left as it is either way, and the buttons that start
+    and stop one work as they do without it. Stopping one ends it for that
+    stream, not for the next."""
+    value = bool(enabled)
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        set_streamer_always_record(conn, row["broadcaster_user_id"], value)
+    finally:
+        conn.close()
+    # Set afresh, it holds for the stream that is on as well - whatever was
+    # stopped in it before.
+    recording_manager.stop_holding_off(slug)
+    recording_manager.wake()
+    logger.info("always recording %s -> %s", slug, "on" if value else "off")
+    return {
+        "slug": slug,
+        "always_record": value,
+        "said": dashboard_view.ALWAYS_RECORD_WORDS[value].format(channel=slug),
     }
 
 

@@ -40,7 +40,8 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
 - **Records a whole stream when asked.** A channel's stream can be recorded whole from the
   Channels page - tracked for clips or not, started ahead of the stream or in the middle of it -
   until it is stopped or the stream is over. It ends up as one video file, and the Recordings page
-  plays it with the chat that went with it replayed beside it.
+  plays it with the chat that went with it replayed beside it. A channel can also be set to be
+  recorded always: every stream of it is then recorded from when it goes live.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.

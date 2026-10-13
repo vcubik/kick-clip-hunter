@@ -475,7 +475,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .watchlist th { height: var(--h-compact); font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
 .watchlist td { height: var(--h-row); border-top: 1px solid var(--quiet); }
 .watchlist td:first-child { font-weight: 700; }
-.watchlist th:nth-last-child(-n+2), .watchlist td:nth-last-child(-n+2) { width: 1%; white-space: nowrap; }
+.watchlist th:nth-last-child(-n+3), .watchlist td:nth-last-child(-n+3) { width: 1%; white-space: nowrap; }
 .watchlist th:last-child, .watchlist td:last-child { padding-right: 0; text-align: right; }
 .add-channel { margin-top: var(--space-16); }
 .add-channel .ch-input { width: 220px; }

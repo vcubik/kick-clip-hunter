@@ -791,3 +791,26 @@ class TestRecordingsInWords:
 
     def test_how_much_room_the_disk_has_left(self):
         assert view.free_room_words(225 * 1024**3) == "225 GB free on the disk recordings are kept on."
+
+
+class TestRecordingAlwaysInWords:
+    def test_stopping_a_recording_says_what_became_of_it(self):
+        assert view.recording_stopped_words(True, False) == "Saving the recording. It will be on the Recordings page."
+        assert view.recording_stopped_words(False, False) == "Nothing had been recorded yet."
+
+    def test_for_a_channel_recorded_always_it_also_says_that_this_did_not_switch_that_off(self):
+        assert view.recording_stopped_words(True, True) == (
+            "Saving the recording. It will be on the Recordings page. The channel's next stream is recorded again."
+        )
+        assert view.recording_stopped_words(False, True) == (
+            "Nothing had been recorded yet. The channel's next stream is recorded again."
+        )
+
+    def test_the_switch_says_what_it_does_either_way(self):
+        assert view.ALWAYS_RECORD_WORDS[True].format(channel="some_channel") == (
+            "Every stream of some_channel is recorded from when it goes live. "
+            "Stopping a recording ends it for that stream."
+        )
+        assert view.ALWAYS_RECORD_WORDS[False].format(channel="some_channel") == (
+            "Streams of some_channel are recorded only when you start a recording."
+        )

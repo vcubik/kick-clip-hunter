@@ -291,6 +291,7 @@ class TestWatchlist:
             "Added",
             "Right now",
             "Clip tracking",
+            "Always record",
             "Stream recording",
         ]
 
