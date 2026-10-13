@@ -1,0 +1,108 @@
+{#- The streams that were kept whole: the list on the left, the newest
+    first, and the one that is open beside it - its video, with the chat
+    that went with it replayed in step. A recording that is not over yet
+    says what it is doing instead, and the script keeps that current. -#}
+{% extends "base.html" %}
+{% block title %}Recordings{% endblock %}
+
+{#- Deleting is asked for twice: the button, then the same word again next
+    to a sentence that says what it will do. -#}
+{% macro delete(recording, what) -%}
+<span class="ch-line" data-delete>
+  <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-open>Delete</button>
+  <span class="ch-line" hidden data-delete-confirm>
+    <span>{{ what }}</span>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-primary" data-delete-go="{{ recording.id }}">Delete</button>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-cancel>Cancel</button>
+  </span>
+</span>
+{%- endmacro %}
+
+{% block main %}
+<main class="recordings">
+<aside class="queue" aria-label="Recordings" data-recordings data-mark="{{ mark }}">
+  <div class="queue-list">
+    {% for item in recordings %}
+    <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %}{% if item.running %} data-recording-row="{{ item.id }}"{% endif %}>
+      <b>{{ item.channel }}</b>
+      <span class="rec-length"{% if item.running %} data-recording-words{% endif %}>{{ item.words or item.length or "" }}</span>
+      <span class="rec-when">{{ item.when }}</span>
+    </a>
+    {% else %}
+    <p class="queue-empty">No recordings yet</p>
+    {% endfor %}
+  </div>
+  <p class="queue-foot">{{ free_words }}</p>
+</aside>
+
+<div class="open" data-recording-open>
+  {% if not recording %}
+  <section class="statement">
+    <h1 class="heading">No recordings yet</h1>
+    <p class="lead">A recording keeps a channel's whole stream and its chat. Start one next to the channel on the Channels page. It is listed here from then on, and can be played once it has been stopped and saved.</p>
+    <a class="ch-btn" href="/dashboard/channels">Go to Channels</a>
+  </section>
+  {% elif recording.standing == "playable" %}
+  <article class="recording" data-status-scope>
+    <div class="stage">
+    <div class="stage-in">
+      <header class="moment-head">
+        <div>
+          <h1 class="title">{{ recording.channel }}</h1>
+          <p class="moment-when">{{ recording.when }}</p>
+        </div>
+        <p class="moment-clock"><span class="counter">{{ recording.length }}</span> <span>recorded</span></p>
+      </header>
+      <div class="player">
+        <video src="{{ recording.video_url }}" controls preload="metadata" playsinline data-recording-clip></video>
+      </div>
+      {% if recording.summary %}<p class="moment-summary">{{ recording.summary }}</p>{% endif %}
+      <div class="ch-line rec-file">
+        <a class="ch-btn ch-btn-compact" href="{{ recording.video_url }}" download>Download</a>
+        <span class="ch-meta">{{ recording.file }}</span>
+        <span class="ch-gap"></span>
+        {{ delete(recording, "Removes the file for good.") }}
+      </div>
+      <p class="status-line" role="status" data-status></p>
+    </div>
+    </div>
+
+    {#- Every line carries the second of the file it belongs to; the script
+        shows the ones up to where the video is. -#}
+    <aside class="chat" aria-label="Chat">
+      <div class="chat-head"><h2>Chat</h2> <span>replayed with the recording</span></div>
+      {% with chat = recording.chat %}
+      {% include "_recording_chat.html" %}
+      {% endwith %}
+      <div class="chat-foot">
+        <p>{{ recording.chat_delay_words }}, as the channel has it on the review page.</p>
+      </div>
+    </aside>
+  </article>
+  {% else %}
+  <section class="statement" data-status-scope>
+    {% if recording.standing == "running" %}
+    <h1 class="heading">Recording {{ recording.channel }}</h1>
+    <p class="lead" data-recording="{{ recording.channel }}" data-recording-state="running"><span data-recording-words>{{ recording.words }}</span>. It can be played here once it has been stopped and saved.</p>
+    <a class="ch-btn" href="/dashboard/channels">Go to Channels</a>
+    {% elif recording.standing == "saving" %}
+    <h1 class="heading">Saving the recording of {{ recording.channel }}</h1>
+    <p class="lead">Its footage is being made into one file, which takes about as long as copying it would: minutes for a long stream. It can be played here when that is done.</p>
+    {% elif recording.standing == "gone" %}
+    <h1 class="heading">The file of this recording is gone</h1>
+    <p class="lead">It was {{ recording.file }}. Deleting the recording takes it off this list.</p>
+    {{ delete(recording, "Takes the recording off the list.") }}
+    {% else %}
+    <h1 class="heading">This recording could not be saved</h1>
+    <p class="lead">No file came of it. What was recorded of {{ recording.channel }} is still in {{ recording.folder }}, and the server log says what went wrong.</p>
+    <div class="ch-line">
+      <button type="button" class="ch-btn" data-save-again="{{ recording.id }}">Try saving again</button>
+      {{ delete(recording, "Removes what was recorded for good.") }}
+    </div>
+    {% endif %}
+    <p class="status-line" role="status" data-status></p>
+  </section>
+  {% endif %}
+</div>
+</main>
+{% endblock %}

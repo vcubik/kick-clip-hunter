@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -419,11 +419,25 @@ def chat_replay(
     identities: Mapping[str, chat_identity.Identity] | None = None,
 ) -> list[dict[str, Any]]:
     """The chat lines to show beside a clip, each with the clip time it
-    belongs to and whether it was sent during the moment. `emotes` are the
-    channel's 7TV emotes, drawn as pictures (see dashboard_view.chat_parts).
-    `identities` are what is known of the chatters by name: the colour
-    their name has on Kick and their badges (see chat_identity). Someone
-    unknown, or without a colour, keeps the colour worked out from the name."""
+    belongs to and whether it was sent during the moment (see chat_lines)."""
+    return chat_lines(messages, timeline.at, emotes, identities, window)
+
+
+def chat_lines(
+    messages: Iterable[Row],
+    second_of: Callable[[datetime], float],
+    emotes: Mapping[str, tuple[str, int, int]] | None = None,
+    identities: Mapping[str, chat_identity.Identity] | None = None,
+    window: tuple[datetime, datetime] | None = None,
+) -> list[dict[str, Any]]:
+    """Chat lines to show beside a video, each with the second of it the
+    line belongs to: what `second_of` makes of when the message arrived.
+    `emotes` are the channel's 7TV emotes, drawn as pictures (see
+    dashboard_view.chat_parts). `identities` are what is known of the
+    chatters by name: the colour their name has on Kick and their badges
+    (see chat_identity). Someone unknown, or without a colour, keeps the
+    colour worked out from the name. A line sent during `window`, a
+    moment's, is marked as such."""
     identities = identities or {}
     lines = []
     for message in messages:
@@ -436,7 +450,7 @@ def chat_replay(
                 "own_colour": chat_identity.readable(own_colour) if own_colour else None,
                 "badges": chat_identity.badge_parts(badges),
                 "parts": chat_parts(message["content"] or "", emotes),
-                "at": number_words(timeline.at(_arrived(message)), 1),
+                "at": number_words(second_of(_arrived(message)), 1),
                 "in_moment": _during(message, window),
             }
         )

@@ -411,8 +411,21 @@ def empty_queue_words(show: str, channel: str | None, newest: datetime | None, t
 # -- the service ------------------------------------------------------------
 
 
+def now_words(*, live: bool, recorded: bool = False, looked_at: bool = True) -> str:
+    """What a channel is doing right now, in a word or two - and, in the top
+    bar, the service as a whole. "Live" is a channel whose stream is coming
+    in; "Recording" is kept for one whose stream is also being kept whole
+    (`recorded`), so that the word means one thing. A channel nothing is
+    coming in from is not live as far as the service can tell - or, if it is
+    neither tracked nor recorded (`looked_at`), simply not looked at."""
+    if live:
+        return "Recording" if recorded else "Live"
+    return "Not live" if looked_at else "Not watched"
+
+
 def channel_count_words(recording: int, tracked: int) -> str:
-    """The words beside the recording lamp in the top bar."""
+    """The words beside the lamp in the top bar: how many of the channels
+    that are looked at are live (`recording`: their streams are coming in)."""
     if tracked == 0:
         return "No channels watched"
     if recording:
@@ -422,7 +435,9 @@ def channel_count_words(recording: int, tracked: int) -> str:
 
 def service_words(*, recording: int, tracked: int, watchlist: int, watching: bool, shutting_down: bool) -> str:
     """What the service is doing right now, for a page with no moment to
-    show - so that "nothing new" can be told apart from "not running"."""
+    show - so that "nothing new" can be told apart from "not running".
+    `recording` is how many of the `tracked` channels are live, their
+    streams coming in."""
     if shutting_down:
         return "The service is shutting down, so nothing new is being watched."
     if watchlist == 0:
@@ -435,27 +450,152 @@ def service_words(*, recording: int, tracked: int, watchlist: int, watching: boo
     lands = "the moment lands in the queue"
     if tracked == 1:
         if recording:
-            return f"The watched channel is live and being recorded. When its chat erupts, {lands}."
-        return f"The watched channel is not being recorded right now. When it goes live and its chat erupts, {lands}."
+            return f"The watched channel is live. When its chat erupts, {lands}."
+        return f"The watched channel is not live right now. When it goes live and its chat erupts, {lands}."
     if recording == 0:
         return (
-            f"None of the {tracked} watched channels is being recorded right now. "
+            f"None of the {tracked} watched channels is live right now. "
             f"When one goes live and its chat erupts, {lands}."
         )
     are = "is" if recording == 1 else "are"
-    return f"{recording} of the {tracked} watched channels {are} live and being recorded. When chat erupts, {lands}."
+    return f"{recording} of the {tracked} watched channels {are} live. When chat erupts, {lands}."
+
+
+# What a shutdown can be waiting on; the script says the same when the
+# button is pressed.
+SHUTDOWN_JOBS_WORDS = "clips being cut or analysed, recordings being saved"
 
 
 def shutdown_words(pending: int) -> str:
     """What a shutdown that has been asked for is still waiting on. `pending`
-    counts open moments and the work that follows one: cutting its clip, its
-    context clips, each analysis step."""
+    counts open moments and the work that follows one - cutting its clip,
+    each analysis step - and stream recordings being made into their files."""
     if pending == 0:
         return "Nothing new is being watched."
     return (
-        f"Waiting for {count_words(pending, 'job')} to finish (clips being cut or analysed). "
-        "Nothing new is being watched."
+        f"Waiting for {count_words(pending, 'job')} to finish ({SHUTDOWN_JOBS_WORDS}). Nothing new is being watched."
     )
+
+
+# -- stream recordings --------------------------------------------------------
+
+
+def size_words(size: int) -> str:
+    """How much room something takes, as it is said: "512 MB", "4.2 GB"."""
+    megabytes = size / 1024**2
+    if megabytes < 1000:
+        return f"{round(megabytes)} MB"
+    return f"{number_words(megabytes / 1024, 1)} GB"
+
+
+def duration_words(seconds: float) -> str:
+    """A length of time written out: "38 seconds", "1 minute 32 seconds",
+    "2 hours 5 minutes" - to the second up to an hour, to the minute past it."""
+    whole = round(seconds)
+    if whole < 1:
+        return "less than a second"
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    words = []
+    if hours:
+        words.append(count_words(hours, "hour"))
+    if minutes:
+        words.append(count_words(minutes, "minute"))
+    if secs and not hours:
+        words.append(count_words(secs, "second"))
+    return " ".join(words)
+
+
+def recording_state(
+    recording_id: int, *, running: bool, on_air: bool = False, seconds: float | None = None, size: int = 0
+) -> dict[str, Any]:
+    """What the pages say of a stream recording that is not over yet: one
+    that runs (`running`; `on_air` while its channel's stream is coming in)
+    or one that is being made into its file. `seconds` is how much footage
+    it has, where that is known, and `size` how much room that takes."""
+    kept = f"{stream_time_words(seconds)} recorded" if seconds else None
+    if not running:
+        words = f"Saving {stream_time_words(seconds)}" if seconds else "Saving"
+    elif kept and on_air:
+        words = f"{kept}, {size_words(size)}"
+    elif kept:
+        words = f"{kept}, the stream is off"
+    elif on_air:
+        words = "Starting"
+    else:
+        words = "Waiting for the stream"
+    return {"id": recording_id, "running": running, "words": words}
+
+
+def recording_row_words(state: str, not_over: Mapping[str, Any] | None) -> str | None:
+    """What a recording's row in the list says beyond when it was and how
+    long it runs: what it is doing while it is not over (`not_over`, see
+    recording_state), or that no file came of it. Nothing for one that can
+    simply be played."""
+    if not_over is not None:
+        return not_over["words"]
+    return "Not saved" if state == "failed" else None
+
+
+# What stopping a recording answers with: whether it had kept anything.
+RECORDING_STOPPED_WORDS = {
+    True: "Saving the recording. It will be on the Recordings page.",
+    False: "Nothing had been recorded yet.",
+}
+
+
+def chat_delay_words(seconds: int) -> str:
+    """Where chat is put against the picture, as the review page words it:
+    how long before it arrived (see chat_trace.CHAT_DELAY_SECONDS)."""
+    if seconds > 0:
+        return f"Chat {seconds} s earlier"
+    return f"Chat {-seconds} s later" if seconds < 0 else "Chat as it arrived"
+
+
+def recording_span_words(started: datetime, ended: datetime | None, today: date) -> str:
+    """When a recording's footage was on air: "Yesterday, 21:04 to 23:31"."""
+    words = f"{sentence_case(day_words(started.date(), today))}, {clock_words(started)}"
+    return f"{words} to {clock_words(ended)}" if ended else words
+
+
+# Why a recording ended, where that is worth a sentence (the keys are
+# stream_recording.py's). One that was stopped by hand needs none. `{grace}`
+# is how long a stream has to have been gone for its recording to end itself.
+RECORDING_ENDED_WORDS = {
+    "stopped": "",
+    "stream_ended": "It ended by itself once the stream had been gone for {grace}.",
+    "disk_full": "It was ended because the disk was running out of room.",
+    "write_failed": "It was ended because its footage could no longer be written to the disk.",
+    "shutdown": "It was ended by the service being shut down.",
+    "interrupted": "The service stopped while it was running, which is where it ends.",
+}
+
+
+def recording_summary_words(
+    size: int | None, parts: int, missing: float, ended_by: str | None, grace_seconds: float
+) -> str:
+    """What is worth knowing of a recording that can be played, in a
+    sentence or three: how big its file is, whether the stream broke off
+    while it was recorded (`parts` is how many unbroken stretches the file
+    is made of, `missing` how many seconds of the stream fell between them)
+    and why it ended."""
+    sentences = []
+    if size:
+        sentences.append(f"{size_words(size)}.")
+    if parts > 1:
+        sentences.append(
+            f"The recording has {count_words(parts - 1, 'break')}, "
+            f"where the file is missing {duration_words(missing)} of the stream."
+        )
+    ended = RECORDING_ENDED_WORDS.get(ended_by or "", "").format(grace=duration_words(grace_seconds))
+    if ended:
+        sentences.append(ended)
+    return " ".join(sentences)
+
+
+def free_room_words(free: int) -> str:
+    """How much room the disk recordings are kept on has left."""
+    return f"{size_words(free)} free on the disk recordings are kept on."
 
 
 def own_settings_words(channels: list[str]) -> str | None:

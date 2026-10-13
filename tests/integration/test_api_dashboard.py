@@ -22,7 +22,16 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import chat_trace, chat_video, clip_trim, db, recorder, recording_manager, tuning
+from kick_clip_hunter import (
+    chat_trace,
+    chat_video,
+    clip_trim,
+    db,
+    recorder,
+    recording_manager,
+    stream_recording,
+    tuning,
+)
 from kick_clip_hunter import dashboard_view as view
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
@@ -175,7 +184,9 @@ class TestEmptyInstallation:
         assert "hidden" in news.attrs
         assert (news.attrs["data-moments"], news.attrs["data-clips"]) == ("0", "0")
 
-    @pytest.mark.parametrize("path", ["/dashboard", "/dashboard/channels", "/dashboard/settings"])
+    @pytest.mark.parametrize(
+        "path", ["/dashboard", "/dashboard/recordings", "/dashboard/channels", "/dashboard/settings"]
+    )
     async def test_the_stylesheet_and_the_script_a_page_asks_for_are_served(self, service, path):
         page = await page_at(service, path)
 
@@ -191,27 +202,37 @@ class TestEmptyInstallation:
 class TestTheBarAcrossTheTop:
     @pytest.mark.parametrize(
         ("path", "name"),
-        [("/dashboard", "Review"), ("/dashboard/channels", "Channels"), ("/dashboard/settings", "Settings")],
+        [
+            ("/dashboard", "Review"),
+            ("/dashboard/recordings", "Recordings"),
+            ("/dashboard/channels", "Channels"),
+            ("/dashboard/settings", "Settings"),
+        ],
     )
     async def test_marks_the_page_you_are_on(self, service, path, name):
         page = await page_at(service, path)
 
         links = page.one("nav", class_="bar-nav").find("a")
-        assert [link.text for link in links] == ["Review", "Channels", "Settings"]
-        assert [link.attrs["href"] for link in links] == ["/dashboard", "/dashboard/channels", "/dashboard/settings"]
+        assert [link.text for link in links] == ["Review", "Recordings", "Channels", "Settings"]
+        assert [link.attrs["href"] for link in links] == [
+            "/dashboard",
+            "/dashboard/recordings",
+            "/dashboard/channels",
+            "/dashboard/settings",
+        ]
         assert [link.text for link in links if link.attrs.get("aria-current") == "page"] == [name]
 
-    async def test_says_when_nothing_is_being_recorded(self, service):
+    async def test_says_when_no_channel_is_live(self, service):
         add_streamer("channel_a", 1)
         add_streamer("channel_b", 2)
 
         bar = (await review(service)).one("header", class_="bar")
 
-        assert bar.one("span", class_="ch-lamp").text == "Not recording"
+        assert bar.one("span", class_="ch-lamp").text == "Not live"
         assert "ch-lamp-rec" not in bar.one("span", class_="ch-lamp").classes
         assert bar.one("span", class_="bar-meta").text == "2 channels watched"
 
-    async def test_says_how_many_channels_are_being_recorded(self, service, monkeypatch):
+    async def test_says_how_many_channels_are_live(self, service, monkeypatch):
         add_streamer("channel_a", 1)
         add_streamer("channel_b", 2)
         add_streamer("paused_channel", 3, tracking=False)
@@ -219,7 +240,7 @@ class TestTheBarAcrossTheTop:
 
         bar = (await review(service)).one("header", class_="bar")
 
-        assert bar.one("span", class_="ch-lamp-rec").text == "Recording"
+        assert bar.one("span", class_="ch-lamp-rec").text == "Live"
         assert bar.one("span", class_="bar-meta").text == "1 of 2 channels"
 
     async def test_the_watching_switch_reflects_what_was_set(self, service):
@@ -240,12 +261,38 @@ class TestWatchlist:
         page = await channels(service)
 
         added = view.date_words(datetime.now(timezone.utc).astimezone().date(), today)
-        assert self.rows(page) == [
-            ["first_channel", added, "Recording", "Off On"],
-            ["second_channel", added, "Not recording", "Off On"],
+        # The fifth cell is the channel's stream recording (see
+        # test_api_recordings.py).
+        assert [cells[:4] for cells in self.rows(page)] == [
+            ["first_channel", added, "Live", "Off On"],
+            ["second_channel", added, "Not watched", "Off On"],
         ]
         states = switch_states(page)
         assert (states["Tracking first_channel"], states["Tracking second_channel"]) == ("On", "Off")
+
+    async def test_a_tracked_channel_that_is_not_live_says_so(self, service):
+        add_streamer("first_channel", 111)
+
+        assert self.rows(await channels(service))[0][2] == "Not live"
+
+    async def test_with_watching_off_no_channel_is_watched(self, service):
+        add_streamer("first_channel", 111)
+        await service.client.post("/settings/watching?enabled=0")
+
+        assert self.rows(await channels(service))[0][2] == "Not watched"
+
+    async def test_the_columns_say_what_each_control_is_for(self, service):
+        add_streamer("first_channel", 111)
+
+        page = await channels(service)
+
+        assert [cell.text for cell in page.one("table").one("thead").find("th")] == [
+            "Channel",
+            "Added",
+            "Right now",
+            "Clip tracking",
+            "Stream recording",
+        ]
 
     async def test_each_tracking_switch_posts_to_its_own_channel(self, service):
         add_streamer("first_channel", 111)
@@ -1385,13 +1432,18 @@ class TestClips:
             "/clips/channel_a/../../kick_clip_hunter.db",
             "/static/../main.py",
             "/static/%2e%2e/main.py",
+            "/streams/../kick_clip_hunter.db",
+            "/streams/%2e%2e/kick_clip_hunter.db",
+            "/streams/channel_a/../../kick_clip_hunter.db",
         ],
     )
     async def test_the_file_routes_do_not_reach_outside_their_directories(self, service, path):
-        # The database sits one level above the clips it is served next to,
-        # the application's code one level above its stylesheet.
+        # The database sits one level above the clips and the recordings it
+        # is served next to, the application's code one level above its
+        # stylesheet.
         add_moment()
         self.clip_file("channel_a/moment_1.mp4")
+        (stream_recording.STREAMS_DIR / "channel_a").mkdir(parents=True)
 
         response = await service.client.get(path)
 
@@ -1660,10 +1712,10 @@ class TestNothingToReview:
         async def lead() -> str:
             return (await review(service)).one("p", class_="lead").text
 
-        assert (await lead()).startswith("None of the 2 watched channels is being recorded right now.")
+        assert (await lead()).startswith("None of the 2 watched channels is live right now.")
 
         monkeypatch.setitem(recording_manager._recorders, "channel_a", RunningRecorder())
-        assert (await lead()).startswith("1 of the 2 watched channels is live and being recorded.")
+        assert (await lead()).startswith("1 of the 2 watched channels is live.")
 
         await service.client.post("/settings/watching?enabled=0")
         assert await lead() == "Watching is off. Nothing new arrives until you turn it on."
@@ -1691,7 +1743,10 @@ class TestShuttingDown:
 
         confirm = section.one("div", data_shutdown_confirm=True)
         assert "hidden" in confirm.attrs
-        assert "Stops watching and shuts down once clips in progress are finished." in confirm.text
+        assert (
+            "Stops watching, ends any stream recording and shuts down once the clips and recordings in progress "
+            "are saved." in confirm.text
+        )
         assert [button.text for button in confirm.find("button")] == ["Shut down", "Cancel"]
 
     async def test_every_page_says_how_much_work_is_still_running(self, service, monkeypatch):

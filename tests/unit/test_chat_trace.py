@@ -600,6 +600,34 @@ class TestAQueueRowsActivity:
         assert activity == {"all": [0] * chat_trace.SPARK_STEPS, "laugh": [0] * chat_trace.SPARK_STEPS, "said": None}
 
 
+class TestChatLinesBesideAnyVideo:
+    """The same lines, placed by whatever says which second of a video a
+    message belongs to - a recording's parts, for one (stream_recording.py)."""
+
+    def test_each_line_is_placed_by_when_its_message_arrived(self):
+        messages = [message(10, "first"), message(75.26, "second")]
+
+        lines = chat_trace.chat_lines(messages, lambda arrived: (arrived - CLIP_START).total_seconds() * 2)
+
+        assert [(line["at"], line["parts"]) for line in lines] == [
+            ("20", [{"text": "first"}]),
+            ("150.5", [{"text": "second"}]),
+        ]
+
+    def test_without_a_moment_no_line_is_marked_as_part_of_one(self):
+        lines = chat_trace.chat_lines([message(25)], lambda arrived: 0.0)
+
+        assert [line["in_moment"] for line in lines] == [False]
+
+    def test_a_clips_replay_is_these_lines_on_the_clips_own_time(self):
+        messages = [message(-12.34, "before"), message(25, "during")]
+        window = (chat_at(20), chat_at(30))
+
+        assert chat_trace.chat_replay(messages, TIMELINE, window) == chat_trace.chat_lines(
+            messages, TIMELINE.at, window=window
+        )
+
+
 def test_the_grid_step_keeps_the_lines_to_a_handful():
     for peak in (1, 12, 16, 17, 40, 41, 80, 200, 400, 5000):
         step = chat_trace._grid_step(peak)

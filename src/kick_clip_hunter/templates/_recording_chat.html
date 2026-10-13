@@ -1,0 +1,14 @@
+{#- The chat that goes with a stretch of a recording: its lines, each with
+    the second of the file it belongs to, in the box the Recordings page
+    shows them in. The box says which stretch it holds; the script shows the
+    lines up to where the video is, and fetches this again around another
+    second (/dashboard/recordings/<id>/chat) as the video leaves the
+    stretch. Without it, the lines are simply there to read. -#}
+{% from "_chat_line.html" import chat_line with context -%}
+<div class="chat-lines" data-recording-chat data-url="{{ chat.url }}" data-first="{{ chat.first }}" data-last="{{ chat.last }}"{% if chat.whole %} data-whole{% endif %}>
+  {% for line in chat.lines %}
+  {{ chat_line(line) }}
+  {% else %}
+  <p class="chat-empty">No chat was stored for this stretch.</p>
+  {% endfor %}
+</div>

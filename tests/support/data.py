@@ -6,7 +6,7 @@ from __future__ import annotations
 import itertools
 from datetime import datetime, timedelta, timezone
 
-from kick_clip_hunter import db
+from kick_clip_hunter import db, stream_recording
 
 _ids = itertools.count(1)
 
@@ -93,5 +93,70 @@ def moment(moment_id: int) -> dict:
         cursor = conn.execute("SELECT * FROM moments WHERE id = ?", (moment_id,))
         names = [description[0] for description in cursor.description]
         return dict(zip(names, cursor.fetchone(), strict=True))
+    finally:
+        conn.close()
+
+
+def add_stream_recording(
+    channel: str = "some_channel",
+    *,
+    broadcaster_user_id: int = 1,
+    started_at: datetime = T0,
+    seconds: float = 600.0,
+    parts: list[tuple[datetime, float]] | None = None,
+    state: str = stream_recording.READY,
+    file: bool = True,
+    **columns: object,
+) -> int:
+    """Stores a stream recording: `seconds` of a channel's stream from
+    `started_at` on, in one part unless `parts` says otherwise (when each
+    began and how long it runs).
+
+    One that is ready is stored as the service stores it once its file has
+    been made, with a file of made-up bytes where the video would be unless
+    `file` is False; in any other state it is the bare row a recording
+    starts out as. Any column of `stream_recordings` can be given by name.
+    """
+    kept = [stream_recording.Part(began, length) for began, length in parts or [(started_at, seconds)]]
+    conn = db.get_connection()
+    try:
+        recording_id = db.insert_stream_recording(
+            conn,
+            broadcaster_user_id=broadcaster_user_id,
+            channel_slug=channel,
+            requested_at=started_at.isoformat(),
+            state=state,
+        )
+        if state == stream_recording.READY:
+            name = stream_recording.file_name(channel, recording_id, kept[0].started_at.astimezone())
+            path = stream_recording.channel_folder(channel) / name
+            if file:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"not really a video")
+            db.finish_stream_recording(
+                conn,
+                recording_id,
+                state=state,
+                file_path=path.relative_to(stream_recording.STREAMS_DIR).as_posix(),
+                started_at=kept[0].started_at.isoformat(),
+                ended_at=kept[-1].ended_at.isoformat(),
+                duration=stream_recording.length(kept),
+                size_bytes=3 * 1024**3,
+                parts=stream_recording.encoded(kept),
+            )
+        if columns:
+            assignments = ", ".join(f"{name} = ?" for name in columns)
+            conn.execute(f"UPDATE stream_recordings SET {assignments} WHERE id = ?", (*columns.values(), recording_id))
+            conn.commit()
+        return recording_id
+    finally:
+        conn.close()
+
+
+def stream_recordings() -> list[dict]:
+    """Every stored stream recording, the oldest first."""
+    conn = db.get_connection()
+    try:
+        return [dict(row) for row in reversed(db.get_stream_recordings(conn))]
     finally:
         conn.close()

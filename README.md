@@ -37,6 +37,10 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
 - **Hands the footage to an editor.** From the open moment a stretch of the file can be trimmed
   out - start and end set on the same timeline - without re-encoding, and its chat rendered as a
   transparent video to lay over it, moved against the picture if it does not sit right.
+- **Records a whole stream when asked.** A channel's stream can be recorded whole from the
+  Channels page - tracked for clips or not, started ahead of the stream or in the middle of it -
+  until it is stopped or the stream is over. It ends up as one video file, and the Recordings page
+  plays it with the chat that went with it replayed beside it.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -107,7 +111,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-More than 1700 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
+About 2000 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
 no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
 every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
@@ -120,7 +124,8 @@ what, and the short manual checklist for the parts that only exist against the r
 | `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip, their markup, stylesheet and script. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
 | `tuning.py`, `replay.py` | What of detection and of clips can be set from the dashboard, for all channels or for one; and stored chat replayed through the detector, to try settings out before they are saved. |
-| `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting. |
+| `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting; which channels are recorded right now, and why. |
+| `stream_recording.py` | A stream kept whole: what is written while it is recorded, how that becomes one video file, and how a second of the file is tied back to when it was on air - which is what places chat against it. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
@@ -143,6 +148,9 @@ Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
   laughing can be added to per channel.
 - Detector state lives in memory, so a channel needs about five minutes of chat after a restart
   before it can fire.
+- A recording of a whole stream takes a few gigabytes an hour, and as much again while its file is
+  being made. An ad break that replaced the broadcast is a break in the recording: unlike a clip,
+  it is not filled in from the stream's VOD.
 - A single-user tool: one SQLite file, no authentication on the dashboard. Expose only the webhook
   route to the internet, as the tunnel command above does.
 

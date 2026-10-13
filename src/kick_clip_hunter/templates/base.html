@@ -1,6 +1,8 @@
 {#- The frame every dashboard page shares: the bar across the top with the
-    pages, what the service is doing right now and the switch that pauses
-    it, and the banner that takes over once a shutdown has been asked for. -#}
+    pages, what the service is doing right now - whether a watched channel
+    is live, and whether a stream is being recorded whole - and the switch
+    that pauses it, and the banner that takes over once a shutdown has been
+    asked for. -#}
 {%- from "_macros.html" import switch -%}
 <!DOCTYPE html>
 <html lang="en">
@@ -16,12 +18,14 @@
   <div class="brand">Clip Hunter</div>
   <nav class="bar-nav" aria-label="Pages">
     <a href="/dashboard"{% if nav == "review" %} aria-current="page"{% endif %}>Review</a>
+    <a href="/dashboard/recordings"{% if nav == "recordings" %} aria-current="page"{% endif %}>Recordings</a>
     <a href="/dashboard/channels"{% if nav == "channels" %} aria-current="page"{% endif %}>Channels</a>
     <a href="/dashboard/settings"{% if nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>
   <div class="bar-state">
-    <span class="ch-lamp{% if recording %} ch-lamp-rec{% endif %}">{{ "Recording" if recording else "Not recording" }}</span>
-    <span class="bar-meta">{{ channel_count_words }}</span>
+    {#- The script keeps these two current while a stream is being recorded. -#}
+    <span class="ch-lamp{% if now.live %} ch-lamp-rec{% endif %}" data-now-lamp>{{ now.words }}</span>
+    <span class="bar-meta" data-now-count>{{ now.count }}</span>
     <span class="bar-switch">
       <span aria-hidden="true">Watching</span>
       {{ switch("Watching", "/settings/watching", watching_enabled, disabled=shutdown_requested) }}
