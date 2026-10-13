@@ -318,6 +318,31 @@ class TestLayingValuesOverEachOther:
         assert tuned.detector.added_ignored_emote_patterns == ("clap", "hype")
         assert tuned.detector.added_ignored_messages == frozenset({"!join", "gg wp"})
 
+    def test_clip_commands_and_who_may_post_them(self):
+        tuned = tuning.tuned({"clip_commands": ("!clip", "clip that")}, {"clip_command_from_anyone": True})
+
+        assert tuned.clip_commands == frozenset({"!clip", "clip that"})
+        assert tuned.clip_command_from_anyone is True
+
+
+class TestClipCommands:
+    def test_there_are_none_until_one_is_set_and_then_only_those_who_run_the_channel_may_ask(self):
+        recommended = tuning.recommended()
+
+        assert recommended.clip_commands == frozenset()
+        assert recommended.clip_command_from_anyone is False
+        assert not recommended.is_clip_command("!clip")
+        assert not recommended.is_clip_command("")
+
+    def test_a_command_is_the_whole_message_whatever_its_case(self):
+        tuned = tuning.tuned({"clip_commands": tuning.clean("clip_commands", "!Clip, clip that")})
+
+        assert tuned.is_clip_command("!clip")
+        assert tuned.is_clip_command("  !CLIP ")
+        assert tuned.is_clip_command("Clip That")
+        assert not tuned.is_clip_command("type !clip to get a clip")
+        assert not tuned.is_clip_command("!clips")
+
 
 class TestWhatIsStored:
     def test_only_what_differs_from_what_it_would_be_anyway(self):
@@ -447,5 +472,5 @@ class TestOnThePage:
         untouched = self.form({"reacting_share": 0.25})
         touched = self.form({"sustain_fraction": 0.5})
 
-        assert [section["advanced_set"] for section in untouched] == [False, False, False]
-        assert [section["advanced_set"] for section in touched] == [True, False, False]
+        assert [section["advanced_set"] for section in untouched] == [False] * len(tuning.GROUPS)
+        assert [section["advanced_set"] for section in touched] == [True] + [False] * (len(tuning.GROUPS) - 1)
