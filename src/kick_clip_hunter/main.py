@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import logging.handlers
+import math
 import mimetypes
 import os
+import shutil
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,6 +32,7 @@ from . import (
     recording_manager,
     replay,
     sound_events,
+    stream_recording,
     transcriber,
     tuning,
     win_console,
@@ -41,6 +44,9 @@ from .db import (
     TUNING_FOR_ALL,
     count_moments,
     count_moments_with_clip,
+    count_stream_recordings,
+    delete_stream_recording,
+    finish_stream_recording,
     get_channel_keywords,
     get_chat_between,
     get_chat_delay,
@@ -51,6 +57,8 @@ from .db import (
     get_moment,
     get_moment_channels,
     get_recent_moments,
+    get_stream_recording,
+    get_stream_recordings,
     get_streamer_by_slug,
     get_streamer_tracking_enabled,
     get_streamers,
@@ -58,10 +66,12 @@ from .db import (
     get_tuning_in_force,
     insert_chat_message,
     insert_moment,
+    insert_stream_recording,
     replace_tuning,
     set_chat_delay,
     set_chat_identity,
     set_flag,
+    set_stream_recording_state,
     set_streamer_own_tuning,
     set_streamer_tracking,
     update_moment_audio_events,
@@ -87,6 +97,7 @@ from .kick_client import (
 from .kick_stream import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
+from .stream_recording import STREAMS_DIR
 from .timeutil import to_local_datetime
 from .watchlist import add_channel_to_watchlist, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
@@ -207,6 +218,8 @@ _flags: dict[str, bool] = {}
 # spawns (clip cut, transcript, audio/frame/sound tagging) still need to run
 # to completion. _background_tasks tracks all of that chained work; the
 # process only actually exits once it (and any open moment session) is empty.
+# A stream that is being kept whole is ended when the shutdown is asked for,
+# and the making of its file is one more of those tasks.
 _shutdown_requested = False
 _background_tasks: set[asyncio.Task] = set()
 # The event loop only holds a weak reference to a task, so one that nothing
@@ -343,6 +356,7 @@ async def _refresh_emote_pictures() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_flags()
+    _take_up_stream_recordings()
     await _ensure_chat_subscriptions()
     tasks = [
         # In the background: the dashboard works without them, 7TV being
@@ -350,7 +364,10 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_refresh_emote_pictures()),
         asyncio.create_task(
             recording_manager.run_forever(
-                _watchlist_slugs, lambda: _flags.get("watching_enabled", True), _is_channel_tracked
+                _watchlist_slugs,
+                lambda: _flags.get("watching_enabled", True),
+                _is_channel_tracked,
+                _stream_recording_over,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -381,6 +398,9 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 Path("data/clips").mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory="data/clips"), name="clips")
+# The streams that were kept whole, for the Recordings page to play.
+STREAMS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/streams", StaticFiles(directory=STREAMS_DIR.as_posix()), name="streams")
 
 # What is stored of the Settings page's values (see tuning.py), by owner:
 # the ones for every channel and those of each channel that goes by its own.
@@ -700,6 +720,220 @@ async def _run_moment_session(session: _MomentSession) -> None:
             session.moment_id, session.channel, session.window_start, session.window_end, session.tuned
         )
     )
+
+
+# -- streams kept whole --------------------------------------------------------
+#
+# A stream recording is started and stopped from the Channels page (see
+# stream_recording.py for what one is, recording_manager.py for what keeps
+# it going). What is seen to here is its row, and the task that makes its
+# file once it is over.
+
+# Stream recordings that are being made into their files right now, by id:
+# whose stream it is, and how much footage it had when it ended (None for
+# one taken up again after a restart).
+_stream_saves: dict[int, dict] = {}
+
+
+def _stream_recordings_not_over() -> dict[int, dict]:
+    """What the pages say of each stream recording that runs or is being
+    made into its file (see dashboard_view.recording_state), by recording,
+    with the channel it is of."""
+    on_air = set(recording_manager.recording_channels())
+    states = {
+        recording_id: {
+            **dashboard_view.recording_state(recording_id, running=False, seconds=save["seconds"]),
+            "channel": save["channel"],
+        }
+        for recording_id, save in _stream_saves.items()
+    }
+    for slug, kept in recording_manager.stream_recordings().items():
+        states[kept.recording_id] = {
+            **dashboard_view.recording_state(
+                kept.recording_id,
+                running=True,
+                on_air=slug in on_air,
+                seconds=kept.writer.seconds,
+                size=kept.writer.size,
+            ),
+            "channel": slug,
+        }
+    return states
+
+
+def _by_channel(not_over: dict[int, dict]) -> dict[str, dict]:
+    """The same by channel. One that has a recording running and its last
+    one still being saved is said to be recording."""
+    states: dict[str, dict] = {}
+    for state in sorted(not_over.values(), key=lambda state: state["running"]):
+        states[state["channel"]] = state
+    return states
+
+
+def _recordings_mark(not_over: dict[int, dict], total: int) -> str:
+    """Different whenever the list of recordings would read differently: one
+    was added or removed, or went from running to being saved to done. The
+    Recordings page compares it with the one it was made with."""
+    standing = (f"{recording_id}{'r' if state['running'] else 's'}" for recording_id, state in sorted(not_over.items()))
+    return f"{total}:{','.join(standing)}"
+
+
+def _save_stream_recording_soon(
+    recording_id: int, channel: str, folder: Path, seconds: float | None, size: int
+) -> None:
+    """Has a stream recording that is over made into its file."""
+    _stream_saves[recording_id] = {"channel": channel, "seconds": seconds}
+    recording_manager.hold_room(recording_id, size)
+    _track_task(_save_stream_recording(recording_id, channel, folder))
+
+
+async def _save_stream_recording(recording_id: int, channel: str, folder: Path) -> None:
+    # Copying hours of footage takes minutes: off the event loop, and as a
+    # tracked task so a shutdown waits for it. A save that is cut short all
+    # the same leaves the row saying "saving", and the next start takes it
+    # up again.
+    try:
+        parts: list[stream_recording.Part] = []
+        started = stream_recording.kept_from(folder)
+        if started is not None:
+            name = stream_recording.file_name(channel, recording_id, started.astimezone())
+            output = stream_recording.channel_folder(channel) / name
+            parts = await asyncio.to_thread(stream_recording.save, folder, output)
+        conn = get_connection()
+        try:
+            if parts:
+                finish_stream_recording(
+                    conn,
+                    recording_id,
+                    state=stream_recording.READY,
+                    file_path=output.relative_to(STREAMS_DIR).as_posix(),
+                    started_at=parts[0].started_at.isoformat(),
+                    ended_at=parts[-1].ended_at.isoformat(),
+                    duration=stream_recording.length(parts),
+                    size_bytes=output.stat().st_size,
+                    parts=stream_recording.encoded(parts),
+                )
+            else:
+                delete_stream_recording(conn, recording_id)
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception(
+            "[%s] stream recording %d could not be saved - what it kept is in %s", channel, recording_id, folder
+        )
+        conn = get_connection()
+        try:
+            set_stream_recording_state(conn, recording_id, stream_recording.FAILED)
+        finally:
+            conn.close()
+        return
+    finally:
+        # From here on its row says how it stands.
+        _stream_saves.pop(recording_id, None)
+        recording_manager.release_room(recording_id)
+
+    # Only now: until its parts were stored, the folder was what the
+    # recording could be made from again.
+    await asyncio.to_thread(shutil.rmtree, folder, True)
+    if parts:
+        logger.info(
+            "[%s] stream recording %d saved: %s (%.0f s in %d part(s))",
+            channel, recording_id, output, stream_recording.length(parts), len(parts),
+        )
+    else:
+        logger.info("[%s] stream recording %d kept no footage - nothing to save", channel, recording_id)
+
+
+def _end_stream_recording(slug: str, ended_by: str) -> bool:
+    """Ends the stream recording of a channel and has what it kept made into
+    its file. Returns whether there is anything to make one of; a recording
+    that kept nothing - stopped before its stream began - is forgotten."""
+    kept = recording_manager.end_stream_recording(slug)
+    if kept is None:
+        return False
+    writer = kept.writer
+    conn = get_connection()
+    try:
+        # By what it holds, not by how long that runs: footage that could
+        # not be measured is still footage.
+        if writer.size:
+            set_stream_recording_state(conn, kept.recording_id, stream_recording.SAVING, ended_by)
+        else:
+            delete_stream_recording(conn, kept.recording_id)
+    finally:
+        conn.close()
+    if not writer.size:
+        shutil.rmtree(writer.folder, ignore_errors=True)
+        logger.info("[%s] stream recording %d ended (%s) before any footage", slug, kept.recording_id, ended_by)
+        return False
+    unasked = ended_by in (stream_recording.DISK_FULL, stream_recording.WRITE_FAILED)
+    (logger.warning if unasked else logger.info)(
+        "[%s] stream recording %d ended (%s) with %.0f s of footage - saving it",
+        slug, kept.recording_id, ended_by, writer.seconds,
+    )
+    _save_stream_recording_soon(kept.recording_id, slug, writer.folder, writer.seconds, writer.size)
+    return True
+
+
+async def _stream_recording_over(slug: str, why: str) -> None:
+    """What the recording loop calls when a stream recording should end
+    without anyone stopping it: its stream is over, or the disk is running
+    out (see recording_manager.run_forever)."""
+    _end_stream_recording(slug, why)
+
+
+def _take_up_stream_recordings() -> None:
+    """Sees to the stream recordings the service was stopped under.
+
+    One that was running goes on: its channel is recorded again from now,
+    into the same recording - the stretch in between is a break in it like
+    any other. That holds for one that was still waiting for its stream to
+    begin, and for one whose footage is fresh. If what it kept is older than
+    a stream may be gone for before its recording ends, the stream it was
+    started for is over: the recording ends where it was cut short. It, and
+    any that was being saved, is made into its file from what its folder
+    holds.
+    """
+    now = datetime.now(timezone.utc)
+    stale = timedelta(seconds=recording_manager.STREAM_END_GRACE_SECONDS)
+    cut_short = []
+    conn = get_connection()
+    try:
+        # The oldest first: of two that were running on one channel - which
+        # nothing lets happen - it is the first that goes on.
+        for row in reversed(get_stream_recordings(conn, (stream_recording.RECORDING, stream_recording.SAVING))):
+            slug, recording_id = row["channel_slug"], row["id"]
+            was_running = row["state"] == stream_recording.RECORDING
+            written = stream_recording.last_written(stream_recording.parts_folder(slug, recording_id))
+            fresh = written is None or now - written < stale
+            if was_running and fresh and recording_manager.stream_recording_of(slug) is None:
+                kept = recording_manager.start_stream_recording(slug, row["broadcaster_user_id"], recording_id)
+                logger.warning(
+                    "[%s] stream recording %d goes on after the restart, with %.0f s of footage so far",
+                    slug, recording_id, kept.writer.seconds,
+                )
+                continue
+            if was_running:
+                set_stream_recording_state(conn, recording_id, stream_recording.SAVING, stream_recording.INTERRUPTED)
+            cut_short.append((recording_id, slug))
+    finally:
+        conn.close()
+    for recording_id, slug in cut_short:
+        folder = stream_recording.parts_folder(slug, recording_id)
+        logger.warning(
+            "[%s] stream recording %d was not finished when the service stopped - saving what it kept",
+            slug, recording_id,
+        )
+        _save_stream_recording_soon(recording_id, slug, folder, None, stream_recording.kept_bytes(folder))
+
+
+def _stream_file(row) -> Path | None:
+    """The file of a stream recording, or None if it has none - or has one
+    that is not where recordings are kept."""
+    if not row["file_path"]:
+        return None
+    file = STREAMS_DIR / row["file_path"]
+    return file if file.resolve().is_relative_to(STREAMS_DIR.resolve()) else None
 
 
 @app.get("/health")
@@ -1032,22 +1266,54 @@ def _today() -> date:
     return datetime.now().astimezone().date()
 
 
+def _right_now(streamers) -> dict:
+    """What the watched channels are doing right now, as the bar across the
+    top says it of the service and the Channels page of each channel: the
+    words (see dashboard_view.now_words), whether the lamp beside them is
+    lit, and for the bar how many channels that is of. A page is made with
+    this, and kept saying it while a stream is being recorded (see
+    recordings_status)."""
+    tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
+    # A channel is looked at for either reason: it is tracked for clips, or
+    # its stream is being kept whole.
+    whole_streams = set(recording_manager.stream_recordings())
+    live = set(recording_manager.recording_channels())
+    watching = _flags.get("watching_enabled", True)
+    return {
+        "live": bool(live),
+        "words": dashboard_view.now_words(live=bool(live), recorded=bool(live & whole_streams)),
+        "count": dashboard_view.channel_count_words(len(live), len(tracked | whole_streams)),
+        "channels": {
+            slug: {
+                "live": slug in live,
+                "words": dashboard_view.now_words(
+                    live=slug in live,
+                    recorded=slug in whole_streams,
+                    looked_at=slug in whole_streams or (watching and slug in tracked),
+                ),
+            }
+            for slug in (row["slug"] for row in streamers)
+        },
+    }
+
+
 def _page_context(conn, nav: str) -> dict:
     """What every dashboard page needs: which page it is, and the state of
     the service shown in the bar across its top."""
     streamers = get_streamers(conn)
-    tracked = sum(1 for row in streamers if row["tracking_enabled"])
+    tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
     recording = recording_manager.recording_channels()
     watching = _flags.get("watching_enabled", True)
     return {
         "nav": nav,
         "asset_version": _asset_version(),
         "watching_enabled": watching,
-        "recording": recording,
-        "channel_count_words": dashboard_view.channel_count_words(len(recording), tracked),
+        "streamers": streamers,
+        "now": _right_now(streamers),
         "service_words": dashboard_view.service_words(
-            recording=len(recording),
-            tracked=tracked,
+            # About moments, so only the channels they can come from count.
+            recording=sum(1 for slug in recording if slug in tracked),
+            tracked=len(tracked),
             watchlist=len(streamers),
             watching=watching,
             shutting_down=_shutdown_requested,
@@ -1193,7 +1459,7 @@ async def dashboard_channels(request: Request):
     conn = get_connection()
     try:
         context = _page_context(conn, "channels")
-        recording = set(context["recording"])
+        whole_streams = _by_channel(_stream_recordings_not_over())
         context.update(
             {
                 "watchlist": [
@@ -1201,10 +1467,13 @@ async def dashboard_channels(request: Request):
                         "slug": row["slug"],
                         "broadcaster_user_id": row["broadcaster_user_id"],
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
-                        "recording": row["slug"] in recording,
+                        "now": context["now"]["channels"][row["slug"]],
                         "tracking_enabled": bool(row["tracking_enabled"]),
+                        # Its stream being kept whole, or the last such
+                        # recording still being saved - None if neither.
+                        "whole_stream": whole_streams.get(row["slug"]),
                     }
-                    for row in get_streamers(conn)
+                    for row in context["streamers"]
                 ],
                 "analysis_settings": [
                     {
@@ -1275,6 +1544,152 @@ async def dashboard_settings(request: Request, channel: str | None = None):
         conn.close()
 
     return templates.TemplateResponse(request, "settings.html", context)
+
+
+# How much of a recording's chat the page is given at a time: from this long
+# before the second it asks about to this long after it, and at most this
+# many lines - past which the stretch ends where the lines do, and the page
+# asks again from there.
+RECORDING_CHAT_BEFORE_SECONDS = 60
+RECORDING_CHAT_AFTER_SECONDS = 300
+RECORDING_CHAT_LIMIT = 3000
+
+
+def _recording_chat(conn, row, parts: list[stream_recording.Part], at: float) -> dict:
+    """The chat that goes with a stretch of a recording's file, around its
+    second `at`: the lines, each with the second of the file it belongs to,
+    and the stretch they cover. A message is put against the picture its
+    writer was watching, as on the review page (see chat_trace.py)."""
+    whole = stream_recording.length(parts)
+    at = min(max(at, 0.0), whole)
+    first = max(at - RECORDING_CHAT_BEFORE_SECONDS, 0.0)
+    last = min(at + RECORDING_CHAT_AFTER_SECONDS, whole)
+    delay = timedelta(seconds=_chat_delay(conn, row["channel_slug"]))
+    messages = get_chat_between(
+        conn,
+        row["channel_slug"],
+        stream_recording.broadcast_time(parts, first) + delay,
+        stream_recording.broadcast_time(parts, last) + delay,
+        RECORDING_CHAT_LIMIT,
+    )
+    chatters = {message["sender_username"] for message in messages if message["sender_username"]}
+    lines = chat_trace.chat_lines(
+        messages,
+        lambda arrived: stream_recording.file_second(parts, arrived - delay),
+        get_chat_emotes(conn, row["broadcaster_user_id"]),
+        get_chat_identities(conn, row["broadcaster_user_id"], chatters),
+    )
+    if len(messages) == RECORDING_CHAT_LIMIT:
+        last = max(float(lines[-1]["at"]), at)
+    return {
+        "url": f"/dashboard/recordings/{row['id']}/chat",
+        "first": dashboard_view.number_words(first, 1),
+        "last": dashboard_view.number_words(last, 1),
+        "whole": last >= whole,
+        "lines": lines,
+    }
+
+
+def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
+    """Everything the Recordings page shows of the one that is open."""
+    parts = stream_recording.decoded(row["parts"])
+    file = _stream_file(row)
+    if not_over is not None:
+        standing = "running" if not_over["running"] else "saving"
+    elif row["state"] == stream_recording.READY and parts and file is not None:
+        standing = "playable" if file.exists() else "gone"
+    else:
+        standing = "failed"
+    started = to_local_datetime(row["started_at"] or row["requested_at"])
+    delay = _chat_delay(conn, row["channel_slug"])
+    return {
+        "id": row["id"],
+        "channel": row["channel_slug"],
+        "standing": standing,
+        "when": dashboard_view.recording_span_words(
+            started, to_local_datetime(row["ended_at"]) if row["ended_at"] else None, today
+        ),
+        "length": dashboard_view.stream_time_words(row["duration"]),
+        "words": not_over["words"] if not_over else None,
+        "video_url": f"/streams/{quote(row['file_path'])}" if standing == "playable" else None,
+        # Where on this machine: what whoever wants the file itself needs.
+        "file": str(file.resolve()) if file is not None else None,
+        "folder": str(stream_recording.parts_folder(row["channel_slug"], row["id"]).resolve()),
+        "summary": dashboard_view.recording_summary_words(
+            row["size_bytes"],
+            len(parts),
+            stream_recording.missing_seconds(parts),
+            row["ended_by"],
+            recording_manager.STREAM_END_GRACE_SECONDS,
+        ),
+        "chat": _recording_chat(conn, row, parts, 0.0) if standing == "playable" else None,
+        "chat_delay_words": dashboard_view.chat_delay_words(delay),
+    }
+
+
+@app.get("/dashboard/recordings", response_class=HTMLResponse)
+async def dashboard_recordings(request: Request, recording: int | None = None):
+    """The Recordings page: the streams that were kept whole, the newest
+    first, and the one that is open - its video, with the chat that went
+    with it replayed beside it. `recording` is the one to open; left out, it
+    is the newest."""
+    today = _today()
+    conn = get_connection()
+    try:
+        rows = get_stream_recordings(conn)
+        not_over = _stream_recordings_not_over()
+        opened = next((row for row in rows if row["id"] == recording), rows[0] if rows else None)
+        context = _page_context(conn, "recordings")
+        context.update(
+            {
+                "recordings": [
+                    {
+                        "id": row["id"],
+                        "channel": row["channel_slug"],
+                        "when": dashboard_view.since_words(
+                            to_local_datetime(row["started_at"] or row["requested_at"]), today
+                        ),
+                        "length": dashboard_view.stream_time_words(row["duration"]),
+                        "words": dashboard_view.recording_row_words(row["state"], not_over.get(row["id"])),
+                        "running": row["id"] in not_over,
+                        "href": f"/dashboard/recordings?recording={row['id']}",
+                        "current": opened is not None and row["id"] == opened["id"],
+                    }
+                    for row in rows
+                ],
+                "recording": (
+                    _open_recording(conn, opened, today, not_over.get(opened["id"])) if opened is not None else None
+                ),
+                "mark": _recordings_mark(not_over, len(rows)),
+                "free_words": dashboard_view.free_room_words(stream_recording.free_bytes()),
+            }
+        )
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(request, "recordings.html", context)
+
+
+@app.get("/dashboard/recordings/{recording_id}/chat", response_class=HTMLResponse)
+async def dashboard_recording_chat(request: Request, recording_id: int, at: float = 0.0):
+    """The chat that goes with a stretch of a recording, around second `at`
+    of its file - what the Recordings page fetches as its video plays on or
+    is moved in."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        if not parts:
+            raise HTTPException(status_code=409, detail="the recording has no footage to put chat against yet")
+        context = {
+            "chat": _recording_chat(conn, row, parts, at if math.isfinite(at) else 0.0),
+            "asset_version": _asset_version(),
+        }
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_recording_chat.html", context)
 
 
 def _moment_status(conn) -> dict[str, int]:
@@ -1462,10 +1877,15 @@ async def set_setting(name: str, enabled: int = 1):
 @app.post("/shutdown")
 async def shutdown():
     global _shutdown_requested, _shutdown_task
-    pending = len(_moment_sessions) + len(_background_tasks)
     if _shutdown_requested:
+        pending = len(_moment_sessions) + len(_background_tasks)
         return {"status": "already shutting down", "pending_work_count": pending}
     _shutdown_requested = True
+    # Chat stops being taken in right now, so a stream that is being kept
+    # whole ends here too. Making its file is one of the things waited for.
+    for slug in recording_manager.stream_recordings():
+        _end_stream_recording(slug, stream_recording.SHUTDOWN)
+    pending = len(_moment_sessions) + len(_background_tasks)
     logger.info(
         "shutdown requested from dashboard - watching stopped, waiting on %d pending item(s) before exiting",
         pending,
@@ -1532,6 +1952,156 @@ async def set_channel_chat_delay(slug: str, seconds: int):
         conn.close()
     logger.info("chat delay for %s -> %d s", slug, seconds)
     return {"slug": slug, "chat_delay_seconds": seconds}
+
+
+@app.post("/channels/{slug}/recording/start")
+async def start_channel_recording(slug: str):
+    """Starts keeping a channel's stream whole (see stream_recording.py).
+    Whether the channel is tracked for clips makes no difference, and its
+    chat is kept with it either way. A channel that is not live yet is
+    recorded from when it goes live."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        if recording_manager.stream_recording_of(slug) is not None:
+            raise HTTPException(status_code=409, detail=f"{slug} is being recorded already.")
+        room = recording_manager.room_left()
+        if room < recording_manager.MIN_FREE_BYTES:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The disk is too full to start a recording: "
+                    f"{dashboard_view.size_words(max(room, 0))} would be left once what is being recorded "
+                    f"is saved, and it takes {dashboard_view.size_words(recording_manager.MIN_FREE_BYTES)}."
+                ),
+            )
+        recording_id = insert_stream_recording(
+            conn,
+            broadcaster_user_id=row["broadcaster_user_id"],
+            channel_slug=slug,
+            requested_at=datetime.now(timezone.utc).isoformat(),
+            state=stream_recording.RECORDING,
+        )
+    finally:
+        conn.close()
+    try:
+        recording_manager.start_stream_recording(slug, row["broadcaster_user_id"], recording_id)
+    except OSError:
+        # Nowhere to keep it: there is no recording, so there is no row.
+        logger.exception("[%s] stream recording %d could not be started", slug, recording_id)
+        conn = get_connection()
+        try:
+            delete_stream_recording(conn, recording_id)
+        finally:
+            conn.close()
+        raise HTTPException(
+            status_code=500, detail="Could not make a place to keep the recording. The server log says why."
+        ) from None
+    logger.info("[%s] stream recording %d started", slug, recording_id)
+    return {"slug": slug, "recording": _by_channel(_stream_recordings_not_over()).get(slug)}
+
+
+@app.post("/channels/{slug}/recording/stop")
+async def stop_channel_recording(slug: str):
+    """Ends the stream recording of a channel. What it kept is made into
+    its file in the background; one that kept nothing is forgotten."""
+    conn = get_connection()
+    try:
+        if get_streamer_by_slug(conn, slug) is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+    finally:
+        conn.close()
+    if recording_manager.stream_recording_of(slug) is None:
+        raise HTTPException(status_code=409, detail=f"{slug} is not being recorded.")
+    kept = _end_stream_recording(slug, stream_recording.STOPPED)
+    return {
+        "slug": slug,
+        "recording": _by_channel(_stream_recordings_not_over()).get(slug),
+        "said": dashboard_view.RECORDING_STOPPED_WORDS[kept],
+    }
+
+
+@app.get("/recordings/status")
+async def recordings_status():
+    """What the stream recordings that are not over yet are doing - by
+    channel for the Channels page and by recording for the Recordings one,
+    which both ask every couple of seconds while there is one - with the
+    mark of the list as it stands (see _recordings_mark) and what the
+    channels are doing right now, for the bar and the watchlist (see
+    _right_now)."""
+    conn = get_connection()
+    try:
+        total = count_stream_recordings(conn)
+        now = _right_now(get_streamers(conn))
+    finally:
+        conn.close()
+    not_over = _stream_recordings_not_over()
+    return {
+        "channels": _by_channel(not_over),
+        "recordings": {str(recording_id): state for recording_id, state in not_over.items()},
+        "mark": _recordings_mark(not_over, total),
+        "now": now,
+    }
+
+
+def _stream_recording_at_rest(conn, recording_id: int):
+    """A stream recording nothing is being done with right now - which is
+    when it can be removed or saved again. Otherwise a 404 or a 409."""
+    row = get_stream_recording(conn, recording_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+    if recording_id in _stream_recordings_not_over():
+        raise HTTPException(status_code=409, detail="This recording is not over yet.")
+    return row
+
+
+@app.post("/recordings/{recording_id}/delete")
+async def delete_recording(recording_id: int):
+    """Removes a stream recording for good: its file, whatever is left of
+    its parts, and its row. Not one that is still running or being saved."""
+    conn = get_connection()
+    try:
+        row = _stream_recording_at_rest(conn, recording_id)
+        file = _stream_file(row)
+        try:
+            if file is not None:
+                file.unlink(missing_ok=True)
+            folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
+            if folder.exists():
+                await asyncio.to_thread(shutil.rmtree, folder)
+        except OSError:
+            logger.warning("stream recording %d could not be removed", recording_id, exc_info=True)
+            raise HTTPException(
+                status_code=409, detail="The recording could not be removed. Something may still have its file open."
+            ) from None
+        delete_stream_recording(conn, recording_id)
+    finally:
+        conn.close()
+    logger.info("[%s] stream recording %d deleted", row["channel_slug"], recording_id)
+    return {"deleted": recording_id}
+
+
+@app.post("/recordings/{recording_id}/save")
+async def save_recording_again(recording_id: int):
+    """Tries once more to make a stream recording that could not be saved
+    into its file, from the parts still in its folder."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    conn = get_connection()
+    try:
+        row = _stream_recording_at_rest(conn, recording_id)
+        if row["state"] != stream_recording.FAILED:
+            raise HTTPException(status_code=409, detail="Only a recording that could not be saved can be saved again.")
+        set_stream_recording_state(conn, recording_id, stream_recording.SAVING)
+    finally:
+        conn.close()
+    folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
+    _save_stream_recording_soon(recording_id, row["channel_slug"], folder, None, stream_recording.kept_bytes(folder))
+    return {"recording": recording_id, "state": stream_recording.SAVING}
 
 
 async def _posted_values(request: Request) -> dict[str, tuning.Value]:
@@ -1738,7 +2308,11 @@ async def kick_webhook(
     payload = await request.json()
 
     if kick_event_type == "chat.message.sent":
-        if not _flags.get("watching_enabled", True) or _shutdown_requested:
+        watching = _flags.get("watching_enabled", True)
+        # The switches are about looking for clips. A channel whose stream
+        # is being kept whole has its chat kept with it whatever they say.
+        kept_whole = recording_manager.keeps_chat_of((payload.get("broadcaster") or {}).get("user_id"))
+        if _shutdown_requested or not (watching or kept_whole):
             # Watching paused (or a shutdown is in progress) - drop the
             # message without storing or running detection, so no new
             # moments pile up.
@@ -1755,20 +2329,13 @@ async def kick_webhook(
 
         conn = get_connection()
         try:
-            if not get_streamer_tracking_enabled(conn, broadcaster_user_id):
+            tracked = watching and get_streamer_tracking_enabled(conn, broadcaster_user_id)
+            if not tracked and not kept_whole:
                 # Tracking paused for this one channel - same drop as the
                 # global pause, scoped to it.
                 return {"status": "channel tracking disabled"}
 
             logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
-            # Everything from here on is judged by the channel's settings as
-            # they stand for this message.
-            tuned = _tuning(conn, broadcaster_user_id)
-            emote_weight = detector.classify_native_emotes(content, tuned.detector)
-            laugh_weight, mention_weight = detector.classify_message(
-                content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
-            )
-
             is_new = insert_chat_message(
                 conn,
                 message_id=payload["message_id"],
@@ -1789,7 +2356,18 @@ async def kick_webhook(
                 return {"status": "duplicate"}
 
             _remember_chat_identity(conn, broadcaster_user_id, sender_username, sender)
+            if not tracked:
+                # Kept to go with the recording of the stream. Nobody is
+                # looking for moments in it.
+                return {"status": "stored"}
 
+            # Everything from here on is judged by the channel's settings as
+            # they stand for this message.
+            tuned = _tuning(conn, broadcaster_user_id)
+            emote_weight = detector.classify_native_emotes(content, tuned.detector)
+            laugh_weight, mention_weight = detector.classify_message(
+                content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
+            )
             spike = detector.record_message(
                 channel,
                 sender=sender_username,

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import clip_creator, config, db, kick_stream, recorder
+from kick_clip_hunter import clip_creator, config, db, kick_stream, recorder, recording_manager, stream_recording
+from tests.conftest import PLENTY_OF_ROOM
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -33,8 +34,20 @@ class TestFilesystem:
         assert not inside_repository(db.DB_PATH)
 
     def test_every_data_path_resolves_outside_the_repository(self):
-        for path in (recorder.RECORDINGS_DIR, recorder.CLIPS_DIR, recorder.DEBUG_PLAYLIST_DIR):
+        data_paths = (
+            recorder.RECORDINGS_DIR,
+            recorder.CLIPS_DIR,
+            recorder.DEBUG_PLAYLIST_DIR,
+            stream_recording.STREAMS_DIR,
+        )
+        for path in data_paths:
             assert not inside_repository(path)
+
+    def test_the_disk_is_always_taken_to_have_plenty_of_room(self):
+        # Whether a stream recording may start depends on it, and a test
+        # must not depend on the disk of the machine it runs on.
+        assert stream_recording.free_bytes() == PLENTY_OF_ROOM
+        assert recording_manager.room_left() > 10 * recording_manager.MIN_FREE_BYTES
 
     def test_each_test_starts_with_an_empty_database(self):
         connection = db.get_connection()

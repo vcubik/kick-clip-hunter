@@ -17,6 +17,7 @@ import pytest
 from kick_clip_hunter import recorder
 from kick_clip_hunter.kick_stream import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
+from kick_clip_hunter.stream_recording import StreamWriter
 from tests.support.hls import SEGMENT_SECONDS, Segment, fake_segments
 from tests.support.waiting import wait_until
 
@@ -484,3 +485,166 @@ class TestRunLifecycle:
         assert rec._stored_segments() == []
         server.publish_all()
         wait_until(lambda: len(server.segment_requests()) == 6, "recording to carry on")
+
+
+class TestHandingTheStreamOn:
+    """While a stream is kept whole, every segment of the broadcast is also
+    given to the recording's writer as it is saved (stream_recording.py)."""
+
+    @pytest.fixture
+    def writer(self, tmp_path):
+        writer = StreamWriter(tmp_path / "stream_1_parts")
+        yield writer
+        writer.close()
+
+    def parts(self, writer) -> list[bytes]:
+        """What the writer kept, part by part, in the order it was on air."""
+        return [path.read_bytes() for path in sorted(writer.folder.iterdir())]
+
+    def test_everything_recorded_while_it_is_attached_is_kept_in_order(self, hls, recording, writer):
+        timeline = fake_segments(10)
+        server = hls(timeline, published=3, window=len(timeline))
+        rec = recording.of(server)
+        rec.whole_stream = writer
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 10)
+        wait_until(lambda: writer.seconds == 10 * SEGMENT_SECONDS, "all of it to be handed on")
+
+        assert self.parts(writer) == [b"".join(segment.data for segment in timeline)]
+        assert writer.started_at == server.segment_start(0)
+
+    def test_the_buffer_gets_the_same_segments_either_way(self, hls, recording, writer):
+        timeline = fake_segments(6)
+        server = hls(timeline, published=3)
+        rec = recording.of(server)
+        rec.whole_stream = writer
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 6)
+
+        assert stored_data(rec) == [segment.data for segment in timeline]
+        assert server.segment_requests() == list(range(6))  # fetched once, kept twice
+
+    def test_only_what_is_broadcast_from_then_on_is_kept(self, hls, recording, writer):
+        # The buffer is not emptied into a recording that starts later.
+        timeline = fake_segments(8)
+        server = hls(timeline, published=3)
+        rec = recording.of(server)
+        start(rec)
+
+        rec.whole_stream = writer
+        server.publish_all()
+        wait_until(lambda: writer.seconds == 5 * SEGMENT_SECONDS, "the rest to be handed on")
+
+        assert self.parts(writer) == [b"".join(segment.data for segment in timeline[3:])]
+
+    def test_it_stops_when_the_writer_is_taken_away_and_the_buffer_carries_on(self, hls, recording, writer):
+        timeline = fake_segments(8)
+        server = hls(timeline, published=3)
+        rec = recording.of(server)
+        rec.whole_stream = writer
+        start(rec)
+        wait_until(lambda: writer.seconds == 3 * SEGMENT_SECONDS, "the first three to be handed on")
+
+        rec.whole_stream = None
+        server.publish_all()
+        wait_for_segments(rec, 8)
+
+        assert self.parts(writer) == [b"".join(segment.data for segment in timeline[:3])]
+
+    def test_a_break_in_the_stream_is_a_break_in_what_is_kept(self, hls, recording, writer):
+        timeline = fake_segments(8)
+        timeline[5].discontinuity = True
+        server = hls(timeline, published=3)
+        rec = recording.of(server)
+        rec.whole_stream = writer
+
+        start(rec)
+        server.publish_all()
+        wait_until(lambda: writer.seconds == 8 * SEGMENT_SECONDS, "all of it to be handed on")
+
+        assert self.parts(writer) == [
+            b"".join(segment.data for segment in timeline[:5]),
+            b"".join(segment.data for segment in timeline[5:]),
+        ]
+
+    def test_an_ad_is_not_part_of_the_stream(self, hls, recording, writer):
+        def source(name: str) -> str:
+            return (
+                f'#EXT-X-DATERANGE:ID="{name}",CLASS="{recorder.STREAM_SOURCE_CLASS}",'
+                f'{recorder.STREAM_SOURCE_ATTRIBUTE}="{name}"'
+            )
+
+        timeline = [
+            *fake_segments(3),
+            Segment(b"ad-1;", title="creative", discontinuity=True, tags=(source("creative"),)),
+            Segment(b"ad-2;", title="creative"),
+            Segment(b"back-1;", discontinuity=True, tags=(source(recorder.LIVE_STREAM_SOURCE),)),
+            Segment(b"back-2;"),
+        ]
+        server = hls(timeline, published=3, window=len(timeline))
+        rec = recording.of(server)
+        rec.whole_stream = writer
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 7)
+        wait_until(lambda: writer.seconds == 5 * SEGMENT_SECONDS, "the broadcast's own segments")
+
+        assert self.parts(writer) == [b"".join(segment.data for segment in timeline[:3]), b"back-1;back-2;"]
+
+    def test_a_segment_that_could_not_be_fetched_leaves_a_break(self, hls, recording, writer):
+        timeline = fake_segments(7)
+        server = hls(timeline, published=3)
+        server.fail_next["/segment/4.ts"] = [500, 503]
+        rec = recording.of(server)
+        rec.whole_stream = writer
+
+        start(rec)
+        server.publish_all()
+        wait_until(lambda: writer.seconds == 6 * SEGMENT_SECONDS, "everything that could be fetched")
+
+        assert self.parts(writer) == [
+            b"".join(segment.data for segment in timeline[:4]),
+            b"".join(segment.data for segment in timeline[5:]),
+        ]
+
+    def test_a_recorder_that_starts_over_does_not_have_the_same_footage_kept_twice(self, hls, recording, writer):
+        timeline = fake_segments(9)
+        server = hls(timeline, published=5, window=len(timeline))
+        rec = recording.of(server)
+        rec.whole_stream = writer
+        start(rec, already_published=5)
+        wait_until(lambda: writer.seconds == 3 * SEGMENT_SECONDS, "the first run's segments")
+
+        # The run is stopped and a fresh one starts three segments back from
+        # the live edge again: two it has already kept, and one that is new.
+        rec.stop()
+        server.publish(1)
+        rec.tick()
+        wait_until(lambda: writer.seconds == 4 * SEGMENT_SECONDS, "the second run's one new segment")
+        server.publish_all()
+        wait_until(lambda: writer.seconds == 7 * SEGMENT_SECONDS, "the second run to catch up")
+
+        assert b"".join(self.parts(writer)) == b"".join(segment.data for segment in timeline[2:])
+
+    def test_a_writer_that_fails_does_not_cost_the_buffer_anything(self, hls, recording, caplog):
+        class Broken:
+            def add(self, *segment):
+                raise RuntimeError("no room left")
+
+        timeline = fake_segments(6)
+        server = hls(timeline, published=3)
+        rec = recording.of(server)
+        rec.whole_stream = Broken()
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            start(rec)
+            server.publish_all()
+            wait_for_segments(rec, 6)
+
+        assert stored_data(rec) == [segment.data for segment in timeline]
+        assert any("could not be handed on" in record.getMessage() for record in caplog.records)

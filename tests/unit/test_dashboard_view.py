@@ -494,27 +494,47 @@ class TestTheServiceInWords:
             (2, 5, "2 of 5 channels"),
         ],
     )
-    def test_beside_the_recording_lamp(self, recording, tracked, words):
+    def test_beside_the_lamp(self, recording, tracked, words):
         assert view.channel_count_words(recording, tracked) == words
+
+    @pytest.mark.parametrize(
+        ("state", "words"),
+        [
+            ({"live": True}, "Live"),
+            ({"live": True, "recorded": True}, "Recording"),
+            ({"live": False}, "Not live"),
+            # Its recording is waiting for the stream; nothing is coming in.
+            ({"live": False, "recorded": True}, "Not live"),
+            ({"live": False, "looked_at": False}, "Not watched"),
+        ],
+    )
+    def test_the_lamp_itself(self, state, words):
+        # "Recording" is kept for a stream that is being kept whole.
+        assert view.now_words(**state) == words
 
     def state(self, **overrides) -> str:
         values = {"recording": 0, "tracked": 3, "watchlist": 3, "watching": True, "shutting_down": False}
         values.update(overrides)
         return view.service_words(**values)
 
-    def test_while_recording_it_says_how_many_channels(self):
-        assert self.state(recording=2).startswith("2 of the 3 watched channels are live and being recorded.")
-        assert self.state(recording=1).startswith("1 of the 3 watched channels is live and being recorded.")
+    def test_while_channels_are_live_it_says_how_many(self):
+        assert self.state(recording=2).startswith("2 of the 3 watched channels are live.")
+        assert self.state(recording=1).startswith("1 of the 3 watched channels is live.")
 
     def test_while_nothing_is_live_it_says_so_and_what_happens_next(self):
         words = self.state()
 
-        assert words.startswith("None of the 3 watched channels is being recorded right now.")
+        assert words.startswith("None of the 3 watched channels is live right now.")
         assert words.endswith("When one goes live and its chat erupts, the moment lands in the queue.")
 
     def test_a_single_watched_channel_is_not_counted(self):
-        assert self.state(tracked=1, watchlist=1, recording=1).startswith("The watched channel is live")
-        assert self.state(tracked=1, watchlist=1).startswith("The watched channel is not being recorded right now.")
+        assert self.state(tracked=1, watchlist=1, recording=1).startswith("The watched channel is live.")
+        assert self.state(tracked=1, watchlist=1).startswith("The watched channel is not live right now.")
+
+    def test_it_never_calls_a_watched_channel_recorded(self):
+        # That word is for a stream that is being kept whole.
+        for recording in (0, 1, 2):
+            assert "record" not in self.state(recording=recording)
 
     def test_an_empty_watchlist_points_to_where_to_add_a_channel(self):
         assert self.state(tracked=0, watchlist=0) == (
@@ -536,8 +556,16 @@ class TestTheServiceInWords:
         ("pending", "words"),
         [
             (0, "Nothing new is being watched."),
-            (1, "Waiting for 1 job to finish (clips being cut or analysed). Nothing new is being watched."),
-            (2, "Waiting for 2 jobs to finish (clips being cut or analysed). Nothing new is being watched."),
+            (
+                1,
+                "Waiting for 1 job to finish (clips being cut or analysed, recordings being saved). "
+                "Nothing new is being watched.",
+            ),
+            (
+                2,
+                "Waiting for 2 jobs to finish (clips being cut or analysed, recordings being saved). "
+                "Nothing new is being watched.",
+            ),
         ],
     )
     def test_what_a_shutdown_is_waiting_for(self, pending, words):
@@ -636,3 +664,130 @@ class TestATrialInWords:
 
         assert [row["label"] for row in rows] == ["As saved", "With these values"]
         assert (rows[1]["moments"], rows[1]["per_hour"], rows[1]["median"], rows[1]["longest"]) == ("0", "0", "-", "-")
+
+
+class TestRecordingsInWords:
+    """What the Channels and Recordings pages say of a stream recording."""
+
+    @pytest.mark.parametrize(
+        ("size", "words"),
+        [
+            (0, "0 MB"),
+            (300_000, "0 MB"),
+            (512 * 1024**2, "512 MB"),
+            (999 * 1024**2, "999 MB"),
+            (1000 * 1024**2, "1 GB"),
+            (1024**3, "1 GB"),
+            (int(4.26 * 1024**3), "4.3 GB"),
+            (225 * 1024**3, "225 GB"),
+        ],
+    )
+    def test_how_much_room_something_takes(self, size, words):
+        assert view.size_words(size) == words
+
+    @pytest.mark.parametrize(
+        ("seconds", "words"),
+        [
+            (0, "less than a second"),
+            (0.4, "less than a second"),
+            (1, "1 second"),
+            (38, "38 seconds"),
+            (60, "1 minute"),
+            (92, "1 minute 32 seconds"),
+            (600, "10 minutes"),
+            (3600, "1 hour"),
+            (3725, "1 hour 2 minutes"),
+            (7259, "2 hours"),
+        ],
+    )
+    def test_a_length_of_time_is_written_out(self, seconds, words):
+        # To the second up to an hour, to the minute past it.
+        assert view.duration_words(seconds) == words
+
+    @pytest.mark.parametrize(
+        ("state", "words"),
+        [
+            ({"running": True}, "Waiting for the stream"),
+            ({"running": True, "on_air": True}, "Starting"),
+            ({"running": True, "on_air": True, "seconds": 5025.4, "size": 4_500_000_000}, "1:23:45 recorded, 4.2 GB"),
+            ({"running": True, "seconds": 5025.4, "size": 4_500_000_000}, "1:23:45 recorded, the stream is off"),
+            ({"running": False, "seconds": 5025.4}, "Saving 1:23:45"),
+            ({"running": False}, "Saving"),
+        ],
+    )
+    def test_what_a_recording_that_is_not_over_is_doing(self, state, words):
+        assert view.recording_state(7, **state) == {"id": 7, "running": state["running"], "words": words}
+
+    def test_a_row_of_the_list_says_what_is_being_done_or_that_nothing_came_of_it(self):
+        running = view.recording_state(7, running=True)
+
+        assert view.recording_row_words("recording", running) == "Waiting for the stream"
+        assert view.recording_row_words("failed", None) == "Not saved"
+        assert view.recording_row_words("ready", None) is None
+
+    def test_stopping_one_answers_with_whether_there_is_anything_to_save(self):
+        assert view.RECORDING_STOPPED_WORDS[True] == "Saving the recording. It will be on the Recordings page."
+        assert view.RECORDING_STOPPED_WORDS[False] == "Nothing had been recorded yet."
+
+    @pytest.mark.parametrize(
+        ("seconds", "words"), [(3, "Chat 3 s earlier"), (0, "Chat as it arrived"), (-2, "Chat 2 s later")]
+    )
+    def test_where_chat_is_put_against_the_picture(self, seconds, words):
+        assert view.chat_delay_words(seconds) == words
+
+    def test_when_a_recording_was_on_air(self):
+        assert view.recording_span_words(local(21, 4), local(23, 31), TODAY) == "Today, 21:04 to 23:31"
+        assert view.recording_span_words(local(21, 4, days_ago=1), local(1, 12), TODAY) == "Yesterday, 21:04 to 01:12"
+        assert view.recording_span_words(local(21, 4, days_ago=3), local(23, 31, days_ago=3), TODAY) == (
+            "Tuesday 6 October, 21:04 to 23:31"
+        )
+
+    def test_one_that_has_not_ended_only_says_when_it_began(self):
+        assert view.recording_span_words(local(21, 4), None, TODAY) == "Today, 21:04"
+
+    def summary(self, size=None, parts=1, missing=0.0, ended_by=None) -> str:
+        return view.recording_summary_words(size, parts, missing, ended_by, 600)
+
+    def test_a_recording_that_went_as_asked_only_says_how_big_it_is(self):
+        assert self.summary(size=3 * 1024**3, ended_by="stopped") == "3 GB."
+
+    def test_one_the_stream_broke_off_in_says_how_often_and_what_is_missing(self):
+        assert self.summary(parts=3, missing=92.4) == (
+            "The recording has 2 breaks, where the file is missing 1 minute 32 seconds of the stream."
+        )
+        assert self.summary(parts=2, missing=0.2) == (
+            "The recording has 1 break, where the file is missing less than a second of the stream."
+        )
+
+    def test_one_that_was_not_stopped_by_hand_says_why_it_ended(self):
+        assert self.summary(ended_by="stream_ended") == (
+            "It ended by itself once the stream had been gone for 10 minutes."
+        )
+        assert self.summary(size=1024**3, parts=2, missing=30, ended_by="disk_full") == (
+            "1 GB. The recording has 1 break, where the file is missing 30 seconds of the stream. "
+            "It was ended because the disk was running out of room."
+        )
+
+    def test_with_nothing_known_nothing_is_said(self):
+        assert self.summary() == ""
+        assert self.summary(ended_by="a reason from the future") == ""
+
+    def test_every_way_a_recording_can_end_has_its_words(self):
+        from kick_clip_hunter import stream_recording
+
+        reasons = {
+            stream_recording.STOPPED,
+            stream_recording.STREAM_ENDED,
+            stream_recording.DISK_FULL,
+            stream_recording.WRITE_FAILED,
+            stream_recording.SHUTDOWN,
+            stream_recording.INTERRUPTED,
+        }
+
+        assert set(view.RECORDING_ENDED_WORDS) == reasons
+        for reason in reasons - {stream_recording.STOPPED}:
+            words = view.RECORDING_ENDED_WORDS[reason]
+            assert words[0].isupper() and words.endswith(".")
+
+    def test_how_much_room_the_disk_has_left(self):
+        assert view.free_room_words(225 * 1024**3) == "225 GB free on the disk recordings are kept on."

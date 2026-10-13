@@ -11,9 +11,9 @@
    - Grey and flat: no shadows, no gradients, no cards; a 1px `line`
      separates panes and `quiet` hairlines separate rows.
    - One colour, one meaning. `lit` is something you set, `sunk` is where you
-     are, `pen` is laughing, `marker` is the moment, `rec` is the recording
-     lamp. Nothing is coloured for decoration, and a problem is stated in
-     words, not in red.
+     are, `pen` is laughing, `marker` is the moment, `rec` is a stream
+     coming in. Nothing is coloured for decoration, and a problem is stated
+     in words, not in red.
    - Hierarchy comes from weight and from the typeface's width, not from
      size, capitals or dimmer greys: text is `text` or `text-2`, nothing
      fainter is readable on `field`. */
@@ -42,7 +42,7 @@
   --text-2: #DADADA;      /* secondary text; the dimmest that passes contrast */
   --placeholder: #C8C8C8;
   --veil: #0000001A;      /* laid over a fill on hover, twice when pressed */
-  --rec: #FF4A3D;         /* the dot of a recording lamp, nothing else */
+  --rec: #FF4A3D;         /* the dot of a lamp: a stream is coming in, live or recorded */
   --video: #000000;
   --shade: #000000B3;     /* over the page while a dialog is open */
 
@@ -88,6 +88,7 @@
   --w-chat: 340px;
   --w-dialog: 1120px;
   --w-trim-chat: 300px;
+  --w-recording: 340px;
   --w-handle: 12px;
 
   /* One family; its width axis carries role. */
@@ -103,6 +104,8 @@
   --stage-rest: 512px;
   /* The same for the Trim dialog: all of it but its picture. */
   --trim-rest: 480px;
+  /* And for a recording, which has less around its picture. */
+  --recording-rest: 300px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -330,7 +333,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* ---- Review: the queue, the open moment, its chat ------------------ */
 
-.review { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
+.review, .recordings { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
 
 .queue { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .queue-head { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-12); }
@@ -341,9 +344,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .queue-pages { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; color: var(--text-2); }
 .queue-pages span { margin-right: auto; }
 .queue .ch-keys-hint { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); }
+.queue-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
 
 .open { display: grid; min-width: 0; min-height: 0; }
-.moment { display: grid; grid-template-columns: minmax(0, 1fr) var(--w-chat); min-height: 0; }
+.moment, .recording { display: grid; grid-template-columns: minmax(0, 1fr) var(--w-chat); min-height: 0; }
 
 /* The stage column is as wide as its clip, and the clip as tall as leaves
    room for the rest. */
@@ -428,15 +432,41 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-foot { display: flex; align-items: center; gap: var(--space-8); margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
 .trim-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
 
+/* ---- Recordings: streams kept whole --------------------------------- */
+
+/* A row of the list: whose stream, and how much of it or what is being done
+   with it; under them, when. The open one is `sunk` with a `lit` edge, like
+   a row of the queue. */
+.rec-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-12); padding: var(--space-8) var(--space-12) var(--space-8) 10px; border-bottom: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
+.rec-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.rec-row:focus-visible { outline-offset: -2px; }
+.rec-row[aria-current="true"] { background-color: var(--sunk); border-left-color: var(--lit); }
+.rec-row b { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rec-length { font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rec-when { grid-column: 1 / -1; font-stretch: var(--width-compact); color: var(--text-2); }
+
+/* The video is as tall as leaves room for what is said under it. */
+.recording .stage-in { max-width: max(520px, calc((100vh - var(--recording-rest)) * 16 / 9)); }
+.rec-file { margin-top: var(--space-12); }
+.rec-file .ch-meta { min-width: 0; overflow-wrap: anywhere; }
+
+/* On the Channels page: what a channel's recording is doing, and the button
+   that starts or stops it. As wide as its longest words need, so that the
+   table keeps its columns while they change. */
+.rec-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-8); min-width: var(--w-recording); font-variant-numeric: tabular-nums; }
+
 /* A page that is a statement: nothing new, nothing yet. */
 .statement { min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
 .statement .lead { margin-top: var(--space-8); }
-.statement .ch-btn { margin-top: var(--space-24); }
+.statement .ch-btn, .statement > .ch-line { margin-top: var(--space-24); }
+.statement .ch-line .ch-btn { margin-top: 0; }
 
 /* ---- Channels and Settings: a page of sections --------------------- */
 
 .channels { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
 .channels-in { display: flex; flex-direction: column; gap: var(--space-36); max-width: 760px; }
+/* The watchlist has a column more than fits that. */
+.channels-in.is-wide { max-width: 920px; }
 .channels .title { margin-bottom: var(--space-12); }
 .section-lead { max-width: 60ch; margin-bottom: var(--space-12); }
 
@@ -445,7 +475,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .watchlist th { height: var(--h-compact); font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
 .watchlist td { height: var(--h-row); border-top: 1px solid var(--quiet); }
 .watchlist td:first-child { font-weight: 700; }
-.watchlist th:last-child, .watchlist td:last-child { width: 1%; padding-right: 0; white-space: nowrap; }
+.watchlist th:nth-last-child(-n+2), .watchlist td:nth-last-child(-n+2) { width: 1%; white-space: nowrap; }
+.watchlist th:last-child, .watchlist td:last-child { padding-right: 0; text-align: right; }
 .add-channel { margin-top: var(--space-16); }
 .add-channel .ch-input { width: 220px; }
 
@@ -497,7 +528,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   body { height: auto; min-height: 100vh; }
   .bar { flex-wrap: wrap; row-gap: var(--space-8); height: auto; padding-top: var(--space-8); padding-bottom: var(--space-8); }
   .bar-nav a { min-height: var(--h-tab); }
-  .review, .moment { display: block; }
+  .review, .moment, .recordings, .recording { display: block; }
   .queue { border-right: 0; border-bottom: 1px solid var(--line); }
   .queue-list, .chat-lines { flex: none; max-height: 340px; }
   .chat-lines::before { content: none; }
@@ -512,6 +543,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .trim-foot { flex-wrap: wrap; }
   .trim-foot .status-line { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
+  .watchlist { display: block; overflow-x: auto; }
   .set-row { grid-template-columns: minmax(0, 1fr); }
   .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
   .set-list { width: 100%; }

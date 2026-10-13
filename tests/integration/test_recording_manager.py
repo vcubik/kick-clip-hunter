@@ -6,19 +6,22 @@ channel the (browser-free) official API says is live.
 
 Recorders are replaced by stand-ins that count their calls; the "is it live"
 question goes through the real client code against the fake Kick API.
+
+The same loop keeps a channel recorded while its stream is being kept whole,
+and reports when such a recording is over.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import recording_manager
+from kick_clip_hunter import recording_manager, stream_recording
 from kick_clip_hunter.kick_stream import StreamUrlError
 from kick_clip_hunter.recorder import PRE_ROLL_SECONDS, ChannelRecorder
 from tests.support.waiting import async_wait_until
@@ -318,3 +321,286 @@ class TestClipRequests:
         assert calls == [
             (20, 3, {"playback_delay_seconds": 4, "context_before_seconds": 0, "context_after_seconds": 90})
         ]
+
+
+@asynccontextmanager
+async def looping(slugs, *, enabled=lambda: True, tracked=lambda slug: True, over=None):
+    """The real loop, running for as long as the block does."""
+    task = asyncio.create_task(recording_manager.run_forever(lambda: list(slugs), enabled, tracked, over))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def rounds(kick_api, count: int = 3) -> None:
+    """Waits for the loop to have asked Kick about a channel that many more
+    times - at least that many rounds, with one channel being looked at."""
+    asked = len(kick_api.calls("GET", "/channels")) + count
+    await async_wait_until(lambda: len(kick_api.calls("GET", "/channels")) >= asked, f"{count} more rounds")
+
+
+class TestStreamsKeptWhole:
+    """A stream that is being kept whole (stream_recording.py) is recorded
+    whatever the switches that pause clip tracking say, and the loop is what
+    notices that such a recording is over."""
+
+    BEGAN = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def keep(self, slug: str, broadcaster_user_id: int = 1, recording_id: int = 1):
+        return recording_manager.start_stream_recording(slug, broadcaster_user_id, recording_id)
+
+    def footage(self, kept, size: int = 7) -> None:
+        kept.writer.add(self.BEGAN, 2.0, "7-0", b"x" * size)
+
+    @pytest.fixture
+    def over(self) -> list[tuple[str, str]]:
+        """What the loop reported, in order."""
+        return []
+
+    @pytest.fixture
+    def told(self, over):
+        """Whoever is told ends the recording, as the service does."""
+
+        async def note(slug: str, why: str) -> None:
+            over.append((slug, why))
+            recording_manager.end_stream_recording(slug)
+
+        return note
+
+    async def test_it_is_recorded_though_its_channel_is_not_tracked(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping(["kept"], tracked=lambda slug: False):
+            await async_wait_until(lambda: recorders["kept"].ticks >= 2, "two ticks")
+
+        assert recorders["kept"].stops == 0
+
+    async def test_it_is_recorded_though_watching_is_off_and_nothing_else_is(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        kick_api.add_channel("other", 2, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        recorders["other"] = StandInRecorder(active=True)
+        self.keep("kept")
+
+        async with looping(["kept", "other"], enabled=lambda: False):
+            await async_wait_until(
+                lambda: recorders["kept"].ticks >= 2 and recorders["other"].stops, "one to tick, the other to stop"
+            )
+
+        assert recorders["other"].ticks == 0
+        assert recorders["kept"].stops == 0
+        # Not even the liveness check is spent on a channel nobody looks at.
+        assert {query["slug"] for query in kick_api.calls("GET", "/channels")} == {"kept"}
+
+    async def test_a_channel_that_is_not_live_yet_is_waited_for(self, kick_api, recorders):
+        channel = kick_api.add_channel("kept", 1, is_live=False)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping(["kept"], tracked=lambda slug: False):
+            await rounds(kick_api)
+            assert recorders["kept"].ticks == 0  # no browser for an offline channel
+
+            channel.is_live = True
+            await async_wait_until(lambda: recorders["kept"].ticks, "the recording to start with the stream")
+
+        assert recording_manager.stream_recording_of("kept") is not None
+
+    async def test_once_it_is_over_a_channel_that_is_not_tracked_is_let_go(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping(["kept"], tracked=lambda slug: False):
+            await async_wait_until(lambda: recorders["kept"].is_active, "the recording to start")
+            recording_manager.end_stream_recording("kept")
+            await async_wait_until(lambda: recorders["kept"].stops == 1, "the recorder to be stopped")
+
+    async def test_a_tracked_channel_goes_on_being_recorded_for_its_clips(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping(["kept"]):
+            await async_wait_until(lambda: recorders["kept"].is_active, "the recording to start")
+            recording_manager.end_stream_recording("kept")
+            await rounds(kick_api)
+
+        assert recorders["kept"].stops == 0
+
+    async def test_it_is_recorded_even_if_the_watchlist_no_longer_has_its_channel(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping([]):
+            await async_wait_until(lambda: recorders["kept"].ticks >= 2, "two ticks")
+
+    async def test_asking_for_one_does_not_wait_for_the_next_round(self, kick_api, recorders, monkeypatch):
+        # Rounds are half a minute apart, which is half a minute of the
+        # stream lost if a recording had to wait for the next one.
+        monkeypatch.setattr(recording_manager, "TICK_INTERVAL_SECONDS", 3600)
+        kick_api.add_channel("other", 1, is_live=True)
+        kick_api.add_channel("kept", 2, is_live=True)
+        recorders["other"] = StandInRecorder()
+        recorders["kept"] = StandInRecorder()
+
+        async with looping(["other", "kept"], tracked=lambda slug: slug == "other"):
+            await async_wait_until(lambda: recorders["other"].ticks, "the first round")
+            assert recorders["kept"].ticks == 0
+
+            self.keep("kept", 2)
+
+            await async_wait_until(lambda: recorders["kept"].ticks, "a round straight away")
+
+    def test_starting_one_gives_the_channels_recorder_its_writer(self, recorders):
+        recorders["kept"] = StandInRecorder()
+
+        kept = self.keep("kept", broadcaster_user_id=41, recording_id=7)
+
+        assert recorders["kept"].whole_stream is kept.writer
+        assert kept.writer.folder == stream_recording.parts_folder("kept", 7) and kept.writer.folder.is_dir()
+        assert recording_manager.stream_recording_of("kept") is kept
+        assert recording_manager.stream_recordings() == {"kept": kept}
+        assert recording_manager.keeps_chat_of(41) is True
+        assert recording_manager.keeps_chat_of(42) is False
+
+    def test_ending_one_takes_the_writer_away_and_closes_it(self, recorders):
+        recorders["kept"] = StandInRecorder()
+        kept = self.keep("kept")
+        self.footage(kept)
+
+        ended = recording_manager.end_stream_recording("kept")
+        ended.writer.add(self.BEGAN + timedelta(seconds=2), 2.0, "7-0", b"too late")
+
+        assert ended is kept
+        assert recorders["kept"].whole_stream is None
+        assert kept.writer.size == 7
+        assert recording_manager.stream_recording_of("kept") is None
+        assert recording_manager.keeps_chat_of(1) is False
+        assert recording_manager.end_stream_recording("kept") is None
+
+    async def test_a_stream_that_has_been_gone_for_a_while_ends_its_recording(
+        self, kick_api, recorders, monkeypatch, over, told
+    ):
+        monkeypatch.setattr(recording_manager, "STREAM_END_GRACE_SECONDS", 0.05)
+        kick_api.add_channel("kept", 1, is_live=False)
+        recorders["kept"] = StandInRecorder()
+        self.footage(self.keep("kept"))
+
+        async with looping(["kept"], over=told):
+            await async_wait_until(lambda: over, "the recording to be reported over")
+
+        assert over == [("kept", stream_recording.STREAM_ENDED)]
+
+    async def test_until_then_it_waits_for_the_stream_to_come_back(self, kick_api, recorders, over, told):
+        kick_api.add_channel("kept", 1, is_live=False)
+        recorders["kept"] = StandInRecorder()
+        self.footage(self.keep("kept"))
+
+        async with looping(["kept"], over=told):
+            await rounds(kick_api)
+
+        assert over == []
+
+    async def test_one_started_ahead_of_its_stream_waits_for_as_long_as_it_takes(
+        self, kick_api, recorders, monkeypatch, over, told
+    ):
+        monkeypatch.setattr(recording_manager, "STREAM_END_GRACE_SECONDS", 0)
+        kick_api.add_channel("kept", 1, is_live=False)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        async with looping(["kept"], over=told):
+            await rounds(kick_api)
+
+        assert over == []
+
+    async def test_footage_that_can_no_longer_be_written_ends_it(self, kick_api, recorders, over, told):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept").writer.failed = True
+
+        async with looping(["kept"], over=told):
+            await async_wait_until(lambda: over, "the recording to be reported over")
+
+        assert over == [("kept", stream_recording.WRITE_FAILED)]
+
+    async def test_a_disk_running_out_ends_every_recording_while_they_can_still_be_saved(
+        self, kick_api, recorders, monkeypatch, over, told
+    ):
+        # Saving takes as much room again as a recording has kept.
+        room = recording_manager.MIN_FREE_BYTES + 100
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: room)
+        for user_id, slug in enumerate(("first", "second"), start=1):
+            kick_api.add_channel(slug, user_id, is_live=True)
+            recorders[slug] = StandInRecorder()
+        first, second = self.keep("first", 1, 1), self.keep("second", 2, 2)
+        self.footage(first, size=60)
+
+        async with looping(["first", "second"], over=told):
+            await rounds(kick_api, 4)
+            assert over == []
+
+            self.footage(second, size=41)
+            await async_wait_until(lambda: len(over) == 2, "both recordings to be reported over")
+
+        assert sorted(over) == [("first", stream_recording.DISK_FULL), ("second", stream_recording.DISK_FULL)]
+
+    def test_a_recording_that_is_being_saved_still_has_its_room_spoken_for(self, monkeypatch):
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: 1000)
+        self.footage(self.keep("kept"), size=100)
+
+        recording_manager.hold_room(5, 300)
+        assert recording_manager.room_left() == 600
+
+        recording_manager.release_room(5)
+        recording_manager.release_room(5)
+        assert recording_manager.room_left() == 900
+
+    async def test_with_nobody_to_tell_nothing_is_ended(self, kick_api, recorders):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept").writer.failed = True
+
+        async with looping(["kept"]):
+            await rounds(kick_api)
+
+        assert recording_manager.stream_recording_of("kept") is not None
+
+    async def test_failing_to_look_at_the_disk_does_not_stop_the_loop(
+        self, kick_api, recorders, monkeypatch, caplog, over, told
+    ):
+        def unreadable() -> int:
+            raise OSError("the disk is gone")
+
+        monkeypatch.setattr(stream_recording, "free_bytes", unreadable)
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            async with looping(["kept"], over=told):
+                await async_wait_until(lambda: recorders["kept"].ticks >= 3, "the loop to carry on")
+
+        assert over == []
+        assert any("could not check on the stream recordings" in record.getMessage() for record in caplog.records)
+
+    async def test_failing_to_end_one_does_not_stop_the_loop(self, kick_api, recorders, caplog):
+        kick_api.add_channel("kept", 1, is_live=True)
+        recorders["kept"] = StandInRecorder()
+        self.keep("kept").writer.failed = True
+
+        async def explode(slug: str, why: str) -> None:
+            raise RuntimeError("database is locked")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            async with looping(["kept"], over=explode):
+                await async_wait_until(lambda: recorders["kept"].ticks >= 3, "the loop to carry on")
+
+        assert any("[kept] could not end the stream recording" in record.getMessage() for record in caplog.records)

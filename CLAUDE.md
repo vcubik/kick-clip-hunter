@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 kick-clip-hunter watches a list of Kick.com streamers and detects potentially viral/funny
 moments from chat activity (message-rate spikes, emote/keyword frequency). Detected
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
-them, and a clip is automatically cut from a rolling local recording buffer. See
+them, and a clip is automatically cut from a rolling local recording buffer. A channel's
+whole stream can also be recorded on request, with its chat. See
 [README.md](README.md) for the roadmap.
 
 ## Current status
@@ -105,7 +106,16 @@ set from the dashboard's Settings page (see `tuning.py` below).
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below). `GET /dashboard/channels` has the
-  watchlist, the per-clip analysis switches and shutdown. `GET /dashboard/settings` is where
+  watchlist, the per-clip analysis switches and shutdown. Beside each channel are its
+  Tracking switch, which is about looking for clips and nothing else, and the button that
+  starts or stops a recording of its whole stream (see `stream_recording.py` below), with
+  how much has been recorded so far. `GET /dashboard/recordings` lists those recordings,
+  the newest first, and plays the open one with its chat replayed beside it - fetched a
+  stretch at a time as the video plays on or is moved in, since a recording runs for hours -
+  and has the buttons that delete one or retry one that could not be saved. On every page
+  "Recording" means a stream that is being kept whole: a channel whose stream is merely
+  coming in for clips is "Live" (the lamp in the bar and the watchlist's "Right now").
+  `GET /dashboard/settings` is where
   detection and clips are tuned: one form of settings (see `tuning.py`), for all channels
   or - chosen at the top - for one of the watchlist's, which goes by its own values once
   its "Own settings" switch is on. Each setting has a button that puts back what it would
@@ -113,7 +123,9 @@ set from the dashboard's Settings page (see `tuning.py` below).
   is saved as a whole, and "Try on stored chat" replays a channel's newest chat under the
   saved settings and under the form's, without saving anything. No page reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
-  (polled from `GET /moments/status`). An empty queue is the normal state, so that page
+  (polled from `GET /moments/status`), and while a stream recording runs or is being saved
+  the Channels and Recordings pages ask what it is doing every couple of seconds (`GET
+  /recordings/status`) and their words follow. An empty queue is the normal state, so that page
   then says what the service is doing instead.
 - Tests: `pip install -r requirements-dev.txt`, then `python -m pytest` (with the project's
   virtual environment: `.venv\Scripts\python.exe -m pytest`). See "Testing" below.
@@ -132,10 +144,12 @@ Watchlist (streamers)
     -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
-       chat_identities, tuning
+       chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
        clip from that buffer, path stored back on the moment
+    -> while a stream recording of the channel runs, the same recorder hands every
+       segment on to it as well (stream_recording) -> one video file when it is over
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
        watchlist and moments
 ```
@@ -178,7 +192,11 @@ Module map (`src/kick_clip_hunter/`):
   channels' state alone
 - `timeutil.py` — UTC-to-local-time display helper
 - `main.py` — FastAPI app: webhook receiver + the dashboard's routes + wires moment
-  detection to clip extraction. Settings are saved through `POST /tuning` (all channels),
+  detection to clip extraction. A stream recording is started and stopped through `POST
+  /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
+  background task, and removed or retried through `POST /recordings/{id}/delete` and
+  `/save`; what is being done with one right now is in memory, everything about one that
+  is over in its row. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
   /channels/{slug}/own_tuning` (whether it goes by them); what is stored is kept in memory
   (`_tuning_values`) and dropped on every save, together with the keyword weights worked
@@ -237,17 +255,20 @@ Module map (`src/kick_clip_hunter/`):
   where the page's own script is not visible - hence `isolated_context=False`. The file
   is large by nature (roughly 3-4 MB per second of clip)
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
-  `review.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
+  `review.html`, `recordings.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
-  without reloading. `_chat_line.html` is one line of chat, shared by the review page and
-  by `chat_video.html`, the page a chat video is made from
+  without reloading. `_chat_line.html` is one line of chat, shared by the review page, the
+  Recordings page and `chat_video.html`, the page a chat video is made from;
+  `_recording_chat.html` is the box of a recording's chat for one stretch of it, also
+  served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`)
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
   open moment's markup gets replaced; it also runs the Trim dialog, whose strip and chat
-  are copied from the page's when it is opened, and the Settings form, which it posts as a
-  whole and then fetches again) and the bundled typeface, Archivo, with its
-  licence;
+  are copied from the page's when it is opened, the Settings form, which it posts as a
+  whole and then fetches again, and stream recordings: the buttons, the words that follow
+  a recording while there is one, and a recording's chat) and the bundled typeface,
+  Archivo, with its licence;
   `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
@@ -273,7 +294,39 @@ Module map (`src/kick_clip_hunter/`):
   (`clip_alone`), cut out of the file for as long as they run. `trim_clip` cuts any
   stretch of a file out as a file of its own (see `clip_trim.py`).
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
-  channel, gated on an `is_live` check so offline channels never touch a browser
+  channel, gated on an `is_live` check so offline channels never touch a browser. A
+  channel's recorder runs for either of two reasons: the channel is tracked for clips
+  (and watching is on), or its stream is being kept whole - which the switches have no
+  say over. The streams kept whole right now are held here, and the loop is what notices
+  that such a recording is over (no footage for `STREAM_END_GRACE_SECONDS`, the disk
+  running out, footage that can no longer be written) and reports it to `main.py`. It is
+  woken when a recording is asked for, so that one does not wait half a minute for the
+  next round.
+- `stream_recording.py` — a stream kept whole: everything a channel broadcasts from when
+  a recording is started (Channels page) until it is stopped or its stream is over, as
+  one video file under `data/streams/<channel>/`, named for when it began. Its module
+  docstring is the full story. In short: it rides on the channel's recorder, which hands
+  every segment it saves to the recording's `StreamWriter` as well (`whole_stream`), so
+  the stream is fetched once. Segments that follow each other are appended to one
+  MPEG-TS file, a *part* (`stream_<id>_parts/part_<start ms>.ts`); a break in the stream -
+  the recorder starting over, a hole, an ad, whose own segments are left out - starts the
+  next part. When it is over, `save` remuxes each part to MP4 without re-encoding and
+  joins several into one; parts that differ in picture or sound format are not forced
+  together, and then, as with any other failure, the recording is marked failed and its
+  parts stay in their folder (the Recordings page offers to try again). When each part
+  began and how long it runs is stored with the recording (`stream_recordings.parts`),
+  which is what puts chat against the picture (`broadcast_time`, `file_second`); what
+  fell between two parts is simply not in the file. A recording is independent of
+  tracking: started with tracking off it still gets its chat stored (the webhook keeps
+  a recorded channel's messages and runs no detection on them), started ahead of the
+  stream it waits for it, and it ends by itself once it has footage and has been given
+  none for ten minutes. Saving takes as much room again as the recording, so recordings
+  are ended - and none is started - while the disk still has that much plus
+  `MIN_FREE_BYTES`. Nothing has to be finished for footage to be safe: after a restart a
+  recording that was running goes on, into the same recording (the stretch in between is
+  one more break), unless what it kept is older than the grace period - then it is saved
+  as it was cut short. A shutdown from the dashboard ends recordings and waits for their
+  files.
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
   own internal API under a logged-in account (see "Clip creation")
 - `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU)
@@ -333,7 +386,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (1700+ tests, a few minutes); `python
+- `python -m pytest` runs everything (about 2000 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -341,7 +394,8 @@ run what, the manual live checklist). What matters when changing code:
   and leave the whole suite to CI - except for a larger change (the recorder, the
   detector, anything spanning several modules), where `check.py` is run first.
 - The suite is hermetic by construction (`tests/conftest.py`): it runs in a throwaway working
-  directory with its own database per test, and any attempt to reach a non-loopback host,
+  directory with its own database per test, the disk is always taken to have plenty of
+  room, and any attempt to reach a non-loopback host,
   launch a browser or exit the process fails the test. It is safe to run while the live
   server is running from the same checkout - but don't *edit* production files in place for
   experiments while it is (a restart would pick them up); use a copy.
@@ -363,7 +417,8 @@ run what, the manual live checklist). What matters when changing code:
 - Not covered, and why: the browser-driven parts (`kick_stream.py`, `clip_creator.create_clip`,
   `chat_video.capture_frames`,
   the login script) and actually running the ML models. After touching those or the code next
-  to them, go through the live checklist in docs/testing.md.
+  to them, go through the live checklist in docs/testing.md. A stream recording is tested
+  on tiny synthetic footage; a real, hours-long one is a step of that checklist.
 
 ## Clip creation
 
@@ -415,6 +470,14 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - Not wired into the automatic pipeline; it's a standalone manual tool.
 
 ## Operational quirks
+
+- A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
+  and as much again for the minutes its file takes to make (the footage is copied once,
+  twice if the stream broke off and its parts have to be joined). Nothing deletes
+  recordings but the button on the Recordings page.
+- The browser has to be able to move about in a multi-gigabyte recording, which it does
+  by asking for byte ranges; Starlette's `StaticFiles` answers those (pinned by a test),
+  so the file is written with its index at the end and not rewritten to move it forward.
 
 - Kick's webhook config UI occasionally fails to persist a URL change silently. If a
   channel is confirmed live/chatting but no webhooks are arriving, the fix is: toggle

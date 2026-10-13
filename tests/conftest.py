@@ -12,7 +12,8 @@ run, so:
   file, so relative `data/...` paths and the database never carry state from
   one test to the next;
 * module-level state (detector windows, caches, feature flags, open moment
-  sessions) is reset around every test;
+  sessions, running stream recordings) is reset around every test, and the
+  disk is always taken to have plenty of room;
 * three things a test must never do are blocked outright and reported as a
   failure even if the code under test swallows the error: talking to
   anything but loopback, launching a browser, and exiting the process.
@@ -163,6 +164,12 @@ def _reset_module_state() -> None:
     for recorder in recording_manager._recorders.values():
         recorder.stop()
     recording_manager._recorders.clear()
+    # Closed, so that a test's folder can be removed on Windows too.
+    for kept in recording_manager._stream_recordings.values():
+        kept.writer.close()
+    recording_manager._stream_recordings.clear()
+    recording_manager._held_bytes.clear()
+    recording_manager._wake = None
 
     # Only if a test has imported the app - importing it here would make
     # every run pay for FastAPI even when just the detector is under test.
@@ -176,6 +183,7 @@ def _reset_module_state() -> None:
         main._trims.clear()
         main._chat_identity_cache.clear()
         main._stream_start_cache.clear()
+        main._stream_saves.clear()
         main._shutdown_requested = False
 
 
@@ -186,6 +194,21 @@ def clean_module_state():
     _reset_module_state()
     yield
     _reset_module_state()
+
+
+# What the disk is taken to have free, unless a test says otherwise.
+PLENTY_OF_ROOM = 500 * 1024**3
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whether a stream recording may start, or has to end, depends on how
+    full the disk is. A test must not depend on the disk of the machine it
+    runs on, so there is always plenty - a test about a full disk says how
+    little there is by replacing `stream_recording.free_bytes` itself."""
+    from kick_clip_hunter import stream_recording
+
+    monkeypatch.setattr(stream_recording, "free_bytes", lambda: PLENTY_OF_ROOM)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}

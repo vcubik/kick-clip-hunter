@@ -132,6 +132,30 @@ CREATE TABLE IF NOT EXISTS tuning (
     value TEXT NOT NULL,
     PRIMARY KEY (broadcaster_user_id, name)
 );
+
+-- Streams kept whole (see stream_recording.py), one row from the moment a
+-- recording is asked for. While it runs the row says little: how it stands
+-- (`state`) and when it was asked for. What it holds is filled in once its
+-- file has been made: where the file is (relative to the streams folder),
+-- how long and how big it is, when its first and last frames were
+-- broadcast, and its parts (JSON: when each began and how long it runs, in
+-- the order they are in the file) - which is what places chat against the
+-- picture. `ended_by` is why it ended. Ids are never used twice: a
+-- recording's folder and file are named for it.
+CREATE TABLE IF NOT EXISTS stream_recordings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcaster_user_id INTEGER NOT NULL,
+    channel_slug TEXT NOT NULL,
+    requested_at TEXT NOT NULL,
+    state TEXT NOT NULL,
+    ended_by TEXT,
+    file_path TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    duration REAL,
+    size_bytes INTEGER,
+    parts TEXT
+);
 """
 
 
@@ -768,6 +792,81 @@ def update_moment_title(conn: sqlite3.Connection, moment_id: int, title: str | N
 
 def update_moment_notes(conn: sqlite3.Connection, moment_id: int, notes: str | None) -> None:
     conn.execute("UPDATE moments SET notes = ? WHERE id = ?", (notes, moment_id))
+    conn.commit()
+
+
+def insert_stream_recording(
+    conn: sqlite3.Connection, *, broadcaster_user_id: int, channel_slug: str, requested_at: str, state: str
+) -> int:
+    """Stores a stream recording that was just asked for (see the
+    stream_recordings table) and returns its id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO stream_recordings (broadcaster_user_id, channel_slug, requested_at, state)
+        VALUES (?, ?, ?, ?)
+        """,
+        (broadcaster_user_id, channel_slug, requested_at, state),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_stream_recording(conn: sqlite3.Connection, recording_id: int) -> sqlite3.Row | None:
+    conn.row_factory = sqlite3.Row
+    return conn.execute("SELECT * FROM stream_recordings WHERE id = ?", (recording_id,)).fetchone()
+
+
+def get_stream_recordings(conn: sqlite3.Connection, states: Iterable[str] | None = None) -> list[sqlite3.Row]:
+    """Stream recordings, the newest first - all of them, or the ones that
+    stand in one of the given states."""
+    conn.row_factory = sqlite3.Row
+    states = None if states is None else list(states)
+    where = "" if states is None else f"WHERE state IN ({', '.join('?' * len(states))})"
+    return conn.execute(f"SELECT * FROM stream_recordings {where} ORDER BY id DESC", states or []).fetchall()
+
+
+def count_stream_recordings(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM stream_recordings").fetchone()[0]
+
+
+def set_stream_recording_state(
+    conn: sqlite3.Connection, recording_id: int, state: str, ended_by: str | None = None
+) -> None:
+    """Records how a stream recording stands now and, where that is given,
+    why it ended - which otherwise stays as it was."""
+    conn.execute(
+        "UPDATE stream_recordings SET state = ?, ended_by = COALESCE(?, ended_by) WHERE id = ?",
+        (state, ended_by, recording_id),
+    )
+    conn.commit()
+
+
+def finish_stream_recording(
+    conn: sqlite3.Connection,
+    recording_id: int,
+    *,
+    state: str,
+    file_path: str,
+    started_at: str,
+    ended_at: str,
+    duration: float,
+    size_bytes: int,
+    parts: str,
+) -> None:
+    """Records the file a stream recording was made into and what it holds."""
+    conn.execute(
+        """
+        UPDATE stream_recordings
+        SET state = ?, file_path = ?, started_at = ?, ended_at = ?, duration = ?, size_bytes = ?, parts = ?
+        WHERE id = ?
+        """,
+        (state, file_path, started_at, ended_at, duration, size_bytes, parts, recording_id),
+    )
+    conn.commit()
+
+
+def delete_stream_recording(conn: sqlite3.Connection, recording_id: int) -> None:
+    conn.execute("DELETE FROM stream_recordings WHERE id = ?", (recording_id,))
     conn.commit()
 
 

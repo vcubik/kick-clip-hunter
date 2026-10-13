@@ -51,6 +51,11 @@ the buffer as one more group (see `backfill_from_vod`); covering the whole
 window, that group is then the one the clip is cut from. If the channel keeps
 no VOD, or it can't be fetched, the clip is cut from the live segments as
 before - ad included.
+
+The buffer is only ever a few minutes deep. A stream that is to be kept
+whole (see stream_recording.py) is not kept here: while one is, every
+segment of the broadcast is also handed on, as it is saved, to whatever the
+recorder was given for it (`ChannelRecorder.whole_stream`).
 """
 
 import logging
@@ -300,6 +305,11 @@ class ChannelRecorder:
         self._base_dir = RECORDINGS_DIR / channel_slug
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._run: _Run | None = None
+        # What every segment of the live playlist is also handed to as it is
+        # saved, while the stream is being kept whole: anything with the
+        # `add` of stream_recording.StreamWriter. Set from outside, read by
+        # the recording thread.
+        self.whole_stream = None
 
     def _start_run(self) -> None:
         urls = get_stream_urls(self.channel_slug)
@@ -382,19 +392,25 @@ class ChannelRecorder:
                 last_sequence, last_title = segment.sequence, segment.title
                 last_end = started_at + timedelta(seconds=segment.duration)
                 group_name = f"{run_id}-{group}{AD_GROUP_SUFFIX if segment.ad else ''}"
-                if self._download(client, segment, started_at, group_name):
-                    run.last_progress_at = datetime.now(timezone.utc)
-                else:
+                content = self._download(client, segment, started_at, group_name)
+                if content is None:
                     # The next segment can't be joined straight onto the one
                     # before this hole.
                     group += 1
+                    continue
+                run.last_progress_at = datetime.now(timezone.utc)
+                self._hand_on(started_at, segment.duration, group_name, content)
 
             if playlist.ended:
                 logger.info("[%s] stream playlist ended", self.channel_slug)
                 return
             run.stop_event.wait(PLAYLIST_POLL_SECONDS)
 
-    def _download(self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str) -> bool:
+    def _download(
+        self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str
+    ) -> bytes | None:
+        """Saves a segment into the buffer. Returns what it holds, or None
+        if it could not be fetched."""
         name = _segment_name(started_at, segment.duration, group)
         for attempt in (1, 2):
             try:
@@ -403,15 +419,28 @@ class ChannelRecorder:
             except httpx.HTTPError as exc:
                 if attempt == 2:
                     logger.warning("[%s] segment download failed: %s", self.channel_slug, type(exc).__name__)
-                    return False
+                    return None
                 continue
             # Written under a temp name first so a clip being cut right now
             # never picks up a half-written segment.
             partial = self._base_dir / (name + ".part")
             partial.write_bytes(response.content)
             partial.replace(self._base_dir / name)
-            return True
-        return False
+            return response.content
+        return None
+
+    def _hand_on(self, started_at: datetime, duration: float, group: str, content: bytes) -> None:
+        """Gives a segment that was just saved to whatever keeps the stream
+        whole, if anything does."""
+        taker = self.whole_stream
+        if taker is None:
+            return
+        try:
+            taker.add(started_at, duration, group, content)
+        except Exception:
+            # Keeping a stream whole must never cost the buffer clips are
+            # cut from: the recording thread carries on either way.
+            logger.exception("[%s] a segment could not be handed on to the stream recording", self.channel_slug)
 
     def _save_debug_playlist(self, text: str) -> None:
         try:

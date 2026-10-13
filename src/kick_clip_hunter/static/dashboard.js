@@ -5,8 +5,9 @@
 // the page again, saves a rating, tag or note as it is set, drives the clip
 // player from the strip under it, replays chat in step with the clip, runs
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
-// the dialog a stretch of the footage is cut out for an editor in, and saves
-// the Settings page's form.
+// the dialog a stretch of the footage is cut out for an editor in, saves the
+// Settings page's form, starts and stops the recording of a whole stream and
+// replays a recording's chat beside it.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -890,9 +891,201 @@
     say(
       section,
       pending
-        ? `Shutting down. Waiting for ${plural(pending, "job")} to finish (clips being cut or analysed).`
+        ? `Shutting down. Waiting for ${plural(pending, "job")} to finish (clips being cut or analysed, recordings being saved).`
         : "Shutting down. This page stops answering once the service has exited.",
     );
+  }
+
+  // ---- Stream recordings ------------------------------------------------
+  //
+  // A channel's whole stream is recorded from the Channels page, and what
+  // was recorded is on the Recordings page. Neither reloads on its own:
+  // while a recording runs or is being saved, the service is asked every
+  // couple of seconds what it is doing, and the words on the page follow.
+
+  const RECORDINGS_POLL_MS = 2000;
+  let recordingsWatch = null;
+
+  // What a channel's recording is doing, in the place the page has for it,
+  // and whichever of the two buttons goes with that. `state` is null for a
+  // channel with no recording running or being saved.
+  function showRecording(place, state) {
+    place.dataset.recordingState = state ? (state.running ? "running" : "saving") : "";
+    one("[data-recording-words]", place).textContent = state ? state.words : "";
+    const start = one("[data-recording-start]", place);
+    const stop = one("[data-recording-stop]", place);
+    if (start) start.hidden = Boolean(state && state.running);
+    if (stop) stop.hidden = !(state && state.running);
+  }
+
+  // What the channels are doing right now, as the bar says it of the
+  // service and the watchlist of each channel: the words, and a lit lamp
+  // where a stream is coming in.
+  function showNow(now) {
+    const lamp = one("[data-now-lamp]");
+    lamp.classList.toggle("ch-lamp-rec", now.live);
+    lamp.textContent = now.words;
+    one("[data-now-count]").textContent = now.count;
+    for (const cell of all("[data-now]")) {
+      const channel = now.channels[cell.dataset.now];
+      if (!channel) continue;
+      cell.firstElementChild.className = channel.live ? "ch-lamp ch-lamp-rec" : "ch-meta";
+      cell.firstElementChild.textContent = channel.words;
+    }
+  }
+
+  // The Recordings page as the service has it now: the list, and what is
+  // open beside it - unless that is a video, which is left to play.
+  async function reloadRecordings() {
+    let fresh;
+    try {
+      const response = await fetch(location.href);
+      if (!response.ok) return;
+      fresh = new DOMParser().parseFromString(await response.text(), "text/html");
+    } catch {
+      return; // what is on screen stays
+    }
+    const list = one("[data-recordings]");
+    const freshList = one("[data-recordings]", fresh);
+    if (list && freshList) list.replaceWith(freshList);
+    const open = one("[data-recording-open]");
+    const freshOpen = one("[data-recording-open]", fresh);
+    if (open && freshOpen && !one("video", open)) open.replaceWith(freshOpen);
+  }
+
+  async function checkRecordings() {
+    let status;
+    try {
+      const response = await fetch("/recordings/status");
+      if (!response.ok) return;
+      status = await response.json();
+    } catch {
+      return; // restarting or down - the page keeps what it says
+    }
+    for (const place of all("[data-recording]")) {
+      const state = status.channels[place.dataset.recording] || null;
+      const saved = place.dataset.recordingState === "saving" && !state;
+      showRecording(place, state);
+      if (saved) say(place, `The recording of ${place.dataset.recording} is on the Recordings page.`);
+    }
+    for (const row of all("[data-recording-row]")) {
+      const state = status.recordings[row.dataset.recordingRow];
+      if (state) one("[data-recording-words]", row).textContent = state.words;
+    }
+    showNow(status.now);
+    // The list reads differently: one was added, saved or removed.
+    const list = one("[data-recordings]");
+    if (list && list.dataset.mark !== status.mark) await reloadRecordings();
+    if (!Object.keys(status.recordings).length) {
+      clearInterval(recordingsWatch);
+      recordingsWatch = null;
+    }
+  }
+
+  function watchRecordings() {
+    if (recordingsWatch === null) recordingsWatch = setInterval(checkRecordings, RECORDINGS_POLL_MS);
+  }
+
+  async function setRecording(button, on) {
+    const place = button.closest("[data-recording]");
+    const channel = encodeURIComponent(place.dataset.recording);
+    button.disabled = true;
+    const response = await post(`/channels/${channel}/recording/${on ? "start" : "stop"}`);
+    button.disabled = false;
+    if (!response) {
+      say(place, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(place, await problem(response, on ? "Could not start the recording." : "Could not stop the recording."));
+      return;
+    }
+    const result = await response.json();
+    showRecording(place, result.recording);
+    say(place, result.said || "");
+    watchRecordings();
+    // The lamps follow at once, not at the next time of asking.
+    checkRecordings();
+  }
+
+  // Deleting is asked for twice, like shutting down.
+  function askToDelete(control, asking) {
+    const group = control.closest("[data-delete]");
+    one("[data-delete-open]", group).hidden = asking;
+    one("[data-delete-confirm]", group).hidden = !asking;
+    one(asking ? "[data-delete-cancel]" : "[data-delete-open]", group).focus();
+  }
+
+  async function deleteRecording(button) {
+    button.disabled = true;
+    // A file that is being played is held open, and can't be removed.
+    const video = one("[data-recording-clip]");
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    const response = await post(`/recordings/${button.dataset.deleteGo}/delete`);
+    if (response && response.ok) {
+      location.assign("/dashboard/recordings");
+      return;
+    }
+    button.disabled = false;
+    say(button, response ? await problem(response, "Could not delete the recording.") : "Could not reach the service.");
+  }
+
+  async function saveRecordingAgain(button) {
+    button.disabled = true;
+    const response = await post(`/recordings/${button.dataset.saveAgain}/save`);
+    if (response && response.ok) {
+      await reloadRecordings();
+      watchRecordings();
+      return;
+    }
+    button.disabled = false;
+    say(button, response ? await problem(response, "Could not save the recording.") : "Could not reach the service.");
+  }
+
+  // A recording runs for hours, so its chat is not all on the page: the box
+  // beside the video holds the lines of one stretch of it, and says which.
+  // As the video nears the end of that stretch, or is moved out of it, the
+  // lines around where it is now are fetched in their place.
+
+  // How long before the end of the stretch the next one is asked for.
+  const CHAT_AHEAD_SECONDS = 30;
+  // How long the same place is left alone after it was asked about - for a
+  // chat so busy that what came back did not reach where the video is.
+  const CHAT_AGAIN_MS = 5000;
+  let chatOnItsWay = false;
+  let chatAsked = { at: -Infinity, when: 0 };
+
+  async function followRecordingChat(video) {
+    const box = one("[data-recording-chat]");
+    if (!box) return;
+    const time = video.currentTime;
+    reveal(box, time);
+    const outside = time < Number(box.dataset.first) || time > Number(box.dataset.last);
+    const nearEnd = !("whole" in box.dataset) && time > Number(box.dataset.last) - CHAT_AHEAD_SECONDS;
+    const justAsked = Math.abs(time - chatAsked.at) < CHAT_AHEAD_SECONDS && performance.now() - chatAsked.when < CHAT_AGAIN_MS;
+    if (!(outside || nearEnd) || chatOnItsWay || justAsked) return;
+
+    chatOnItsWay = true;
+    chatAsked = { at: time, when: performance.now() };
+    let markup = null;
+    try {
+      const response = await fetch(`${box.dataset.url}?at=${time.toFixed(1)}`);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // the lines there are stay
+    } finally {
+      chatOnItsWay = false;
+    }
+    const fresh = markup && one("[data-recording-chat]", new DOMParser().parseFromString(markup, "text/html"));
+    const current = one("[data-recording-chat]");
+    if (!fresh || !current) return;
+    current.replaceWith(fresh);
+    // The video may have been moved again while these were on their way.
+    followRecordingChat(video);
   }
 
   // ---- Settings ---------------------------------------------------------
@@ -1058,6 +1251,12 @@
       },
     ],
     ["[data-trial-go]", trySettings],
+    ["[data-recording-start]", (button) => setRecording(button, true)],
+    ["[data-recording-stop]", (button) => setRecording(button, false)],
+    ["[data-delete-open]", (button) => askToDelete(button, true)],
+    ["[data-delete-cancel]", (button) => askToDelete(button, false)],
+    ["[data-delete-go]", deleteRecording],
+    ["[data-save-again]", saveRecordingAgain],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
     ["[data-mute]", (button) => toggleMute(clipOf(button))],
@@ -1233,6 +1432,7 @@
   };
   onMedia("[data-clip]", paint);
   onMedia("[data-trim-clip]", trimTick);
+  onMedia("[data-recording-clip]", followRecordingChat);
   document.addEventListener("close", (event) => event.target.matches?.("[data-trim]") && leaveTrim(event.target), true);
 
   // The page's own transport is not on screen in full screen, so the
@@ -1249,4 +1449,7 @@
   dress();
   currentRow()?.scrollIntoView({ block: "nearest" });
   if (one("[data-news]")) setInterval(checkForNew, NEWS_INTERVAL_MS);
+  one('.rec-row[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+  if (one("[data-recording-clip]")) followRecordingChat(one("[data-recording-clip]"));
+  if (one('[data-recording-state="running"], [data-recording-state="saving"], [data-recording-row]')) watchRecordings();
 })();

@@ -93,6 +93,7 @@ class TestSchema:
             "chat_identities",
             "app_settings",
             "tuning",
+            "stream_recordings",
         }
 
     def test_the_database_file_and_its_directory_are_created_on_first_use(self):
@@ -967,3 +968,118 @@ class TestFlags:
         db.set_flag(conn, "watching_enabled", False)
 
         assert conn.execute("SELECT key, value FROM app_settings").fetchall() == [("watching_enabled", "0")]
+
+
+class TestStreamRecordings:
+    """Streams kept whole (stream_recording.py): one row from the moment a
+    recording is asked for, filled in once its file has been made."""
+
+    def start(self, conn, channel: str = "some_channel", when: datetime = T0, state: str = "recording") -> int:
+        return db.insert_stream_recording(
+            conn, broadcaster_user_id=41, channel_slug=channel, requested_at=when.isoformat(), state=state
+        )
+
+    def finish(self, conn, recording_id: int) -> None:
+        db.finish_stream_recording(
+            conn,
+            recording_id,
+            state="ready",
+            file_path="some_channel/2026-03-01_21-00_some_channel_1.mp4",
+            started_at=(T0 + minutes(1)).isoformat(),
+            ended_at=(T0 + minutes(61)).isoformat(),
+            duration=3600.5,
+            size_bytes=5_000_000_000,
+            parts='[["2026-03-01T20:01:00+00:00", 3600.5]]',
+        )
+
+    def test_one_that_was_just_asked_for_says_little(self, conn):
+        recording_id = self.start(conn)
+
+        row = db.get_stream_recording(conn, recording_id)
+
+        assert dict(row) == {
+            "id": recording_id,
+            "broadcaster_user_id": 41,
+            "channel_slug": "some_channel",
+            "requested_at": T0.isoformat(),
+            "state": "recording",
+            "ended_by": None,
+            "file_path": None,
+            "started_at": None,
+            "ended_at": None,
+            "duration": None,
+            "size_bytes": None,
+            "parts": None,
+        }
+
+    def test_what_it_holds_is_filled_in_when_its_file_has_been_made(self, conn):
+        recording_id = self.start(conn)
+        db.set_stream_recording_state(conn, recording_id, "saving", "stopped")
+
+        self.finish(conn, recording_id)
+
+        row = db.get_stream_recording(conn, recording_id)
+        assert (row["state"], row["ended_by"]) == ("ready", "stopped")
+        assert row["file_path"] == "some_channel/2026-03-01_21-00_some_channel_1.mp4"
+        assert (row["duration"], row["size_bytes"]) == (3600.5, 5_000_000_000)
+        assert row["parts"] == '[["2026-03-01T20:01:00+00:00", 3600.5]]'
+
+    def test_a_size_past_four_gigabytes_is_stored_whole(self, conn):
+        recording_id = self.start(conn)
+        self.finish(conn, recording_id)
+        conn.execute("UPDATE stream_recordings SET size_bytes = ?", (60 * 1024**3,))
+
+        assert db.get_stream_recording(conn, recording_id)["size_bytes"] == 60 * 1024**3
+
+    def test_why_it_ended_stays_unless_it_is_given_again(self, conn):
+        recording_id = self.start(conn)
+        db.set_stream_recording_state(conn, recording_id, "saving", "stream_ended")
+
+        db.set_stream_recording_state(conn, recording_id, "failed")
+        assert db.get_stream_recording(conn, recording_id)["ended_by"] == "stream_ended"
+
+        db.set_stream_recording_state(conn, recording_id, "saving", "interrupted")
+        assert db.get_stream_recording(conn, recording_id)["ended_by"] == "interrupted"
+
+    def test_they_are_listed_newest_first(self, conn):
+        first = self.start(conn, "channel_a")
+        second = self.start(conn, "channel_b", T0 + minutes(5))
+        third = self.start(conn, "channel_a", T0 + minutes(9))
+
+        assert [row["id"] for row in db.get_stream_recordings(conn)] == [third, second, first]
+        assert db.count_stream_recordings(conn) == 3
+
+    def test_or_only_the_ones_that_stand_a_certain_way(self, conn):
+        running = self.start(conn)
+        saving = self.start(conn, state="saving")
+        ready = self.start(conn)
+        self.finish(conn, ready)
+
+        assert [row["id"] for row in db.get_stream_recordings(conn, ("recording", "saving"))] == [saving, running]
+        assert [row["id"] for row in db.get_stream_recordings(conn, ["ready"])] == [ready]
+        assert db.get_stream_recordings(conn, []) == []
+
+    def test_one_that_is_removed_is_gone_and_its_number_is_not_used_again(self, conn):
+        # A recording's folder and file are named for its number.
+        first = self.start(conn)
+        second = self.start(conn)
+
+        db.delete_stream_recording(conn, second)
+        third = self.start(conn)
+
+        assert db.get_stream_recording(conn, second) is None
+        assert third > second > first
+        assert db.count_stream_recordings(conn) == 2
+
+    def test_an_unknown_one_is_none(self, conn):
+        assert db.get_stream_recording(conn, 999) is None
+
+    def test_a_database_from_before_recordings_gets_the_table(self):
+        legacy_database("CREATE TABLE streamers (id INTEGER PRIMARY KEY, broadcaster_user_id INTEGER, slug TEXT)")
+
+        connection = db.get_connection()
+        try:
+            assert "stream_recordings" in tables(connection)
+            assert db.get_stream_recordings(connection) == []
+        finally:
+            connection.close()
