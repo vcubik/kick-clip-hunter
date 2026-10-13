@@ -6,7 +6,7 @@ detection heuristic against before deciding what's safe to prune.
 """
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -651,6 +651,43 @@ def get_channel_chat_between(
             end.astimezone(timezone.utc).isoformat(),
             limit,
         ),
+    ).fetchall()
+
+
+def iter_channel_chat_between(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+) -> Iterator[sqlite3.Row]:
+    """As get_channel_chat_between, but every message there is, one at a
+    time and with no name to it - for what goes through the chat of a
+    stream of hours to count it and keeps none of it."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT received_at, content
+        FROM chat_messages
+        WHERE broadcaster_user_id = ? AND received_at BETWEEN ? AND ?
+        ORDER BY received_at
+        """,
+        (broadcaster_user_id, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
+    )
+
+
+def get_channel_moment_windows(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+) -> list[sqlite3.Row]:
+    """When the reaction of each of a channel's moments ran (`window_start`,
+    `window_end`, on chat's clock), for those that ran at any time from
+    `start` to `end`, oldest first. The channel is told by its id, and the
+    bounds are compared as text, both as in get_channel_chat_between."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT id, window_start, window_end
+        FROM moments
+        WHERE broadcaster_user_id = ? AND window_end >= ? AND window_start <= ?
+        ORDER BY window_start
+        """,
+        (broadcaster_user_id, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
     ).fetchall()
 
 

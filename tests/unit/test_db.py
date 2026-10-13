@@ -733,6 +733,82 @@ class TestChatOfAChannelToldByItsId:
     def test_a_channel_with_no_chat_has_no_such_name(self, conn):
         assert db.get_chat_name(conn, 1) is None
 
+    def test_all_of_a_stretch_can_be_gone_through_one_message_at_a_time(self, conn):
+        # For counting the chat of a stream of hours: no limit, and nothing
+        # of a message but when it came and what it says.
+        store_chat(conn, "some_channel", "too_early", "x", T0 - timedelta(milliseconds=1))
+        for number in range(30):
+            store_chat(conn, "some_channel", f"user{number:02d}", f"line {number}", T0 + timedelta(seconds=number))
+        store_chat(conn, "renamed_channel", "bob", "under another name", T0 + timedelta(seconds=5, milliseconds=500))
+        store_chat(conn, "another_channel", "carol", "elsewhere", T0 + timedelta(seconds=6), broadcaster_user_id=2)
+
+        chat = db.iter_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=29))
+
+        first = next(chat)
+        assert (first["received_at"], first["content"]) == (T0.isoformat(), "line 0")
+        assert set(first.keys()) == {"received_at", "content"}
+        rest = [row["content"] for row in chat]
+        assert len(rest) == 30 and rest[5] == "under another name" and rest[-1] == "line 29"
+
+    def test_going_through_it_is_done_through_the_same_index(self, conn):
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT received_at, content FROM chat_messages"
+            " WHERE broadcaster_user_id = 1 AND received_at BETWEEN 'a' AND 'b' ORDER BY received_at"
+        ).fetchall()
+
+        assert any("USING INDEX" in step[-1] for step in plan)
+
+
+class TestMomentsOfAChannelToldByItsId:
+    """When a channel's moments were, for what has the channel's name from
+    the watchlist - a recording, on whose trace they are marked."""
+
+    def window(self, conn, start: float, end: float, **overrides) -> int:
+        return store_moment(
+            conn,
+            window_start=(T0 + timedelta(seconds=start)).isoformat(),
+            window_end=(T0 + timedelta(seconds=end)).isoformat(),
+            **overrides,
+        )
+
+    def between(self, conn, start: float, end: float, broadcaster_user_id: int = 1) -> list[int]:
+        rows = db.get_channel_moment_windows(
+            conn, broadcaster_user_id, T0 + timedelta(seconds=start), T0 + timedelta(seconds=end)
+        )
+        return [row["id"] for row in rows]
+
+    def test_the_moments_whose_reaction_ran_in_a_stretch_come_back_oldest_first(self, conn):
+        late = self.window(conn, 300, 312)
+        early = self.window(conn, 100, 110)
+        self.window(conn, 900, 910)
+
+        assert self.between(conn, 0, 600) == [early, late]
+
+    def test_each_says_when_its_reaction_ran(self, conn):
+        self.window(conn, 100, 110)
+
+        (row,) = db.get_channel_moment_windows(conn, 1, T0, T0 + minutes(10))
+
+        assert (row["window_start"], row["window_end"]) == (
+            (T0 + timedelta(seconds=100)).isoformat(),
+            (T0 + timedelta(seconds=110)).isoformat(),
+        )
+
+    def test_one_that_only_reaches_into_the_stretch_counts(self, conn):
+        over_the_start = self.window(conn, 95, 105)
+        over_the_end = self.window(conn, 195, 205)
+        self.window(conn, 80, 99)
+        self.window(conn, 201, 210)
+
+        assert self.between(conn, 100, 200) == [over_the_start, over_the_end]
+
+    def test_whatever_name_the_channel_had_and_no_other_channels(self, conn):
+        renamed = self.window(conn, 100, 110, channel_slug="renamed_channel")
+        self.window(conn, 100, 110, broadcaster_user_id=2, channel_slug="another_channel")
+
+        assert self.between(conn, 0, 600) == [renamed]
+        assert self.between(conn, 0, 600, broadcaster_user_id=3) == []
+
 
 class TestMoments:
     def test_inserting_returns_consecutive_ids(self, conn):

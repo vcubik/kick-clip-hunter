@@ -114,7 +114,13 @@ set from the dashboard's Settings page (see `tuning.py` below).
   /dashboard/recordings` lists those recordings,
   the newest first, and plays the open one with its chat replayed beside it - fetched a
   stretch at a time as the video plays on or is moved in, since a recording runs for hours -
-  and has the buttons that delete one or retry one that could not be saved. On every page
+  and has the buttons that delete one or retry one that could not be saved. Under the video
+  is the chat trace over the whole recording (see `chat_trace.py` below): hours on one
+  strip, drawn in steps of several seconds, with the channel's moments and the breaks in
+  the file marked on it, and a scrubber like the one under a clip. The page comes without
+  it and the script fetches it (`GET /dashboard/recordings/{id}/trace`), because counting
+  the chat of a whole stream takes a second or two. Trim, beside Download, opens the same
+  dialog as on the review page over the recording's file (see `clip_trim.py`). On every page
   "Recording" means a stream that is being kept whole: a channel whose stream is merely
   coming in for clips is "Live" (the lamp in the bar and the watchlist's "Right now").
   `GET /dashboard/settings` is where
@@ -205,7 +211,8 @@ Module map (`src/kick_clip_hunter/`):
   /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
-  is over in its row. `POST /channels/{slug}/always_record` sets whether a channel is
+  is over in its row. A stretch is cut out of one through `/recordings/{id}/trim`, by the
+  same background task that cuts one out of a moment's footage (`_trim_background`). `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
@@ -227,7 +234,17 @@ Module map (`src/kick_clip_hunter/`):
   starts at 3s - about what Kick's player reports for its latency, with a little room -
   and can go below 0, which is where a streamer's own on-screen chat lines up. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
-  are placed by estimate: centred on the window they were cut for
+  are placed by estimate: centred on the window they were cut for. The same trace is
+  drawn over a stream that was kept whole, or any stretch of one (`stretch_step`,
+  `stretch_counts`, `stretch_trace`): on the seconds of the recording's file, and in
+  steps of as many seconds as keep it to 720 of them - 1 for the few minutes the Trim
+  dialog shows, 10 for two hours, 30 for six - each step drawn as the pace over it
+  (messages a second, averaged), with the grid and the times under it chosen to suit the
+  length. `main._recording_strip` is what feeds it: chat placed as beside the recording,
+  a message from a break in the stream not counted, the channel's moments and the file's
+  breaks marked. It runs in a worker thread, and what it counted over a whole recording
+  is kept in memory (`_recording_counts`) for as long as nothing it was counted under
+  changes
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
   sends with every chat message (`sender.identity`). Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
@@ -252,7 +269,19 @@ Module map (`src/kick_clip_hunter/`):
   one video, on top of the channel's chat delay - and shows them beside the picture as
   they will be. The chat video is see-through unless a background colour is picked
   for it there (`chat_background`, "#rrggbb"), for putting chat next to the picture. What state a cut is in is kept in memory while one is being made and told
-  from the files otherwise
+  from the files otherwise. Either end of the stretch can also be typed into the dialog
+  as a time (the script reads it; the server is only ever given seconds). The Recordings
+  page has the same dialog over a recording's file (`POST`/`GET /recordings/{id}/trim`,
+  times in seconds of the file). What differs there: the strip can't hold hours at a
+  width a handle could be set on, so it shows a window of a few minutes around the
+  stretch, drawn by the service (the trace endpoint with `first` and `last`) and set
+  anew by the script whenever the stretch reaches its edge or leaves it; the stretch
+  starts out as the minute around where the recording was being watched; the cut is
+  written next to the recording's file and named for the stretch it holds
+  (`..._trim_1h23m45s-1h24m30s.mp4`, see `recording_video_name`), one at a time, and is
+  removed with the recording; chat can go with a stretch of up to
+  `CHAT_VIDEO_MAX_SECONDS` only; and a cut that would leave the disk short of what a
+  running recording needs is refused
 - `chat_video.py` — chat as a video with a transparent background (ProRes 4444,
   `moment_<id>_trim_chat.mov`), for an editor to lay over the video cut out with Trim.
   Made only when asked for there: it takes about twice the video's length. A headless
@@ -271,14 +300,18 @@ Module map (`src/kick_clip_hunter/`):
   without reloading. `_chat_line.html` is one line of chat, shared by the review page, the
   Recordings page and `chat_video.html`, the page a chat video is made from;
   `_recording_chat.html` is the box of a recording's chat for one stretch of it, also
-  served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`)
+  served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`);
+  `_recording_trace.html` is the chat trace over a recording or a stretch of it, only ever
+  served on its own; `_trim.html` is the Trim dialog, included by the open moment and by
+  the open recording
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
   open moment's markup gets replaced; it also runs the Trim dialog, whose strip and chat
-  are copied from the page's when it is opened, the Settings form, which it posts as a
+  are copied from the page's when it is opened on a moment and fetched for the window it
+  shows of a recording, the Settings form, which it posts as a
   whole and then fetches again, and stream recordings: the buttons, the words that follow
-  a recording while there is one, and a recording's chat) and the bundled typeface,
+  a recording while there is one, a recording's chat and the trace under it) and the bundled typeface,
   Archivo, with its licence;
   `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)

@@ -1,0 +1,86 @@
+{#- Cutting a stretch of footage out for an editor: of a moment's file on
+    the review page, of a stream that was kept whole on the Recordings page.
+    Where the stretch starts and ends is set on a strip, with a handle at
+    either end, or typed; its chat can go with it as a video to lay over it,
+    moved against the picture if it does not sit right. The script opens
+    this and draws the strip in it: a moment's from the one on the page, a
+    recording's - which is hours, so the strip shows a window of it around
+    the stretch - from what the service draws for that window. -#}
+<dialog class="ch-dialog trim" aria-labelledby="trim-title-{{ trim.id }}" data-trim="{{ trim.url }}" data-lead="{{ trim.lead }}" data-last="{{ trim.last }}" data-min="{{ trim.min_seconds }}"
+  {%- if trim.window %} data-window="{{ trim.window.seconds }}" data-around="{{ trim.window.around }}" data-strip-url="{{ trim.window.strip_url }}"{% endif %}>
+  <div class="ch-dialog-head">
+    <h2 class="title" id="trim-title-{{ trim.id }}">Trim</h2>
+    <p class="ch-keys-hint">
+      <span><kbd>I</kbd> start here</span>
+      <span><kbd>O</kbd> end here</span>
+      <span><kbd>Space</kbd> play</span>
+    </p>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-trim-close>Close</button>
+  </div>
+  <div class="trim-view">
+    <div class="player"><video preload="none" playsinline data-trim-clip data-src="{{ trim.video_url }}"></video></div>
+    {% if trim.chat %}
+    <div class="trim-chat" role="group" aria-label="Chat as its video will show it" hidden data-trim-chat-pane>
+      {#- A recording's chat is fetched a stretch at a time, as beside the
+          recording itself; the box starts out holding none of it. -#}
+      {% if trim.window %}
+      <div class="chat-lines" data-recording-chat data-url="{{ trim.window.chat_url }}" data-first="0" data-last="-1"></div>
+      {% else %}
+      <div class="chat-lines" data-trim-lines></div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="ch-transport">
+    <button type="button" class="ch-btn ch-btn-icon play" aria-label="Play" data-trim-play>
+      <svg class="icon-play" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
+      <svg class="icon-pause" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" fill="currentColor"></path></svg>
+    </button>
+    <span class="ch-now" data-trim-now>0:00.0</span>
+    <span class="ch-gap"></span>
+    {#- Either end can be typed instead of dragged to; Enter sets it. -#}
+    <span class="trim-range" title="{{ trim.time_hint }}">
+      <label>From <input type="text" class="ch-input trim-time" value="0:00.0" autocomplete="off" spellcheck="false" aria-label="Start of the cut, as a time" data-trim-type="from"></label>
+      <label>to <input type="text" class="ch-input trim-time" value="0:00.0" autocomplete="off" spellcheck="false" aria-label="End of the cut, as a time" data-trim-type="to"></label>
+      <b data-trim-length>0.0 s</b>
+    </span>
+  </div>
+  <div class="trim-track">
+    <div class="ch-strip trim-strip" data-trim-strip>
+      <div class="trim-drawing" data-trim-drawing></div>
+      <div class="trim-out is-before"></div>
+      <div class="trim-out is-after"></div>
+      <div class="trim-keep"></div>
+      <div class="ch-playhead"></div>
+      <div class="trim-handle is-from" role="slider" tabindex="0" aria-label="Start of the cut" data-trim-handle="from"></div>
+      <div class="trim-handle is-to" role="slider" tabindex="0" aria-label="End of the cut" data-trim-handle="to"></div>
+    </div>
+    <div class="ch-axis" data-trim-axis></div>
+  </div>
+  {% if trim.chat %}
+  <div class="trim-options">
+    <label class="trim-check"><input type="checkbox" data-trim-chat> Chat as a video to lay over it</label>
+    <label class="trim-shift" title="Where a message is placed against the picture is a guess. This moves all of them, for this video only. Double-click to put it back.">
+      <span>earlier</span>
+      <input type="range" class="ch-shift" min="-{{ trim.chat_shift_limit }}" max="{{ trim.chat_shift_limit }}" step="0.5" value="0" aria-label="Move chat against the picture" disabled data-trim-shift>
+      <span>later</span>
+    </label>
+    <output class="trim-shift-words" data-trim-shift-words data-rest="{{ trim.chat_rest_words }}">{{ trim.chat_rest_words }}</output>
+    {#- Nothing behind the text, to lay it over the picture - or a colour,
+        to put it next to the picture. The chat beside the player shows it. -#}
+    <span class="trim-background">
+      <label class="trim-check"><input type="checkbox" disabled data-trim-background> on a background</label>
+      <input type="color" value="{{ trim.chat_background }}" aria-label="Colour behind the chat" disabled data-trim-background-colour>
+    </span>
+  </div>
+  {% endif %}
+  <p class="trim-note">Cut without re-encoding, so the video begins on the last frame a cut can begin on before the start you set: up to a couple of seconds earlier.
+    {%- if trim.chat %} Its chat is lined up with where it really begins{% if trim.window %}, and can go with a stretch of up to {{ trim.window.chat_most }}{% endif %}.{% endif %}
+    {%- if trim.window %} A recording keeps one cut at a time: the next one takes its place, so download each as it is made.{% endif %}</p>
+  <div class="trim-foot">
+    <p class="status-line" role="status" data-trim-state></p>
+    <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
+    <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
+    <button type="button" class="ch-btn ch-btn-primary" data-trim-go>Export</button>
+  </div>
+</dialog>

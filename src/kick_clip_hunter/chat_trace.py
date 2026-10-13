@@ -14,6 +14,11 @@ on the stream's program clock, and viewers - so chat - saw each frame some
 seconds later. How many is an assumption rather than a measurement (see
 CHAT_DELAY_SECONDS), and one the review page lets be corrected per channel.
 
+A stream that was kept whole has the same trace under it, over all of the
+recording or any stretch of it (the last section here). Hours do not fit a
+strip second by second, so that one is drawn in steps of as many seconds as
+the stretch needs, and its times are seconds of the recording's file.
+
 Nothing here touches the database or the wall clock, so all of it is tested
 with plain lists of messages.
 """
@@ -29,7 +34,15 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from . import chat_identity
-from .dashboard_view import IMPORT_REASON, chat_parts, count_words, nick_colour, number_words
+from .dashboard_view import (
+    IMPORT_REASON,
+    chat_parts,
+    count_words,
+    duration_words,
+    nick_colour,
+    number_words,
+    stream_time_words,
+)
 from .detector import NATIVE_EMOTE_TOKEN_PATTERN, is_laughing, laugh_emote_names
 
 Row = Mapping[str, Any]
@@ -575,3 +588,220 @@ def reaction_words(messages: Iterable[Row], emote_names: Iterable[str] = ()) -> 
     if count < 2:
         return None
     return f"{spellings[key].most_common(1)[0][0]} {TIMES_SIGN}{count}"
+
+
+# -- the trace over a recording ----------------------------------------------
+#
+# A stream that was kept whole runs for hours, and the strip it is drawn on
+# is a thousand pixels wide. So its trace goes in steps of several seconds -
+# as few as keep the number of steps under STRETCH_MAX_STEPS - and what a
+# step shows is the pace over it: messages a second, averaged. A stretch of a
+# few minutes, which is what the Trim dialog shows of a recording, comes out
+# second by second, like the trace under a clip.
+#
+# Times here are seconds of the recording's file. What puts a message at one
+# is the caller's to say (`second_of`): the file is made of parts with breaks
+# between them, which this module knows nothing of.
+
+STRETCH_MAX_STEPS = 720
+STRETCH_STEP_SECONDS = (1, 2, 5, 10, 15, 20, 30, 60, 120, 300, 600, 900, 1800, 3600)
+# The strip's height stands for at least this many messages a second.
+STRETCH_MIN_TOP = 2
+# The chart paper's upright lines: a heavy one, with its time written under
+# the strip, every so many seconds - the first of these that makes for no
+# more than STRETCH_MAX_TIMES of them - and a fine one as often as it says.
+STRETCH_MAX_TIMES = 8
+STRETCH_GRID_SECONDS = {
+    10: 2,
+    30: 10,
+    60: 10,
+    120: 30,
+    300: 60,
+    600: 120,
+    900: 300,
+    1800: 300,
+    3600: 600,
+    7200: 1800,
+    14400: 3600,
+    28800: 7200,
+    86400: 14400,
+}
+# The strip's two ends have their times written too; one that would stand
+# closer to an end than this share of the strip's width is left out.
+STRETCH_TIME_CLEARANCE = 0.12
+
+
+def stretch_step(seconds: float) -> int:
+    """How many seconds one step of the trace over a stretch that long
+    stands for."""
+    for step in STRETCH_STEP_SECONDS:
+        if seconds <= step * STRETCH_MAX_STEPS:
+            return step
+    # Longer than any stream: whole hours, as many to a step as it takes.
+    return math.ceil(seconds / STRETCH_MAX_STEPS / 3600) * 3600
+
+
+def stretch_counts(
+    messages: Iterable[Row],
+    second_of: Callable[[datetime], float | None],
+    first: float,
+    last: float,
+    step: int,
+    laugh_names: Iterable[str] = (),
+    laugh_patterns: Iterable[str] = (),
+) -> tuple[list[int], list[int]]:
+    """Messages in each step of the stretch of a recording from `first` to
+    `last`: all of them, and the laughing ones. `second_of` makes the second
+    of the file a message belongs to of when it arrived - or None, for one
+    the file has no footage for, which is then not counted."""
+    laugh_names, laugh_patterns = tuple(laugh_names), tuple(laugh_patterns)
+    size = max(1, math.ceil((last - first) / step))
+    everything, laughing = [0] * size, [0] * size
+    for message in messages:
+        second = second_of(_arrived(message))
+        if second is None or not first <= second < last:
+            continue
+        index = math.floor((second - first) / step)
+        everything[index] += 1
+        if is_laughing(message["content"] or "", laugh_names, laugh_patterns):
+            laughing[index] += 1
+    return everything, laughing
+
+
+def _paces(counts: list[int], step: int, seconds: float) -> list[float]:
+    """Messages a second over each step. The last step is as long as the
+    stretch leaves it, which can be less than the others."""
+    paces = [count / step for count in counts]
+    left = seconds - (len(counts) - 1) * step
+    if counts and 0 < left < step:
+        paces[-1] = counts[-1] / max(left, 1.0)
+    return paces
+
+
+def _pace_grid_step(peak: float) -> int:
+    """As _grid_step, for paces that are averages and so a good deal lower."""
+    for step in (1, 2, 5, 10, 20, 50):
+        if peak <= step * 6:
+            return step
+    return 100
+
+
+def _time_steps(seconds: float) -> tuple[int, int]:
+    """How many seconds apart the times under a stretch that long are, and
+    how many apart the fine lines between them."""
+    for step, fine in STRETCH_GRID_SECONDS.items():
+        if seconds <= step * STRETCH_MAX_TIMES:
+            return step, fine
+    # Longer than any stream: whole days, as many at a time as it takes.
+    step = math.ceil(seconds / STRETCH_MAX_TIMES / 86400) * 86400
+    return step, step // 4
+
+
+def _stretch_times(first: float, last: float, every: int) -> list[int]:
+    """The seconds strictly inside a stretch that are whole multiples of
+    `every`."""
+    second = (math.floor(first / every) + 1) * every
+    times = []
+    while second < last:
+        times.append(second)
+        second += every
+    return times
+
+
+def stretch_trace(
+    first: float,
+    last: float,
+    step: int,
+    everything: list[int],
+    laughing: list[int],
+    *,
+    breaks: Iterable[tuple[float, float]] = (),
+    moments: Iterable[tuple[float, float]] = (),
+) -> dict[str, Any]:
+    """Everything the page needs to draw the strip over the stretch of a
+    recording from `first` to `last`, from its messages in each step (see
+    stretch_counts).
+
+    As with the trace under a clip, lengths along the strip are percentages
+    of its width and the lines are paths in a box the page stretches over
+    it: one unit wide per step, and `top` units high, one for each message a
+    second. `breaks` are where the file goes from one part to the next, each
+    with how many seconds of the stream are missing there, and `moments` the
+    stretches of the file during which a moment's reaction ran.
+    """
+    seconds = last - first
+    time_step, fine_step = _time_steps(seconds)
+    paces = _paces(everything, step, seconds)
+    peak = max(paces, default=0.0)
+    level = _pace_grid_step(max(peak, STRETCH_MIN_TOP))
+    top = math.ceil(max(peak, STRETCH_MIN_TOP) / level) * level
+    width = _coordinate(seconds / step)
+
+    def along(second: float) -> str:
+        return _coordinate((second - first) / step)
+
+    fine = [f"M{along(second)},0V{top}" for second in _stretch_times(first, last, fine_step)]
+    heavy = [f"M{along(second)},0V{top}" for second in _stretch_times(first, last, time_step)]
+    # A heavy line takes the place of the fine one it falls on.
+    fine = [line for line in fine if line not in heavy]
+    fine.extend(f"M0,{height}H{width}" for height in range(level, top, level))
+
+    def time(second: float, align: str) -> dict[str, str]:
+        return {"left": _percent(second - first, seconds), "words": stream_time_words(second), "align": align}
+
+    axis = [time(first, "start")]
+    for second in _stretch_times(first, last, time_step):
+        if STRETCH_TIME_CLEARANCE <= (second - first) / seconds <= 1 - STRETCH_TIME_CLEARANCE:
+            axis.append(time(second, "middle"))
+    axis.append(time(last, "end"))
+
+    bands = []
+    for began, ended in moments:
+        if ended <= first or began >= last:
+            continue
+        left, right = _percent(began - first, seconds), _percent(ended - first, seconds)
+        bands.append({"left": left, "width": number_words(float(right) - float(left), 3)})
+
+    strip: dict[str, Any] = {
+        "start": number_words(first, 2),
+        "end": number_words(last, 2),
+        "step": step,
+        "width": width,
+        "top": top,
+        "grid": "".join(fine),
+        "grid_strong": "".join(heavy),
+        "axis": axis,
+        "moments": bands,
+        "breaks": [
+            {
+                "left": _percent(second - first, seconds),
+                "words": f"The file is missing {duration_words(missing)} of the stream here.",
+            }
+            for second, missing in breaks
+            if first < second < last
+        ],
+        "has_chat": any(everything),
+    }
+    span = f"from {stream_time_words(first)} to {stream_time_words(last)} of the recording"
+    if not strip["has_chat"]:
+        strip["label"] = f"No chat was stored {span}."
+        return strip
+
+    laugh_paces = _paces(laughing, step, seconds)
+    busiest = stream_time_words(first + paces.index(peak) * step)
+    by = "second by second" if step == 1 else f"in steps of {duration_words(step)}"
+    strip.update(
+        {
+            "all": _line_path(paces, top),
+            "laugh": _pen_path(laughing, laugh_paces, top),
+            "wash": _pen_path(laughing, laugh_paces, top, closed=True),
+            "all_counts": ",".join(map(str, everything)),
+            "laugh_counts": ",".join(map(str, laughing)),
+            "scale": f"full height {top}/s" + ("" if step == 1 else f", averaged over {duration_words(step)}"),
+            "label": (
+                f"Chat messages a second {span}, {by}. "
+                f"It peaks at {number_words(peak, 1)} a second, at {busiest}."
+            ),
+        }
+    )
+    return strip

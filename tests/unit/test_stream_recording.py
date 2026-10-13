@@ -368,6 +368,31 @@ class TestWhenASecondOfTheFileWasOnAir:
         assert stream_recording.broadcast_time(parts, 1800) == at(1800)
         assert stream_recording.file_second(parts, at(1800)) == 1800
 
+    @pytest.mark.parametrize(
+        ("broadcast", "second"),
+        [(0, 0), (40.5, 40.5), (99.9, 99.9), (160, 100), (180, 120), (209, 149)],
+    )
+    def test_what_is_counted_by_where_it_falls_gets_the_same_second(self, broadcast, second):
+        assert stream_recording.second_in_file(self.PARTS, at(broadcast)) == second
+
+    @pytest.mark.parametrize("broadcast", [-30, 100, 130, 159.9, 210, 900])
+    def test_but_no_second_at_all_for_a_time_the_file_has_no_footage_of(self, broadcast):
+        # Or everything from a break would pile up on the frame after it.
+        assert stream_recording.second_in_file(self.PARTS, at(broadcast)) is None
+
+    def test_the_file_breaks_where_one_part_follows_another(self):
+        # A third part, five seconds after the second one ended.
+        parts = (*self.PARTS, Part(at(215), 30.0))
+
+        assert stream_recording.breaks(parts) == [(100.0, 60.0), (150.0, 5.0)]
+
+    def test_a_file_of_one_part_has_no_breaks(self):
+        assert stream_recording.breaks(self.PARTS[:1]) == []
+        assert stream_recording.breaks(()) == []
+
+    def test_parts_that_overlap_break_the_file_without_anything_missing(self):
+        assert stream_recording.breaks((Part(at(0), 100.0), Part(at(99.5), 50.0))) == [(100.0, 0.0)]
+
 
 @pytest.mark.ffmpeg
 class TestMakingTheFile:

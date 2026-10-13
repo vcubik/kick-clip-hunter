@@ -656,3 +656,257 @@ def test_the_grid_step_keeps_the_lines_to_a_handful():
 @pytest.mark.parametrize(("seconds", "words"), [(0, "0:00"), (9.9, "0:09"), (38, "0:38"), (95.5, "1:35"), (-3, "0:00")])
 def test_clip_time_is_written_as_minutes_and_seconds(seconds, words):
     assert chat_trace._clock(seconds) == words
+
+
+class TestTheStepsOfARecordingsTrace:
+    """A recording runs for hours; its trace is drawn in steps of as many
+    seconds as keep it to what a strip can show."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "step"),
+        [
+            (130, 1),
+            (720, 1),
+            (721, 2),
+            (3600, 5),
+            (2 * 3600, 10),
+            (4 * 3600, 20),
+            (6 * 3600, 30),
+            (12 * 3600, 60),
+            (48 * 3600, 300),
+        ],
+    )
+    def test_a_longer_stretch_is_drawn_in_longer_steps(self, seconds, step):
+        assert chat_trace.stretch_step(seconds) == step
+
+    @pytest.mark.parametrize("seconds", [1, 59, 600, 5000, 9999, 30000, 86400, 400000, 10**7, 10**9])
+    def test_there_are_never_more_steps_than_a_strip_can_show(self, seconds):
+        assert seconds / chat_trace.stretch_step(seconds) <= chat_trace.STRETCH_MAX_STEPS
+
+    def test_a_stretch_longer_than_any_stream_is_drawn_in_steps_of_whole_hours(self):
+        step = chat_trace.stretch_step(10**7)
+
+        assert step > chat_trace.STRETCH_STEP_SECONDS[-1] and step % 3600 == 0
+
+
+class TestCountingOverARecording:
+    @staticmethod
+    def second_of(arrived: datetime) -> float:
+        """The file began when CLIP_START was on chat's clock, and has no breaks."""
+        return (arrived - CLIP_START).total_seconds()
+
+    def test_each_message_is_counted_in_the_step_it_falls_in(self):
+        messages = [message(0), message(9.9), message(10), message(25), message(29.9)]
+
+        everything, laughing = chat_trace.stretch_counts(messages, self.second_of, 0, 30, 10)
+
+        assert (everything, laughing) == ([2, 1, 2], [0, 0, 0])
+
+    def test_a_stretch_is_counted_from_where_it_starts(self):
+        messages = [message(100), message(104.9), message(105)]
+
+        everything, _laughing = chat_trace.stretch_counts(messages, self.second_of, 100, 110, 5)
+
+        assert everything == [2, 1]
+
+    def test_what_lies_outside_the_stretch_is_left_out(self):
+        messages = [message(99.9), message(125), message(125.1), message(129), message(500)]
+
+        # Its last step is cut short by the stretch's end: 120 to 125.
+        assert chat_trace.stretch_counts(messages, self.second_of, 100, 125, 10)[0] == [0, 0, 0]
+
+    def test_a_stretch_ends_just_before_its_last_second(self):
+        # As a step does: what arrives on the dot belongs to what follows.
+        messages = [message(29.999), message(30)]
+
+        assert chat_trace.stretch_counts(messages, self.second_of, 0, 30, 10)[0] == [0, 0, 1]
+
+    def test_laughing_messages_are_counted_a_second_time_on_their_own(self):
+        messages = [message(5, "what"), message(5, "xDDD"), message(15, "OMEGALUL"), message(25, "OMEGALUL")]
+
+        everything, laughing = chat_trace.stretch_counts(messages, self.second_of, 0, 30, 10, ["omegalul"])
+
+        assert (everything, laughing) == ([2, 1, 1], [1, 1, 1])
+        assert chat_trace.stretch_counts(messages, self.second_of, 0, 30, 10)[1] == [1, 0, 0]
+
+    def test_an_emote_the_channel_tells_laughing_by_counts_too(self):
+        messages = [message(5, "[emote:1:pepeSmich]")]
+
+        counted = chat_trace.stretch_counts(messages, self.second_of, 0, 30, 10, laugh_patterns=["smich"])
+
+        assert counted[1] == [1, 0, 0]
+
+    def test_a_message_the_file_has_no_footage_for_is_not_counted(self):
+        # As from a break in the stream, which the caller knows of.
+        messages = [message(5), message(15), message(25)]
+
+        def second_of(arrived: datetime) -> float | None:
+            return None if chat_at(10) <= arrived < chat_at(20) else self.second_of(arrived)
+
+        assert chat_trace.stretch_counts(messages, second_of, 0, 30, 10)[0] == [1, 0, 1]
+
+    def test_messages_can_come_one_at_a_time(self):
+        # As they do from the database, for a stream of hours.
+        everything, _laughing = chat_trace.stretch_counts((message(n) for n in range(30)), self.second_of, 0, 30, 10)
+
+        assert everything == [10, 10, 10]
+
+    def test_the_shortest_stretch_still_has_a_step(self):
+        assert chat_trace.stretch_counts([], self.second_of, 0, 0, 1) == ([0], [0])
+
+
+class TestTheTraceOverARecording:
+    """Two hours in ten second steps, unless a test says otherwise."""
+
+    def trace(self, everything=None, laughing=None, first=0.0, last=7200.0, step=10, **marks) -> dict:
+        size = -(-int(last - first) // step)
+        return chat_trace.stretch_trace(first, last, step, everything or [0] * size, laughing or [0] * size, **marks)
+
+    def counts(self, size: int = 720, **at_steps: int) -> list[int]:
+        """Nothing but the given counts in the given steps ("s25=90")."""
+        values = [0] * size
+        for name, count in at_steps.items():
+            values[int(name[1:])] = count
+        return values
+
+    def test_says_what_stretch_of_the_file_it_covers_and_in_what_steps(self):
+        strip = self.trace()
+
+        assert (strip["start"], strip["end"], strip["step"], strip["width"]) == ("0", "7200", 10, "720")
+
+    def test_a_step_is_drawn_as_the_pace_over_it(self):
+        # Thirty messages in ten seconds are three a second.
+        strip = self.trace(self.counts(s0=30, s1=10))
+
+        points = strip["all"].removeprefix("M").split(" L")
+        assert strip["top"] == 3 and len(points) == 720
+        assert points[:3] == ["0.5,0", "1.5,2", "2.5,3"]
+
+    def test_the_height_stands_for_at_least_a_couple_of_messages_a_second(self):
+        assert self.trace(self.counts(s5=5))["top"] == chat_trace.STRETCH_MIN_TOP
+
+    def test_and_grows_with_the_busiest_step_in_steps_of_the_grid(self):
+        assert self.trace(self.counts(s5=70))["top"] == 8
+        assert self.trace(self.counts(s5=130))["top"] == 15
+        assert self.trace(self.counts(s5=610))["top"] == 80
+        # A chat no stream has had: the paper's lines are a hundred apart.
+        assert self.trace(self.counts(s5=4500))["top"] == 500
+
+    def test_a_last_step_cut_short_by_the_stretchs_end_is_paced_over_what_there_is_of_it(self):
+        # Ten messages in the five seconds the last step has.
+        strip = self.trace([10, 10, 10], last=25.0)
+
+        assert strip["all"] == "M0.5,1 L1.5,1 L2.5,0"
+
+    def test_the_laughing_line_is_only_drawn_where_someone_laughed(self):
+        strip = self.trace(self.counts(s10=30, s11=60), self.counts(s10=20, s11=50))
+
+        assert strip["top"] == 6
+        assert strip["laugh"] == "M9.5,6 L10.5,4 L11.5,1 L12.5,6"
+        assert strip["wash"] == "M9.5,6 L9.5,6 L10.5,4 L11.5,1 L12.5,6 L12.5,6 Z"
+
+    def test_the_counts_go_along_for_the_readout(self):
+        strip = self.trace([3, 0, 12], [1, 0, 7], last=30.0)
+
+        assert (strip["all_counts"], strip["laugh_counts"]) == ("3,0,12", "1,0,7")
+
+    def test_two_hours_have_a_heavy_line_and_a_time_every_quarter_of_an_hour(self):
+        strip = self.trace()
+
+        assert strip["grid_strong"].split("M")[1:] == [f"{x},0V2" for x in range(90, 720, 90)]
+        # A fine one every five minutes in between, and at every message a second.
+        assert "M30,0V2" in strip["grid"] and "M90,0V2" not in strip["grid"]
+        assert "M0,1H720" in strip["grid"]
+        assert [tick["words"] for tick in strip["axis"]] == [
+            "0:00:00",
+            "0:15:00",
+            "0:30:00",
+            "0:45:00",
+            "1:00:00",
+            "1:15:00",
+            "1:30:00",
+            "1:45:00",
+            "2:00:00",
+        ]
+        assert [tick["align"] for tick in strip["axis"]] == ["start", *["middle"] * 7, "end"]
+        assert [tick["left"] for tick in strip["axis"]][::4] == ["0", "50", "100"]
+
+    def test_a_time_that_would_stand_on_the_end_of_the_strip_gives_way_to_it(self):
+        strip = self.trace(last=3700.0)
+
+        # 1:00:00 is left out for 1:01:40, the end; its line is still drawn.
+        assert [tick["words"] for tick in strip["axis"]] == [
+            "0:00:00",
+            "0:10:00",
+            "0:20:00",
+            "0:30:00",
+            "0:40:00",
+            "0:50:00",
+            "1:01:40",
+        ]
+        assert "M360,0V2" in strip["grid_strong"]
+
+    def test_a_stretch_of_a_few_minutes_is_drawn_second_by_second_on_the_files_own_time(self):
+        # What the Trim dialog shows of a recording.
+        strip = self.trace(first=4980.0, last=5280.0, step=1)
+
+        assert (strip["start"], strip["end"], strip["width"]) == ("4980", "5280", "300")
+        assert [tick["words"] for tick in strip["axis"]] == [
+            "1:23:00",
+            "1:24:00",
+            "1:25:00",
+            "1:26:00",
+            "1:27:00",
+            "1:28:00",
+        ]
+        assert strip["grid_strong"].split("M")[1:] == [f"{x},0V2" for x in (60, 120, 180, 240)]
+        assert "M10,0V2" in strip["grid"]
+
+    @pytest.mark.parametrize("seconds", [45, 300, 1800, 7200, 20000, 43200, 200000, 10**7])
+    def test_however_long_the_stretch_there_is_a_handful_of_times_under_it(self, seconds):
+        strip = self.trace(last=float(seconds), step=chat_trace.stretch_step(seconds))
+
+        assert 2 <= len(strip["axis"]) <= chat_trace.STRETCH_MAX_TIMES + 2
+
+    def test_the_channels_moments_are_marked_where_they_were(self):
+        strip = self.trace(moments=[(3600.0, 3612.0), (9000.0, 9010.0)])
+
+        # The second one is not in this stretch of the file.
+        assert strip["moments"] == [{"left": "50", "width": "0.167"}]
+
+    def test_a_moment_that_reaches_over_an_end_of_the_stretch_is_marked_as_far_as_the_end(self):
+        strip = self.trace(first=4980.0, last=5280.0, step=1, moments=[(4970.0, 4990.0)])
+
+        assert strip["moments"] == [{"left": "0", "width": "3.333"}]
+
+    def test_where_the_file_goes_from_one_part_to_the_next_is_marked_with_what_is_missing(self):
+        strip = self.trace(breaks=[(2400.0, 180.0), (9000.0, 5.0)])
+
+        assert strip["breaks"] == [{"left": "33.333", "words": "The file is missing 3 minutes of the stream here."}]
+
+    def test_a_break_on_the_very_end_of_the_stretch_is_not_marked(self):
+        assert self.trace(first=2400.0, last=2700.0, step=1, breaks=[(2400.0, 180.0)])["breaks"] == []
+
+    def test_it_is_described_in_words_for_who_cannot_see_it(self):
+        strip = self.trace(self.counts(s360=250))
+
+        assert strip["label"] == (
+            "Chat messages a second from 0:00:00 to 2:00:00 of the recording, in steps of 10 seconds. "
+            "It peaks at 25 a second, at 1:00:00."
+        )
+        assert strip["scale"] == "full height 25/s, averaged over 10 seconds"
+
+    def test_second_by_second_it_says_so_and_averages_nothing(self):
+        strip = self.trace(self.counts(300, s20=3), first=4980.0, last=5280.0, step=1)
+
+        assert "of the recording, second by second. It peaks at 3 a second, at 1:23:20." in strip["label"]
+        assert strip["scale"] == "full height 3/s"
+
+    def test_with_no_chat_there_is_only_the_paper(self):
+        strip = self.trace(breaks=[(2400.0, 180.0)])
+
+        assert strip["has_chat"] is False
+        assert strip["label"] == "No chat was stored from 0:00:00 to 2:00:00 of the recording."
+        assert "all" not in strip and "scale" not in strip
+        # ... which still has its lines and its marks.
+        assert strip["grid"] and strip["axis"] and strip["breaks"]

@@ -477,3 +477,29 @@ def file_second(parts: Sequence[Part], when: datetime) -> float:
             return begins + (when - part.started_at).total_seconds()
         begins += part.seconds
     return begins
+
+
+def second_in_file(parts: Sequence[Part], when: datetime) -> float | None:
+    """The same, but None for a time the file has no footage of - for what
+    counts things by where they fall in the file, where everything from a
+    break would otherwise pile up on the frame after it."""
+    begins = 0.0
+    for part in parts:
+        if when < part.started_at:
+            return None
+        if when < part.ended_at:
+            return begins + (when - part.started_at).total_seconds()
+        begins += part.seconds
+    return None
+
+
+def breaks(parts: Sequence[Part]) -> list[tuple[float, float]]:
+    """Where the file goes from one part to the next: the second of the
+    file each part but the first begins at, with how many seconds of the
+    stream fell between it and the part before."""
+    found = []
+    begins = 0.0
+    for part, following in itertools.pairwise(parts):
+        begins += part.seconds
+        found.append((begins, max((following.started_at - part.ended_at).total_seconds(), 0.0)))
+    return found
