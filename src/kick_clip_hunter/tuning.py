@@ -12,10 +12,11 @@ for, and everything nobody set follows the code.
 Three things are in this module:
 
 * `Tuning` - everything the service does for a channel that a setting can
-  change: the detector's settings, how long a moment stays open and how its
-  clip is cut around it. `recommended()` is what the constants say, read
-  where they are kept (detector.py, recorder.py, and the moment session's
-  below) at the time it is called;
+  change: the detector's settings, how long a moment stays open, how its
+  clip is cut around it, and which messages in chat ask for a clip
+  outright. `recommended()` is what the constants say, read where they are
+  kept (detector.py, recorder.py, and the moment session's below) at the
+  time it is called;
 * `SETTINGS` - the ones on offer: what each is called on the page, what it
   may be, and which fields of a Tuning it sets. One setting can set two:
   the lull that ends a moment is also how soon the next one may fire;
@@ -89,6 +90,17 @@ class Tuning:
     playback_delay_seconds: float
     context_before_seconds: float
     context_after_seconds: float
+    # Clips on command: the messages (whole, lowercased) that make a moment
+    # there and then when the channel's streamer or one of its moderators
+    # posts one - or anyone at all, with the switch on. None to begin with.
+    clip_commands: frozenset[str] = frozenset()
+    clip_command_from_anyone: bool = False
+
+    def is_clip_command(self, content: str) -> bool:
+        """Whether a chat message is one of the channel's clip commands.
+        Compared whole, like a message to ignore: a command named in the
+        middle of a sentence is somebody talking about it."""
+        return content.strip().lower() in self.clip_commands
 
     def framing(self) -> dict[str, float]:
         """How a clip is cut for the channel, as recorder.extract_clip takes it."""
@@ -145,6 +157,7 @@ LIST_MAX_ITEMS = 50
 MOMENTS = "moments"
 SIGNALS = "signals"
 CLIPS = "clips"
+COMMANDS = "commands"
 GROUPS = (
     (
         MOMENTS,
@@ -161,6 +174,12 @@ GROUPS = (
         CLIPS,
         "The clip",
         "How long a moment may run and how much footage goes into its file. Clips cut already stay as they are.",
+    ),
+    (
+        COMMANDS,
+        "A clip on command",
+        "A message in chat that makes a moment there and then, however quiet chat is - for a channel too small "
+        "for its chat to set one off. The clip is cut like any other, reaching back from the command.",
     ),
 )
 
@@ -390,6 +409,21 @@ SETTINGS: tuple[Setting, ...] = (
         "this to make up for it.",
         ("playback_delay_seconds",),
         least=0, most=30, unit="seconds", advanced=True,
+    ),
+    Setting(
+        "clip_commands", COMMANDS, PHRASES,
+        "Messages that ask for a clip",
+        "Whole messages, with commas between them: !clip, for one. Posted by the channel's streamer or one of its "
+        "moderators, any of them makes a moment. The channel has to be tracked, and the detector leaves these "
+        "messages out.",
+        ("clip_commands",),
+    ),
+    Setting(
+        "clip_command_from_anyone", COMMANDS, SWITCH,
+        "Anyone in chat may ask",
+        "Off, only the streamer and the moderators are listened to. On, every viewer can have a clip made, as "
+        "often as they like.",
+        ("clip_command_from_anyone",),
     ),
 )
 
