@@ -25,7 +25,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-That is the whole suite: about 2300 tests in a few minutes. It needs no `.env`, no Kick
+That is the whole suite: about 2500 tests in a few minutes. It needs no `.env`, no Kick
 account, no network, and it cannot touch the real `data/` directory - see
 [What keeps it hermetic](#what-keeps-it-hermetic). The commands are the same in PowerShell and in a
 POSIX shell; if the project's virtual environment isn't activated, call its interpreter directly
@@ -164,7 +164,8 @@ worded as intended? Do rating, tags and notes validate and persist; do the switc
 restart; does shutdown wait for work in flight and stop recorders before exiting? Is a stretch asked
 for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
 its chat video hold the stretch's chat counted from where the video really begins, moved by what was
-asked for; does a new cut replace the one before, and is each state said in words?
+asked for; does a new cut replace the one before, and is each state said in words? Does the dialog
+have a field for either end of the cut to be typed into?
 
 **9. Settings** - `unit/test_tuning.py`, `integration/test_api_settings.py`, `unit/test_replay_chat.py`
 Is every field of what the service works from settable by exactly one setting, and is what the code
@@ -180,8 +181,9 @@ form's would each have made, saving nothing? Does the page show every setting wi
 if left alone, mark the ones that were set, and keep a channel's form closed until it goes by its own?
 
 **10. Stream recordings** - `unit/test_stream_recording.py`, `integration/test_api_recordings.py`,
-`integration/test_api_recordings_page.py`, and in `integration/test_recorder_recording.py` and
-`integration/test_recording_manager.py`
+`integration/test_api_recordings_page.py`, `integration/test_api_recording_trim.py`, and in
+`integration/test_recorder_recording.py` and `integration/test_recording_manager.py`; the trace over
+a recording in `unit/test_chat_trace.py`
 Is every segment a recorder saves also kept while a recording runs - in order, once, ads left out,
 a break in the stream a break in what is kept - and does a failure to keep it cost the buffer
 nothing? Is a recorded channel's recorder kept going whatever the tracking and watching switches
@@ -198,7 +200,13 @@ off, without anyone looking for moments in it? After a restart, does a recording
 go on and one that is stale get saved? Does a shutdown wait for the file? Is a second of the file
 tied to the right moment on air, so that chat lands on the picture - across a break too - and is
 the chat page given a stretch at a time? Do the pages say what a recording is doing in every state,
-serve the file in byte ranges, and remove nothing outside the recordings folder?
+serve the file in byte ranges, and remove nothing outside the recordings folder? Is what chat did
+over a recording drawn in steps that fit a strip however long it ran, each step the pace over it,
+with chat placed as beside the video, a break's chat left out and the break marked, the channel's
+moments marked - and counted once, until chat is placed differently? Is a stretch of a recording cut
+out as a video named for the stretch, one at a time, its chat told by the channel's id and placed by
+the recording's parts, refused where it is too long for its chat or would fill the disk, and removed
+with the recording?
 
 **11. The Analyze page** - `unit/test_chat_stats.py`, `integration/test_api_analyze.py`, and in
 `unit/test_db.py`
@@ -310,7 +318,8 @@ Some things only exist against the real Kick, and faking them would only test th
 |---|---|
 | `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser against kick.com, whose pages only load in a headed browser. |
 | `chat_video.capture_frames`, `static/chat_video.js` | They are a headless browser drawing the chat video's page frame by frame. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, and the encoding of its frames with real ffmpeg (step 9 below). |
-| `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (step 9 below). |
+| `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it, reading a time that was typed, the window it shows of a recording | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (steps 9 and 11 below). |
+| `static/dashboard.js` - the trace under a recording: fetching it, the playhead, scrubbing | The same: the trace the service draws is tested, the script that puts it on the page is checked by hand (step 11 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
@@ -355,7 +364,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    cut, on a copy of the strip; dragging a handle moves that end of the stretch and the picture
    with it, as far as the footage goes and no closer to the other handle than a second. `I` and
    `O` put the start and the end where the player is, `Space` plays and stops at the end of the
-   stretch, and a number key rates nothing. Tick the chat box: chat appears beside the picture and
+   stretch, and a number key rates nothing. Type a time into "From" or "to" and press Enter - `0:12.5`,
+   `-0:05` for five seconds before the clip, `+0:10` for ten after its end: the handle and the
+   picture go there; something that is no time is said so and the field goes back to what it
+   was. Tick the chat box: chat appears beside the picture and
    follows it, and the slider moves it earlier or later; with "on a background" ticked the chat
    beside the picture takes the colour picked, and so does the exported chat video behind its text. Export: the dialog says it is cutting,
    then that the video is ready while its chat is rendered, and a minute or two later offers both
@@ -385,8 +397,21 @@ Run this on a live channel after changing any of the above, or the code right ne
    lists it with its length; opened, the video plays with sound, moving far ahead in it takes a
    moment and not a download of everything in between, and the chat beside it follows the
    picture, also after such a jump - it should sit against the picture as chat does beside a
-   clip of that channel. The file is where the page says it is and plays in another player.
-   Delete it from the page when done: it asks twice, and the file is gone. If the service is
+   clip of that channel. Under the video, a moment after the page, is what chat did over the
+   whole recording: the times under it run to the recording's length, pointing at it says the
+   time and the pace there, a press on it takes the video there and the playhead follows the
+   video as it plays. Where chat went off shows as a peak, a moment found during the recording
+   as a yellow mark, a break in the stream as a slit in the paper. Go to a peak and press
+   Trim: the dialog opens with a minute around that place set, on a strip that shows about
+   five minutes of the recording second by second. Drag a handle, type an end as `1:23:45`
+   and press Enter - typed far off, the strip moves to show it - and Export: the dialog names
+   the stretch that is ready, the downloaded file has the stretch in its name and plays, and
+   the log says `stream recording N trimmed`. With the chat box ticked the lines beside the
+   picture follow it, and the chat video is made as for a clip (for a stretch of up to ten
+   minutes; a longer one is refused in a sentence). A second export replaces the first.
+   The file is where the page says it is and plays in another player.
+   Delete it from the page when done: it asks twice, and the file and what was cut out of it
+   are gone. If the service is
    restarted while a recording runs, the log says the recording `goes on after the restart`,
    and the finished file has a break where the service was away. Then switch "Always record" on
    beside a live channel that is not being recorded: within a few seconds the log says `stream

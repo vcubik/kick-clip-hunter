@@ -202,3 +202,30 @@ class TestBadges:
         pictures = {path.stem for path in (STATIC / "badges").glob("*.svg")}
 
         assert pictures == chat_identity.BADGE_ICONS | {chat_identity.OTHER_BADGE}
+
+
+class TestWhoRunsAChannel:
+    BROADCASTER = 500
+
+    def wearing(self, *types: str, user_id: int = 1) -> dict:
+        badges = [{"type": badge, "text": badge.capitalize()} for badge in types]
+        return {"user_id": user_id, "username": "alice", "identity": {"username_color": "#FF5733", "badges": badges}}
+
+    def test_the_streamer_and_the_moderators_by_their_badges(self):
+        assert chat_identity.runs_channel(self.wearing("broadcaster"), self.BROADCASTER)
+        assert chat_identity.runs_channel(self.wearing("subscriber", "moderator"), self.BROADCASTER)
+
+    def test_the_broadcasters_own_account_whatever_it_wears(self):
+        assert chat_identity.runs_channel(self.wearing(user_id=self.BROADCASTER), self.BROADCASTER)
+        assert chat_identity.runs_channel({"user_id": self.BROADCASTER}, self.BROADCASTER)
+
+    def test_nobody_else(self):
+        assert not chat_identity.runs_channel(self.wearing(), self.BROADCASTER)
+        assert not chat_identity.runs_channel(self.wearing("vip", "subscriber", "og", "verified"), self.BROADCASTER)
+
+    @pytest.mark.parametrize(
+        "identity",
+        [None, "moderator", {}, {"badges": "moderator"}, {"badges": ["moderator", None, {"type": ["moderator"]}]}],
+    )
+    def test_an_identity_that_is_not_what_kick_sends_gives_nobody_the_run_of_it(self, identity):
+        assert not chat_identity.runs_channel(sender(identity), self.BROADCASTER)

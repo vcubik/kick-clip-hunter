@@ -77,6 +77,22 @@ def from_sender(sender: Mapping[str, Any]) -> Identity | None:
     return (colour.lower() if colour else None, json.dumps(badges[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
 
 
+# The badges of those who run a channel: its streamer and its moderators.
+RUNNING_BADGES = frozenset({"broadcaster", "moderator"})
+
+
+def runs_channel(sender: Mapping[str, Any], broadcaster_user_id: int) -> bool:
+    """Whether a chat message's `sender` is the channel's streamer or one of
+    its moderators - by the badges Kick sent with the message, which a
+    chatter has no say over, or by being the broadcaster's own account."""
+    if sender.get("user_id") == broadcaster_user_id:
+        return True
+    identity = sender.get("identity")
+    listed = identity.get("badges") if isinstance(identity, Mapping) else None
+    badges = map(_badge, listed if isinstance(listed, list) else [])
+    return any(badge is not None and badge["type"] in RUNNING_BADGES for badge in badges)
+
+
 # -- drawing ----------------------------------------------------------------
 
 

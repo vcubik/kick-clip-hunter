@@ -108,8 +108,9 @@
   --stage-rest: 512px;
   /* The same for the Trim dialog: all of it but its picture. */
   --trim-rest: 480px;
-  /* And for a recording, which has less around its picture. */
-  --recording-rest: 300px;
+  /* And for a recording, which has less around its picture: the trace of
+     its chat and a few lines of words. */
+  --recording-rest: 450px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -260,6 +261,15 @@ a { color: inherit; }
 .ch-axis span { position: absolute; top: 2px; white-space: nowrap; }
 .ch-axis .is-middle { transform: translateX(-50%); }
 .ch-axis .is-end { transform: translateX(-100%); }
+/* The same trace over a recording: hours on one strip, each step of it the
+   pace of chat over some seconds. A moment is seconds long, a hair on such
+   a strip, so its band is never thinner than can be seen. Where the file
+   goes from one part of the stream to the next the paper is cut: a slit of
+   `field` shows through. */
+.rec-trace .ch-moment { min-width: 3px; }
+.rec-trace .ch-flag { left: clamp(30px, var(--at, 0%), calc(100% - 30px)); }
+.ch-chip-moment { background: var(--marker); }
+.ch-strip .ch-break { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--field); }
 
 /* Chat: the username in its colour, then what was said. The space between
    them is a real one, so the margin only tops it up. */
@@ -404,8 +414,12 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-view { display: flex; gap: var(--space-12); }
 .trim-view .player { flex: 1 1 0; min-width: 0; max-height: max(200px, calc(100vh - var(--trim-rest))); }
 .trim-chat { display: flex; flex-direction: column; flex: none; width: var(--w-trim-chat); padding-top: var(--space-8); border: 1px solid var(--line); }
-.trim-range { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
-.trim-range b { font-weight: 600; color: var(--text); }
+.trim-range { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+.trim-range label { display: inline-flex; align-items: center; gap: var(--space-8); }
+.trim-range b { min-width: 52px; font-weight: 600; color: var(--text); }
+/* Either end of the stretch as a time, to type where dragging is not exact
+   enough. */
+.trim-time { width: 96px; height: var(--h-compact); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 
 /* The strip again, with the stretch that is kept framed in `lit` - it is
    what you set - and the rest of the footage under a wash of ink. A handle

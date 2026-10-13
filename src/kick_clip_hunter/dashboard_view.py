@@ -67,6 +67,9 @@ BOOSTER_REASONS = frozenset({"message_rate"})
 # scripts/import_clip.py stores clips from elsewhere under this reason, with
 # every detector figure at zero.
 IMPORT_REASON = "manual_import"
+# A moment made because somebody posted one of the channel's clip commands
+# (see tuning.py). The detector had no part in it, so its figures are zero.
+COMMAND_REASON = "command"
 
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _MONTHS = (
@@ -177,10 +180,14 @@ TRIM_BUSY = frozenset({TRIM_CUTTING, TRIM_CHAT})
 TRIM_EARLY_SECONDS = 0.1
 
 
-def trim_words(state: str, early: float = 0.0) -> str:
+def trim_words(state: str, early: float = 0.0, stretch: tuple[float, float] | None = None) -> str:
     """What the Trim dialog says of a cut. `early` is how long before the
-    start that was set the video begins (see recorder.trim_clip)."""
+    start that was set the video begins (see recorder.trim_clip). `stretch`
+    is which seconds of a recording the cut holds: from hours of footage
+    more than one is cut, so one that is there to download is named."""
     words = TRIM_WORDS[state]
+    if stretch is not None and state == TRIM_READY:
+        words = f"{stream_time_words(stretch[0])} to {stream_time_words(stretch[1])} is ready to download."
     if early >= TRIM_EARLY_SECONDS and state in (TRIM_CHAT, TRIM_READY, TRIM_CHAT_FAILED):
         words += f" It begins {number_words(early, 1)} s before the start you set, on a frame a cut can begin on."
     return words
@@ -214,6 +221,8 @@ def queue_label(row: Row, reaction: str | None = None, *, named: bool = True) ->
         words = [reaction]
     elif row["reason"] == IMPORT_REASON:
         words = ["Imported"]
+    elif row["reason"] == COMMAND_REASON:
+        words = ["On command"]
     else:
         words = [sentence_case(", ".join(reason_words(row["reason"], main_only=True)))]
     if not row["clip_path"]:
@@ -225,6 +234,8 @@ def summary_words(row: Row) -> str:
     """The detector's figures for a moment as a sentence or three."""
     if row["reason"] == IMPORT_REASON:
         return "Imported clip. No chat was measured for it."
+    if row["reason"] == COMMAND_REASON:
+        return "Asked for in chat. The detector had no part in it."
 
     reasons = reason_words(row["reason"])
     score = f"Score {number_words(row['score'], 1)}"

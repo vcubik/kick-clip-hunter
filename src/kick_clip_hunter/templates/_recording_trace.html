@@ -1,0 +1,51 @@
+{#- What chat did over a recording, or over a stretch of it: messages a
+    second and how many of them were laughing, on the time axis of the
+    recording's file. A recording runs for hours, so this is drawn in steps
+    of several seconds, each the pace over that step; the moments the
+    channel had are marked on it, and so is every place where the file goes
+    from one part of the stream to the next. Under the video it is also a
+    scrubber, and carries the playhead. The script fetches this
+    (/dashboard/recordings/<id>/trace) once the page is there, and for the
+    Trim dialog again, for the stretch that shows. -#}
+<figure class="trace rec-trace" data-trace data-rec-trace data-start="{{ strip.start }}" data-end="{{ strip.end }}" data-step="{{ strip.step }}">
+  <figcaption class="visually-hidden">{{ strip.label }}</figcaption>
+  <div class="ch-legend">
+    {% if strip.has_chat %}
+    <span><span class="ch-chip"><i></i></span>all messages</span>
+    <span><span class="ch-chip"><i class="ch-laugh"></i></span>laughing</span>
+    {% if strip.moments %}<span><span class="ch-chip ch-chip-moment"></span>a moment</span>{% endif %}
+    <span>{{ strip.scale }}</span>
+    <output class="ch-readout" data-readout></output>
+    {% else %}
+    <span>{{ strip.label }}</span>
+    {% endif %}
+  </div>
+  <div class="ch-strip" role="slider" tabindex="0" aria-label="Position in the recording" aria-valuemin="{{ strip.start }}" aria-valuemax="{{ strip.end }}" aria-valuenow="{{ strip.start }}" aria-valuetext="{{ strip.axis[0].words }}" data-rec-strip
+    {%- if strip.has_chat %} data-all="{{ strip.all_counts }}" data-laugh="{{ strip.laugh_counts }}"{% endif %}>
+    <svg aria-hidden="true" viewBox="0 0 {{ strip.width }} {{ strip.top }}" preserveAspectRatio="none">
+      <path class="ch-grid" d="{{ strip.grid }}"></path>
+      <path class="ch-grid-strong" d="{{ strip.grid_strong }}"></path>
+    </svg>
+    {% for band in strip.moments %}
+    <div class="ch-moment" style="left: {{ band.left }}%; width: {{ band.width }}%"></div>
+    {% endfor %}
+    {% if strip.has_chat %}
+    <svg aria-hidden="true" viewBox="0 0 {{ strip.width }} {{ strip.top }}" preserveAspectRatio="none">
+      <path class="ch-wash" d="{{ strip.wash }}"></path>
+      <path class="ch-laugh" d="{{ strip.laugh }}"></path>
+      <path class="ch-all" d="{{ strip.all }}"></path>
+    </svg>
+    {% endif %}
+    {% for gap in strip.breaks %}
+    <div class="ch-break" style="left: {{ gap.left }}%" title="{{ gap.words }}"></div>
+    {% endfor %}
+    <div class="ch-hover" data-hover hidden></div>
+    <div class="ch-playhead" data-playhead></div>
+    <span class="ch-flag" data-flag>{{ strip.axis[0].words }}</span>
+  </div>
+  <div class="ch-axis">
+    {% for tick in strip.axis %}
+    <span class="is-{{ tick.align }}" style="left: {{ tick.left }}%">{{ tick.words }}</span>
+    {% endfor %}
+  </div>
+</figure>

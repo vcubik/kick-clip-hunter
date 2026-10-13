@@ -56,12 +56,25 @@
       <div class="player">
         <video src="{{ recording.video_url }}" controls preload="metadata" playsinline data-recording-clip></video>
       </div>
+      {#- What chat did over all of it, to find one's way about hours of
+          stream by (see _recording_trace.html). Counting that much chat
+          takes a moment, so the page comes without it and the script
+          fetches it into this place - which only the script can, so it
+          shows once the script is there. -#}
+      <figure class="trace rec-trace" hidden data-rec-trace-load="{{ recording.trace_url }}">
+        <div class="ch-legend"><span data-rec-trace-words>Counting what chat did over the recording.</span></div>
+        <div class="ch-strip"></div>
+        <div class="ch-axis"></div>
+      </figure>
       {% if recording.summary %}<p class="moment-summary">{{ recording.summary }}</p>{% endif %}
       <div class="ch-line rec-file">
         <a class="ch-btn ch-btn-compact" href="{{ recording.video_url }}" download>Download</a>
+        {#- Opens the Trim dialog at the foot of the article, which only the
+            script can: shown once the script is there. -#}
+        <button type="button" class="ch-btn ch-btn-compact" hidden data-trim-open>Trim</button>
         <span class="ch-meta">{{ recording.file }}</span>
         <span class="ch-gap"></span>
-        {{ delete(recording, "Removes the file for good.") }}
+        {{ delete(recording, "Removes the file, and what was cut out of it, for good.") }}
       </div>
       <p class="status-line" role="status" data-status></p>
     </div>
@@ -78,6 +91,13 @@
         <p>{{ recording.chat_delay_words }}, as the channel has it on the review page.</p>
       </div>
     </aside>
+
+    {#- Cutting a stretch of the recording out for an editor, as on the
+        review page (see _trim.html). The script opens this around where
+        the video is. -#}
+    {% with trim = recording.trim %}
+    {% include "_trim.html" %}
+    {% endwith %}
   </article>
   {% else %}
   <section class="statement" data-status-scope>

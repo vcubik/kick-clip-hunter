@@ -20,6 +20,7 @@ import pytest
 from kick_clip_hunter import db, detector, recorder, tuning
 from kick_clip_hunter.kick_stream import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
+from tests.support.webhook import chat_payload
 
 pytestmark = pytest.mark.anyio
 
@@ -530,3 +531,138 @@ class TestPerClipAnalysis:
         await self.cut(service, moment)
 
         assert ran == []
+
+
+MODERATOR = {"username_color": "#00ff00", "badges": [{"type": "moderator", "text": "Moderator"}]}
+STREAMER = {"username_color": "#00ff00", "badges": [{"type": "broadcaster", "text": "Broadcaster"}]}
+SUBSCRIBER = {"username_color": "#00ff00", "badges": [{"type": "subscriber", "text": "Subscriber", "count": 3}]}
+
+
+async def set_up(service, **values) -> None:
+    response = await service.client.post("/tuning", json={"values": values})
+    assert response.status_code == 200, response.text
+
+
+class TestAClipOnCommand:
+    async def test_the_streamer_asking_makes_a_moment_in_a_chat_with_no_history_at_all(self, service):
+        user_id = service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+        before = datetime.now(timezone.utc)
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        (moment,) = service.moments()
+        assert (moment["channel_slug"], moment["broadcaster_user_id"]) == (CHANNEL, user_id)
+        assert moment["reason"] == "command"
+        assert (moment["score"], moment["message_count"], moment["keyword_hits"]) == (0, 0, 0)
+        assert window(moment) == WINDOW
+        assert before <= datetime.fromisoformat(moment["window_end"]) <= datetime.now(timezone.utc)
+
+    async def test_a_moderator_may_ask_and_so_may_the_broadcasters_account_without_a_badge(self, service):
+        user_id = service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+
+        await service.chat(CHANNEL, "a_mod", " !CLIP ", identity=MODERATOR)
+        await service.settle()
+        payload = chat_payload(CHANNEL, user_id, "the_streamer", "!clip")
+        payload["sender"]["user_id"] = user_id
+        await service.deliver(payload)
+
+        assert [moment["reason"] for moment in service.moments()] == ["command", "command"]
+
+    async def test_a_viewer_asking_gets_nothing(self, service):
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+
+        await service.chat(CHANNEL, "viewer", "!clip", identity=SUBSCRIBER)
+        await service.chat(CHANNEL, "another", "!clip")
+
+        assert service.moments() == []
+        assert [content for _channel, _sender, content in service.chat_log()] == ["!clip", "!clip"]
+
+    async def test_unless_anyone_may_ask(self, service):
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip", clip_command_from_anyone=True)
+
+        await service.chat(CHANNEL, "viewer", "!clip")
+
+        assert [moment["reason"] for moment in service.moments()] == ["command"]
+
+    async def test_a_channel_goes_by_its_own_command(self, service):
+        service.watch(CHANNEL)
+        service.watch("another_channel")
+        await service.client.post(f"/channels/{CHANNEL}/tuning", json={"values": {"clip_commands": "!clip"}})
+        await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled=1")
+
+        await service.chat("another_channel", "its_streamer", "!clip", identity=STREAMER)
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        assert [moment["channel_slug"] for moment in service.moments()] == [CHANNEL]
+
+    async def test_with_no_command_set_the_message_is_chat_like_any_other(self, service):
+        service.watch(CHANNEL)
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        assert service.moments() == []
+
+    async def test_talking_about_the_command_is_not_asking(self, service):
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+
+        await service.chat(CHANNEL, "the_streamer", "type !clip and I get a clip", identity=STREAMER)
+
+        assert service.moments() == []
+
+    async def test_a_channel_that_is_not_tracked_gets_no_clip(self, service):
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        assert service.moments() == []
+
+    async def test_asking_while_a_moment_is_open_extends_that_one(self, service):
+        service.quiet_seconds = 0.5
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+        opened = service.main._moment_sessions[CHANNEL].window_end
+        await service.clock_tick()
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        assert service.main._moment_sessions[CHANNEL].window_end > opened
+        await service.settle()
+        (moment,) = service.moments()
+        assert window(moment) > WINDOW
+
+    async def test_the_command_is_kept_from_the_detector_whoever_posts_it(self, service):
+        # A crowd of viewers posting it is neither a clip nor a reaction.
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL)
+        await set_up(service, clip_commands="xDDD")
+
+        await service.crowd_laughs(CHANNEL, people=8)
+
+        assert service.moments() == []
+
+    async def test_its_clip_is_cut_like_any_other(self, service, monkeypatch):
+        asked = []
+
+        async def create_clip(channel, start, end, name, **framing):
+            asked.append((channel, end - start, name, framing))
+            raise RecorderError("nothing is being recorded in this test")
+
+        monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip", pre_roll_seconds=40)
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+        await service.settle()
+
+        (moment,) = service.moments()
+        ((channel, length, name, framing),) = asked
+        assert (channel, length, name) == (CHANNEL, WINDOW, f"moment_{moment['id']}.mp4")
+        assert framing["pre_roll_seconds"] == 40

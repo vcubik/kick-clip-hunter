@@ -13,9 +13,17 @@ from datetime import date, timedelta
 
 import pytest
 
-from kick_clip_hunter import chat_trace, db, recording_manager, stream_recording
+from kick_clip_hunter import chat_trace, clip_trim, db, recording_manager, stream_recording
 from kick_clip_hunter import dashboard_view as view
-from tests.support.data import T0, add_chat, add_stream_recording, add_streamer, minutes, stream_recordings
+from tests.support.data import (
+    T0,
+    add_chat,
+    add_moment,
+    add_stream_recording,
+    add_streamer,
+    minutes,
+    stream_recordings,
+)
 from tests.support.html import Element, parse
 
 pytestmark = pytest.mark.anyio
@@ -456,7 +464,7 @@ class TestARecordingThatCanBePlayed:
         assert "hidden" not in control.one("button", data_delete_open=True).attrs
         confirm = control.one("span", data_delete_confirm=True)
         assert "hidden" in confirm.attrs
-        assert "Removes the file for good." in confirm.text
+        assert "Removes the file, and what was cut out of it, for good." in confirm.text
         assert confirm.one("button", data_delete_go=True).attrs["data-delete-go"] == str(recording_id)
         assert [button.text for button in confirm.find("button")] == ["Delete", "Cancel"]
 
@@ -551,12 +559,13 @@ class TestARecordingThatCanNotBePlayed:
 
 class TestChatBesideARecording:
     def box(self, page: Element) -> Element:
-        return page.one("div", data_recording_chat=True)
+        # The one beside the video: the Trim dialog has a box of its own.
+        return page.one("aside", class_="chat").one("div", data_recording_chat=True)
 
     async def chunk(self, service, recording_id: int, at: float | str) -> Element:
         response = await service.client.get(f"/dashboard/recordings/{recording_id}/chat", params={"at": at})
         assert response.status_code == 200, response.text
-        return self.box(parse(response.text))
+        return parse(response.text).one("div", data_recording_chat=True)
 
     async def test_every_line_knows_which_second_of_the_file_it_belongs_to(self, service):
         add_stream_recording(CHANNEL, seconds=600)
@@ -751,4 +760,344 @@ class TestChatBesideARecording:
 
         page = parse(response.text)
         assert page.find("header") == [] and page.find("video") == []
-        assert "chat-lines" in self.box(page).classes
+        assert "chat-lines" in page.one("div", data_recording_chat=True).classes
+
+
+class TestWhatChatDidOverARecording:
+    """The trace under a recording's video: fetched by the script once the
+    page is there, drawn over all of the recording - or over a stretch of
+    it, for the Trim dialog."""
+
+    async def trace(self, service, recording_id: int, **params) -> Element:
+        response = await service.client.get(f"/dashboard/recordings/{recording_id}/trace", params=params)
+        assert response.status_code == 200, response.text
+        return parse(response.text).one("figure", data_rec_trace=True)
+
+    def strip(self, figure: Element) -> Element:
+        return figure.one("div", data_rec_strip=True)
+
+    def counts(self, figure: Element, which: str = "data-all") -> list[int]:
+        return [int(count) for count in self.strip(figure).attrs[which].split(",")]
+
+    async def test_the_page_has_a_place_for_it_that_the_script_fills(self, service):
+        recording_id = add_stream_recording(CHANNEL)
+
+        place = (await recordings(service)).one("figure", data_rec_trace_load=True)
+
+        assert place.attrs["data-rec-trace-load"] == f"/dashboard/recordings/{recording_id}/trace"
+        # Only the script can fetch it, so the place shows once the script is there.
+        assert "hidden" in place.attrs
+        assert place.one("span", data_rec_trace_words=True).text == "Counting what chat did over the recording."
+
+    async def test_it_covers_the_whole_recording_in_steps_a_strip_can_show(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        said_at(5)
+        said_at(8)
+        said_at(3605, content="xDDD")
+
+        figure = await self.trace(service, recording_id)
+
+        assert (figure.attrs["data-start"], figure.attrs["data-end"], figure.attrs["data-step"]) == ("0", "7200", "10")
+        everything, laughing = self.counts(figure), self.counts(figure, "data-laugh")
+        assert len(everything) == 720
+        assert (everything[0], everything[360], sum(everything)) == (2, 1, 3)
+        assert (laughing[360], sum(laughing)) == (1, 1)
+        assert figure.one("figcaption").text.startswith(
+            "Chat messages a second from 0:00:00 to 2:00:00 of the recording, in steps of 10 seconds."
+        )
+        assert [tick.text for tick in figure.one("div", class_="ch-axis").find("span")][::4] == [
+            "0:00:00",
+            "1:00:00",
+            "2:00:00",
+        ]
+
+    async def test_it_is_a_scrubber_over_the_file(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        said_at(5)
+
+        strip = self.strip(await self.trace(service, recording_id))
+
+        assert strip.attrs["role"] == "slider" and strip.attrs["tabindex"] == "0"
+        assert (strip.attrs["aria-valuemin"], strip.attrs["aria-valuemax"]) == ("0", "7200")
+        assert strip.one("div", data_playhead=True) is not None
+        assert strip.one("span", data_flag=True).text == "0:00:00"
+
+    async def test_chat_is_put_where_the_channel_has_it_against_the_picture(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        add_chat(CHANNEL, "alice", "hello", T0 + timedelta(seconds=100))
+        conn = db.get_connection()
+        try:
+            db.set_chat_delay(conn, CHANNEL, 8)
+        finally:
+            conn.close()
+
+        everything = self.counts(await self.trace(service, recording_id))
+
+        # Second by second, for ten minutes: it arrived at 100 and belongs to 92.
+        assert len(everything) == 600 and everything[92] == 1 and sum(everything) == 1
+
+    async def test_chat_is_found_under_the_name_kick_sends_it_with(self, service):
+        recording_id = add_stream_recording("Some_Channel", seconds=600)
+        said_at(12.5, channel="some_channel")
+
+        assert self.counts(await self.trace(service, recording_id))[12] == 1
+
+    async def test_only_the_channels_own_chat_and_only_from_while_it_was_recorded(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=120)
+        said_at(-30)
+        said_at(60)
+        said_at(60, channel="another_channel", broadcaster_user_id=2)
+        said_at(200)
+
+        everything = self.counts(await self.trace(service, recording_id))
+
+        assert everything[60] == 1 and sum(everything) == 1
+
+    async def test_chat_from_a_break_in_the_stream_is_not_counted_and_the_break_is_marked(self, service):
+        # Two parts: a hundred seconds, then - a minute later - fifty more.
+        recording_id = add_stream_recording(CHANNEL, parts=[(T0, 100.0), (T0 + timedelta(seconds=160), 50.0)])
+        said_at(40)
+        said_at(130)  # while nothing was recorded
+        said_at(170)
+
+        figure = await self.trace(service, recording_id)
+
+        everything = self.counts(figure)
+        assert (everything[40], everything[110], sum(everything)) == (1, 1, 2)
+        (mark,) = figure.find("div", class_="ch-break")
+        assert mark.attrs["style"] == "left: 66.667%"
+        assert mark.attrs["title"] == "The file is missing 1 minute of the stream here."
+
+    async def test_the_channels_moments_are_marked_on_it(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        said_at(295)
+        # A reaction chat had from second 290 to second 300 of the recording.
+        add_moment(CHANNEL, detected_at=T0 + timedelta(seconds=300) + DELAY, reaction_seconds=10)
+        add_moment("another_channel", detected_at=T0 + timedelta(seconds=100) + DELAY, broadcaster_user_id=2)
+        add_moment(CHANNEL, detected_at=T0 + minutes(30))  # after the recording
+
+        figure = await self.trace(service, recording_id)
+
+        (band,) = figure.find("div", class_="ch-moment")
+        assert band.attrs["style"] == "left: 48.333%; width: 1.667%"
+        assert "a moment" in figure.one("div", class_="ch-legend").text
+
+    async def test_a_recording_without_moments_has_none_in_its_legend(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        said_at(295)
+
+        figure = await self.trace(service, recording_id)
+
+        assert figure.find("div", class_="ch-moment") == []
+        assert "a moment" not in figure.one("div", class_="ch-legend").text
+
+    async def test_a_message_laughs_by_what_the_channel_has_for_laughing(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        said_at(50, content="OMEGALUL")
+        assert sum(self.counts(await self.trace(service, recording_id), "data-laugh")) == 0
+
+        conn = db.get_connection()
+        try:
+            db.replace_channel_keywords(conn, 1, {"omegalul": 3.0})
+        finally:
+            conn.close()
+        service.main._forget_tuning()
+
+        assert self.counts(await self.trace(service, recording_id), "data-laugh")[50] == 1
+
+    async def test_a_stretch_of_it_is_drawn_for_the_trim_dialog(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        said_at(4999)
+        said_at(5025.5)
+        said_at(5301)
+
+        figure = await self.trace(service, recording_id, first=5000, last=5300)
+
+        assert (figure.attrs["data-start"], figure.attrs["data-end"], figure.attrs["data-step"]) == (
+            "5000",
+            "5300",
+            "1",
+        )
+        everything = self.counts(figure)
+        assert len(everything) == 300 and everything[25] == 1 and sum(everything) == 1
+        assert [tick.text for tick in figure.one("div", class_="ch-axis").find("span")] == [
+            "1:23:20",
+            "1:24:00",
+            "1:25:00",
+            "1:26:00",
+            "1:27:00",
+            "1:28:20",
+        ]
+
+    @pytest.mark.parametrize(
+        "asked",
+        [
+            {"first": "-50", "last": "99999"},
+            {"first": "nan", "last": "inf"},
+            {"first": "300", "last": "200"},
+            {"first": "300", "last": "300.5"},
+        ],
+        ids=["beyond-the-file", "not-numbers", "backwards", "too-short"],
+    )
+    async def test_a_stretch_that_is_none_is_all_of_the_recording(self, service, asked):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+
+        figure = await self.trace(service, recording_id, **asked)
+
+        assert (figure.attrs["data-start"], figure.attrs["data-end"]) == ("0", "600")
+
+    async def test_a_recording_with_no_chat_has_only_the_paper_and_says_so(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+
+        figure = await self.trace(service, recording_id)
+
+        assert (
+            figure.one("div", class_="ch-legend").text == "No chat was stored from 0:00:00 to 0:10:00 of the recording."
+        )
+        strip = self.strip(figure)
+        assert "data-all" not in strip.attrs and strip.attrs["role"] == "slider"
+
+    async def test_the_chat_of_a_whole_recording_is_gone_through_once(self, service, monkeypatch):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        said_at(5)
+        asked = []
+        through = service.main.iter_channel_chat_between
+
+        def counting(*args):
+            asked.append(args[2:])
+            return through(*args)
+
+        monkeypatch.setattr(service.main, "iter_channel_chat_between", counting)
+
+        first = await self.trace(service, recording_id)
+        again = await self.trace(service, recording_id)
+
+        assert len(asked) == 1 and self.counts(first) == self.counts(again)
+
+        # A stretch is a few minutes of chat, counted whenever it is asked for.
+        await self.trace(service, recording_id, first=0, last=300)
+        await self.trace(service, recording_id, first=0, last=300)
+        assert len(asked) == 3
+
+    async def test_what_was_counted_is_counted_again_once_chat_is_placed_differently(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        add_chat(CHANNEL, "alice", "hello", T0 + timedelta(seconds=100))
+        # The delay is set on the review page, at one of the channel's moments.
+        add_moment(CHANNEL, detected_at=T0 - minutes(60))
+        assert self.counts(await self.trace(service, recording_id))[100 - chat_trace.CHAT_DELAY_SECONDS] == 1
+
+        moved = await service.client.post(f"/channels/{CHANNEL}/chat_delay", params={"seconds": 10})
+
+        assert moved.status_code == 200
+        assert self.counts(await self.trace(service, recording_id))[90] == 1
+
+    async def test_moments_found_since_are_marked_without_counting_again(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=600)
+        said_at(295)
+        assert (await self.trace(service, recording_id)).find("div", class_="ch-moment") == []
+
+        add_moment(CHANNEL, detected_at=T0 + timedelta(seconds=300) + DELAY)
+
+        assert len((await self.trace(service, recording_id)).find("div", class_="ch-moment")) == 1
+
+    async def test_it_is_nothing_but_the_figure(self, service):
+        recording_id = add_stream_recording(CHANNEL)
+
+        response = await service.client.get(f"/dashboard/recordings/{recording_id}/trace")
+
+        page = parse(response.text)
+        assert page.find("header") == [] and page.find("video") == []
+        assert "trace" in page.one("figure").classes
+
+    async def test_an_unknown_recording_is_a_404(self, service):
+        assert (await service.client.get("/dashboard/recordings/999/trace")).status_code == 404
+
+    async def test_a_recording_with_no_file_yet_has_nothing_to_draw_chat_over(self, service):
+        service.watch(CHANNEL)
+        await service.client.post(f"/channels/{CHANNEL}/recording/start")
+
+        assert (await service.client.get("/dashboard/recordings/1/trace")).status_code == 409
+
+
+class TestTheTrimDialogOfARecording:
+    """What the page gives the script to cut a stretch of a recording out
+    with. The cutting itself is in test_api_recording_trim.py."""
+
+    async def article(self, service) -> Element:
+        return (await recordings(service)).one("article", class_="recording")
+
+    async def test_a_recording_can_be_trimmed_from_the_page(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        (row,) = stream_recordings()
+
+        article = await self.article(service)
+        dialog = article.one("dialog", class_="trim")
+
+        # The button opens the dialog, which only the script can.
+        button = article.one("div", class_="rec-file").one("button", **{"data-trim-open": True})
+        assert button.text == "Trim" and "hidden" in button.attrs
+        assert "open" not in dialog.attrs
+        assert dialog.attrs["data-trim"] == f"/recordings/{recording_id}/trim"
+        # Its times are seconds of the file, all of which can be cut from.
+        assert (dialog.attrs["data-lead"], dialog.attrs["data-last"]) == ("0", "7200")
+        assert dialog.attrs["data-min"] == view.number_words(clip_trim.MIN_SECONDS)
+        assert dialog.attrs["aria-labelledby"] == dialog.one("h2").attrs["id"] == f"trim-title-recording-{recording_id}"
+        assert dialog.one("video").attrs["data-src"] == f"/streams/{row['file_path']}"
+        assert [handle.attrs["data-trim-handle"] for handle in dialog.find("div", role="slider")] == ["from", "to"]
+        assert all("hidden" in link.attrs for link in dialog.find("a"))
+
+    async def test_its_strip_shows_a_window_of_the_recording_drawn_by_the_service(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+
+        dialog = (await self.article(service)).one("dialog", class_="trim")
+
+        assert dialog.attrs["data-window"] == str(service.main.RECORDING_TRIM_WINDOW_SECONDS)
+        assert dialog.attrs["data-around"] == str(service.main.RECORDING_TRIM_AROUND_SECONDS)
+        assert dialog.attrs["data-strip-url"] == f"/dashboard/recordings/{recording_id}/trace"
+        assert "A recording keeps one cut at a time" in dialog.one("p", class_="trim-note").text
+
+    async def test_either_end_of_the_cut_can_be_typed_as_a_time_of_the_recording(self, service):
+        add_stream_recording(CHANNEL, seconds=7200)
+
+        dialog = (await self.article(service)).one("dialog", class_="trim")
+
+        assert [field.attrs["data-trim-type"] for field in dialog.find("input", type="text")] == ["from", "to"]
+        assert dialog.one("span", class_="trim-range").attrs["title"] == (
+            "A time in the recording, written like 1:23:45 or 83:45.5."
+        )
+
+    async def test_chat_can_go_with_it_where_the_recording_has_any(self, service):
+        recording_id = add_stream_recording(CHANNEL, seconds=7200)
+        said_at(6000)
+
+        dialog = (await self.article(service)).one("dialog", class_="trim")
+
+        assert "checked" not in dialog.one("input", data_trim_chat=True).attrs
+        pane = dialog.one("div", class_="trim-chat")
+        assert "hidden" in pane.attrs
+        # Its lines are fetched a stretch at a time, as beside the recording;
+        # the box starts out holding none.
+        box = pane.one("div", data_recording_chat=True)
+        assert box.attrs["data-url"] == f"/dashboard/recordings/{recording_id}/chat"
+        assert float(box.attrs["data-last"]) < float(box.attrs["data-first"]) and box.find("p") == []
+        assert dialog.one("output").text == "Chat where it is beside the recording"
+        note = dialog.one("p", class_="trim-note").text
+        assert f"can go with a stretch of up to {view.duration_words(clip_trim.CHAT_VIDEO_MAX_SECONDS)}" in note
+
+    async def test_a_recording_without_chat_is_trimmed_without_it(self, service):
+        add_stream_recording(CHANNEL, seconds=7200)
+        said_at(100, channel="another_channel", broadcaster_user_id=2)
+
+        dialog = (await self.article(service)).one("dialog", class_="trim")
+
+        assert [field.attrs["type"] for field in dialog.find("input")] == ["text", "text"]
+        assert dialog.find("div", class_="trim-chat") == []
+
+    @pytest.mark.parametrize("columns", [{"state": "failed"}, {"file": False}], ids=["not-saved", "file-gone"])
+    async def test_nothing_is_offered_where_there_is_no_file_to_cut_from(self, service, columns):
+        add_stream_recording(CHANNEL, **columns)
+
+        page = await recordings(service)
+
+        assert page.find("dialog") == [] and page.find("button", **{"data-trim-open": True}) == []
+        assert page.find("figure") == []

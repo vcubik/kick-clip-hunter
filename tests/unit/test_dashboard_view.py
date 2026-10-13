@@ -148,6 +148,10 @@ class TestReasons:
     def test_an_imported_clip_is_called_that(self):
         assert view.queue_label(row(reason=view.IMPORT_REASON)) == "Imported"
 
+    def test_a_clip_made_on_command_is_called_that(self):
+        assert view.queue_label(row(reason=view.COMMAND_REASON)) == "On command"
+        assert view.queue_label(row(reason=view.COMMAND_REASON), "KEKW x3") == "KEKW x3"
+
     def test_a_name_the_reviewer_gave_takes_the_place_of_everything_else(self):
         named = row(title="He fell off the chair")
 
@@ -213,6 +217,11 @@ class TestSummary:
         imported = row(reason=view.IMPORT_REASON, score=0.0, message_count=0, current_message_rate=0.0)
 
         assert view.summary_words(imported) == "Imported clip. No chat was measured for it."
+
+    def test_nor_has_a_clip_made_on_command(self):
+        commanded = row(reason=view.COMMAND_REASON, score=0.0, message_count=0, current_message_rate=0.0)
+
+        assert view.summary_words(commanded) == "Asked for in chat. The detector had no part in it."
 
 
 # One channel's 7TV emotes, as stored: (emote id, width, height) by name.
@@ -603,6 +612,24 @@ class TestACutInWords:
     @pytest.mark.parametrize("state", [view.TRIM_NONE, view.TRIM_CUTTING, view.TRIM_FAILED])
     def test_nor_does_a_state_in_which_there_is_no_video(self, state):
         assert view.trim_words(state, early=3.0) == view.trim_words(state)
+
+    def test_a_cut_of_a_recording_that_is_ready_is_named_by_the_stretch_it_holds(self):
+        # Several are cut from one stream; which one this is has to be said.
+        assert view.trim_words(view.TRIM_READY, stretch=(5025, 5071)) == "1:23:45 to 1:24:31 is ready to download."
+
+    def test_and_still_says_how_much_earlier_it_begins(self):
+        words = view.trim_words(view.TRIM_READY, early=1.26, stretch=(5025, 5071))
+
+        assert words == (
+            "1:23:45 to 1:24:31 is ready to download. "
+            "It begins 1.3 s before the start you set, on a frame a cut can begin on."
+        )
+
+    @pytest.mark.parametrize(
+        "state", [view.TRIM_NONE, view.TRIM_CUTTING, view.TRIM_CHAT, view.TRIM_FAILED, view.TRIM_CHAT_FAILED]
+    )
+    def test_any_other_state_of_one_reads_as_it_does_of_a_moment(self, state):
+        assert view.trim_words(state, stretch=(5025, 5071)) == view.trim_words(state)
 
 
 class TestSettingsInWords:
