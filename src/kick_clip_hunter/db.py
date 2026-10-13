@@ -65,6 +65,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_time
 CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_received
     ON chat_messages (channel_slug, received_at);
 
+-- The same by the channel's id, for what knows a channel by its name on the
+-- watchlist: chat is stored under the name Kick sends it with, which need
+-- not be spelled the same.
+CREATE INDEX IF NOT EXISTS idx_chat_messages_broadcaster_received
+    ON chat_messages (broadcaster_user_id, received_at);
+
 CREATE TABLE IF NOT EXISTS moments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     broadcaster_user_id INTEGER NOT NULL,
@@ -605,6 +611,42 @@ def get_chat_between(
         """,
         (channel_slug, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat(), limit),
     ).fetchall()
+
+
+def get_channel_chat_between(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime, limit: int = 2000
+) -> list[sqlite3.Row]:
+    """As get_chat_between, for a channel told by its id rather than by the
+    name its chat came under. That name is Kick's own spelling (all in small
+    letters), so it is not what to look chat up by for something that has
+    the channel's name from the watchlist - a stream recording."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT received_at, sender_username, content
+        FROM chat_messages
+        WHERE broadcaster_user_id = ? AND received_at BETWEEN ? AND ?
+        ORDER BY received_at
+        LIMIT ?
+        """,
+        (
+            broadcaster_user_id,
+            start.astimezone(timezone.utc).isoformat(),
+            end.astimezone(timezone.utc).isoformat(),
+            limit,
+        ),
+    ).fetchall()
+
+
+def get_chat_name(conn: sqlite3.Connection, broadcaster_user_id: int) -> str | None:
+    """The name a channel's chat is stored under - the one its newest
+    message came with - or None if none is stored. It is also the name its
+    moments have, and what is kept by channel name is kept under."""
+    row = conn.execute(
+        "SELECT channel_slug FROM chat_messages WHERE broadcaster_user_id = ? ORDER BY received_at DESC LIMIT 1",
+        (broadcaster_user_id,),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def insert_chat_message(
