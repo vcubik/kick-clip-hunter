@@ -9,6 +9,11 @@ channel's. Only what was really set is stored, so a channel follows the
 settings for all channels in everything it was not given a value of its own
 for, and everything nobody set follows the code.
 
+A few settings are a channel's alone (`Setting.per_channel`: the messages
+that ask for a clip). Those are not on offer for all channels, and what a
+channel has of them holds whether or not it goes by its own settings in the
+rest.
+
 Three things are in this module:
 
 * `Tuning` - everything the service does for a channel that a setting can
@@ -153,12 +158,20 @@ PHRASE_MAX_LENGTH = 100
 LIST_MAX_ITEMS = 50
 
 # The sections of the page, in the order they come: key, heading, and what is
-# said under it.
+# said under it. The first is on a channel's page only (see
+# Setting.per_channel).
 MOMENTS = "moments"
 SIGNALS = "signals"
 CLIPS = "clips"
 COMMANDS = "commands"
 GROUPS = (
+    (
+        COMMANDS,
+        "A clip on command",
+        "A message in chat that makes a moment there and then, however quiet chat is - for a channel too small "
+        "for its chat to set one off. The clip is cut like any other, reaching back from the command. Each "
+        "channel has its own, whether or not it goes by its own settings in the rest.",
+    ),
     (
         MOMENTS,
         "How big a reaction has to be",
@@ -175,12 +188,6 @@ GROUPS = (
         "The clip",
         "How long a moment may run and how much footage goes into its file. Clips cut already stay as they are.",
     ),
-    (
-        COMMANDS,
-        "A clip on command",
-        "A message in chat that makes a moment there and then, however quiet chat is - for a channel too small "
-        "for its chat to set one off. The clip is cut like any other, reaching back from the command.",
-    ),
 )
 
 
@@ -188,7 +195,10 @@ GROUPS = (
 class Setting:
     """One thing that can be set: what it is called and may be, and which
     fields of a Tuning take its value (the detector's with "detector." in
-    front). `advanced` ones are folded away on the page."""
+    front). `advanced` ones are folded away on the page. A `per_channel`
+    one is set for each channel by itself: it is not on offer for all
+    channels, and a channel's value holds whether or not the channel goes
+    by its own settings in the rest."""
 
     name: str
     group: str
@@ -200,6 +210,7 @@ class Setting:
     most: float | None = None
     unit: str = ""
     advanced: bool = False
+    per_channel: bool = False
 
 
 _WINDOW = detector.SHORT_WINDOW_SECONDS
@@ -417,6 +428,7 @@ SETTINGS: tuple[Setting, ...] = (
         "moderators, any of them makes a moment. The channel has to be tracked, and the detector leaves these "
         "messages out.",
         ("clip_commands",),
+        per_channel=True,
     ),
     Setting(
         "clip_command_from_anyone", COMMANDS, SWITCH,
@@ -424,10 +436,13 @@ SETTINGS: tuple[Setting, ...] = (
         "Off, only the streamer and the moderators are listened to. On, every viewer can have a clip made, as "
         "often as they like.",
         ("clip_command_from_anyone",),
+        per_channel=True,
     ),
 )
 
 BY_NAME: dict[str, Setting] = {setting.name: setting for setting in SETTINGS}
+# The settings that are a channel's alone.
+PER_CHANNEL = frozenset(setting.name for setting in SETTINGS if setting.per_channel)
 
 # Pairs of settings that only make sense one way round: the first may not be
 # more than the second - or, where the third says so, has to be less.
@@ -459,10 +474,22 @@ def recommended_values() -> dict[str, Value]:
     return found
 
 
+def shared(given: Mapping[str, Value]) -> dict[str, Value]:
+    """Those of the given values that can be set for all channels."""
+    return {name: value for name, value in given.items() if name not in PER_CHANNEL}
+
+
+def per_channel(given: Mapping[str, Value]) -> dict[str, Value]:
+    """Those of the given values that are a channel's alone: what is in
+    force of a channel's own while it goes by the settings for all channels."""
+    return {name: value for name, value in given.items() if name in PER_CHANNEL}
+
+
 def values(for_all: Mapping[str, Value], own: Mapping[str, Value] | None = None) -> dict[str, Value]:
     """Every setting's value for a channel: what is recommended, with what
-    was set for all channels laid over it, then the channel's `own`."""
-    return {**recommended_values(), **for_all, **(own or {})}
+    was set for all channels laid over it, then the channel's `own`. A
+    setting that is a channel's alone takes nothing from all channels."""
+    return {**recommended_values(), **shared(for_all), **(own or {})}
 
 
 def tuned(for_all: Mapping[str, Value], own: Mapping[str, Value] | None = None) -> Tuning:
@@ -474,7 +501,7 @@ def tuned(for_all: Mapping[str, Value], own: Mapping[str, Value] | None = None) 
     base = recommended()
     fields: dict[str, Any] = {}
     detector_fields: dict[str, Any] = {}
-    for name, value in {**for_all, **(own or {})}.items():
+    for name, value in {**shared(for_all), **(own or {})}.items():
         setting = BY_NAME[name]
         if setting.kind == PHRASES:
             value = frozenset(value)
@@ -618,19 +645,33 @@ def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) ->
     }
 
 
-def form(every: Mapping[str, Value], rest: Mapping[str, Value], rest_label: str) -> list[dict[str, Any]]:
+def form(
+    every: Mapping[str, Value], rest: Mapping[str, Value], rest_label: str, for_channel: bool = False
+) -> list[dict[str, Any]]:
     """The Settings page's form: its sections in order, and in each the
     settings as the page draws them - what each is set to, and what it would
     be if it were left alone (`rest`: what is recommended, or for a channel
     what all channels have), which a button beside it puts back. The
     advanced ones are listed apart; the page folds them away unless one of
-    them is set to something."""
+    them is set to something.
+
+    The settings that are a channel's alone are in a channel's form only
+    (`for_channel`), where what they would be if left alone is what is
+    recommended; a section of nothing else says so (`per_channel`), since
+    it can be set whether or not the channel goes by its own settings."""
     sections = []
     for key, title, lead in GROUPS:
+        offered = [setting for setting in SETTINGS if setting.group == key and (for_channel or not setting.per_channel)]
+        if not offered:
+            continue
         fields = [
-            _form_field(setting, every[setting.name], rest[setting.name], rest_label)
-            for setting in SETTINGS
-            if setting.group == key
+            _form_field(
+                setting,
+                every[setting.name],
+                rest[setting.name],
+                "Recommended" if setting.per_channel else rest_label,
+            )
+            for setting in offered
         ]
         advanced = [field for field in fields if field["advanced"]]
         sections.append(
@@ -640,6 +681,7 @@ def form(every: Mapping[str, Value], rest: Mapping[str, Value], rest_label: str)
                 "fields": [field for field in fields if not field["advanced"]],
                 "advanced": advanced,
                 "advanced_set": any(not field["at_rest"] for field in advanced),
+                "per_channel": all(setting.per_channel for setting in offered),
             }
         )
     return sections

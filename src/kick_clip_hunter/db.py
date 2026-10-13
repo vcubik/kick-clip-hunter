@@ -477,17 +477,21 @@ def get_tuning(conn: sqlite3.Connection, owner: int = TUNING_FOR_ALL) -> dict[st
     return {row[0]: row[1] for row in rows}
 
 
-def get_tuning_in_force(conn: sqlite3.Connection) -> dict[int, dict[str, str]]:
+def get_tuning_in_force(conn: sqlite3.Connection, per_channel: Iterable[str] = ()) -> dict[int, dict[str, str]]:
     """Everything stored that the service is to go by, by owner: the
     settings for every channel (TUNING_FOR_ALL) and, by channel id, those of
-    the channels that go by their own."""
+    the channels that go by their own. Of a watched channel that does not,
+    only the settings named in `per_channel`: the ones that are a channel's
+    alone, whatever it goes by in the rest."""
+    names = tuple(per_channel)
     rows = conn.execute(
-        """
+        f"""
         SELECT tuning.broadcaster_user_id, tuning.name, tuning.value FROM tuning
         LEFT JOIN streamers ON streamers.broadcaster_user_id = tuning.broadcaster_user_id
         WHERE tuning.broadcaster_user_id = ? OR streamers.own_tuning = 1
+           OR (streamers.own_tuning = 0 AND tuning.name IN ({", ".join("?" * len(names))}))
         """,
-        (TUNING_FOR_ALL,),
+        (TUNING_FOR_ALL, *names),
     ).fetchall()
     in_force: dict[int, dict[str, str]] = {}
     for owner, name, value in rows:

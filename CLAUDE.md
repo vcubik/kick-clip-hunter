@@ -207,7 +207,13 @@ Module map (`src/kick_clip_hunter/`):
   posts one (`chat_identity.runs_channel`), or anyone with the switch on. The webhook
   opens the moment without the detector (`reason=command`, its figures zero), so it
   needs no chat history, only a tracked channel; the detector never sees a command, and
-  a replay leaves commands out without counting them
+  a replay leaves commands out without counting them. These two are a channel's alone
+  (`Setting.per_channel`, `PER_CHANNEL`): not on offer for all channels (posted there
+  they are refused, and one stored there holds for nobody), in force for a channel
+  whether or not its "Own settings" switch is on, and the first section of a channel's
+  Settings page - the only one that is not locked while the switch is off. The page's
+  script sends only what is not locked, so saving them leaves alone the values a
+  channel keeps for when it goes by its own again
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
   rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`
   and the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`

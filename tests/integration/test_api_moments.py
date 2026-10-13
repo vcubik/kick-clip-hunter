@@ -539,8 +539,12 @@ SUBSCRIBER = {"username_color": "#00ff00", "badges": [{"type": "subscriber", "te
 
 
 async def set_up(service, **values) -> None:
-    response = await service.client.post("/tuning", json={"values": values})
-    assert response.status_code == 200, response.text
+    """Saves settings: what is a channel's alone for CHANNEL, the rest for
+    all channels."""
+    mine = tuning.per_channel(values)
+    for address, given in ((f"/channels/{CHANNEL}/tuning", mine), ("/tuning", tuning.shared(values))):
+        response = await service.client.post(address, json={"values": given})
+        assert response.status_code == 200, response.text
 
 
 class TestAClipOnCommand:
@@ -588,16 +592,27 @@ class TestAClipOnCommand:
 
         assert [moment["reason"] for moment in service.moments()] == ["command"]
 
-    async def test_a_channel_goes_by_its_own_command(self, service):
+    async def test_a_command_is_its_channels_alone(self, service):
+        # Without the channel going by settings of its own in anything else.
         service.watch(CHANNEL)
         service.watch("another_channel")
-        await service.client.post(f"/channels/{CHANNEL}/tuning", json={"values": {"clip_commands": "!clip"}})
-        await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled=1")
+        await set_up(service, clip_commands="!clip")
 
         await service.chat("another_channel", "its_streamer", "!clip", identity=STREAMER)
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
 
         assert [moment["channel_slug"] for moment in service.moments()] == [CHANNEL]
+
+    @pytest.mark.parametrize("own", [True, False])
+    async def test_it_holds_whichever_way_the_channels_own_settings_are_switched(self, service, own):
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands="!clip")
+        await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled=1")
+        await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled={int(own)}")
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+
+        assert [moment["reason"] for moment in service.moments()] == ["command"]
 
     async def test_with_no_command_set_the_message_is_chat_like_any_other(self, service):
         service.watch(CHANNEL)

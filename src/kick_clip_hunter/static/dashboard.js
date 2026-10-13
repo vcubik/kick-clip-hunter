@@ -1405,8 +1405,15 @@
     return typed === "" || Number.isNaN(Number(typed)) ? null : Number(typed);
   }
 
+  // Only what can be set is sent. A channel that goes by the settings for
+  // all channels is shown those, locked: saved as its own they would take
+  // the place of the ones it keeps for when it goes by its own again.
   const settingValues = (form) =>
-    Object.fromEntries(all("[data-setting]", form).map((field) => [field.dataset.setting, settingValue(field)]));
+    Object.fromEntries(
+      all("[data-setting]", form)
+        .filter((field) => !field.closest("fieldset:disabled"))
+        .map((field) => [field.dataset.setting, settingValue(field)]),
+    );
 
   // Marks the settings that are not what they would be if left alone, and
   // lets those be put back.

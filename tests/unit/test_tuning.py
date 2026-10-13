@@ -9,6 +9,7 @@ written against the constants, not against what they happen to be today.
 from __future__ import annotations
 
 import dataclasses
+from typing import ClassVar
 
 import pytest
 
@@ -319,10 +320,39 @@ class TestLayingValuesOverEachOther:
         assert tuned.detector.added_ignored_messages == frozenset({"!join", "gg wp"})
 
     def test_clip_commands_and_who_may_post_them(self):
-        tuned = tuning.tuned({"clip_commands": ("!clip", "clip that")}, {"clip_command_from_anyone": True})
+        tuned = tuning.tuned({}, {"clip_commands": ("!clip", "clip that"), "clip_command_from_anyone": True})
 
         assert tuned.clip_commands == frozenset({"!clip", "clip that"})
         assert tuned.clip_command_from_anyone is True
+
+
+class TestWhatIsAChannelsAlone:
+    COMMANDS: ClassVar = {"clip_commands": ("!clip",), "clip_command_from_anyone": True}
+
+    def test_the_clip_commands_are_and_nothing_else_is(self):
+        assert tuning.PER_CHANNEL == {"clip_commands", "clip_command_from_anyone"}
+        assert {item.name for item in tuning.SETTINGS if item.per_channel} == tuning.PER_CHANNEL
+
+    def test_given_values_are_told_apart(self):
+        given = {**self.COMMANDS, "reacting_share": 0.2}
+
+        assert tuning.per_channel(given) == self.COMMANDS
+        assert tuning.shared(given) == {"reacting_share": 0.2}
+
+    def test_one_stored_for_all_channels_holds_for_none(self):
+        # Left over from when it could be set there.
+        for_all = {**self.COMMANDS, "reacting_share": 0.2}
+
+        tuned = tuning.tuned(for_all)
+
+        assert (tuned.clip_commands, tuned.clip_command_from_anyone) == (frozenset(), False)
+        assert tuned.detector.min_reaction_unique_fraction == 0.2
+        assert tuning.values(for_all) == {**tuning.recommended_values(), "reacting_share": 0.2}
+
+    def test_a_channels_own_holds_over_that(self):
+        tuned = tuning.tuned({"clip_commands": ("!old",)}, {"clip_commands": ("!clip",)})
+
+        assert tuned.clip_commands == frozenset({"!clip"})
 
 
 class TestClipCommands:
@@ -335,7 +365,7 @@ class TestClipCommands:
         assert not recommended.is_clip_command("")
 
     def test_a_command_is_the_whole_message_whatever_its_case(self):
-        tuned = tuning.tuned({"clip_commands": tuning.clean("clip_commands", "!Clip, clip that")})
+        tuned = tuning.tuned({}, {"clip_commands": tuning.clean("clip_commands", "!Clip, clip that")})
 
         assert tuned.is_clip_command("!clip")
         assert tuned.is_clip_command("  !CLIP ")
@@ -403,18 +433,45 @@ class TestOnThePage:
     def form(self, for_all: dict | None = None, own: dict | None = None) -> list[dict]:
         if own is None:
             return tuning.form(tuning.values(for_all or {}), tuning.recommended_values(), "Recommended")
-        return tuning.form(tuning.values(for_all or {}, own), tuning.values(for_all or {}), "All channels")
+        every, rest = tuning.values(for_all or {}, own), tuning.values(for_all or {})
+        return tuning.form(every, rest, "All channels", for_channel=True)
 
     def fields(self, form: list[dict]) -> dict[str, dict]:
         return {field["name"]: field for section in form for field in [*section["fields"], *section["advanced"]]}
 
-    def test_the_form_has_the_sections_in_order_with_every_setting_in_one(self):
-        form = self.form()
+    def test_a_channels_form_has_the_sections_in_order_with_every_setting_in_one(self):
+        form = self.form(own={})
 
         assert [section["title"] for section in form] == [title for _key, title, _lead in tuning.GROUPS]
         assert list(self.fields(form)) == [
             item.name for group, *_ in tuning.GROUPS for item in tuning.SETTINGS if item.group == group
         ]
+
+    def test_what_is_a_channels_alone_comes_first_in_it_as_a_section_of_its_own(self):
+        first, *others = self.form(own={})
+
+        assert first["title"] == "A clip on command"
+        assert [field["name"] for field in first["fields"]] == ["clip_commands", "clip_command_from_anyone"]
+        assert first["per_channel"] is True
+        assert [section["per_channel"] for section in others] == [False] * len(others)
+
+    def test_and_is_not_in_the_form_for_all_channels_at_all(self):
+        form = self.form()
+
+        assert [section["title"] for section in form] == [title for _key, title, _lead in tuning.GROUPS[1:]]
+        assert not tuning.PER_CHANNEL & self.fields(form).keys()
+        assert self.fields(form).keys() == {item.name for item in tuning.SETTINGS if not item.per_channel}
+
+    def test_left_alone_it_is_what_is_recommended_whatever_all_channels_were_given(self):
+        fields = self.fields(self.form({"clip_commands": ("!old",)}, own={"clip_command_from_anyone": True}))
+
+        assert (fields["clip_commands"]["value"], fields["clip_commands"]["at_rest"]) == ("", True)
+        assert fields["clip_commands"]["rest_words"] == "Recommended: none"
+        assert (fields["clip_command_from_anyone"]["on"], fields["clip_command_from_anyone"]["at_rest"]) == (
+            True,
+            False,
+        )
+        assert fields["clip_command_from_anyone"]["rest_words"] == "Recommended: Off"
 
     def test_advanced_settings_are_listed_apart(self):
         form = self.form()
@@ -472,5 +529,5 @@ class TestOnThePage:
         untouched = self.form({"reacting_share": 0.25})
         touched = self.form({"sustain_fraction": 0.5})
 
-        assert [section["advanced_set"] for section in untouched] == [False] * len(tuning.GROUPS)
-        assert [section["advanced_set"] for section in touched] == [True] + [False] * (len(tuning.GROUPS) - 1)
+        assert [section["advanced_set"] for section in untouched] == [False] * len(untouched)
+        assert [section["advanced_set"] for section in touched] == [True] + [False] * (len(touched) - 1)
