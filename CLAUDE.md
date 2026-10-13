@@ -109,7 +109,9 @@ set from the dashboard's Settings page (see `tuning.py` below).
   watchlist, the per-clip analysis switches and shutdown. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else, and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
-  how much has been recorded so far. `GET /dashboard/recordings` lists those recordings,
+  how much has been recorded so far - and its "Always record" switch, with which a
+  recording is started by itself whenever the channel goes live. `GET
+  /dashboard/recordings` lists those recordings,
   the newest first, and plays the open one with its chat replayed beside it - fetched a
   stretch at a time as the video plays on or is moved in, since a recording runs for hours -
   and has the buttons that delete one or retry one that could not be saved. On every page
@@ -125,8 +127,9 @@ set from the dashboard's Settings page (see `tuning.py` below).
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`), and while a stream recording runs or is being saved
   the Channels and Recordings pages ask what it is doing every couple of seconds (`GET
-  /recordings/status`) and their words follow. An empty queue is the normal state, so that page
-  then says what the service is doing instead.
+  /recordings/status`) and their words follow - every ten seconds with nothing being recorded
+  but a channel set to be recorded always, whose recording nobody on the page starts. An empty
+  queue is the normal state, so that page then says what the service is doing instead.
 - Tests: `pip install -r requirements-dev.txt`, then `python -m pytest` (with the project's
   virtual environment: `.venv\Scripts\python.exe -m pytest`). See "Testing" below.
 
@@ -196,7 +199,9 @@ Module map (`src/kick_clip_hunter/`):
   /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
-  is over in its row. Settings are saved through `POST /tuning` (all channels),
+  is over in its row. `POST /channels/{slug}/always_record` sets whether a channel is
+  recorded always (`streamers.always_record`); the recording itself is then started by
+  `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
   /channels/{slug}/own_tuning` (whether it goes by them); what is stored is kept in memory
   (`_tuning_values`) and dropped on every save, together with the keyword weights worked
@@ -301,7 +306,12 @@ Module map (`src/kick_clip_hunter/`):
   that such a recording is over (no footage for `STREAM_END_GRACE_SECONDS`, the disk
   running out, footage that can no longer be written) and reports it to `main.py`. It is
   woken when a recording is asked for, so that one does not wait half a minute for the
-  next round.
+  next round. A channel set to be recorded always is looked at like one that is being
+  recorded - tracked or not, watching on or off - and reported to `main.py` when it is
+  live with no recording of it running, which is when one is started. Once per stream: a
+  channel whose recording ended for any reason but its stream being over (stopped by
+  hand, the disk, a refusal to start) is held off until it has been seen off the air, or
+  until its switch is set again (`hold_off`; in memory, so a restart forgets it).
 - `stream_recording.py` — a stream kept whole: everything a channel broadcasts from when
   a recording is started (Channels page) until it is stopped or its stream is over, as
   one video file under `data/streams/<channel>/`, named for when it began. Its module
@@ -320,8 +330,10 @@ Module map (`src/kick_clip_hunter/`):
   tracking: started with tracking off it still gets its chat stored (the webhook keeps
   a recorded channel's messages and runs no detection on them), started ahead of the
   stream it waits for it, and it ends by itself once it has footage and has been given
-  none for ten minutes. Saving takes as much room again as the recording, so recordings
-  are ended - and none is started - while the disk still has that much plus
+  none for ten minutes. One started by itself, for a channel that is recorded always, is
+  a recording like any other from then on. Saving takes as much room again as the
+  recording, so recordings are ended - and none is started - while the disk still has
+  that much plus
   `MIN_FREE_BYTES`. Nothing has to be finished for footage to be safe: after a restart a
   recording that was running goes on, into the same recording (the stretch in between is
   one more break), unless what it kept is older than the grace period - then it is saved

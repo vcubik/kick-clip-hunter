@@ -8,7 +8,8 @@ Recorders are replaced by stand-ins that count their calls; the "is it live"
 question goes through the real client code against the fake Kick API.
 
 The same loop keeps a channel recorded while its stream is being kept whole,
-and reports when such a recording is over.
+and reports when such a recording is over - and, for a channel that is
+recorded always, when its stream is on with no recording of it.
 """
 
 from __future__ import annotations
@@ -324,9 +325,13 @@ class TestClipRequests:
 
 
 @asynccontextmanager
-async def looping(slugs, *, enabled=lambda: True, tracked=lambda slug: True, over=None):
+async def looping(
+    slugs, *, enabled=lambda: True, tracked=lambda slug: True, over=None, always=lambda: (), stream_is_on=None
+):
     """The real loop, running for as long as the block does."""
-    task = asyncio.create_task(recording_manager.run_forever(lambda: list(slugs), enabled, tracked, over))
+    task = asyncio.create_task(
+        recording_manager.run_forever(lambda: list(slugs), enabled, tracked, over, always, stream_is_on)
+    )
     try:
         yield
     finally:
@@ -604,3 +609,211 @@ class TestStreamsKeptWhole:
                 await async_wait_until(lambda: recorders["kept"].ticks >= 3, "the loop to carry on")
 
         assert any("[kept] could not end the stream recording" in record.getMessage() for record in caplog.records)
+
+
+class TestChannelsRecordedAlways:
+    """A channel can be set to have every stream kept whole. The loop looks
+    at whether it is live whatever the tracking switches say, and tells
+    whoever starts recordings when it is and nothing is keeping its stream."""
+
+    @pytest.fixture
+    def seen_on(self) -> list[str]:
+        """The channels the loop reported as live and not recorded, in order."""
+        return []
+
+    @pytest.fixture
+    def starts(self, seen_on):
+        """Whoever is told starts a recording, as the service does."""
+
+        async def start(slug: str) -> None:
+            seen_on.append(slug)
+            recording_manager.start_stream_recording(slug, 1, len(seen_on))
+
+        return start
+
+    @pytest.fixture
+    def declines(self, seen_on):
+        """Whoever is told starts nothing."""
+
+        async def note(slug: str) -> None:
+            seen_on.append(slug)
+
+        return note
+
+    async def test_its_stream_is_reported_once_it_is_on(self, kick_api, recorders, seen_on, starts):
+        channel = kick_api.add_channel("always", 1, is_live=False)
+        recorders["always"] = StandInRecorder()
+
+        async with looping(["always"], always=lambda: ["always"], stream_is_on=starts):
+            await rounds(kick_api)
+            assert seen_on == []
+            assert recorders["always"].ticks == 0  # no browser for an offline channel
+
+            channel.is_live = True
+            await async_wait_until(lambda: recorders["always"].ticks >= 2, "the stream to be recorded")
+
+        # Once: from then on its stream is being kept.
+        assert seen_on == ["always"]
+
+    async def test_what_is_started_for_it_gets_the_same_rounds_tick(self, kick_api, recorders, starts, monkeypatch):
+        # Not the next round's, half a minute of the stream later.
+        monkeypatch.setattr(recording_manager, "TICK_INTERVAL_SECONDS", 3600)
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+
+        async with looping([], tracked=lambda slug: False, always=lambda: ["always"], stream_is_on=starts):
+            await async_wait_until(lambda: recorders["always"].ticks, "the recorder to be ticked")
+
+    async def test_tracking_has_no_say_in_it(self, kick_api, recorders, seen_on, starts):
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+
+        async with looping(["always"], tracked=lambda slug: False, always=lambda: ["always"], stream_is_on=starts):
+            await async_wait_until(lambda: recorders["always"].ticks >= 2, "the stream to be recorded")
+
+        assert seen_on == ["always"]
+        assert recorders["always"].stops == 0
+
+    async def test_nor_has_the_watching_switch(self, kick_api, recorders, seen_on, starts):
+        kick_api.add_channel("always", 1, is_live=True)
+        kick_api.add_channel("other", 2, is_live=True)
+        recorders["always"] = StandInRecorder()
+        recorders["other"] = StandInRecorder(active=True)
+
+        async with looping(["always", "other"], enabled=lambda: False, always=lambda: ["always"], stream_is_on=starts):
+            await async_wait_until(
+                lambda: recorders["always"].ticks >= 2 and recorders["other"].stops, "one to tick, the other to stop"
+            )
+
+        assert seen_on == ["always"]
+        assert recorders["other"].ticks == 0
+        # Not even the liveness check is spent on a channel nobody looks at.
+        assert {query["slug"] for query in kick_api.calls("GET", "/channels")} == {"always"}
+
+    async def test_a_channel_that_is_being_recorded_already_is_not_reported(self, kick_api, recorders, seen_on, starts):
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+        recording_manager.start_stream_recording("always", 1, 7)
+
+        async with looping(["always"], always=lambda: ["always"], stream_is_on=starts):
+            await async_wait_until(lambda: recorders["always"].ticks >= 3, "a few rounds")
+
+        assert seen_on == []
+        assert recording_manager.stream_recording_of("always").recording_id == 7
+
+    async def test_if_nothing_is_started_for_it_no_browser_is_opened(self, kick_api, recorders, seen_on, declines):
+        # Its stream is wanted whole or not at all: a channel that is not
+        # tracked has nothing else to be recorded for.
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+
+        async with looping(["always"], tracked=lambda slug: False, always=lambda: ["always"], stream_is_on=declines):
+            await async_wait_until(lambda: len(seen_on) >= 3, "a few rounds")
+
+        assert recorders["always"].ticks == 0
+
+    async def test_a_channel_that_is_held_off_is_left_alone_until_its_stream_is_over(
+        self, kick_api, recorders, seen_on, starts
+    ):
+        # Its recording was stopped while the stream was on.
+        channel = kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder(active=True)
+        recording_manager.hold_off("always")
+
+        async with looping(["always"], tracked=lambda slug: False, always=lambda: ["always"], stream_is_on=starts):
+            await rounds(kick_api)
+            assert seen_on == []
+            # With nothing to record it for, the channel's recorder is stopped.
+            assert (recorders["always"].ticks, recorders["always"].stops) == (0, 1)
+
+            # The stream ends, and the next one is recorded again.
+            channel.is_live = False
+            await async_wait_until(lambda: not recording_manager.is_held_off("always"), "the stream to be seen off")
+            assert seen_on == []
+            channel.is_live = True
+            await async_wait_until(lambda: recorders["always"].ticks, "the next stream to be recorded")
+
+        assert seen_on == ["always"]
+
+    async def test_a_tracked_channel_that_is_held_off_is_still_recorded_for_its_clips(
+        self, kick_api, recorders, seen_on, starts
+    ):
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+        recording_manager.hold_off("always")
+
+        async with looping(["always"], always=lambda: ["always"], stream_is_on=starts):
+            await async_wait_until(lambda: recorders["always"].ticks >= 2, "two ticks")
+
+        assert seen_on == []
+        assert recording_manager.stream_recording_of("always") is None
+
+    async def test_holding_off_can_be_called_off(self):
+        recording_manager.hold_off("always")
+        assert recording_manager.is_held_off("always")
+
+        recording_manager.stop_holding_off("always")
+        recording_manager.stop_holding_off("never_held_off")
+
+        assert not recording_manager.is_held_off("always")
+
+    async def test_a_channel_that_is_no_longer_recorded_always_is_let_go(self, kick_api, recorders, seen_on, declines):
+        kick_api.add_channel("always", 1, is_live=True)
+        kick_api.add_channel("tracked", 2, is_live=True)
+        recorders["always"] = StandInRecorder()
+        recorders["tracked"] = StandInRecorder()
+        always = ["always"]
+
+        async def more_rounds(count: int) -> None:
+            # A tracked channel is ticked once a round.
+            ticks = recorders["tracked"].ticks + count
+            await async_wait_until(lambda: recorders["tracked"].ticks >= ticks, f"{count} more rounds")
+
+        async with looping(["tracked"], always=lambda: always, stream_is_on=declines):
+            await async_wait_until(lambda: seen_on, "the channel to be reported")
+            always.clear()
+            await more_rounds(2)  # the round that was under way is over
+            reported = len(seen_on)
+            asked = [query["slug"] for query in kick_api.calls("GET", "/channels")].count("always")
+            await more_rounds(3)
+
+        assert len(seen_on) == reported
+        # Not even the liveness check is spent on it any more.
+        assert [query["slug"] for query in kick_api.calls("GET", "/channels")].count("always") == asked
+
+    async def test_failing_to_start_one_does_not_cost_a_tracked_channel_its_tick(self, kick_api, recorders, caplog):
+        async def broken(slug: str) -> None:
+            raise RuntimeError("no recording today")
+
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            async with looping(["always"], always=lambda: ["always"], stream_is_on=broken):
+                await async_wait_until(lambda: recorders["always"].ticks >= 2, "the loop to carry on")
+
+        assert any("its recording could not be started" in record.getMessage() for record in caplog.records)
+
+    async def test_failing_to_tell_which_channels_they_are_does_not_stop_the_loop(
+        self, kick_api, recorders, caplog, starts
+    ):
+        def unreadable() -> list[str]:
+            raise OSError("the database is gone")
+
+        kick_api.add_channel("tracked", 1, is_live=True)
+        recorders["tracked"] = StandInRecorder()
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            async with looping(["tracked"], always=unreadable, stream_is_on=starts):
+                await async_wait_until(lambda: recorders["tracked"].ticks >= 2, "the loop to carry on")
+
+        assert any("which channels are always recorded" in record.getMessage() for record in caplog.records)
+
+    async def test_with_nobody_to_tell_its_stream_is_still_not_recorded_for_nothing(self, kick_api, recorders):
+        kick_api.add_channel("always", 1, is_live=True)
+        recorders["always"] = StandInRecorder()
+
+        async with looping(["always"], tracked=lambda slug: False, always=lambda: ["always"]):
+            await rounds(kick_api)
+
+        assert recorders["always"].ticks == 0

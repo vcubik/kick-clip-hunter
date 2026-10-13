@@ -187,7 +187,10 @@ a break in the stream a break in what is kept - and does a failure to keep it co
 nothing? Is a recorded channel's recorder kept going whatever the tracking and watching switches
 say, started at once rather than at the next round, and let go when the recording is over? Does
 one started ahead of its stream wait, does one whose stream has been gone for a while end by
-itself, and is every recording ended while the disk still has the room saving it takes? With the
+itself, and is every recording ended while the disk still has the room saving it takes? Is a
+channel that is recorded always looked at whatever the switches say, reported when it is live with
+nothing keeping its stream, given a recording without anyone starting one - and left alone for the
+rest of a stream its recording was stopped in, then recorded again in the next? With the
 real ffmpeg: does what was kept become one playable file, its parts joined in the order they were
 on air and stored with it, parts of different pictures left apart rather than forced together, and
 can a save that was cut short be done again? Is a recorded channel's chat stored with tracking
@@ -367,7 +370,12 @@ Run this on a live channel after changing any of the above, or the code right ne
    clip of that channel. The file is where the page says it is and plays in another player.
    Delete it from the page when done: it asks twice, and the file is gone. If the service is
    restarted while a recording runs, the log says the recording `goes on after the restart`,
-   and the finished file has a break where the service was away.
+   and the finished file has a break where the service was away. Then switch "Always record" on
+   beside a live channel that is not being recorded: within a few seconds the log says `stream
+   recording N started by itself` and the row counts up, without the page being reloaded. Press
+   "Stop recording": it is saved, and no new recording begins while that stream is still on.
+   Leave the switch on for a channel that is offline, and check after its next stream that the
+   stream is on the Recordings page from its first minute.
 12. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
    how much work is still in flight, and the process exits on its own once that is done, and not
    before. A stream recording that was running is ended and saved first.

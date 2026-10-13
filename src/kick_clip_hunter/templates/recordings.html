@@ -20,7 +20,7 @@
 
 {% block main %}
 <main class="recordings">
-<aside class="queue" aria-label="Recordings" data-recordings data-mark="{{ mark }}">
+<aside class="queue" aria-label="Recordings" data-recordings data-mark="{{ mark }}"{% if awaited %} data-recordings-awaited{% endif %}>
   <div class="queue-list">
     {% for item in recordings %}
     <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %}{% if item.running %} data-recording-row="{{ item.id }}"{% endif %}>

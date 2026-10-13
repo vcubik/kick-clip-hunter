@@ -40,6 +40,8 @@ async def recording_loop(service, monkeypatch):
             lambda: main._flags.get("watching_enabled", True),
             main._is_channel_tracked,
             main._stream_recording_over,
+            main._always_recorded_slugs,
+            main._record_stream_by_itself,
         )
     )
     try:
@@ -162,3 +164,58 @@ async def test_a_recording_ends_and_is_saved_by_itself_when_its_stream_is_over(
     assert recording_manager.stream_recording_of(CHANNEL) is None
     summary = parse((await service.client.get("/dashboard/recordings")).text).one("p", class_="moment-summary").text
     assert "It ended by itself once the stream had been gone for" in summary
+
+
+async def test_a_channel_recorded_always_has_every_stream_kept_without_anyone_starting_it(
+    service, hls, recording, ts_segments, monkeypatch
+):
+    # A channel that is neither live nor tracked for clips, set to be
+    # recorded always.
+    service.watch(CHANNEL, live=False)
+    await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+
+    async with recording_loop(service, monkeypatch):
+        switched = await service.client.post(f"/channels/{CHANNEL}/always_record?enabled=1")
+        assert switched.json()["always_record"] is True
+        # The loop looks at the channel now; with no stream there is nothing
+        # to record, and no browser is opened to find that out.
+        asked = len(service.api.calls("GET", "/channels"))
+        await async_wait_until(lambda: len(service.api.calls("GET", "/channels")) >= asked + 3, "a few rounds")
+        assert stream_recordings() == [] and recording.url_requests == []
+
+        # It goes live, and nobody presses anything.
+        server = live_stream(hls, recording, ts_segments, seconds=12)
+        service.api.channels[CHANNEL].is_live = True
+        await async_wait_until(lambda: recording_manager.stream_recording_of(CHANNEL), "a recording to start")
+        kept = recording_manager.stream_recording_of(CHANNEL)
+        await async_wait_until(lambda: kept.writer.seconds >= 3, "the first footage to be kept")
+        server.publish_all()
+        await async_wait_until(lambda: kept.writer.seconds == 12, "the whole stream to be kept")
+
+        # Stopping it ends it for this stream: the channel is live still,
+        # the switch is on still, and no second recording begins.
+        stopped = await service.client.post(f"/channels/{CHANNEL}/recording/stop")
+        assert stopped.json()["said"].endswith("The channel's next stream is recorded again.")
+        await service.settle()
+        asked = len(service.api.calls("GET", "/channels"))
+        await async_wait_until(lambda: len(service.api.calls("GET", "/channels")) >= asked + 3, "a few rounds")
+        assert [row["state"] for row in stream_recordings()] == ["ready"]
+        assert recording_manager.stream_recording_of(CHANNEL) is None
+
+        # The stream ends. The next one is recorded again.
+        server.end_stream()
+        service.api.channels[CHANNEL].is_live = False
+        await async_wait_until(lambda: not recording_manager.is_held_off(CHANNEL), "the stream to be seen off")
+        live_stream(hls, recording, ts_segments, seconds=6)
+        service.api.channels[CHANNEL].is_live = True
+        await async_wait_until(lambda: recording_manager.stream_recording_of(CHANNEL), "the next recording to start")
+        again = recording_manager.stream_recording_of(CHANNEL)
+        await async_wait_until(lambda: again.writer.seconds >= 3, "footage of the second stream")
+
+        await service.client.post(f"/channels/{CHANNEL}/recording/stop")
+        await service.settle()
+
+    first, second = sorted(stream_recordings(), key=lambda row: row["id"])
+    assert (first["state"], second["state"]) == ("ready", "ready")
+    assert probe(stream_recording.STREAMS_DIR / first["file_path"])["duration"] == pytest.approx(12, abs=0.4)
+    assert (stream_recording.STREAMS_DIR / second["file_path"]).exists()

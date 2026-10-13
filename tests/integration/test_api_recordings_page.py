@@ -158,6 +158,70 @@ class TestTheControlBesideAChannel:
         assert "Recordings page" in lead.text
 
 
+class TestTheSwitchThatRecordsAChannelAlways:
+    def switch(self, page: Element, channel: str = CHANNEL) -> Element:
+        return page.one("span", class_="ch-switch", aria_label=f"Always record {channel}")
+
+    def lit(self, switch: Element) -> str:
+        return switch.one("button", aria_pressed="true").text
+
+    async def test_every_channel_has_one_and_it_is_off_to_begin_with(self, service):
+        add_streamer(CHANNEL, 1)
+        add_streamer("another_channel", 2)
+
+        page = await channels(service)
+
+        assert self.lit(self.switch(page)) == "Off"
+        assert self.lit(self.switch(page, "another_channel")) == "Off"
+
+    async def test_it_shows_what_was_set_and_where_to_set_it(self, service):
+        add_streamer(CHANNEL, 1)
+        add_streamer("another_channel", 2)
+        await service.client.post(f"/channels/{CHANNEL}/always_record?enabled=1")
+
+        page = await channels(service)
+
+        assert self.lit(self.switch(page)) == "On"
+        assert self.switch(page).attrs["data-switch"] == f"/channels/{CHANNEL}/always_record"
+        assert self.lit(self.switch(page, "another_channel")) == "Off"
+
+    async def test_it_sits_where_the_script_looks_for_it(self, service):
+        # A page with such a channel asks about recordings nobody on it started.
+        add_streamer(CHANNEL, 1)
+
+        page = await channels(service)
+
+        assert page.one("td", data_always_record=True).one("span", class_="ch-switch") is not None
+
+    async def test_the_page_says_what_it_does(self, service):
+        add_streamer(CHANNEL, 1)
+
+        lead = (
+            (await channels(service))
+            .one("section", aria_labelledby="watchlist-title")
+            .one("p", class_="section-lead")
+            .text
+        )
+
+        assert 'With "Always record" on, one is started by itself whenever the channel goes live.' in lead
+
+    async def test_the_start_and_stop_buttons_are_there_as_ever(self, service):
+        add_streamer(CHANNEL, 1)
+        await service.client.post(f"/channels/{CHANNEL}/always_record?enabled=1")
+
+        control = (await channels(service)).one("span", class_="rec-control", data_recording=CHANNEL)
+
+        assert [button.text for button in control.find("button") if "hidden" not in button.attrs] == ["Start recording"]
+
+    async def test_the_recordings_page_knows_whether_one_may_begin_by_itself(self, service):
+        add_streamer(CHANNEL, 1)
+        assert "data-recordings-awaited" not in (await recordings(service)).one("aside", data_recordings=True).attrs
+
+        await service.client.post(f"/channels/{CHANNEL}/always_record?enabled=1")
+
+        assert "data-recordings-awaited" in (await recordings(service)).one("aside", data_recordings=True).attrs
+
+
 class TestWhatAChannelIsDoingRightNow:
     """ "Recording" means one thing on the dashboard: a stream that is being
     kept whole. A channel that is merely watched for clips is live."""

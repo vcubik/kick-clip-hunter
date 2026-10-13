@@ -503,6 +503,51 @@ class TestChannelEmotes:
             connection.close()
 
 
+class TestChannelsRecordedAlways:
+    def test_a_channel_is_not_recorded_always_to_begin_with(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        assert [row["always_record"] for row in db.get_streamers(conn)] == [0]
+        assert db.get_streamer_by_slug(conn, "some_channel")["always_record"] == 0
+
+    def test_it_is_set_for_one_channel_and_can_be_set_back(self, conn):
+        db.add_streamer(conn, 1, "always")
+        db.add_streamer(conn, 2, "on_request")
+
+        db.set_streamer_always_record(conn, 1, True)
+
+        assert {row["slug"]: row["always_record"] for row in db.get_streamers(conn)} == {"always": 1, "on_request": 0}
+        assert db.get_streamer_by_slug(conn, "always")["always_record"] == 1
+
+        db.set_streamer_always_record(conn, 1, False)
+
+        assert db.get_streamer_by_slug(conn, "always")["always_record"] == 0
+
+    def test_a_watchlist_from_before_there_was_such_a_thing_gets_it_switched_off(self, tmp_path, monkeypatch):
+        path = tmp_path / "older.db"
+        older = sqlite3.connect(path)
+        older.execute(
+            "CREATE TABLE streamers (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "broadcaster_user_id INTEGER UNIQUE NOT NULL, slug TEXT UNIQUE NOT NULL, "
+            "added_at TEXT NOT NULL DEFAULT '2026-01-01', tracking_enabled INTEGER NOT NULL DEFAULT 1, "
+            "own_tuning INTEGER NOT NULL DEFAULT 0)"
+        )
+        older.execute(
+            "INSERT INTO streamers (broadcaster_user_id, slug, tracking_enabled) VALUES (7, 'old_channel', 0)"
+        )
+        older.commit()
+        older.close()
+        monkeypatch.setattr(db, "DB_PATH", path)
+
+        connection = db.get_connection()
+        try:
+            (row,) = db.get_streamers(connection)
+        finally:
+            connection.close()
+
+        assert (row["slug"], row["tracking_enabled"], row["always_record"]) == ("old_channel", 0, 0)
+
+
 class TestChatIdentities:
     MOD = '[{"text":"Moderator","type":"moderator"}]'
 

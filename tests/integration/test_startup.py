@@ -121,7 +121,7 @@ class TestLifespan:
         started = asyncio.Event()
         loop_arguments = []
 
-        async def recording_loop(get_slugs, recording_enabled, is_channel_tracked, stream_recording_over):
+        async def recording_loop(get_slugs, recording_enabled, is_channel_tracked, stream_recording_over, *_always):
             loop_arguments.append((get_slugs(), recording_enabled(), is_channel_tracked("lost_one")))
             # ...and whom to tell that a stream recording should end.
             assert stream_recording_over is service.main._stream_recording_over

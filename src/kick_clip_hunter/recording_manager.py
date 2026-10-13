@@ -15,11 +15,18 @@ second is asked for by hand, and the switches that pause tracking have no
 say over it. Which streams are kept that way right now is held here, and the
 loop is what notices that such a recording is over - the stream has been
 gone for a while, or the disk is running out - and reports it.
+
+A channel can also be set to be recorded always. The loop then looks at
+whether it is live like at any channel it records, tracked or not, and
+reports when it is and nothing is keeping its stream - which is when a
+recording of it is started without anyone asking. Once per stream: a channel
+whose recording was ended while its stream was still on is left alone until
+that stream is over (`hold_off`).
 """
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -68,6 +75,9 @@ _stream_recordings: dict[str, StreamRecording] = {}
 # Room on the disk spoken for by recordings that are being saved, by
 # recording.
 _held_bytes: dict[int, int] = {}
+# Channels that are not recorded by themselves until their stream has been
+# seen to be over, set to be recorded always or not (see hold_off).
+_held_off: set[str] = set()
 # Set to have the loop start its next round now. It belongs to the event
 # loop the manager runs on, so there is one only while it runs.
 _wake: asyncio.Event | None = None
@@ -152,6 +162,23 @@ def keeps_chat_of(broadcaster_user_id: int) -> bool:
     return any(kept.broadcaster_user_id == broadcaster_user_id for kept in _stream_recordings.values())
 
 
+def hold_off(channel_slug: str) -> None:
+    """Keeps a channel from being recorded by itself until its stream has
+    been seen to be over - for one whose recording was just ended while the
+    stream may still be on, which would otherwise be recorded again the
+    moment the loop came round. Starting a recording by hand is not held
+    off."""
+    _held_off.add(channel_slug)
+
+
+def stop_holding_off(channel_slug: str) -> None:
+    _held_off.discard(channel_slug)
+
+
+def is_held_off(channel_slug: str) -> bool:
+    return channel_slug in _held_off
+
+
 def hold_room(recording_id: int, size: int) -> None:
     """Counts a recording that is being saved as taking that much of the
     disk's free room, until `release_room`."""
@@ -196,45 +223,90 @@ async def _report_over(stream_recording_over: StreamRecordingOver) -> None:
             logger.exception("[%s] could not end the stream recording", slug)
 
 
+StreamIsOn = Callable[[str], Awaitable[None]]
+
+
+def _always_recorded(always_recorded: Callable[[], Iterable[str]]) -> set[str]:
+    try:
+        return set(always_recorded())
+    except Exception:
+        logger.exception("could not tell which channels are always recorded")
+        return set()
+
+
+async def _see_to(slug: str, *, tracked: bool, always: bool, stream_is_on: StreamIsOn | None) -> None:
+    """One channel's turn in a round: its recorder is ticked if the channel
+    is live and its stream is wanted - for clips (`tracked`) or whole - and
+    stopped if it is running for nothing. A channel that is recorded
+    `always` and turns out to be live with nothing keeping its stream is
+    reported first, so that what is started for it gets this round's tick."""
+    recorder = _get_recorder(slug)
+    if not (tracked or always or slug in _stream_recordings):
+        # Tracking paused for this one channel - same teardown as the
+        # global pause, scoped to it. Not even the liveness check is spent.
+        if recorder.is_active:
+            await asyncio.to_thread(recorder.stop)
+        return
+    live = await _is_live(slug)
+    if not live:
+        # Whatever stream a recording was ended in is over.
+        _held_off.discard(slug)
+    elif always and stream_is_on is not None and slug not in _stream_recordings and slug not in _held_off:
+        try:
+            await stream_is_on(slug)
+        except Exception:
+            logger.exception("[%s] is live and always recorded, but its recording could not be started", slug)
+    if live and (tracked or slug in _stream_recordings):
+        await asyncio.to_thread(_tick_one, slug)
+    elif recorder.is_active:
+        await asyncio.to_thread(recorder.stop)
+
+
 async def run_forever(
     get_channel_slugs,
     recording_enabled=lambda: True,
     is_channel_tracked=lambda slug: True,
     stream_recording_over: StreamRecordingOver | None = None,
+    always_recorded: Callable[[], Iterable[str]] = lambda: (),
+    stream_is_on: StreamIsOn | None = None,
 ) -> None:
     """Drives the recorders until cancelled. `stream_recording_over` is
     told, with the channel and why, when a stream recording should be ended;
     ending it (`end_stream_recording`) and saving what it kept is up to
-    whoever that is."""
+    whoever that is. `always_recorded` is the channels whose every stream is
+    to be kept whole, and `stream_is_on` is told when one of them is live
+    with no recording of it running; starting one (`start_stream_recording`)
+    is up to whoever that is, too."""
     global _wake
     _wake = wake_up = asyncio.Event()
     try:
         while True:
             wake_up.clear()
-            if recording_enabled():
+            watching = recording_enabled()
+            always = _always_recorded(always_recorded)
+            # A stream that is being kept whole, or is to be once it is on,
+            # is none of the switches' business.
+            whole = [*_stream_recordings, *sorted(always.difference(_stream_recordings))]
+            if watching:
                 slugs = get_channel_slugs()
-                slugs = [*slugs, *(slug for slug in _stream_recordings if slug not in slugs)]
+                slugs = [*slugs, *(slug for slug in whole if slug not in slugs)]
             else:
                 # Recording paused from the dashboard: tear down any running
-                # recorders and don't touch a browser until it's back on. A
-                # stream that is being kept whole is none of that switch's
-                # business, and is seen to as on any other round.
+                # recorders and don't touch a browser until it's back on -
+                # but for the streams wanted whole, which are seen to as on
+                # any other round.
                 for slug, recorder in list(_recorders.items()):
-                    if recorder.is_active and slug not in _stream_recordings:
+                    if recorder.is_active and slug not in whole:
                         await asyncio.to_thread(recorder.stop)
-                slugs = list(_stream_recordings)
+                slugs = whole
             for slug in slugs:
                 try:
-                    if slug not in _stream_recordings and not is_channel_tracked(slug):
-                        # Tracking paused for this one channel - same
-                        # teardown as the global pause, scoped to it.
-                        if _get_recorder(slug).is_active:
-                            await asyncio.to_thread(_get_recorder(slug).stop)
-                        continue
-                    if await _is_live(slug):
-                        await asyncio.to_thread(_tick_one, slug)
-                    elif _get_recorder(slug).is_active:
-                        await asyncio.to_thread(_get_recorder(slug).stop)
+                    await _see_to(
+                        slug,
+                        tracked=watching and is_channel_tracked(slug),
+                        always=slug in always,
+                        stream_is_on=stream_is_on,
+                    )
                 except Exception:
                     logger.exception("[%s] recording tick failed", slug)
             if stream_recording_over is not None:

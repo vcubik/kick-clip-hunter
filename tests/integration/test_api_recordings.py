@@ -1,6 +1,7 @@
 """Recording a channel's whole stream, from the button to the file: starting
 and stopping one, what happens to chat meanwhile, what is done when one ends
-without being stopped, and getting rid of one.
+without being stopped, a channel that is recorded always, and getting rid
+of one.
 
 The service is the real one. What stands in for the stream is footage handed
 straight to a running recording's writer, as its channel's recorder would
@@ -524,6 +525,221 @@ class TestEndingByItself:
         gate.set()
         await service.settle()
         assert recording_manager.room_left() == free
+
+
+class TestAChannelRecordedAlways:
+    """With the switch on, a recording is started whenever the channel is
+    live and none is running. The loop is what sees that (see
+    test_recording_manager.py); what it calls is the service's."""
+
+    async def always(self, service, enabled: bool = True, channel: str = CHANNEL):
+        return await service.client.post(f"/channels/{channel}/always_record?enabled={int(enabled)}")
+
+    def is_set(self, service, channel: str = CHANNEL) -> bool:
+        return channel in service.main._always_recorded_slugs()
+
+    async def test_the_switch_is_kept_with_the_channel(self, service):
+        service.watch(CHANNEL)
+        service.watch("another_channel")
+        assert service.main._always_recorded_slugs() == []
+
+        response = await self.always(service)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "slug": CHANNEL,
+            "always_record": True,
+            "said": view.ALWAYS_RECORD_WORDS[True].format(channel=CHANNEL),
+        }
+        assert service.main._always_recorded_slugs() == [CHANNEL]
+
+        response = await self.always(service, False)
+
+        assert response.json()["always_record"] is False
+        assert response.json()["said"] == view.ALWAYS_RECORD_WORDS[False].format(channel=CHANNEL)
+        assert service.main._always_recorded_slugs() == []
+
+    async def test_a_channel_that_is_not_on_the_watchlist_is_a_404(self, service):
+        assert (await self.always(service, channel="nobody")).status_code == 404
+
+    async def test_switching_it_on_has_the_loop_look_at_once(self, service, monkeypatch):
+        # Not at its next round: the channel may be live right now.
+        service.watch(CHANNEL)
+        woken = []
+        monkeypatch.setattr(recording_manager, "wake", lambda: woken.append(True))
+
+        await self.always(service)
+
+        assert woken == [True]
+
+    async def test_switching_it_on_starts_nothing_by_itself(self, service):
+        # That is the loop's to do, once it has seen the channel live.
+        service.watch(CHANNEL)
+
+        await self.always(service)
+
+        assert stream_recordings() == []
+
+    async def test_a_live_channel_gets_a_recording_without_anyone_starting_it(self, service, caplog):
+        service.watch(CHANNEL, broadcaster_user_id=41)
+        await self.always(service)
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await service.main._record_stream_by_itself(CHANNEL)
+
+        row = the_recording()
+        assert (row["channel_slug"], row["broadcaster_user_id"], row["state"]) == (CHANNEL, 41, "recording")
+        kept = recording_manager.stream_recording_of(CHANNEL)
+        assert (kept.recording_id, kept.broadcaster_user_id) == (row["id"], 41)
+        assert any("started by itself" in record.getMessage() for record in caplog.records)
+
+    async def test_it_is_a_recording_like_any_other(self, service, ts_segments):
+        service.watch(CHANNEL)
+        await self.always(service)
+        await service.main._record_stream_by_itself(CHANNEL)
+        broadcast(CHANNEL, ts_segments[:5])
+
+        response = await stop(service)
+        await service.settle()
+
+        assert response.status_code == 200
+        row = the_recording()
+        assert (row["state"], row["ended_by"]) == ("ready", "stopped")
+        assert file_of(row).exists()
+
+    async def test_tracking_has_no_say_in_it(self, service):
+        add_streamer(CHANNEL, 1, tracking=False)
+        await service.client.post("/settings/watching?enabled=0")
+        await self.always(service)
+
+        await service.main._record_stream_by_itself(CHANNEL)
+
+        assert recording_manager.stream_recording_of(CHANNEL) is not None
+
+    async def test_a_channel_whose_switch_is_off_gets_none(self, service):
+        # Switched off between the loop looking and it telling.
+        service.watch(CHANNEL)
+
+        await service.main._record_stream_by_itself(CHANNEL)
+        await service.main._record_stream_by_itself("nobody")
+
+        assert stream_recordings() == []
+
+    async def test_none_is_started_while_the_service_is_shutting_down(self, service, monkeypatch):
+        service.watch(CHANNEL)
+        await self.always(service)
+        monkeypatch.setattr(service.main, "_shutdown_requested", True)
+
+        await service.main._record_stream_by_itself(CHANNEL)
+
+        assert stream_recordings() == []
+        # Nor is the loop given any channel to look at for it.
+        assert service.main._always_recorded_slugs() == []
+
+    async def test_stopping_one_ends_it_for_that_stream_and_says_so(self, service, ts_segments):
+        service.watch(CHANNEL)
+        await self.always(service)
+        await service.main._record_stream_by_itself(CHANNEL)
+        broadcast(CHANNEL, ts_segments[:5])
+
+        response = await stop(service)
+        await service.settle()
+
+        assert response.json()["said"] == view.recording_stopped_words(True, True)
+        # The loop leaves the channel alone until this stream is over...
+        assert recording_manager.is_held_off(CHANNEL)
+        # ...and the switch is as it was.
+        assert self.is_set(service)
+
+    async def test_stopping_a_recording_of_any_other_channel_says_nothing_of_the_next(self, service):
+        service.watch(CHANNEL)
+        await start(service)
+
+        response = await stop(service)
+
+        assert response.json()["said"] == view.recording_stopped_words(False, False)
+
+    async def test_a_recording_that_ends_with_its_stream_holds_nothing_off(self, service, ts_segments):
+        # The next stream is the next recording.
+        service.watch(CHANNEL)
+        await self.always(service)
+        await service.main._record_stream_by_itself(CHANNEL)
+        broadcast(CHANNEL, ts_segments[:5])
+
+        await service.main._stream_recording_over(CHANNEL, stream_recording.STREAM_ENDED)
+        await service.settle()
+
+        assert not recording_manager.is_held_off(CHANNEL)
+
+    async def test_one_ended_because_the_disk_ran_out_is_not_started_again_in_that_stream(self, service, ts_segments):
+        service.watch(CHANNEL)
+        await self.always(service)
+        await service.main._record_stream_by_itself(CHANNEL)
+        broadcast(CHANNEL, ts_segments[:5])
+
+        await service.main._stream_recording_over(CHANNEL, stream_recording.DISK_FULL)
+        await service.settle()
+
+        assert recording_manager.is_held_off(CHANNEL)
+
+    async def test_setting_the_switch_afresh_holds_for_the_stream_that_is_on(self, service):
+        service.watch(CHANNEL)
+        await self.always(service)
+        await start(service)
+        await stop(service)
+        assert recording_manager.is_held_off(CHANNEL)
+
+        await self.always(service, False)
+        await self.always(service)
+
+        assert not recording_manager.is_held_off(CHANNEL)
+
+    async def test_a_disk_that_is_too_full_is_said_once_and_not_tried_every_round(self, service, monkeypatch, caplog):
+        service.watch(CHANNEL)
+        await self.always(service)
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: recording_manager.MIN_FREE_BYTES - 1024**3)
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            await service.main._record_stream_by_itself(CHANNEL)
+
+        assert stream_recordings() == []
+        (said,) = [record.getMessage() for record in caplog.records if "recorded always" in record.getMessage()]
+        assert "this stream is not being recorded: The disk is too full to start a recording" in said
+        # Which is what keeps the loop from asking again before the next stream.
+        assert recording_manager.is_held_off(CHANNEL)
+
+    async def test_the_pages_count_a_channel_that_is_waited_for_as_looked_at(self, service):
+        async def now() -> dict:
+            return (await service.client.get("/recordings/status")).json()["now"]
+
+        add_streamer(CHANNEL, 1, tracking=False)
+        assert (await now())["count"] == "No channels watched"
+        assert (await now())["channels"][CHANNEL]["words"] == "Not watched"
+
+        await self.always(service)
+
+        assert (await now())["count"] == "1 channel watched"
+        assert (await now())["channels"][CHANNEL]["words"] == "Not live"
+
+        # Not while its recording was stopped and its stream is still on.
+        recording_manager.hold_off(CHANNEL)
+
+        assert (await now())["channels"][CHANNEL]["words"] == "Not watched"
+
+    async def test_the_loop_is_told_which_channels_and_whom_to_tell(self, service, monkeypatch):
+        # As the service starts it (see test_startup.py for the rest).
+        given = []
+
+        async def recording_loop(*arguments):
+            given.extend(arguments)
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", recording_loop)
+
+        async with service.main.lifespan(service.main.app):
+            await async_wait_until(lambda: given, "the loop to start")
+
+        assert given[4:] == [service.main._always_recorded_slugs, service.main._record_stream_by_itself]
 
 
 class TestShuttingDown:

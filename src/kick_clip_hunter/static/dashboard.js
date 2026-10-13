@@ -847,10 +847,17 @@
       say(group, "Could not save the change. Try again.");
       return;
     }
-    say(group, "");
     for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === half));
     // Some switches change what the page around them says.
     if (group.hasAttribute("data-switch-reloads")) reloadSettings();
+    if (group.closest("[data-always-record]")) {
+      // What the switch does is not on the page, so the service says it -
+      // and a channel that is live may be recorded from this moment.
+      say(group, (await response.json()).said || "");
+      watchRecordings();
+      return;
+    }
+    say(group, "");
   }
 
   async function addChannel(form) {
@@ -902,9 +909,16 @@
   // was recorded is on the Recordings page. Neither reloads on its own:
   // while a recording runs or is being saved, the service is asked every
   // couple of seconds what it is doing, and the words on the page follow.
+  // A channel that is recorded always starts being recorded without anyone
+  // pressing anything, so a page that has one asks now and then even while
+  // nothing is being recorded.
 
   const RECORDINGS_POLL_MS = 2000;
+  const RECORDINGS_AWAITED_POLL_MS = 10000;
   let recordingsWatch = null;
+
+  const recordingsAwaited = () =>
+    Boolean(one('[data-always-record] [data-enabled="1"][aria-pressed="true"], [data-recordings-awaited]'));
 
   // What a channel's recording is doing, in the place the page has for it,
   // and whichever of the two buttons goes with that. `state` is null for a
@@ -976,7 +990,9 @@
     // The list reads differently: one was added, saved or removed.
     const list = one("[data-recordings]");
     if (list && list.dataset.mark !== status.mark) await reloadRecordings();
-    if (!Object.keys(status.recordings).length) {
+    if (Object.keys(status.recordings).length) {
+      watchRecordings();
+    } else {
       clearInterval(recordingsWatch);
       recordingsWatch = null;
     }
@@ -1452,4 +1468,9 @@
   one('.rec-row[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   if (one("[data-recording-clip]")) followRecordingChat(one("[data-recording-clip]"));
   if (one('[data-recording-state="running"], [data-recording-state="saving"], [data-recording-row]')) watchRecordings();
+  if (one("[data-always-record], [data-recordings]")) {
+    setInterval(() => {
+      if (recordingsWatch === null && recordingsAwaited()) checkRecordings();
+    }, RECORDINGS_AWAITED_POLL_MS);
+  }
 })();

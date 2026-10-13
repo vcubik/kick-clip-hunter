@@ -8,6 +8,11 @@ it is deleted. It rides on the same download - a channel's recorder hands
 every segment it saves to the recording's `StreamWriter` as well - so the
 stream is only ever fetched once.
 
+A channel can also be set to be recorded always. Nothing here knows of
+that: the recording loop sees such a channel go live and a recording is
+started for it (see recording_manager.py), which from then on is a
+recording like one started by hand.
+
 While it runs, the footage is kept as it arrives, in a folder of its own.
 Segments that follow each other are appended to one MPEG-TS file, a *part*,
 named for when its first frame was broadcast. A break in the stream - the

@@ -12,10 +12,10 @@
   <section aria-labelledby="watchlist-title" data-status-scope>
     <h2 class="title" id="watchlist-title">Watchlist</h2>
     {% if watchlist %}
-    <p class="section-lead">Tracking looks for clips while a channel is live. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. What it kept is on the Recordings page.</p>
+    <p class="section-lead">Tracking looks for clips while a channel is live. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. What was kept is on the Recordings page.</p>
     <table class="watchlist">
       <thead>
-        <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Clip tracking</th><th scope="col">Stream recording</th></tr>
+        <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Clip tracking</th><th scope="col">Always record</th><th scope="col">Stream recording</th></tr>
       </thead>
       <tbody>
         {% for channel in watchlist %}
@@ -25,6 +25,7 @@
           <td class="ch-meta">{{ channel.added }}</td>
           <td data-now="{{ channel.slug }}">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
           <td>{{ switch("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", channel.tracking_enabled) }}</td>
+          <td data-always-record>{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
           {#- One button or the other, and what the recording is doing; the
               script keeps both current while there is one. -#}
           <td>
