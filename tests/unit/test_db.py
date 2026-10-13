@@ -735,7 +735,7 @@ class TestChatOfAChannelToldByItsId:
 
     def test_all_of_a_stretch_can_be_gone_through_one_message_at_a_time(self, conn):
         # For counting the chat of a stream of hours: no limit, and nothing
-        # of a message but when it came and what it says.
+        # of a message but when it came, what it says and the row it is in.
         store_chat(conn, "some_channel", "too_early", "x", T0 - timedelta(milliseconds=1))
         for number in range(30):
             store_chat(conn, "some_channel", f"user{number:02d}", f"line {number}", T0 + timedelta(seconds=number))
@@ -746,17 +746,74 @@ class TestChatOfAChannelToldByItsId:
 
         first = next(chat)
         assert (first["received_at"], first["content"]) == (T0.isoformat(), "line 0")
-        assert set(first.keys()) == {"received_at", "content"}
+        assert set(first.keys()) == {"received_at", "content", "rowid"}
         rest = [row["content"] for row in chat]
         assert len(rest) == 30 and rest[5] == "under another name" and rest[-1] == "line 29"
 
-    def test_going_through_it_is_done_through_the_same_index(self, conn):
-        plan = conn.execute(
-            "EXPLAIN QUERY PLAN SELECT received_at, content FROM chat_messages"
-            " WHERE broadcaster_user_id = 1 AND received_at BETWEEN 'a' AND 'b' ORDER BY received_at"
-        ).fetchall()
+    @pytest.mark.parametrize("chunk", [1, 3, 5, 10, 11])
+    def test_it_is_gone_through_a_chunk_at_a_time_and_every_message_once(self, conn, monkeypatch, chunk):
+        monkeypatch.setattr(db, "CHAT_CHUNK", chunk)
+        for second in range(10):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
 
-        assert any("USING INDEX" in step[-1] for step in plan)
+        chat = db.iter_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=9))
+
+        assert [row["content"] for row in chat] == [f"second {second}" for second in range(10)]
+
+    def test_messages_that_arrived_at_the_same_instant_are_not_lost_between_two_chunks(self, conn, monkeypatch):
+        monkeypatch.setattr(db, "CHAT_CHUNK", 2)
+        for number in range(5):
+            store_chat(conn, "some_channel", f"user{number}", f"line {number}", T0, message_id=f"m-{number}")
+        store_chat(conn, "some_channel", "alice", "later", T0 + timedelta(seconds=1))
+
+        chat = db.iter_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=1))
+
+        assert [row["content"] for row in chat] == [*(f"line {number}" for number in range(5)), "later"]
+
+    def test_no_statement_is_left_open_while_it_is_gone_through(self, conn, monkeypatch):
+        # One left open would keep the database locked against the message
+        # that arrives meanwhile.
+        monkeypatch.setattr(db, "CHAT_CHUNK", 2)
+        for second in range(5):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
+        writer = db.get_connection()
+        writer.execute("PRAGMA busy_timeout = 0")
+
+        try:
+            for number, _row in enumerate(db.iter_channel_chat_between(conn, 1, T0, T0 + minutes(1))):
+                store_chat(writer, "some_channel", "bob", "meanwhile", T0 + minutes(5) + timedelta(seconds=number))
+        finally:
+            writer.close()
+
+        assert len(db.get_channel_chat_between(conn, 1, T0 + minutes(5), T0 + minutes(6))) == 5
+
+    def test_a_message_that_arrives_meanwhile_moves_none_of_the_others(self, conn, monkeypatch):
+        # Each chunk goes on from the last message of the one before, not
+        # from how many were handed out - which a new message would shift.
+        monkeypatch.setattr(db, "CHAT_CHUNK", 2)
+        for second in range(0, 10, 2):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
+
+        handed_out = []
+        for row in db.iter_channel_chat_between(conn, 1, T0, T0 + minutes(1)):
+            handed_out.append(row["content"])
+            if row["content"] == "second 2":
+                store_chat(conn, "some_channel", "bob", "behind", T0 + timedelta(seconds=1))
+                store_chat(conn, "some_channel", "bob", "ahead", T0 + timedelta(seconds=7))
+
+        assert handed_out == ["second 0", "second 2", "second 4", "second 6", "ahead", "second 8"]
+
+    def test_going_through_it_is_done_through_the_same_index_and_without_sorting(self, conn):
+        asked = []
+        conn.set_trace_callback(asked.append)
+        list(db.iter_channel_chat_between(conn, 1, T0, T0 + minutes(1)))
+        conn.set_trace_callback(None)
+        (statement,) = asked
+
+        plan = conn.execute(f"EXPLAIN QUERY PLAN {statement}").fetchall()
+
+        assert any("USING INDEX idx_chat_messages_broadcaster_received" in step[-1] for step in plan)
+        assert not any("TEMP B-TREE" in step[-1] for step in plan)
 
 
 class TestMomentsOfAChannelToldByItsId:

@@ -557,12 +557,14 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 
 - The database is in SQLite's default journal mode, where a statement that is still
   being read holds off every commit - and a chat message that cannot be stored within
-  the five-second busy timeout fails its webhook delivery. So the Analyze page, which
-  reads more chat at once than anything else, keeps no statement open while it works
-  through the rows: it reads a period's chat in chunks (`db.iter_channel_chat`), each
-  fetched whole before the next row is handed out, and counts only a period's newest
+  the five-second busy timeout fails its webhook delivery. So whatever goes through chat
+  in bulk keeps no statement open while it works through the rows: it reads the chat in
+  chunks (`db.CHAT_CHUNK`), each fetched whole before the next row is handed out. That is
+  the Analyze page (`db.iter_channel_chat`), which also counts only a period's newest
   100,000 messages (`ANALYZE_MESSAGE_LIMIT`), saying so on the page when that left some
-  out.
+  out, and the trace over a recording (`db.iter_channel_chat_between`), which counts all
+  the chat of a stream of hours. Anything new that reads chat by the tens of thousands
+  of rows goes the same way, and never hands on a cursor that is still open.
 - A channel has two spellings of its name. The watchlist keeps the one it was added
   under, capitals and all; Kick sends chat under its own, all in small letters, and that
   is what chat rows, moments and the per-channel chat delay are stored under. Anything

@@ -183,7 +183,7 @@ if left alone, mark the ones that were set, and keep a channel's form closed unt
 **10. Stream recordings** - `unit/test_stream_recording.py`, `integration/test_api_recordings.py`,
 `integration/test_api_recordings_page.py`, `integration/test_api_recording_trim.py`, and in
 `integration/test_recorder_recording.py` and `integration/test_recording_manager.py`; the trace over
-a recording in `unit/test_chat_trace.py`
+a recording in `unit/test_chat_trace.py`, and how its chat is read in `unit/test_db.py`
 Is every segment a recorder saves also kept while a recording runs - in order, once, ads left out,
 a break in the stream a break in what is kept - and does a failure to keep it cost the buffer
 nothing? Is a recorded channel's recorder kept going whatever the tracking and watching switches
@@ -203,10 +203,11 @@ the chat page given a stretch at a time? Do the pages say what a recording is do
 serve the file in byte ranges, and remove nothing outside the recordings folder? Is what chat did
 over a recording drawn in steps that fit a strip however long it ran, each step the pace over it,
 with chat placed as beside the video, a break's chat left out and the break marked, the channel's
-moments marked - and counted once, until chat is placed differently? Is a stretch of a recording cut
-out as a video named for the stretch, one at a time, its chat told by the channel's id and placed by
-the recording's parts, refused where it is too long for its chat or would fill the disk, and removed
-with the recording?
+moments marked - and counted once, until chat is placed differently, its chat read a chunk at a
+time, every message once, without a statement left open against the webhook's writes? Is a stretch
+of a recording cut out as a video named for the stretch, one at a time, its chat told by the
+channel's id and placed by the recording's parts, refused where it is too long for its chat or
+would fill the disk, and removed with the recording?
 
 **11. The Analyze page** - `unit/test_chat_stats.py`, `integration/test_api_analyze.py`, and in
 `unit/test_db.py`

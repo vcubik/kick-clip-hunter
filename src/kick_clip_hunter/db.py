@@ -654,22 +654,44 @@ def get_channel_chat_between(
     ).fetchall()
 
 
+# How many rows of a channel's chat one statement reads at a time, where
+# chat is gone through in bulk.
+CHAT_CHUNK = 20_000
+
+
 def iter_channel_chat_between(
     conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
 ) -> Iterator[sqlite3.Row]:
     """As get_channel_chat_between, but every message there is, one at a
     time and with no name to it - for what goes through the chat of a
-    stream of hours to count it and keeps none of it."""
+    stream of hours to count it and keeps none of it.
+
+    It is read a chunk at a time, each with a statement that is over before
+    its rows are handed out: a statement left open while its rows are worked
+    through keeps the database locked against the webhook's writes for as
+    long as that takes. A chunk goes on from the last message of the one
+    before - told by when it arrived and, among those that arrived at the
+    same instant, by its row - so a message that arrives meanwhile moves
+    none of the others."""
     conn.row_factory = sqlite3.Row
-    return conn.execute(
-        """
-        SELECT received_at, content
-        FROM chat_messages
-        WHERE broadcaster_user_id = ? AND received_at BETWEEN ? AND ?
-        ORDER BY received_at
-        """,
-        (broadcaster_user_id, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
-    )
+    last = end.astimezone(timezone.utc).isoformat()
+    # Rows are numbered from 1, so to begin with none of the stretch is behind.
+    arrived, row = start.astimezone(timezone.utc).isoformat(), 0
+    while True:
+        rows = conn.execute(
+            """
+            SELECT received_at, content, rowid
+            FROM chat_messages
+            WHERE broadcaster_user_id = ? AND received_at BETWEEN ? AND ? AND (received_at > ? OR rowid > ?)
+            ORDER BY received_at, rowid
+            LIMIT ?
+            """,
+            (broadcaster_user_id, arrived, last, arrived, row, CHAT_CHUNK),
+        ).fetchall()
+        yield from rows
+        if len(rows) < CHAT_CHUNK:
+            return
+        arrived, row = rows[-1]["received_at"], rows[-1]["rowid"]
 
 
 def get_channel_moment_windows(
@@ -708,9 +730,6 @@ def get_chat_name(conn: sqlite3.Connection, broadcaster_user_id: int) -> str | N
 # what arrived from the start up to, but not at, the end - so two stretches
 # that follow each other share no message. The bounds are compared as text,
 # as in get_chat_between.
-
-# How many rows of a channel's chat one statement reads at a time.
-CHAT_CHUNK = 20_000
 
 
 def _folded(text: str | None) -> str:
