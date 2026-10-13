@@ -1,0 +1,131 @@
+{#- Whether what the service depends on is there: webhooks arriving from
+    Kick, Kick's chat subscriptions, the recorders, room on the disk and
+    the tunnel (see health.py). Each part says where it stands in a
+    sentence - in bold when that is trouble - and what there is to know
+    beyond it under that. The script fetches the page again every few
+    seconds and swaps in each part as it reads now, so nothing but a
+    part's words is inside `data-health-part`. -#}
+{% extends "base.html" %}
+{% block title %}Health{% endblock %}
+
+{% macro statement(part) -%}
+<p class="health-said{% if part.trouble %} is-trouble{% endif %}">{{ part.said }}</p>
+{%- for sentence in part.more %}
+<p class="ch-meta health-more">{{ sentence }}</p>
+{%- endfor %}
+{%- endmacro %}
+
+{% macro right_now(now) -%}
+{% if now.live %}<span class="ch-lamp ch-lamp-rec">{{ now.words }}</span>{% else %}<span class="ch-meta">{{ now.words }}</span>{% endif %}
+{%- endmacro %}
+
+{% block main %}
+<main class="channels" data-health>
+<div class="channels-in is-wide">
+  <div data-health-part="lead">
+    <h1 class="title">{{ health.lead }}</h1>
+    <p class="ch-meta health-more">{{ health.running }} The log is in {{ log_file }}.</p>
+  </div>
+
+  <section aria-labelledby="webhooks-title">
+    <h2 class="title" id="webhooks-title">Webhooks</h2>
+    <div data-health-part="webhooks">
+      {{ statement(health.webhooks) }}
+      {% if health.webhooks.rows %}
+      <table class="an-table health-table">
+        <thead>
+          <tr><th scope="col">Channel</th><th scope="col">Right now</th><th scope="col">Last chat message</th><th scope="col"></th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.webhooks.rows %}
+          <tr>
+            <th scope="row">{{ row.slug }}</th>
+            <td>{{ right_now(row.now) }}</td>
+            <td title="{{ row.chat_title }}">{{ row.chat }}</td>
+            <td class="health-note">{{ row.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </section>
+
+  <section aria-labelledby="subscriptions-title" data-status-scope>
+    <h2 class="title" id="subscriptions-title">Subscriptions</h2>
+    <div data-health-part="subscriptions">
+      {{ statement(health.subscriptions) }}
+      {% if health.subscriptions.drops %}
+      <table class="an-table health-table">
+        <caption class="health-caption">When Kick was found to have dropped subscriptions</caption>
+        <thead>
+          <tr><th scope="col">Found</th><th scope="col">Missing</th><th scope="col">What was done</th></tr>
+        </thead>
+        <tbody>
+          {% for drop in health.subscriptions.drops %}
+          <tr><th scope="row">{{ drop.when }}</th><td>{{ drop.who }}</td><td>{{ drop.what }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+    <div class="ch-line health-act">
+      <button type="button" class="ch-btn" data-subscriptions-check>Check now</button>
+      <span class="status-line" role="status" data-status></span>
+    </div>
+  </section>
+
+  <section aria-labelledby="recorders-title">
+    <h2 class="title" id="recorders-title">Recorders</h2>
+    <div data-health-part="recorders">
+      {{ statement(health.recorders) }}
+      {% if health.recorders.rows %}
+      <table class="an-table health-table">
+        <thead>
+          <tr><th scope="col">Channel</th><th scope="col">Right now</th><th scope="col">Newest footage</th><th scope="col">Coming in since</th><th scope="col">VOD</th><th scope="col"></th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.recorders.rows %}
+          <tr>
+            <th scope="row">{{ row.slug }}</th>
+            <td>{{ right_now(row.now) }}</td>
+            <td title="{{ row.footage_title }}">{{ row.footage }}</td>
+            <td>{{ row.since }}</td>
+            <td>{{ row.vod }}</td>
+            <td class="health-note">{{ row.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </section>
+
+  <section aria-labelledby="disk-title">
+    <h2 class="title" id="disk-title">Disk</h2>
+    <div data-health-part="disk">
+      {{ statement(health.disk) }}
+      {% if health.disk.rows %}
+      <table class="an-table health-table health-use">
+        <thead>
+          <tr><th scope="col">What takes the room</th><th scope="col" class="an-number">Size</th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.disk.rows %}
+          <tr><th scope="row">{{ row.what }}</th><td class="an-number">{{ row.size }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </section>
+
+  <section aria-labelledby="tunnel-title">
+    <h2 class="title" id="tunnel-title">Tunnel</h2>
+    <div data-health-part="tunnel">
+      {{ statement(health.tunnel) }}
+    </div>
+  </section>
+</div>
+</main>
+{% endblock %}

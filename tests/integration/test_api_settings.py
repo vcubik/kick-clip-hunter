@@ -582,7 +582,7 @@ class TestTheSettingsPage:
         page = await settings_page(service)
 
         links = page.one("nav", class_="bar-nav").find("a")
-        assert [link.text for link in links] == ["Review", "Recordings", "Analyze", "Channels", "Settings"]
+        assert [link.text for link in links] == ["Review", "Recordings", "Analyze", "Channels", "Settings", "Health"]
         assert [link.text for link in links if link.attrs.get("aria-current") == "page"] == ["Settings"]
 
     async def test_with_nothing_saved_every_setting_is_at_what_is_recommended(self, service):

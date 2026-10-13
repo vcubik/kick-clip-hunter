@@ -7,8 +7,9 @@
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
 // the dialog a stretch of footage is cut out for an editor in - a moment's or
 // a recording's - saves the Settings page's form, starts and stops the
-// recording of a whole stream, replays a recording's chat beside it and puts
-// what chat did over all of it under it.
+// recording of a whole stream, replays a recording's chat beside it, puts
+// what chat did over all of it under it, and keeps the Health page saying
+// what holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -1532,6 +1533,55 @@
     say(button, "");
   }
 
+  // ---- Health ----------------------------------------------------------
+  //
+  // The Health page says how long ago things happened, so what it says is
+  // out of date within seconds. Like the other pages it does not reload:
+  // every few seconds it is fetched again, and each part's words are put in
+  // place of the ones on screen - with what stands beside Health in the bar.
+
+  const HEALTH_POLL_MS = 5000;
+
+  async function refreshHealth() {
+    let fresh;
+    try {
+      const response = await fetch(location.href);
+      if (!response.ok) return;
+      fresh = new DOMParser().parseFromString(await response.text(), "text/html");
+    } catch {
+      return; // restarting or down - the page keeps what it says
+    }
+    for (const part of all("[data-health-part]")) {
+      const now = one(`[data-health-part="${part.dataset.healthPart}"]`, fresh);
+      if (now) part.replaceWith(now);
+    }
+    const flag = one("[data-health-flag]", fresh);
+    if (flag) one("[data-health-flag]").textContent = flag.textContent;
+  }
+
+  // Not while the page is out of sight, and not under a selection: whoever
+  // is copying an address out of it would lose their place.
+  function watchHealth() {
+    if (!document.hidden && getSelection().isCollapsed) refreshHealth();
+  }
+
+  async function checkSubscriptions(button) {
+    button.disabled = true;
+    say(button, "Asking Kick.");
+    const response = await post("/subscriptions/check");
+    button.disabled = false;
+    if (!response) {
+      say(button, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(button, await problem(response, "Could not check the subscriptions."));
+      return;
+    }
+    await refreshHealth();
+    say(button, "");
+  }
+
   // ---- Wiring -----------------------------------------------------------
 
   const onClick = [
@@ -1561,6 +1611,7 @@
     ["[data-delete-cancel]", (button) => askToDelete(button, false)],
     ["[data-delete-go]", deleteRecording],
     ["[data-save-again]", saveRecordingAgain],
+    ["[data-subscriptions-check]", checkSubscriptions],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
     ["[data-mute]", (button) => toggleMute(clipOf(button))],
@@ -1792,4 +1843,5 @@
       if (recordingsWatch === null && recordingsAwaited()) checkRecordings();
     }, RECORDINGS_AWAITED_POLL_MS);
   }
+  if (one("[data-health]")) setInterval(watchHealth, HEALTH_POLL_MS);
 })();

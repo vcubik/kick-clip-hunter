@@ -49,6 +49,9 @@ class RunningRecorder:
     def stop(self) -> None:
         self.is_active = False
 
+    def state(self) -> None:
+        return None  # nothing the Health page could say of it
+
 
 async def page_at(service, path: str, **params) -> Element:
     response = await service.client.get(path, params=params)

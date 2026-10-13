@@ -22,13 +22,18 @@ reports when it is and nothing is keeping its stream - which is when a
 recording of it is started without anyone asking. Once per stream: a channel
 whose recording was ended while its stream was still on is left alone until
 that stream is over (`hold_off`).
+
+What the loop saw of each channel on its last round - whether Kick said it
+was live, and since when, or why it could not be looked at - is kept for the
+Health page, together with when the loop last finished a round: a loop that
+has stopped going round fails as quietly as a channel that is not live.
 """
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import stream_recording
 from .config import load_settings
@@ -40,6 +45,7 @@ from .recorder import (
     ChannelRecorder,
     CutClip,
     RecorderError,
+    RunState,
     extract_clip,
 )
 from .stream_recording import StreamWriter
@@ -83,6 +89,56 @@ _held_off: set[str] = set()
 _wake: asyncio.Event | None = None
 
 
+@dataclass(frozen=True)
+class Look:
+    """What the loop saw of a channel the last time it looked at it."""
+
+    at: datetime
+    # Since when Kick has said the channel is live; None while it is not.
+    live_since: datetime | None = None
+    # Why the look came to nothing, if it did: Kick could not be asked, or
+    # the channel's recorder could not be started.
+    trouble: str | None = None
+
+
+# By channel, for the channels the loop looks at. One it has stopped looking
+# at - tracking off, watching paused - has none.
+_looks: dict[str, Look] = {}
+# When the loop last got through all of its channels.
+_round_finished_at: datetime | None = None
+
+# What a look says went wrong when Kick calls a channel live and its page
+# gives no stream address. Once is a stream that ended in between.
+NO_STREAM_ADDRESS = "no stream address could be captured"
+
+
+def _saw(channel_slug: str, live: bool) -> None:
+    now = datetime.now(timezone.utc)
+    before = _looks.get(channel_slug)
+    since = ((before.live_since if before else None) or now) if live else None
+    _looks[channel_slug] = Look(at=now, live_since=since)
+
+
+def _could_not_see(channel_slug: str, trouble: str) -> None:
+    """Keeps why a look at a channel failed. Since when it has been live is
+    left as it was: a look that failed says nothing about that."""
+    before = _looks.get(channel_slug)
+    _looks[channel_slug] = Look(
+        at=datetime.now(timezone.utc), live_since=before.live_since if before else None, trouble=trouble
+    )
+
+
+def looks() -> dict[str, Look]:
+    """What the loop last saw of each channel it looks at, by channel."""
+    return dict(_looks)
+
+
+def round_finished_at() -> datetime | None:
+    """When the loop last got through all of its channels, or None if it
+    has not yet."""
+    return _round_finished_at
+
+
 def _get_recorder(channel_slug: str) -> ChannelRecorder:
     if channel_slug not in _recorders:
         _recorders[channel_slug] = ChannelRecorder(channel_slug)
@@ -102,6 +158,7 @@ def _tick_one(channel_slug: str) -> None:
         recorder.tick()
     except StreamUrlError:
         logger.info("[%s] stream ended between the is_live check and recording", channel_slug)
+        _could_not_see(channel_slug, NO_STREAM_ADDRESS)
 
 
 def wake() -> None:
@@ -244,10 +301,12 @@ async def _see_to(slug: str, *, tracked: bool, always: bool, stream_is_on: Strea
     if not (tracked or always or slug in _stream_recordings):
         # Tracking paused for this one channel - same teardown as the
         # global pause, scoped to it. Not even the liveness check is spent.
+        _looks.pop(slug, None)
         if recorder.is_active:
             await asyncio.to_thread(recorder.stop)
         return
     live = await _is_live(slug)
+    _saw(slug, live)
     if not live:
         # Whatever stream a recording was ended in is over.
         _held_off.discard(slug)
@@ -277,7 +336,7 @@ async def run_forever(
     to be kept whole, and `stream_is_on` is told when one of them is live
     with no recording of it running; starting one (`start_stream_recording`)
     is up to whoever that is, too."""
-    global _wake
+    global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:
         while True:
@@ -299,6 +358,10 @@ async def run_forever(
                     if recorder.is_active and slug not in whole:
                         await asyncio.to_thread(recorder.stop)
                 slugs = whole
+            # What was seen of a channel that is no longer looked at is not
+            # what it is doing now.
+            for slug in _looks.keys() - set(slugs):
+                del _looks[slug]
             for slug in slugs:
                 try:
                     await _see_to(
@@ -307,13 +370,15 @@ async def run_forever(
                         always=slug in always,
                         stream_is_on=stream_is_on,
                     )
-                except Exception:
+                except Exception as error:
                     logger.exception("[%s] recording tick failed", slug)
+                    _could_not_see(slug, type(error).__name__)
             if stream_recording_over is not None:
                 try:
                     await _report_over(stream_recording_over)
                 except Exception:
                     logger.exception("could not check on the stream recordings")
+            _round_finished_at = datetime.now(timezone.utc)
             await _rest(wake_up)
     finally:
         if _wake is wake_up:
@@ -323,6 +388,13 @@ async def run_forever(
 def recording_channels() -> list[str]:
     """The channels being recorded right now, for the dashboard."""
     return [slug for slug, recorder in _recorders.items() if recorder.is_active]
+
+
+def recorder_runs() -> dict[str, RunState]:
+    """Where each recorder that is running stands, by channel (see
+    recorder.RunState)."""
+    runs = {slug: recorder.state() for slug, recorder in list(_recorders.items())}
+    return {slug: run for slug, run in runs.items() if run is not None}
 
 
 async def stop_all() -> None:

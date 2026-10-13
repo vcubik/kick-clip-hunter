@@ -1673,3 +1673,54 @@ class TestStreamRecordings:
             assert db.get_stream_recordings(connection) == []
         finally:
             connection.close()
+
+
+class TestSubscriptionDrops:
+    """The checks that found Kick without a chat subscription, kept for the
+    Health page as whatever the service makes of them (see health.Drop)."""
+
+    def test_none_are_remembered_to_begin_with(self, conn):
+        assert db.get_subscription_drops(conn) == []
+
+    def test_they_are_kept_the_newest_first(self, conn):
+        db.add_subscription_drop(conn, {"at": "first", "missing": ["channel_a"]})
+        db.add_subscription_drop(conn, {"at": "second", "missing": ["channel_a", "channel_b"]})
+
+        assert db.get_subscription_drops(conn) == [
+            {"at": "second", "missing": ["channel_a", "channel_b"]},
+            {"at": "first", "missing": ["channel_a"]},
+        ]
+
+    def test_they_are_there_for_the_next_connection(self, conn):
+        db.add_subscription_drop(conn, {"at": "first"})
+
+        other = db.get_connection()
+        try:
+            assert db.get_subscription_drops(other) == [{"at": "first"}]
+        finally:
+            other.close()
+
+    def test_only_so_many_are_kept(self, conn, monkeypatch):
+        monkeypatch.setattr(db, "SUBSCRIPTION_DROPS_KEPT", 3)
+
+        for number in range(5):
+            db.add_subscription_drop(conn, {"at": number})
+
+        assert [drop["at"] for drop in db.get_subscription_drops(conn)] == [4, 3, 2]
+
+    @pytest.mark.parametrize("stored", ["not json", '{"at": "an object, not a list"}', "7"])
+    def test_a_stored_value_that_makes_no_sense_counts_as_none(self, conn, stored):
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)", (db.SUBSCRIPTION_DROPS_KEY, stored))
+        conn.commit()
+
+        assert db.get_subscription_drops(conn) == []
+
+        db.add_subscription_drop(conn, {"at": "first"})
+        assert db.get_subscription_drops(conn) == [{"at": "first"}]
+
+    def test_they_do_not_get_in_the_way_of_the_switches(self, conn):
+        db.set_flag(conn, "watching_enabled", False)
+
+        db.add_subscription_drop(conn, {"at": "first"})
+
+        assert db.get_flag(conn, "watching_enabled") is False

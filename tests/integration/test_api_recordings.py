@@ -43,6 +43,9 @@ class RunningRecorder:
     def stop(self) -> None:
         self.is_active = False
 
+    def state(self) -> None:
+        return None  # nothing the Health page could say of it
+
 
 def broadcast(channel: str, segments: list[Path], *, began: datetime = BEGAN, group: str = "7-0") -> None:
     """Hands the recording of a channel real footage, a second a segment, as

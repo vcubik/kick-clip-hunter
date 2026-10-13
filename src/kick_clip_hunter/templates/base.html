@@ -1,8 +1,9 @@
 {#- The frame every dashboard page shares: the bar across the top with the
-    pages, what the service is doing right now - whether a watched channel
-    is live, and whether a stream is being recorded whole - and the switch
-    that pauses it, and the banner that takes over once a shutdown has been
-    asked for. -#}
+    pages - and, beside Health, how much of what the service depends on is
+    in trouble - what the service is doing right now - whether a watched
+    channel is live, and whether a stream is being recorded whole - and the
+    switch that pauses it, and the banner that takes over once a shutdown
+    has been asked for. -#}
 {%- from "_macros.html" import switch -%}
 <!DOCTYPE html>
 <html lang="en">
@@ -22,6 +23,9 @@
     <a href="/dashboard/analyze"{% if nav == "analyze" %} aria-current="page"{% endif %}>Analyze</a>
     <a href="/dashboard/channels"{% if nav == "channels" %} aria-current="page"{% endif %}>Channels</a>
     <a href="/dashboard/settings"{% if nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
+    {#- How much there is trouble with stands beside the page that says
+        what; nothing does while all is well. -#}
+    <a href="/dashboard/health"{% if nav == "health" %} aria-current="page"{% endif %}>Health <span class="bar-flag" data-health-flag>{{ health_flag }}</span></a>
   </nav>
   <div class="bar-state">
     {#- The script keeps these two current while a stream is being recorded. -#}

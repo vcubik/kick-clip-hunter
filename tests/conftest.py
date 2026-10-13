@@ -16,7 +16,9 @@ run, so:
   disk is always taken to have plenty of room;
 * three things a test must never do are blocked outright and reported as a
   failure even if the code under test swallows the error: talking to
-  anything but loopback, launching a browser, and exiting the process.
+  anything but loopback, launching a browser, and exiting the process;
+* the machine's own Tailscale client, which the Health page would ask about
+  the tunnel, is replaced by one that is not installed.
 """
 
 from __future__ import annotations
@@ -40,8 +42,10 @@ from tests.support.fixtures import kick_api as kick_api
 from tests.support.fixtures import recording as recording
 from tests.support.fixtures import service as service
 from tests.support.fixtures import signer as signer
+from tests.support.fixtures import tailscale as tailscale
 from tests.support.fixtures import ts_segments as ts_segments
 from tests.support.media import require_ffmpeg
+from tests.support.tailscale import FakeTailscale
 
 _INVOCATION_DIR = Path.cwd()
 _sandbox: Path | None = None
@@ -171,6 +175,8 @@ def _reset_module_state() -> None:
     recording_manager._held_bytes.clear()
     recording_manager._held_off.clear()
     recording_manager._wake = None
+    recording_manager._looks.clear()
+    recording_manager._round_finished_at = None
 
     # Only if a test has imported the app - importing it here would make
     # every run pay for FastAPI even when just the detector is under test.
@@ -188,6 +194,13 @@ def _reset_module_state() -> None:
         main._stream_start_cache.clear()
         main._stream_saves.clear()
         main._shutdown_requested = False
+        main._heard = main._Heard()
+        main._subscriptions = None
+        main._subscription_check_running = False
+        main._funnel = None
+        main._served_port = None
+        main._tunnel_look = None
+        main._disk_use = None
 
 
 @pytest.fixture(autouse=True)
@@ -283,6 +296,20 @@ def no_browser(monkeypatch: pytest.MonkeyPatch):
     yield launches
     if launches:
         pytest.fail("a browser launch was attempted")
+
+
+@pytest.fixture(autouse=True)
+def no_tailscale(monkeypatch: pytest.MonkeyPatch) -> FakeTailscale:
+    """The Health page asks the machine's Tailscale client where the tunnel
+    stands. A test must not depend on whether the machine it runs on has
+    one, or on what it is set up to serve, so as far as the service can
+    tell there is none - a test about the tunnel says what the client
+    answers through the `tailscale` fixture."""
+    from kick_clip_hunter import tunnel
+
+    client = FakeTailscale(installed=False)
+    monkeypatch.setattr(tunnel, "subprocess", client)
+    return client
 
 
 class _ExitGuard:

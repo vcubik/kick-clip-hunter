@@ -341,6 +341,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .bar-nav a { display: flex; align-items: center; padding: 2px var(--space-12) 0; border-bottom: 2px solid transparent; font-weight: 500; font-stretch: var(--width-compact); text-decoration: none; }
 .bar-nav a:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .bar-nav a[aria-current] { background-color: var(--sunk); border-bottom-color: var(--lit); font-weight: 700; }
+/* Beside Health: how much is in trouble. Words and weight, like any problem. */
+.bar-flag { font-weight: 700; white-space: nowrap; }
+.bar-flag:not(:empty) { margin-left: var(--space-8); }
 .bar-state { display: flex; align-items: center; gap: var(--space-16); margin-left: auto; }
 .bar-meta { font-stretch: var(--width-compact); color: var(--text-2); white-space: nowrap; }
 .bar-switch { display: flex; align-items: center; gap: var(--space-8); font-stretch: var(--width-compact); }
@@ -501,6 +504,23 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 .settings { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--space-8) var(--space-12); }
 
+/* ---- Health: whether what the service depends on is there ---------- */
+
+/* A page of sections like Channels. Each says where it stands in a
+   sentence, and one that is trouble says it in weight; what there is to
+   know beyond that follows in smaller words and in tables, which are the
+   Analyze page's. */
+.health-said { max-width: 80ch; font-size: 16px; line-height: 24px; overflow-wrap: anywhere; }
+.health-said.is-trouble { font-weight: 700; }
+.health-more { max-width: 100ch; margin-top: var(--space-4); overflow-wrap: anywhere; }
+.health-table { margin-top: var(--space-12); }
+.health-table td { white-space: nowrap; }
+.health-table .health-note { white-space: normal; }
+.health-caption { padding-bottom: var(--space-4); text-align: left; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.health-use { max-width: 360px; }
+.health-act { margin-top: var(--space-12); }
+.health-act .status-line { margin-top: 0; }
+
 /* ---- Settings ------------------------------------------------------ */
 
 .set-form, .set-fields { display: flex; flex-direction: column; gap: var(--space-36); }
@@ -636,6 +656,7 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .trim-foot .status-line { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
   .watchlist { display: block; overflow-x: auto; }
+  .health-table { display: block; overflow-x: auto; }
   .set-row { grid-template-columns: minmax(0, 1fr); }
   .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
   .set-list { width: 100%; }

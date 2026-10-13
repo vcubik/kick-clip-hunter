@@ -5,6 +5,7 @@ temporary simplification (see roadmap) so we have real data to build the
 detection heuristic against before deciding what's safe to prune.
 """
 
+import json
 import sqlite3
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
@@ -1312,5 +1313,33 @@ def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) ->
         "INSERT INTO app_settings (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (_chat_delay_key(channel_slug), str(seconds)),
+    )
+    conn.commit()
+
+
+# The checks that found Kick without a chat subscription for a watched
+# channel (see health.Drop), newest first, as one JSON list: there are a few
+# a month at most, and only the Health page reads them.
+SUBSCRIPTION_DROPS_KEY = "subscription_drops"
+SUBSCRIPTION_DROPS_KEPT = 20
+
+
+def get_subscription_drops(conn: sqlite3.Connection) -> list:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (SUBSCRIPTION_DROPS_KEY,)).fetchone()
+    try:
+        drops = json.loads(row[0]) if row else []
+    except ValueError:
+        return []
+    return drops if isinstance(drops, list) else []
+
+
+def add_subscription_drop(conn: sqlite3.Connection, drop: dict) -> None:
+    """Remembers one more, and forgets the oldest past
+    SUBSCRIPTION_DROPS_KEPT."""
+    drops = [drop, *get_subscription_drops(conn)][:SUBSCRIPTION_DROPS_KEPT]
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (SUBSCRIPTION_DROPS_KEY, json.dumps(drops)),
     )
     conn.commit()
