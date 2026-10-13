@@ -519,7 +519,7 @@ class TestTryingOnStoredChat:
         assert response.status_code == 422
 
     async def test_one_trial_at_a_time(self, service, evening, monkeypatch):
-        monkeypatch.setattr(service.main, "_trial_running", True)
+        monkeypatch.setattr(service.main, "_replay_running", True)
 
         response = await self.trial(service)
 
@@ -528,7 +528,7 @@ class TestTryingOnStoredChat:
 
     async def test_the_next_one_can_run_once_it_is_over_however_it_ended(self, service, evening):
         await self.trial(service)
-        assert service.main._trial_running is False
+        assert service.main._replay_running is False
 
         await self.trial(service, chat=OTHER)  # not watched: refused before anything runs
         assert (await self.trial(service)).status_code == 200

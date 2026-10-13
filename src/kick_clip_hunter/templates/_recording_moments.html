@@ -1,0 +1,40 @@
+{#- What would have been a moment in a recording, going by the chat stored
+    with it: the chat is replayed through the detector when that is asked
+    for, under the channel's settings as they are saved then (see
+    recording_moments.py). Each moment found is a row: the time is where in
+    the recording its clip begins, and plays the recording from there; one
+    that is a moment already leads to it on the review page, and any other
+    can be made one, with its clip cut out of the recording. The same marks
+    go onto the trace above, which the script sees to.
+
+    Asking is the script's to do, so the buttons that ask show once it is
+    there. While the chat is being replayed or clips are being cut, the
+    script fetches this again every couple of seconds
+    (/dashboard/recordings/<id>/moments) and puts it in its own place. -#}
+<section class="rec-moments" aria-label="Moments in the recording" data-rec-moments data-status-scope data-state="{{ finding.state }}" data-url="{{ finding.url }}" data-page="{{ finding.page_url }}" data-trace="{{ finding.trace_url }}"{% if finding.busy %} data-busy{% endif %}>
+  <div class="ch-line">
+    <h2>Moments</h2>
+    <span class="ch-gap"></span>
+    {% if finding.new > 1 %}
+    <button type="button" class="ch-btn ch-btn-compact" data-make-clips=""{% if finding.busy %} disabled{% endif %}>Make clips of all {{ finding.new }}</button>
+    {% endif %}
+    <button type="button" class="ch-btn ch-btn-compact" hidden data-find-moments{% if finding.busy %} disabled{% endif %}>{{ "Look again" if finding.looked_before else "Find moments" }}</button>
+  </div>
+  <p class="rec-moments-words" role="status">{{ finding.words }}</p>
+  {% if finding.rows %}
+  <ol class="rec-found">
+    {% for row in finding.rows %}
+    <li data-found="{{ row.key }}" data-began="{{ row.began }}" data-ended="{{ row.ended }}"{% if row.moment %} data-found-moment="{{ row.moment.id }}"{% endif %}>
+      <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Play the recording from here" data-found-go="{{ row.at }}">{{ row.time }}</button>
+      <span>{{ row.words }}</span>
+      {% if row.moment %}
+      <a class="ch-btn ch-btn-compact ch-btn-quiet" href="{{ row.moment.href }}">Open in review</a>
+      {% else %}
+      <button type="button" class="ch-btn ch-btn-compact" data-make-clips="{{ row.key }}"{% if finding.busy %} disabled{% endif %}>Make a clip</button>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  <p class="status-line" role="status" data-status></p>
+</section>

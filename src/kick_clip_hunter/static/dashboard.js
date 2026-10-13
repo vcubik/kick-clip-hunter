@@ -8,8 +8,8 @@
 // the dialog a stretch of footage is cut out for an editor in - a moment's or
 // a recording's - saves the Settings page's form, starts and stops the
 // recording of a whole stream, replays a recording's chat beside it, puts
-// what chat did over all of it under it, and keeps the Health page saying
-// what holds now.
+// what chat did over all of it under it, looks for moments in it, and keeps
+// the Health page saying what holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -990,7 +990,8 @@
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
-    for (const button of all("[data-trim-open]")) button.hidden = false;
+    for (const button of all("[data-trim-open], [data-find-moments]")) button.hidden = false;
+    markFound();
     const video = one("[data-clip]");
     if (!video) return;
     video.defaultPlaybackRate = speed;
@@ -1133,6 +1134,7 @@
     // What has been saved meanwhile can be played, and has a trace.
     dress();
     loadRecordingTrace();
+    watchFound();
   }
 
   async function checkRecordings() {
@@ -1312,6 +1314,7 @@
       return;
     }
     place.replaceWith(figure);
+    markFound();
     const video = one("[data-recording-clip]");
     if (video) paintRecording(video);
   }
@@ -1384,6 +1387,134 @@
     event.preventDefault();
     video.currentTime = clamp(time, Number(trace.dataset.start), Number(trace.dataset.end));
     return true;
+  }
+
+  // ---- Moments found in a recording --------------------------------------
+  //
+  // Under a recording is what looking for moments in its chat came to (see
+  // _recording_moments.html): the service replays the chat through the
+  // detector when asked, and lists what would have been a moment. A row's
+  // time plays the recording from there, and its button has the service
+  // make a moment of it, with a clip cut out of the recording. Both take the
+  // service a while, so the section says what is being done and is fetched
+  // again every couple of seconds until it is over.
+
+  const FOUND_POLL_MS = 2000;
+  let foundWatch = null;
+
+  // Puts what was found and is no moment yet on the trace under the
+  // recording, where the channel's moments are marked already: the same
+  // mark, along the foot of the strip only, with a word for it in the
+  // legend. Done again whenever either of the two is new on the page.
+  function markFound() {
+    const strip = one("[data-rec-strip]");
+    if (!strip) return;
+    const trace = strip.closest("[data-trace]");
+    for (const old of all("[data-found-mark]", trace)) old.remove();
+    const start = Number(trace.dataset.start);
+    const whole = Number(trace.dataset.end) - start;
+    const under = one("svg", strip);
+    let marked = false;
+    for (const row of all("[data-found]:not([data-found-moment])")) {
+      const began = Number(row.dataset.began);
+      const ended = Number(row.dataset.ended);
+      if (!under || !(whole > 0) || ended <= start || began >= start + whole) continue;
+      const mark = document.createElement("div");
+      mark.className = "ch-moment is-found";
+      mark.dataset.foundMark = "";
+      mark.style.left = `${clamp((began - start) / whole, 0, 1) * 100}%`;
+      mark.style.width = `${clamp((ended - began) / whole, 0, 1) * 100}%`;
+      under.after(mark);
+      marked = true;
+    }
+    const readout = one("[data-readout]", trace);
+    if (!marked || !readout) return;
+    const word = document.createElement("span");
+    word.dataset.foundMark = "";
+    word.innerHTML = '<span class="ch-chip ch-chip-found"><i></i></span>';
+    word.append("found, not a moment yet");
+    readout.before(word);
+  }
+
+  // The trace under the recording as the service draws it now: a moment
+  // that was just made is one of the channel's, and marked as one.
+  async function redrawRecordingTrace(url) {
+    let markup = null;
+    try {
+      const response = await fetch(url);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // the one on the page stays
+    }
+    const fresh = markup && one("[data-rec-trace]", new DOMParser().parseFromString(markup, "text/html"));
+    const current = one("[data-rec-trace]");
+    if (!fresh || !current) return;
+    current.replaceWith(fresh);
+    markFound();
+    const video = one("[data-recording-clip]");
+    if (video) paintRecording(video);
+  }
+
+  // The section as the service has it now, in place of the one on the page.
+  async function refreshFound() {
+    const asked = one("[data-rec-moments]");
+    if (!asked) return;
+    let markup = null;
+    try {
+      const response = await fetch(asked.dataset.page);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // what is on the page stays, and is asked about again
+    }
+    const fresh = markup && one("[data-rec-moments]", new DOMParser().parseFromString(markup, "text/html"));
+    const current = one("[data-rec-moments]");
+    // Another recording may be open by the time the answer is here.
+    if (!fresh || !current || current.dataset.url !== fresh.dataset.url) return;
+    const made = all("[data-found-moment]", current).length;
+    current.replaceWith(fresh);
+    dress();
+    // A moment that was made since is one of the channel's on the trace too.
+    if (all("[data-found-moment]", fresh).length !== made) redrawRecordingTrace(fresh.dataset.trace);
+    watchFound();
+  }
+
+  function watchFound() {
+    const busy = Boolean(one("[data-rec-moments][data-busy]"));
+    if (busy && foundWatch === null) {
+      foundWatch = setInterval(refreshFound, FOUND_POLL_MS);
+    } else if (!busy && foundWatch !== null) {
+      clearInterval(foundWatch);
+      foundWatch = null;
+    }
+  }
+
+  // Asks the service for something to do with the recording's moments, and
+  // shows where that stands; what it refuses is said in its own words.
+  async function askFound(button, path, body, otherwise) {
+    const section = button.closest("[data-rec-moments]");
+    button.disabled = true;
+    const response = await post(`${section.dataset.url}${path}`, body);
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, otherwise) : "Could not reach the service.");
+      return;
+    }
+    await refreshFound();
+  }
+
+  const findMoments = (button) => askFound(button, "", undefined, "Could not look for moments.");
+
+  // One row's moment, or - from the button over the list - all of them.
+  function makeClips(button) {
+    const key = button.dataset.makeClips;
+    askFound(button, "/clips", key ? { moments: [Number(key)] } : {}, "Could not make the clip.");
+  }
+
+  function playFound(button) {
+    const video = one("[data-recording-clip]");
+    if (!video) return;
+    video.currentTime = Number(button.dataset.foundGo);
+    video.play().catch(() => {});
   }
 
   // ---- Settings ---------------------------------------------------------
@@ -1612,6 +1743,9 @@
     ["[data-delete-go]", deleteRecording],
     ["[data-save-again]", saveRecordingAgain],
     ["[data-subscriptions-check]", checkSubscriptions],
+    ["[data-find-moments]", findMoments],
+    ["[data-make-clips]", makeClips],
+    ["[data-found-go]", playFound],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
     ["[data-mute]", (button) => toggleMute(clipOf(button))],
@@ -1837,6 +1971,7 @@
   one('.rec-row[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   if (one("[data-recording-clip]")) paintRecording(one("[data-recording-clip]"));
   loadRecordingTrace();
+  watchFound();
   if (one('[data-recording-state="running"], [data-recording-state="saving"], [data-recording-row]')) watchRecordings();
   if (one("[data-always-record], [data-recordings]")) {
     setInterval(() => {

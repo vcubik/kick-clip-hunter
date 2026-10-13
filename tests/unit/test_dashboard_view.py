@@ -693,6 +693,102 @@ class TestATrialInWords:
         assert (rows[1]["moments"], rows[1]["per_hour"], rows[1]["median"], rows[1]["longest"]) == ("0", "0", "-", "-")
 
 
+class TestMomentsFoundInARecordingInWords:
+    """What the Recordings page says of the moments looked for in a
+    recording's chat (see recording_moments.py)."""
+
+    def found(self, **figures) -> str:
+        figures = {"found": 3, "messages": 8000, "looked": local(21, 47), "today": TODAY, **figures}
+        return view.find_words(view.FIND_FOUND, **figures)
+
+    def test_before_anything_was_looked_for_it_says_what_looking_does(self):
+        words = view.find_words(view.FIND_NONE)
+
+        assert words.startswith("Replays the chat stored with this recording through the detector")
+        assert "as they are saved" in words
+
+    def test_while_the_chat_is_read_there_is_nothing_to_count_yet(self):
+        assert view.find_words(view.FIND_LOOKING) == "Reading the recording's chat."
+
+    def test_while_it_is_replayed_it_says_how_far_that_has_got(self):
+        assert view.find_words(view.FIND_LOOKING, done=1500, of=36108) == (
+            "Replaying the recording's chat: 1500 of 36108 messages. A long stream with a busy chat takes minutes."
+        )
+
+    def test_a_replay_that_failed_points_at_the_log(self):
+        assert view.find_words(view.FIND_FAILED) == (
+            "The recording's chat could not be replayed. The server log says why."
+        )
+
+    def test_what_was_found_is_counted_with_the_chat_it_was_found_in_and_when(self):
+        assert self.found() == (
+            "3 moments in the recording's chat (8000 messages), under the settings as they were saved at 21:47."
+        )
+
+    def test_one_is_one(self):
+        assert self.found(found=1, messages=1).startswith("1 moment in the recording's chat (1 message), ")
+
+    def test_looked_for_on_another_day_it_says_which(self):
+        assert self.found(looked=local(21, 47, days_ago=1)).endswith("as they were saved at yesterday, 21:47.")
+
+    @pytest.mark.parametrize(
+        ("found", "already", "words"),
+        [
+            (3, 1, "1 of them is a moment already."),
+            (3, 2, "2 of them are moments already."),
+            (3, 3, "All of them are moments already."),
+            (1, 1, "It is a moment already."),
+        ],
+    )
+    def test_it_says_how_many_of_them_are_moments_already(self, found, already, words):
+        assert self.found(found=found, already=already).endswith(f" {words}")
+
+    def test_nothing_found_is_said_of_the_chat_and_the_settings(self):
+        assert self.found(found=0) == (
+            "Nothing in the recording's chat (8000 messages) would have been a moment "
+            "under the settings as they were saved at 21:47."
+        )
+
+    def test_a_recording_without_chat_says_so(self):
+        assert self.found(found=0, messages=0) == (
+            "No chat was stored for this recording, so there is nothing to look for moments in."
+        )
+
+    @pytest.mark.parametrize(
+        ("missing", "words"),
+        [
+            (1, "1 more fell where the recording has too little footage of it."),
+            (4, "4 more fell where the recording has too little footage of them."),
+        ],
+    )
+    def test_moments_the_recording_has_no_footage_of_are_counted_last(self, missing, words):
+        assert self.found(missing=missing).endswith(f" {words}")
+        assert self.found(found=0, missing=missing).endswith(f" {words}")
+
+    def test_while_clips_are_cut_it_says_which_one(self):
+        assert view.find_words(view.FIND_CUTTING, done=0, of=5) == "Cutting clip 1 of 5."
+        assert view.find_words(view.FIND_CUTTING, done=4, of=5) == "Cutting clip 5 of 5."
+        # The last one is done, and the page has not been told yet.
+        assert view.find_words(view.FIND_CUTTING, done=5, of=5) == "Cutting clip 5 of 5."
+
+    def test_once_they_are_cut_it_says_how_that_went_first(self):
+        assert self.found(made=2, already=2).startswith("2 clips made, and in the review queue. 3 moments in ")
+        assert self.found(made=1, already=1).startswith("1 clip made, and in the review queue. ")
+        assert self.found(made=1, failed=2, already=1).startswith(
+            "1 clip made, and in the review queue. 2 clips could not be cut. The server log says why. 3 moments"
+        )
+        assert self.found(failed=1).startswith("1 clip could not be cut. The server log says why. ")
+
+    def test_the_states_in_which_more_is_to_come(self):
+        assert view.FIND_BUSY == {view.FIND_LOOKING, view.FIND_CUTTING}
+
+    def test_a_found_moment_is_what_set_it_off_how_strongly_and_how_long_its_clip_is(self):
+        assert view.found_words("laugh", 7.25, 41.4) == "Laughing, score 7.2, a clip of 41 seconds"
+        assert view.found_words("emote_mention,message_rate", 12.0, 95.0) == (
+            "Emote names, score 12, a clip of 1 minute 35 seconds"
+        )
+
+
 class TestRecordingsInWords:
     """What the Channels and Recordings pages say of a stream recording."""
 

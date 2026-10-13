@@ -33,6 +33,7 @@ from . import (
     health,
     recorder,
     recording_manager,
+    recording_moments,
     replay,
     sound_events,
     stream_recording,
@@ -52,6 +53,7 @@ from .db import (
     count_moments_with_clip,
     count_returning_chatters,
     count_stream_recordings,
+    delete_moment,
     delete_stream_recording,
     finish_stream_recording,
     get_channel_chat_between,
@@ -269,6 +271,21 @@ def _track_task(coro) -> asyncio.Task:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+# Whether stored chat is being replayed through the detector right now: for a
+# trial of settings, or to find the moments of a recording. One at a time: a
+# replay keeps a processor busy for seconds on end, next to a service that
+# has chat to keep up with.
+_replay_running = False
+
+
+def _one_replay_at_a_time() -> None:
+    """Refuses, with a 409, to start a replay while another is running."""
+    if _replay_running:
+        raise HTTPException(
+            status_code=409, detail="Another replay of stored chat is still running. Try again in a moment."
+        )
 
 
 SHUTDOWN_POLL_SECONDS = 5
@@ -697,14 +714,8 @@ async def _create_clip_background(
         channel, moment_id, clip_path, clip.duration, clip.context_before, clip.context_after,
     )
     extent = (clip.context_before, clip.duration, clip.context_after)
-    if _flags.get("transcript_enabled"):
-        _track_task(_transcribe_clip_background(moment_id, channel, clip_path, extent))
-    if _flags.get("audio_events_enabled"):
-        _track_task(_detect_audio_events_background(moment_id, channel, clip_path, extent))
-    if _flags.get("frames_enabled"):
-        _track_task(_encode_frames_background(moment_id, channel, clip_path, extent))
-    if _flags.get("sound_events_enabled"):
-        _track_task(_tag_sound_events_background(moment_id, channel, clip_path, extent))
+    for analyse in _analysis_steps():
+        _track_task(analyse(moment_id, channel, clip_path, extent))
 
 
 # Where a clip lies in its file: seconds of context before it, its own
@@ -798,6 +809,19 @@ async def _tag_sound_events_background(moment_id: int, channel: str, clip_path: 
     finally:
         conn.close()
     logger.info("[%s] sound events saved for moment %d: %s", channel, moment_id, tags)
+
+
+def _analysis_steps() -> list:
+    """The per-clip analysis steps that are switched on right now. Each is
+    called with a moment's id, its channel, its file and where the clip
+    lies in that file."""
+    steps = (
+        ("transcript_enabled", _transcribe_clip_background),
+        ("audio_events_enabled", _detect_audio_events_background),
+        ("frames_enabled", _encode_frames_background),
+        ("sound_events_enabled", _tag_sound_events_background),
+    )
+    return [analyse for flag, analyse in steps if _flags.get(flag)]
 
 
 # A detected moment isn't cut into a clip right away. It stays "open" for a
@@ -1181,6 +1205,22 @@ def _stream_file(row) -> Path | None:
         return None
     file = STREAMS_DIR / row["file_path"]
     return file if file.resolve().is_relative_to(STREAMS_DIR.resolve()) else None
+
+
+def _recording_with_file(conn, recording_id: int, to: str) -> tuple:
+    """A stream recording that is over and has its file - what something
+    can be cut out of, or looked for in: its row, its parts and the file.
+    Otherwise a 404, or a 409 that says there is no file `to` do that
+    with."""
+    row = get_stream_recording(conn, recording_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+    parts = stream_recording.decoded(row["parts"])
+    file = _stream_file(row)
+    over = row["state"] == stream_recording.READY and recording_id not in _stream_recordings_not_over()
+    if not over or not parts or file is None or not file.exists():
+        raise HTTPException(status_code=409, detail=f"The recording has no file to {to}.")
+    return row, parts, file
 
 
 @app.get("/health")
@@ -2211,6 +2251,253 @@ def _recording_trim_dialog(conn, row, parts: list[stream_recording.Part], video_
     }
 
 
+# -- moments found in a recording after the fact ------------------------------
+#
+# The chat stored with a recording can be replayed through the detector once
+# the stream is over (see recording_moments.py). The Recordings page lists
+# what would have been a moment under the channel's settings as they are
+# saved, plays the recording from any of them, and makes the ones asked for
+# into moments, each with a file cut out of the recording's.
+
+# Where that stands, by recording: its chat being replayed, what was found
+# and when, clips being cut, or that it failed. A restart forgets what was
+# found; looking again finds it again.
+_recording_finds: dict[int, dict] = {}
+
+
+class _GivenUp(Exception):
+    """A replay that was not seen through: the service is on its way down."""
+
+
+def _look_through(
+    broadcaster_user_id: int, parts: list[stream_recording.Part], tuned: tuning.Tuning, standing: dict
+) -> dict:
+    """What replaying a recording's chat under `tuned` comes to: the moments
+    found in its file, how many more the file has too little footage of,
+    and how many messages were replayed. How far it has got is kept in
+    `standing` as it goes, for the page to say. Runs in a thread of its own,
+    so with a connection of its own - and gives up (_GivenUp) once the
+    service is shutting down, which would otherwise wait minutes for it."""
+    conn = get_connection()
+    try:
+        messages, keywords = replay.load_between(conn, broadcaster_user_id, *recording_moments.chat_span(parts))
+    finally:
+        conn.close()
+    standing["of"] = len(messages)
+
+    def progress(done: int) -> None:
+        if _shutdown_requested:
+            raise _GivenUp
+        standing["done"] = done
+
+    found, missing = recording_moments.find(replay.replay(messages, keywords, tuned, progress), parts, tuned)
+    return {"found": found, "missing": missing, "messages": len(messages)}
+
+
+async def _find_moments_background(
+    recording_id: int, channel: str, broadcaster_user_id: int, parts: list[stream_recording.Part], tuned: tuning.Tuning
+) -> None:
+    # The replay of a long stream with a busy chat takes minutes (see
+    # replay.PROGRESS_EVERY): off the event loop, and as a tracked task, so
+    # that the page can come and go while it runs.
+    global _replay_running
+    standing = _recording_finds[recording_id]
+    try:
+        result = await asyncio.to_thread(_look_through, broadcaster_user_id, parts, tuned, standing)
+    except _GivenUp:
+        _recording_finds.pop(recording_id, None)
+        logger.info("[%s] looking for moments in stream recording %d given up: shutting down", channel, recording_id)
+        return
+    except Exception:
+        logger.exception("[%s] looking for moments in stream recording %d failed", channel, recording_id)
+        _recording_finds[recording_id] = {"state": dashboard_view.FIND_FAILED}
+        return
+    finally:
+        _replay_running = False
+    # Each moment found is kept with where its clip lies, framed by the
+    # settings the chat was replayed under: what is saved later changes
+    # nothing of it until the recording is looked through again.
+    _recording_finds[recording_id] = {
+        "state": dashboard_view.FIND_FOUND,
+        **result,
+        "looked": datetime.now(timezone.utc),
+    }
+    logger.info(
+        "[%s] stream recording %d: %d moment(s) found in %d messages, %d more without footage",
+        channel, recording_id, len(result["found"]), result["messages"], result["missing"],
+    )
+
+
+def _moment_from_recording(
+    recording_id: int, broadcaster_user_id: int, channel: str, file: Path, found: recording_moments.Found
+) -> tuple[int, Path, ClipExtent]:
+    """Makes a moment of one found in a recording, and returns its id, its
+    file and where the clip lies in that. The file is cut out of the
+    recording's, clip and context in one as for any moment, and the moment
+    is stored as the service stores one it detected - with what the replay
+    measured, at the time it would have fired.
+
+    The file is cut first, so a cut that fails leaves no moment behind, and
+    a moment whose file can then not be put in its place is taken back: it
+    is all of a moment or none of it. Blocks for as long as the cut takes:
+    run in a thread of its own, hence the connection of its own."""
+    cut = CLIPS_DIR / channel / f".recording_{recording_id}_{found.key}.mp4"
+    try:
+        begins, duration = recorder.trim_clip(file, *found.footage, cut)
+        before, length, after = recording_moments.extent(found, begins, duration)
+        spike = found.spike
+        conn = get_connection()
+        try:
+            moment_id = insert_moment(
+                conn,
+                broadcaster_user_id=broadcaster_user_id,
+                channel_slug=channel,
+                window_start=found.window_start.isoformat(),
+                window_end=found.window_end.isoformat(),
+                reason=",".join(spike.reasons),
+                score=spike.score,
+                message_count=spike.message_count,
+                baseline_message_rate=spike.baseline_message_rate,
+                current_message_rate=spike.current_message_rate,
+                emote_count=spike.emote_count,
+                keyword_hits=spike.keyword_hits,
+                detected_at=found.fired_at.isoformat(),
+            )
+            clip = cut.with_name(f"moment_{moment_id}.mp4")
+            try:
+                cut.replace(clip)
+                update_moment_clip_path(
+                    conn,
+                    moment_id,
+                    clip.relative_to(CLIPS_DIR).as_posix(),
+                    clip_start=found.clip_started_at.isoformat(),
+                    clip_duration=length,
+                    context_before=before,
+                    context_after=after,
+                )
+            except Exception:
+                delete_moment(conn, moment_id)
+                clip.unlink(missing_ok=True)
+                raise
+        finally:
+            conn.close()
+    finally:
+        cut.unlink(missing_ok=True)
+    return moment_id, clip, (before, length, after)
+
+
+async def _make_moments_background(
+    recording_id: int, broadcaster_user_id: int, channel: str, file: Path, chosen: list[recording_moments.Found]
+) -> None:
+    # One cut after another, each off the event loop, and as a tracked task
+    # so a shutdown waits for them. How far it has got is kept with what was
+    # found, which is what the page asks about.
+    standing = _recording_finds[recording_id]
+    made: list[tuple[int, Path, ClipExtent]] = []
+    for found in chosen:
+        try:
+            made.append(
+                await asyncio.to_thread(
+                    _moment_from_recording, recording_id, broadcaster_user_id, channel, file, found
+                )
+            )
+        except Exception:
+            logger.exception(
+                "[%s] the moment at %s of stream recording %d could not be made",
+                channel, dashboard_view.stream_time_words(found.clip[0]), recording_id,
+            )
+        else:
+            moment_id, clip, (before, length, after) = made[-1]
+            logger.info(
+                "[%s] moment %d made from stream recording %d: %s (%.0f s, with %.0f s before it and %.0f s after)",
+                channel, moment_id, recording_id, clip, length, before, after,
+            )
+        standing["done"] += 1
+    standing.update(state=dashboard_view.FIND_FOUND, made=len(made), failed=len(chosen) - len(made))
+    if made and _analysis_steps():
+        _track_task(_analyse_in_turn(channel, made))
+
+
+async def _analyse_in_turn(channel: str, clips: list[tuple[int, Path, ClipExtent]]) -> None:
+    # A clip at a time: each analysis step keeps a processor busy, and a
+    # recording can give dozens of clips at once.
+    for moment_id, clip, extent in clips:
+        await asyncio.gather(*(analyse(moment_id, channel, clip, extent) for analyse in _analysis_steps()))
+
+
+def _recording_finding(conn, row, parts: list[stream_recording.Part], today: date) -> dict:
+    """What the Recordings page shows of the moments looked for in a
+    recording (see _recording_moments.html): where that stands, in words,
+    and the moments found - where in the file each is, what set it off, and
+    the moment it is, if it is one already. That last is looked up every
+    time, so a moment the service made of it while the stream was on counts
+    as much as one made from here."""
+    recording_id = row["id"]
+    known = _recording_finds.get(recording_id, {})
+    state = known.get("state", dashboard_view.FIND_NONE)
+    found: list[recording_moments.Found] = known.get("found", [])
+    rows = []
+    if found:
+        delay = timedelta(seconds=_recording_chat_delay(conn, row))
+        windows = get_channel_moment_windows(
+            conn, row["broadcaster_user_id"], found[0].window_start, max(one.window_end for one in found)
+        )
+        for one in found:
+            moment_id = recording_moments.moment_of(one, windows)
+            rows.append(
+                {
+                    "key": one.key,
+                    # Where its clip begins, which is where the recording is
+                    # played from, and where its reaction shows on the trace:
+                    # placed as the trace places a moment's.
+                    "at": dashboard_view.number_words(one.clip[0], 1),
+                    "time": dashboard_view.stream_time_words(one.clip[0]),
+                    "began": dashboard_view.number_words(
+                        stream_recording.file_second(parts, one.window_start - delay), 1
+                    ),
+                    "ended": dashboard_view.number_words(
+                        stream_recording.file_second(parts, one.window_end - delay), 1
+                    ),
+                    "words": dashboard_view.found_words(
+                        ",".join(one.spike.reasons), one.spike.score, one.clip_seconds
+                    ),
+                    "moment": (
+                        {
+                            "id": moment_id,
+                            "href": dashboard_view.review_url(dashboard_view.SHOW_ALL, moment=moment_id),
+                        }
+                        if moment_id is not None
+                        else None
+                    ),
+                }
+            )
+    new = sum(1 for item in rows if item["moment"] is None)
+    looked = known.get("looked")
+    return {
+        "url": f"/recordings/{recording_id}/moments",
+        "page_url": f"/dashboard/recordings/{recording_id}/moments",
+        "trace_url": f"/dashboard/recordings/{recording_id}/trace",
+        "state": state,
+        "busy": state in dashboard_view.FIND_BUSY,
+        "looked_before": state in (dashboard_view.FIND_FOUND, dashboard_view.FIND_FAILED),
+        "words": dashboard_view.find_words(
+            state,
+            found=len(rows),
+            already=len(rows) - new,
+            missing=known.get("missing", 0),
+            messages=known.get("messages", 0),
+            looked=looked.astimezone() if looked else None,
+            today=today,
+            done=known.get("done", 0),
+            of=known.get("of", 0),
+            made=known.get("made", 0),
+            failed=known.get("failed", 0),
+        ),
+        "rows": rows,
+        "new": new,
+    }
+
+
 def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
     """Everything the Recordings page shows of the one that is open."""
     parts = stream_recording.decoded(row["parts"])
@@ -2250,6 +2537,7 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
         ),
         "chat": _recording_chat(conn, row, parts, 0.0) if standing == "playable" else None,
         "chat_delay_words": dashboard_view.chat_delay_words(delay),
+        "finding": _recording_finding(conn, row, parts, today) if video_url else None,
     }
 
 
@@ -3188,6 +3476,11 @@ async def delete_recording(recording_id: int):
             raise HTTPException(
                 status_code=409, detail="A stretch of this recording is being cut out. Try again once that is done."
             )
+        if _recording_finds.get(recording_id, {}).get("state") in dashboard_view.FIND_BUSY:
+            raise HTTPException(
+                status_code=409,
+                detail="Moments are being looked for in this recording, or cut out of it. Try again once that is done.",
+            )
         file = _stream_file(row)
         try:
             if file is not None:
@@ -3208,6 +3501,7 @@ async def delete_recording(recording_id: int):
         conn.close()
     _recording_trims.pop(recording_id, None)
     _recording_counts.pop(recording_id, None)
+    _recording_finds.pop(recording_id, None)
     logger.info("[%s] stream recording %d deleted", row["channel_slug"], recording_id)
     return {"deleted": recording_id}
 
@@ -3224,14 +3518,7 @@ async def trim_recording(recording_id: int, request: Request):
     asked = await _asked_trim(request)
     conn = get_connection()
     try:
-        row = get_stream_recording(conn, recording_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
-        parts = stream_recording.decoded(row["parts"])
-        file = _stream_file(row)
-        over = row["state"] == stream_recording.READY and recording_id not in _stream_recordings_not_over()
-        if not over or not parts or file is None or not file.exists():
-            raise HTTPException(status_code=409, detail="The recording has no file to cut from.")
+        row, parts, file = _recording_with_file(conn, recording_id, "cut from")
         whole = stream_recording.length(parts)
         try:
             start, end = clip_trim.stretch(0.0, whole, asked.get("start"), asked.get("end"))
@@ -3301,6 +3588,124 @@ async def recording_trim_state(recording_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
     return {"recording_id": recording_id, **_recording_trim(row)}
+
+
+def _find_standing(recording_id: int) -> dict:
+    """Where looking for moments in a recording stands, as its two
+    requests answer. What was found is on the page (see
+    dashboard_recording_moments)."""
+    known = _recording_finds.get(recording_id, {})
+    return {"recording_id": recording_id, "state": known.get("state", dashboard_view.FIND_NONE)}
+
+
+@app.post("/recordings/{recording_id}/moments")
+async def find_recording_moments(recording_id: int):
+    """Starts looking for moments in a recording: the chat stored with it
+    is replayed through the detector under the channel's settings as they
+    are saved now (see recording_moments.py). Nothing is stored - what was
+    found is kept until the service stops or the recording is looked through
+    again, and shown by dashboard_recording_moments. Asked again while it is
+    being looked through, or while clips are being cut, nothing more is
+    started."""
+    global _replay_running
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    conn = get_connection()
+    try:
+        row, parts, _file = _recording_with_file(conn, recording_id, "look for moments in")
+        tuned = _tuning(conn, row["broadcaster_user_id"])
+    finally:
+        conn.close()
+    if _recording_finds.get(recording_id, {}).get("state") not in dashboard_view.FIND_BUSY:
+        _one_replay_at_a_time()
+        _replay_running = True
+        _recording_finds[recording_id] = {"state": dashboard_view.FIND_LOOKING, "done": 0, "of": 0}
+        _track_task(
+            _find_moments_background(recording_id, row["channel_slug"], row["broadcaster_user_id"], parts, tuned)
+        )
+    return _find_standing(recording_id)
+
+
+@app.post("/recordings/{recording_id}/moments/clips")
+async def make_recording_moments(recording_id: int, request: Request):
+    """Makes moments of the ones found in a recording, each with its file
+    cut out of the recording's: clip and context, framed by the settings the
+    chat was replayed under. `moments` says which, by the key the page has
+    for each; left out, it is all of them. One that is a moment already is
+    left as it is. They are stored like moments the service detected, at the
+    time they would have fired, so they are in the review queue from then
+    on."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    keys = asked.get("moments") if isinstance(asked, dict) else ()
+    if keys is not None and (not isinstance(keys, list) or not all(type(key) is int for key in keys)):
+        raise HTTPException(status_code=400, detail="Expected the moments to make clips of as JSON.")
+
+    conn = get_connection()
+    try:
+        row, parts, file = _recording_with_file(conn, recording_id, "cut clips from")
+        known = _recording_finds.get(recording_id, {})
+        if known.get("state") == dashboard_view.FIND_CUTTING:
+            raise HTTPException(status_code=409, detail="Clips are still being cut. Try again once that is done.")
+        if known.get("state") != dashboard_view.FIND_FOUND:
+            raise HTTPException(status_code=409, detail="Look for moments in the recording first.")
+        found: list[recording_moments.Found] = known["found"]
+        if keys is not None and (unknown := set(keys) - {one.key for one in found}):
+            raise HTTPException(
+                status_code=400, detail=f"{len(unknown)} of the moments asked for were not found in this recording."
+            )
+        windows = (
+            get_channel_moment_windows(
+                conn, row["broadcaster_user_id"], found[0].window_start, max(one.window_end for one in found)
+            )
+            if found
+            else []
+        )
+        chosen = [
+            one
+            for one in found
+            if (keys is None or one.key in keys) and recording_moments.moment_of(one, windows) is None
+        ]
+        # Moments are kept under the name the channel's chat comes with.
+        channel = get_chat_name(conn, row["broadcaster_user_id"]) or row["channel_slug"]
+    finally:
+        conn.close()
+    if not chosen:
+        raise HTTPException(status_code=409, detail="There is nothing here that is not a moment already.")
+    # Each file is a copy of its share of the recording's. Clips are not
+    # what may fill the disk under a recording that is running.
+    whole = stream_recording.length(parts)
+    takes = (row["size_bytes"] or 0) * sum(one.footage[1] - one.footage[0] for one in chosen) / whole
+    if recording_manager.room_left() - takes < recording_manager.MIN_FREE_BYTES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"The disk is too full to cut that: it takes about {dashboard_view.size_words(round(takes))}.",
+        )
+
+    known.update(state=dashboard_view.FIND_CUTTING, done=0, of=len(chosen), made=0, failed=0)
+    _track_task(_make_moments_background(recording_id, row["broadcaster_user_id"], channel, file, chosen))
+    return _find_standing(recording_id)
+
+
+@app.get("/dashboard/recordings/{recording_id}/moments", response_class=HTMLResponse)
+async def dashboard_recording_moments(request: Request, recording_id: int):
+    """What looking for moments in a recording has come to, as the
+    Recordings page shows it - what the page fetches after asking for
+    something, and every couple of seconds while that is being done."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        context = {"finding": _recording_finding(conn, row, parts, _today())}
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_recording_moments.html", context)
 
 
 @app.post("/recordings/{recording_id}/save")
@@ -3432,9 +3837,6 @@ async def set_channel_own_tuning(slug: str, enabled: int = 1):
 # How much of a channel's newest stored chat settings are tried on. A replay
 # takes about half a second per thousand messages, and a trial is two.
 TRIAL_MESSAGE_LIMIT = 10_000
-# One at a time: a trial keeps a processor busy for several seconds, next to
-# a service that has chat to keep up with.
-_trial_running = False
 
 
 def _replay_both(slug: str, saved: tuning.Tuning, proposed: tuning.Tuning) -> dict | None:
@@ -3458,14 +3860,13 @@ def _replay_both(slug: str, saved: tuning.Tuning, proposed: tuning.Tuning) -> di
 
 
 async def _trial(slug: str, saved: tuning.Tuning, proposed: tuning.Tuning) -> dict:
-    global _trial_running
-    if _trial_running:
-        raise HTTPException(status_code=409, detail="Another trial is still running. Try again in a moment.")
-    _trial_running = True
+    global _replay_running
+    _one_replay_at_a_time()
+    _replay_running = True
     try:
         result = await asyncio.to_thread(_replay_both, slug, saved, proposed)
     finally:
-        _trial_running = False
+        _replay_running = False
     if result is None:
         raise HTTPException(status_code=409, detail=f"No chat is stored for {slug} yet.")
     return result

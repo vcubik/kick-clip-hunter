@@ -765,6 +765,30 @@ class TestChatOfAChannelToldByItsId:
         rest = [row["content"] for row in chat]
         assert len(rest) == 30 and rest[5] == "under another name" and rest[-1] == "line 29"
 
+    def test_asked_for_whole_each_message_comes_with_who_wrote_it_and_its_emotes(self, conn, monkeypatch):
+        # What the detector is fed, for replaying the stretch - in the same
+        # chunks, in the same order.
+        monkeypatch.setattr(db, "CHAT_CHUNK", 2)
+        for number in range(5):
+            store_chat(conn, "some_channel", f"user{number}", f"line {number}", T0 + timedelta(seconds=number))
+        db.insert_chat_message(
+            conn,
+            message_id="with-an-emote",
+            broadcaster_user_id=1,
+            channel_slug="some_channel",
+            sender_username="alice",
+            content="[emote:1:KEKW]",
+            emotes_json='[{"emote_id": "1", "positions": [{"s": 0, "e": 13}]}]',
+            created_at=(T0 + timedelta(seconds=5)).isoformat(),
+            received_at=(T0 + timedelta(seconds=5)).isoformat(),
+        )
+
+        chat = list(db.iter_channel_chat_between(conn, 1, T0, T0 + minutes(1), whole=True))
+
+        assert [row["sender_username"] for row in chat] == [*(f"user{number}" for number in range(5)), "alice"]
+        assert [row["content"] for row in chat][-2:] == ["line 4", "[emote:1:KEKW]"]
+        assert chat[0]["emotes"] == "[]" and "positions" in chat[-1]["emotes"]
+
     @pytest.mark.parametrize("chunk", [1, 3, 5, 10, 11])
     def test_it_is_gone_through_a_chunk_at_a_time_and_every_message_once(self, conn, monkeypatch, chunk):
         monkeypatch.setattr(db, "CHAT_CHUNK", chunk)
@@ -1236,6 +1260,29 @@ class TestMoments:
             "moment_type",
         ):
             assert row[column] is None
+
+    def test_a_moment_is_detected_now_unless_it_is_said_when(self, conn):
+        # One found afterwards, in the chat of a recording, is stored at the
+        # time it would have fired.
+        then = T0 - timedelta(days=3)
+        found = store_moment(conn, detected_at=then.isoformat())
+        live = store_moment(conn)
+
+        newest, oldest = db.get_recent_moments(conn)
+
+        assert (newest["id"], oldest["id"]) == (live, found)
+        assert datetime.fromisoformat(oldest["detected_at"]) == then
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(newest["detected_at"].replace("Z", "+00:00"))
+        assert timedelta(0) <= age < minutes(1)
+
+    def test_a_moment_can_be_taken_back(self, conn):
+        kept, gone = store_moment(conn), store_moment(conn)
+
+        db.delete_moment(conn, gone)
+
+        assert [row["id"] for row in db.get_recent_moments(conn)] == [kept]
+        # Its id is not handed out again.
+        assert store_moment(conn) == gone + 1
 
     def test_recent_moments_come_newest_first(self, conn):
         for minute, reason in [(1, "first"), (3, "third"), (2, "second")]:

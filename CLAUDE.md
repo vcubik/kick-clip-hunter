@@ -120,7 +120,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
   the file marked on it, and a scrubber like the one under a clip. The page comes without
   it and the script fetches it (`GET /dashboard/recordings/{id}/trace`), because counting
   the chat of a whole stream takes a second or two. Trim, beside Download, opens the same
-  dialog as on the review page over the recording's file (see `clip_trim.py`). On every page
+  dialog as on the review page over the recording's file (see `clip_trim.py`). Under those is
+  "Moments": "Find moments" replays the recording's chat through the detector under the
+  channel's settings as they are saved and lists what would have been a moment (see
+  `recording_moments.py` below) - a row's time plays the recording from there, "Make a clip"
+  (or "Make clips of all N") makes it a moment with its file cut out of the recording, and one
+  that is a moment already links to it on the review page. On every page
   "Recording" means a stream that is being kept whole: a channel whose stream is merely
   coming in for clips is "Live" (the lamp in the bar and the watchlist's "Right now").
   `GET /dashboard/analyze` is a channel's stored chat in figures (see `chat_stats.py`
@@ -150,7 +155,10 @@ set from the dashboard's Settings page (see `tuning.py` below).
   (polled from `GET /moments/status`), and while a stream recording runs or is being saved
   the Channels and Recordings pages ask what it is doing every couple of seconds (`GET
   /recordings/status`) and their words follow - every ten seconds with nothing being recorded
-  but a channel set to be recorded always, whose recording nobody on the page starts. An empty
+  but a channel set to be recorded always, whose recording nobody on the page starts. While a
+  recording's chat is being replayed for its moments, or their clips are being cut, the
+  Recordings page fetches that section again every couple of seconds (`GET
+  /dashboard/recordings/{id}/moments`). An empty
   queue is the normal state, so that page then says what the service is doing instead.
 - Tests: `pip install -r requirements-dev.txt`, then `python -m pytest` (with the project's
   virtual environment: `.venv\Scripts\python.exe -m pytest`). See "Testing" below.
@@ -222,9 +230,10 @@ Module map (`src/kick_clip_hunter/`):
   script sends only what is not locked, so saving them leaves alone the values a
   channel keeps for when it goes by its own again
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
-  rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`
-  and the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`
-  - the newest 10,000 messages, in a worker thread, one trial at a time). Each run is a
+  rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`,
+  the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`
+  - the newest 10,000 messages, in a worker thread, one trial at a time) and the search
+  for moments in a recording (`recording_moments.py`). Each run is a
   channel of its own to the detector, so a replay inside the running service leaves live
   channels' state alone
 - `timeutil.py` — UTC-to-local-time display helper
@@ -361,8 +370,9 @@ Module map (`src/kick_clip_hunter/`):
   `_recording_chat.html` is the box of a recording's chat for one stretch of it, also
   served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`);
   `_recording_trace.html` is the chat trace over a recording or a stretch of it, only ever
-  served on its own; `_trim.html` is the Trim dialog, included by the open moment and by
-  the open recording
+  served on its own; `_recording_moments.html` is what looking for moments in a recording
+  has come to, on the page and served on its own; `_trim.html` is the Trim dialog, included
+  by the open moment and by the open recording
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
@@ -370,7 +380,8 @@ Module map (`src/kick_clip_hunter/`):
   are copied from the page's when it is opened on a moment and fetched for the window it
   shows of a recording, the Settings form, which it posts as a
   whole and then fetches again, and stream recordings: the buttons, the words that follow
-  a recording while there is one, a recording's chat and the trace under it) and the bundled typeface,
+  a recording while there is one, a recording's chat and the trace under it, and the moments
+  found in a recording - which it also marks on that trace) and the bundled typeface,
   Archivo, with its licence;
   `chat_video.css`/`chat_video.js` dress and step the chat video's page
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
@@ -437,6 +448,31 @@ Module map (`src/kick_clip_hunter/`):
   one more break), unless what it kept is older than the grace period - then it is saved
   as it was cut short. A shutdown from the dashboard ends recordings and waits for their
   files.
+- `recording_moments.py` — moments looked for in a stream that was kept whole, once it is
+  over. Pure; its module docstring is the full story. A recording has its chat stored
+  whether or not the channel was tracked, so `POST /recordings/{id}/moments` replays that
+  chat (`replay.load_between`, by the channel's id, from five minutes before the first
+  frame to five after the last) under the channel's settings as they are saved, in a
+  tracked background task, and this module places what the replay found in the
+  recording's file: the clip framed as the recorder frames one (`Tuning.framing`), with
+  context either side, all of it from the one part of the recording that holds most of
+  the clip - nothing is cut across a break, and a moment the file has less than half the
+  clip of is counted, not listed. What was found is kept in memory (`_recording_finds`:
+  each moment with where its clip lies, so settings saved later change nothing of it
+  until the recording is looked through again; a restart forgets it) and shown by
+  `_recording_moments.html`. `POST /recordings/{id}/moments/clips` makes moments of the
+  ones asked for (`moments`: their keys; left out, all): each file is cut out of the
+  recording's with `recorder.trim_clip` - so it begins on a keyframe, up to a couple of
+  seconds before the context asked for (`extent`) - and the moment is stored as a
+  detected one is, with the replay's figures, `detected_at` the time it would have fired
+  and no stream time. Which found moments are moments already is told from the channel's
+  stored moments every time (`moment_of`: a reaction that overlaps), so one the service
+  detected live counts as much as one made from here, and none is made twice. One replay
+  runs at a time across this and the Settings trial (`_replay_running`); it takes as
+  long as the chat was busy - the detector looks back five minutes for every message,
+  so minutes for a long stream of a big channel (`replay.PROGRESS_EVERY`) - says how far
+  it has got, and is given up when the service shuts down. Not found this way: clips on
+  command, and anything the recording has no footage of
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
   own internal API under a logged-in account (see "Clip creation")
 - `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU)
@@ -596,7 +632,8 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   chunks (`db.CHAT_CHUNK`), each fetched whole before the next row is handed out. That is
   the Analyze page (`db.iter_channel_chat`), which also counts only a period's newest
   100,000 messages (`ANALYZE_MESSAGE_LIMIT`), saying so on the page when that left some
-  out, and the trace over a recording (`db.iter_channel_chat_between`), which counts all
+  out, and the trace over a recording and the replay of a recording's chat
+  (`db.iter_channel_chat_between`), which go through all
   the chat of a stream of hours. Anything new that reads chat by the tens of thousands
   of rows goes the same way, and never hands on a cursor that is still open.
 - A channel has two spellings of its name. The watchlist keeps the one it was added

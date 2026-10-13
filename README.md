@@ -45,6 +45,11 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   over the whole stream - hours on one timeline, with the moments that were found marked on it -
   which is how to find one's way about it. A channel can also be set to be recorded always: every
   stream of it is then recorded from when it goes live.
+- **Finds the moments of a recorded stream afterwards.** The chat stored with a recording can be
+  replayed through the detector at any time, under the settings as they are saved then. What would
+  have been a moment is listed under the recording and marked on its timeline, each one a click
+  away in the video - so a change of settings can be judged on the picture - and any of them can
+  be made into a moment like the others, its clip cut out of the recording.
 - **Shows what chat did.** The Analyze page turns a channel's stored chat into figures for any
   period - one session, the last day, week or month, or everything: messages over time with the
   laughing and the detected moments marked, the busiest minutes, the most active chatters, the
@@ -142,6 +147,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `tuning.py`, `replay.py` | What of detection and of clips can be set from the dashboard, for all channels or for one; and stored chat replayed through the detector, to try settings out before they are saved. |
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting; which channels are recorded right now, and why. |
 | `stream_recording.py` | A stream kept whole: what is written while it is recorded, how that becomes one video file, and how a second of the file is tied back to when it was on air - which is what places chat against it. |
+| `recording_moments.py` | Moments looked for in a recorded stream afterwards: which chat to replay, where in the recording's file a replayed moment's clip lies, and which of them are moments already. |
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
