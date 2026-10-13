@@ -427,6 +427,22 @@ class TestARecordingThatCanBePlayed:
         assert (download.text, download.attrs["href"]) == ("Download", f"/streams/{row['file_path']}")
         assert "download" in download.attrs
 
+    async def test_has_a_place_for_the_moments_looked_for_in_it(self, service):
+        # What is done from there is tests/integration/
+        # test_api_recording_moments.py's; the page comes with it as it stands.
+        recording_id = add_stream_recording(CHANNEL)
+
+        article = (await recordings(service)).one("article", class_="recording")
+
+        found = article.one("section", data_rec_moments=True)
+        assert found.attrs["data-state"] == "none"
+        assert found.attrs["data-url"] == f"/recordings/{recording_id}/moments"
+        assert found.one("h2").text == "Moments"
+        # Asking is the script's to do: the button shows once it is there.
+        assert "hidden" in found.one("button", data_find_moments=True).attrs
+        # What it refuses is said under it, not under the recording's file.
+        assert "data-status-scope" in found.attrs and len(found.find("p", data_status=True)) == 1
+
     async def test_the_file_is_served_and_can_be_read_from_anywhere_in_it(self, service):
         # A recording is gigabytes: a player moves about in it by asking for
         # the bytes it needs, not by fetching all of it.
@@ -497,6 +513,8 @@ class TestARecordingThatCanNotBePlayed:
         page = await recordings(service)
 
         assert page.find("video") == []
+        # Nor is there anything to look for moments in yet.
+        assert page.find("section", data_rec_moments=True) == []
         statement = page.one("section", class_="statement")
         assert statement.one("h1").text == f"Recording {CHANNEL}"
         lead = statement.one("p", class_="lead")

@@ -187,6 +187,8 @@ def _reset_module_state() -> None:
         main._chat_identity_cache.clear()
         main._stream_start_cache.clear()
         main._stream_saves.clear()
+        main._recording_finds.clear()
+        main._replay_running = False
         main._shutdown_requested = False
 
 

@@ -209,6 +209,19 @@ of a recording cut out as a video named for the stretch, one at a time, its chat
 channel's id and placed by the recording's parts, refused where it is too long for its chat or
 would fill the disk, and removed with the recording?
 
+**10a. Moments found in a recording** - `unit/test_recording_moments.py`,
+`integration/test_api_recording_moments.py`, and in `unit/test_replay_chat.py`
+Is a replayed moment's clip framed in the recording's file as the recorder would have framed it
+live, with its context, kept to one part of the recording and left out - but counted - where the
+file has too little of it? Does what the cut file holds add up, when the cut begins on an earlier
+frame than was asked? Is the chat a recording's channel wrote found by the channel's id and
+replayed under the settings saved for it, off the event loop, one replay at a time, saying how far
+it has got, given up on shutdown, and nothing stored by looking? With the real ffmpeg: is a found
+moment made into a moment as the service would have detected it - same figures, the time it would
+have fired, its file clip and context in one - shown on the review page with its chat, and never
+made twice, whether it was made from here or detected while the stream was on? Does a cut that
+fails leave neither a moment nor a file behind?
+
 **11. The Analyze page** - `unit/test_chat_stats.py`, `integration/test_api_analyze.py`, and in
 `unit/test_db.py`
 Is the period the one that was asked for - a preset, any two times, the newest session where
@@ -321,6 +334,7 @@ Some things only exist against the real Kick, and faking them would only test th
 | `chat_video.capture_frames`, `static/chat_video.js` | They are a headless browser drawing the chat video's page frame by frame. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, and the encoding of its frames with real ffmpeg (step 9 below). |
 | `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it, reading a time that was typed, the window it shows of a recording | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (steps 9 and 11 below). |
 | `static/dashboard.js` - the trace under a recording: fetching it, the playhead, scrubbing | The same: the trace the service draws is tested, the script that puts it on the page is checked by hand (step 11 below). |
+| `static/dashboard.js` - the moments found in a recording: asking for them, following a replay or the cutting of clips, the marks on the trace, playing from a row | The same: every request and the section the service renders are tested, the script is checked by hand (step 11 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
@@ -411,6 +425,17 @@ Run this on a live channel after changing any of the above, or the code right ne
    picture follow it, and the chat video is made as for a clip (for a stretch of up to ten
    minutes; a longer one is refused in a sentence). A second export replaces the first.
    The file is where the page says it is and plays in another player.
+   Under the file's line is "Moments". Press "Find moments": the section counts through the
+   recording's messages - a busy chat of hours takes minutes, and the rest of the dashboard and
+   incoming chat carry on meanwhile - then lists what would have been a moment under the
+   channel's saved settings, each marked along the foot of the trace. For a stream that was
+   tracked while it was recorded, the list should be close to the moments the stream really
+   had, and those rows say "Open in review". A row's time plays the recording from where its
+   clip begins. "Make a clip" on a row that is no moment yet: within seconds the row links to
+   the review page, where the moment plays like any other - clip, context either side, chat
+   in step - and sits in the queue at the time it happened; the log says `moment N made from
+   stream recording M`. Change a setting on the Settings page, press "Look again", and the
+   list follows the new values.
    Delete it from the page when done: it asks twice, and the file and what was cut out of it
    are gone. If the service is
    restarted while a recording runs, the log says the recording `goes on after the restart`,

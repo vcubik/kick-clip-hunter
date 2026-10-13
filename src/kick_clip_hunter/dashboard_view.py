@@ -624,6 +624,92 @@ def free_room_words(free: int) -> str:
     return f"{size_words(free)} free on the disk recordings are kept on."
 
 
+# Where looking for moments in a recording's chat stands (see
+# recording_moments.py), and what the Recordings page says of each state
+# that needs no figures to say it.
+FIND_NONE = "none"
+FIND_LOOKING = "looking"
+FIND_FOUND = "found"
+FIND_CUTTING = "cutting"
+FIND_FAILED = "failed"
+FIND_WORDS = {
+    FIND_NONE: (
+        "Replays the chat stored with this recording through the detector, under the channel's settings as "
+        "they are saved, and lists what would have been a moment."
+    ),
+    FIND_FAILED: "The recording's chat could not be replayed. The server log says why.",
+}
+# The states in which more is still to come.
+FIND_BUSY = frozenset({FIND_LOOKING, FIND_CUTTING})
+
+
+def find_words(
+    state: str,
+    *,
+    found: int = 0,
+    already: int = 0,
+    missing: int = 0,
+    messages: int = 0,
+    looked: datetime | None = None,
+    today: date | None = None,
+    done: int = 0,
+    of: int = 0,
+    made: int = 0,
+    failed: int = 0,
+) -> str:
+    """What the Recordings page says of the moments looked for in a
+    recording. While its chat is replayed: how many messages of how many
+    have been (`done`, `of`). Once it has been: how many moments that came
+    to (`found`) in how many `messages`, under the settings as they were
+    when it was `looked` for, how many of them are moments `already`, and
+    how many more the recording is `missing` the footage of. While clips are
+    cut, which one of how many (`done`, `of` again); after that, how many
+    were `made` and how many `failed`."""
+    if state == FIND_LOOKING:
+        if not of:
+            return "Reading the recording's chat."
+        return (
+            f"Replaying the recording's chat: {done} of {count_words(of, 'message')}. "
+            "A long stream with a busy chat takes minutes."
+        )
+    if state == FIND_CUTTING:
+        return f"Cutting clip {min(done + 1, of)} of {of}."
+    if state != FIND_FOUND:
+        return FIND_WORDS[state]
+
+    sentences = []
+    if made:
+        sentences.append(f"{count_words(made, 'clip')} made, and in the review queue.")
+    if failed:
+        sentences.append(f"{count_words(failed, 'clip')} could not be cut. The server log says why.")
+    if not messages:
+        sentences.append("No chat was stored for this recording, so there is nothing to look for moments in.")
+        return " ".join(sentences)
+
+    when = since_words(looked, today) if looked is not None and today is not None else "then"
+    chat = f"the recording's chat ({count_words(messages, 'message')})"
+    under = f"under the settings as they were saved at {when}"
+    if not found:
+        sentences.append(f"Nothing in {chat} would have been a moment {under}.")
+    else:
+        sentences.append(f"{count_words(found, 'moment')} in {chat}, {under}.")
+        if already == found:
+            sentences.append("It is a moment already." if found == 1 else "All of them are moments already.")
+        elif already:
+            sentences.append(f"{already} of them {'is a moment' if already == 1 else 'are moments'} already.")
+    if missing:
+        them = "it" if missing == 1 else "them"
+        sentences.append(f"{missing} more fell where the recording has too little footage of {them}.")
+    return " ".join(sentences)
+
+
+def found_words(reason: str, score: float, clip_seconds: float) -> str:
+    """What the list of moments found in a recording says of one: what set
+    it off, how strongly, and how long its clip is."""
+    reasons = sentence_case(", ".join(reason_words(reason, main_only=True)))
+    return f"{reasons}, score {number_words(score, 1)}, a clip of {duration_words(clip_seconds)}"
+
+
 def own_settings_words(channels: list[str]) -> str | None:
     """Which channels the settings for all channels do not hold for in
     everything, said on the page those are set on - or None if they hold
