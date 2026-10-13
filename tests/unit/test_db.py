@@ -734,6 +734,339 @@ class TestChatOfAChannelToldByItsId:
         assert db.get_chat_name(conn, 1) is None
 
 
+class TestTheChannelsThatHaveChat:
+    def test_every_channel_with_chat_is_named_once(self, conn):
+        for owner in (7, 3, 7, 12, 3, 7):
+            store_chat(conn, f"channel_{owner}", "alice", "x", T0 + minutes(owner), broadcaster_user_id=owner)
+            store_chat(conn, f"channel_{owner}", "bob", "x", T0 + minutes(owner), broadcaster_user_id=owner)
+
+        assert db.get_chat_channel_ids(conn) == [3, 7, 12]
+
+    def test_no_chat_means_no_channels(self, conn):
+        assert db.get_chat_channel_ids(conn) == []
+
+    def test_a_channels_chat_reaches_from_its_oldest_message_to_its_newest(self, conn):
+        for minute in (5, 1, 9):
+            store_chat(conn, "some_channel", "alice", "x", T0 + minutes(minute))
+        store_chat(conn, "another_channel", "bob", "x", T0 + minutes(30), broadcaster_user_id=2)
+
+        assert db.get_chat_span(conn, 1) == ((T0 + minutes(1)).isoformat(), (T0 + minutes(9)).isoformat())
+
+    def test_a_channel_without_chat_reaches_nowhere(self, conn):
+        assert db.get_chat_span(conn, 1) is None
+
+
+class TestSessionsOfChat:
+    """Chat with no silence longer than the gap in it is one session."""
+
+    def sessions(self, conn, **overrides):
+        asked = {"gap_seconds": 600, "min_messages": 1, "min_seconds": 0, "limit": 10, "newest": 1000}
+        return [dict(row) for row in db.get_chat_sessions(conn, 1, **{**asked, **overrides})]
+
+    def chat(self, conn, *at_minutes: float, broadcaster_user_id: int = 1) -> None:
+        for minute in at_minutes:
+            store_chat(
+                conn, "some_channel", "alice", "x", T0 + minutes(minute), broadcaster_user_id=broadcaster_user_id
+            )
+
+    def test_a_silence_longer_than_the_gap_ends_a_session(self, conn):
+        self.chat(conn, 0, 4, 9, 30, 31, 100)
+
+        assert self.sessions(conn) == [
+            {"first": (T0 + minutes(100)).isoformat(), "last": (T0 + minutes(100)).isoformat(), "messages": 1},
+            {"first": (T0 + minutes(30)).isoformat(), "last": (T0 + minutes(31)).isoformat(), "messages": 2},
+            {"first": T0.isoformat(), "last": (T0 + minutes(9)).isoformat(), "messages": 3},
+        ]
+
+    def test_a_shorter_silence_does_not(self, conn):
+        self.chat(conn, 0, 9.9, 20.5)
+
+        assert [session["messages"] for session in self.sessions(conn)] == [1, 2]
+
+    def test_chat_stored_in_the_older_way_and_in_todays_is_one_chat(self, conn):
+        # Rows from before arrival times were written by the service itself
+        # end in "Z" and carry milliseconds.
+        conn.execute(
+            "INSERT INTO chat_messages (message_id, broadcaster_user_id, channel_slug, received_at)"
+            " VALUES ('old', 1, 'some_channel', '2026-03-01T19:58:00.000Z')"
+        )
+        conn.commit()
+        self.chat(conn, 0)
+
+        assert [session["messages"] for session in self.sessions(conn)] == [2]
+
+    def test_a_session_of_too_few_messages_or_too_short_is_left_out(self, conn):
+        self.chat(conn, 0, 1, 2, 3, 40, 41, 80, 85, 89, 120)
+
+        assert [session["messages"] for session in self.sessions(conn, min_messages=2)] == [3, 2, 4]
+        assert [session["messages"] for session in self.sessions(conn, min_seconds=170)] == [3, 4]
+        assert [session["messages"] for session in self.sessions(conn, min_messages=4, min_seconds=170)] == [4]
+
+    def test_only_so_many_sessions_are_returned_the_newest_ones(self, conn):
+        self.chat(conn, 0, 30, 60, 90)
+
+        assert [session["first"] for session in self.sessions(conn, limit=2)] == [
+            (T0 + minutes(90)).isoformat(),
+            (T0 + minutes(60)).isoformat(),
+        ]
+
+    def test_only_the_newest_messages_are_looked_at(self, conn):
+        self.chat(conn, 0, 1, 2, 30, 31, 32)
+
+        assert [session["messages"] for session in self.sessions(conn, newest=4)] == [3, 1]
+
+    def test_another_channels_chat_is_no_part_of_them(self, conn):
+        self.chat(conn, 0, 30)
+        self.chat(conn, 10, 20, broadcaster_user_id=2)
+
+        assert [session["messages"] for session in self.sessions(conn)] == [1, 1]
+
+    def test_a_channel_without_chat_has_none(self, conn):
+        assert self.sessions(conn) == []
+
+
+class TestAStretchOfAChannelsChat:
+    """What the Analyze page reads: a channel's chat from one time up to,
+    but not at, another - all of it, one chatter's, or what has a text in
+    it."""
+
+    END = T0 + minutes(10)
+
+    def said(self, rows) -> list[str]:
+        return [row["content"] for row in rows]
+
+    def searched(self, conn, **asked) -> list[str]:
+        return self.said(db.search_channel_chat(conn, 1, T0, self.END, **asked))
+
+    def test_it_holds_its_start_and_not_its_end(self, conn):
+        store_chat(conn, "some_channel", "alice", "too early", T0 - timedelta(milliseconds=1))
+        store_chat(conn, "some_channel", "alice", "first", T0)
+        store_chat(conn, "some_channel", "alice", "last", self.END - timedelta(milliseconds=1))
+        store_chat(conn, "some_channel", "alice", "too late", self.END)
+
+        assert self.searched(conn, newest_first=False) == ["first", "last"]
+        assert db.count_channel_chat(conn, 1, T0, self.END) == 2
+        assert self.said(db.iter_channel_chat(conn, 1, T0, self.END, limit=10)) == ["last", "first"]
+
+    def test_it_is_one_channels_whatever_name_its_chat_came_under(self, conn):
+        store_chat(conn, "some_channel", "alice", "here", T0)
+        store_chat(conn, "renamed_channel", "alice", "here too", T0 + minutes(1))
+        store_chat(conn, "another_channel", "alice", "elsewhere", T0 + minutes(2), broadcaster_user_id=2)
+
+        assert self.searched(conn, newest_first=False) == ["here", "here too"]
+        assert db.count_channel_chat(conn, 1, T0, self.END) == 2
+
+    def test_it_comes_newest_first_unless_asked_otherwise(self, conn):
+        for minute in (3, 1, 2):
+            store_chat(conn, "some_channel", "alice", f"minute {minute}", T0 + minutes(minute))
+
+        assert self.searched(conn) == ["minute 3", "minute 2", "minute 1"]
+        assert self.searched(conn, newest_first=False) == ["minute 1", "minute 2", "minute 3"]
+
+    def test_it_is_read_a_page_at_a_time(self, conn):
+        for minute in range(7):
+            store_chat(conn, "some_channel", "alice", f"minute {minute}", T0 + minutes(minute))
+
+        assert self.searched(conn, limit=3) == ["minute 6", "minute 5", "minute 4"]
+        assert self.searched(conn, limit=3, offset=3) == ["minute 3", "minute 2", "minute 1"]
+        assert self.searched(conn, limit=3, offset=6) == ["minute 0"]
+        assert self.searched(conn, limit=3, offset=9) == []
+
+    def test_one_chatters_messages_are_found_however_the_name_is_capitalised(self, conn):
+        store_chat(conn, "some_channel", "Marmot", "mine", T0)
+        store_chat(conn, "some_channel", "Marmot2", "not mine", T0 + minutes(1))
+        store_chat(conn, "some_channel", "alice", "nor this", T0 + minutes(2))
+
+        assert self.searched(conn, sender="marmot") == ["mine"]
+        assert db.count_channel_chat(conn, 1, T0, self.END, sender="MARMOT") == 1
+
+    def test_a_text_is_found_however_it_is_capitalised_in_any_alphabet(self, conn):
+        store_chat(conn, "some_channel", "alice", "ČAU všem", T0)
+        store_chat(conn, "some_channel", "bob", "no čau teda", T0 + minutes(1))
+        store_chat(conn, "some_channel", "carol", "cau", T0 + minutes(2))
+
+        assert self.searched(conn, text="Čau", newest_first=False) == ["ČAU všem", "no čau teda"]
+        assert db.count_channel_chat(conn, 1, T0, self.END, text="čau") == 2
+
+    def test_a_text_is_looked_for_as_it_is_and_not_as_a_pattern(self, conn):
+        store_chat(conn, "some_channel", "alice", "100% sure", T0)
+        store_chat(conn, "some_channel", "bob", "1000 sure", T0 + minutes(1))
+        store_chat(conn, "some_channel", "carol", "a_b", T0 + minutes(2))
+        store_chat(conn, "some_channel", "dave", "axb", T0 + minutes(3))
+
+        assert self.searched(conn, text="100%") == ["100% sure"]
+        assert self.searched(conn, text="a_b") == ["a_b"]
+
+    def test_a_chatter_and_a_text_narrow_it_together(self, conn):
+        store_chat(conn, "some_channel", "alice", "gg wp", T0)
+        store_chat(conn, "some_channel", "alice", "ahoj", T0 + minutes(1))
+        store_chat(conn, "some_channel", "bob", "gg", T0 + minutes(2))
+
+        assert self.searched(conn, sender="alice", text="gg") == ["gg wp"]
+        assert self.said(db.iter_channel_chat(conn, 1, T0, self.END, limit=10, sender="alice", text="GG")) == ["gg wp"]
+
+    def test_a_message_comes_with_what_tells_it_from_every_other(self, conn):
+        store_chat(conn, "some_channel", "alice", "hello", T0, message_id="m-1")
+
+        (row,) = db.search_channel_chat(conn, 1, T0, self.END)
+
+        assert dict(row) == {
+            "message_id": "m-1",
+            "received_at": T0.isoformat(),
+            "sender_username": "alice",
+            "content": "hello",
+        }
+
+    def test_all_of_it_is_handed_out_once_a_chunk_at_a_time(self, conn, monkeypatch):
+        monkeypatch.setattr(db, "CHAT_CHUNK", 3)
+        for second in range(10):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
+
+        handed_out = self.said(db.iter_channel_chat(conn, 1, T0, self.END, limit=100))
+
+        assert handed_out == [f"second {second}" for second in reversed(range(10))]
+
+    @pytest.mark.parametrize("limit", [0, 1, 3, 4, 6, 7])
+    def test_no_more_than_was_asked_for_is_handed_out(self, conn, monkeypatch, limit):
+        monkeypatch.setattr(db, "CHAT_CHUNK", 3)
+        for second in range(10):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
+
+        handed_out = self.said(db.iter_channel_chat(conn, 1, T0, self.END, limit=limit))
+
+        assert handed_out == [f"second {second}" for second in reversed(range(10))][:limit]
+
+    def test_no_statement_is_left_open_while_its_rows_are_worked_through(self, conn, monkeypatch):
+        # One left open would keep the database locked against the message
+        # that arrives meanwhile.
+        monkeypatch.setattr(db, "CHAT_CHUNK", 2)
+        for second in range(5):
+            store_chat(conn, "some_channel", "alice", f"second {second}", T0 + timedelta(seconds=second))
+        writer = db.get_connection()
+        writer.execute("PRAGMA busy_timeout = 0")
+
+        try:
+            for number, _row in enumerate(db.iter_channel_chat(conn, 1, T0, self.END, limit=100)):
+                store_chat(writer, "some_channel", "bob", "meanwhile", self.END + timedelta(seconds=number))
+        finally:
+            writer.close()
+
+        assert db.count_channel_chat(conn, 1, T0, self.END + minutes(1), sender="bob") == 5
+
+    def test_the_stretch_is_found_through_an_index(self, conn):
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT content FROM chat_messages"
+            " WHERE broadcaster_user_id = 1 AND received_at >= 'a' AND received_at < 'b' ORDER BY received_at DESC"
+        ).fetchall()
+
+        assert any("USING INDEX" in step[-1] for step in plan)
+        assert not any("TEMP B-TREE" in step[-1] for step in plan)
+
+
+class TestTheChatAroundAMessage:
+    def chat(self, conn, count: int = 9) -> None:
+        for number in range(count):
+            store_chat(conn, "some_channel", "alice", f"line {number}", T0 + minutes(number), message_id=f"m-{number}")
+
+    def around(self, conn, message_id: str, before: int = 2, after: int = 2) -> list[str] | None:
+        rows = db.get_chat_around(conn, 1, message_id, before=before, after=after)
+        return None if rows is None else [row["content"] for row in rows]
+
+    def test_it_comes_with_what_was_written_before_and_after_in_order(self, conn):
+        self.chat(conn)
+
+        assert self.around(conn, "m-4") == ["line 2", "line 3", "line 4", "line 5", "line 6"]
+
+    def test_there_is_less_of_it_at_either_end_of_the_chat(self, conn):
+        self.chat(conn)
+
+        assert self.around(conn, "m-0") == ["line 0", "line 1", "line 2"]
+        assert self.around(conn, "m-8") == ["line 6", "line 7", "line 8"]
+
+    def test_another_channels_chat_is_no_part_of_it(self, conn):
+        self.chat(conn, 3)
+        store_chat(conn, "another_channel", "bob", "elsewhere", T0 + timedelta(seconds=90), broadcaster_user_id=2)
+
+        assert self.around(conn, "m-1") == ["line 0", "line 1", "line 2"]
+
+    def test_a_message_the_channel_does_not_have_has_nothing_around_it(self, conn):
+        self.chat(conn, 3)
+        store_chat(conn, "another_channel", "bob", "x", T0, message_id="theirs", broadcaster_user_id=2)
+
+        assert self.around(conn, "no-such-message") is None
+        assert self.around(conn, "theirs") is None
+
+
+class TestWhoWroteInAStretchOfChat:
+    END = T0 + minutes(10)
+
+    def test_everyone_is_counted_the_most_active_first(self, conn):
+        for minute, sender in enumerate(["bob", "alice", "carol", "alice", "bob", "alice"]):
+            store_chat(conn, "some_channel", sender, "x", T0 + minutes(minute))
+        store_chat(conn, "some_channel", "late", "x", self.END)
+        store_chat(conn, "another_channel", "elsewhere", "x", T0, broadcaster_user_id=2)
+
+        assert db.get_chatter_counts(conn, 1, T0, self.END) == [("alice", 3), ("bob", 2), ("carol", 1)]
+
+    def test_those_as_active_as_each_other_come_in_the_order_of_their_names(self, conn):
+        for minute, sender in enumerate(["zed", "alice", "mia"]):
+            store_chat(conn, "some_channel", sender, "x", T0 + minutes(minute))
+
+        assert [name for name, _count in db.get_chatter_counts(conn, 1, T0, self.END)] == ["alice", "mia", "zed"]
+
+    def test_who_had_written_before_is_told_from_everything_stored_before(self, conn):
+        store_chat(conn, "some_channel", "regular", "x", T0 - timedelta(days=30))
+        store_chat(conn, "some_channel", "gone", "x", T0 - timedelta(days=30))
+        store_chat(conn, "some_channel", "regular", "x", T0)
+        store_chat(conn, "some_channel", "regular", "x", T0 + minutes(1))
+        store_chat(conn, "some_channel", "newcomer", "x", T0 + minutes(2))
+        store_chat(conn, "another_channel", "newcomer", "x", T0 - timedelta(days=30), broadcaster_user_id=2)
+
+        assert db.count_returning_chatters(conn, 1, T0, self.END) == 1
+
+    def test_with_nothing_stored_from_before_nobody_can_be_called_new(self, conn):
+        store_chat(conn, "some_channel", "alice", "x", T0)
+
+        assert db.count_returning_chatters(conn, 1, T0, self.END) is None
+
+    def test_a_chatter_was_first_seen_when_their_oldest_message_arrived(self, conn):
+        store_chat(conn, "some_channel", "Marmot", "x", T0 + minutes(5))
+        store_chat(conn, "some_channel", "Marmot", "x", T0 + minutes(1))
+        store_chat(conn, "another_channel", "Marmot", "x", T0 - minutes(9), broadcaster_user_id=2)
+
+        assert db.get_first_message_time(conn, 1, "marmot") == (T0 + minutes(1)).isoformat()
+        assert db.get_first_message_time(conn, 1, "nobody") is None
+
+
+class TestWhenMomentsWereDetected:
+    def detected(self, conn, at: str, **overrides) -> None:
+        """Stores a moment that was detected at `at`, as the column has it."""
+        conn.execute("UPDATE moments SET detected_at = ? WHERE id = ?", (at, store_moment(conn, **overrides)))
+        conn.commit()
+
+    def times(self, conn) -> list[str]:
+        return db.get_moment_times(conn, 1, T0, T0 + minutes(10), not_for="manual_import")
+
+    def test_a_stretch_of_time_has_the_moments_detected_in_it_oldest_first(self, conn):
+        for minute in (7, -1, 3, 10):
+            self.detected(conn, (T0 + minutes(minute)).isoformat())
+        self.detected(conn, (T0 + minutes(5)).isoformat(), broadcaster_user_id=2)
+
+        assert self.times(conn) == [(T0 + minutes(3)).isoformat(), (T0 + minutes(7)).isoformat()]
+
+    def test_a_moment_timed_by_the_database_is_found_too(self, conn):
+        # Left to the database, a time is written with a "Z" and milliseconds.
+        self.detected(conn, "2026-03-01T20:04:00.000Z")
+
+        assert self.times(conn) == ["2026-03-01T20:04:00.000Z"]
+
+    def test_an_imported_clip_is_not_a_moment_that_was_detected(self, conn):
+        self.detected(conn, (T0 + minutes(1)).isoformat(), reason="manual_import")
+        self.detected(conn, (T0 + minutes(2)).isoformat(), reason="laugh")
+
+        assert self.times(conn) == [(T0 + minutes(2)).isoformat()]
+
+
 class TestMoments:
     def test_inserting_returns_consecutive_ids(self, conn):
         assert [store_moment(conn), store_moment(conn), store_moment(conn)] == [1, 2, 3]

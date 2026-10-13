@@ -205,6 +205,7 @@ class TestTheBarAcrossTheTop:
         [
             ("/dashboard", "Review"),
             ("/dashboard/recordings", "Recordings"),
+            ("/dashboard/analyze", "Analyze"),
             ("/dashboard/channels", "Channels"),
             ("/dashboard/settings", "Settings"),
         ],
@@ -213,10 +214,11 @@ class TestTheBarAcrossTheTop:
         page = await page_at(service, path)
 
         links = page.one("nav", class_="bar-nav").find("a")
-        assert [link.text for link in links] == ["Review", "Recordings", "Channels", "Settings"]
+        assert [link.text for link in links] == ["Review", "Recordings", "Analyze", "Channels", "Settings"]
         assert [link.attrs["href"] for link in links] == [
             "/dashboard",
             "/dashboard/recordings",
+            "/dashboard/analyze",
             "/dashboard/channels",
             "/dashboard/settings",
         ]

@@ -84,12 +84,16 @@
   --h-row: 40px;
   --h-bar: 48px;
   --h-strip: 96px;
+  --h-chart: 168px;
   --w-queue: 400px;
   --w-chat: 340px;
   --w-dialog: 1120px;
   --w-trim-chat: 300px;
   --w-recording: 340px;
   --w-handle: 12px;
+  --w-analysis: 1200px;
+  --w-gutter: 44px;
+  --w-when: 152px;
 
   /* One family; its width axis carries role. */
   --font-sans: Archivo, "Segoe UI", system-ui, sans-serif;
@@ -333,7 +337,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* ---- Review: the queue, the open moment, its chat ------------------ */
 
-.review, .recordings { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
+.review, .recordings, .analyze { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
 
 .queue { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .queue-head { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-12); }
@@ -436,7 +440,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* A row of the list: whose stream, and how much of it or what is being done
    with it; under them, when. The open one is `sunk` with a `lit` edge, like
-   a row of the queue. */
+   a row of the queue. The sessions on the Analyze page are rows of the same
+   kind: which day, how long, and under them from when to when. */
 .rec-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-12); padding: var(--space-8) var(--space-12) var(--space-8) 10px; border-bottom: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
 .rec-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .rec-row:focus-visible { outline-offset: -2px; }
@@ -522,13 +527,86 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trial-result th:first-child { text-align: left; }
 .trial-result tbody th { font-weight: 700; }
 
+/* ---- Analyze: a channel's chat in figures --------------------------- */
+
+/* The period is set in the pane on the left: by a tab, by two times, or by
+   a session from the list. */
+.an-range { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: var(--space-4) var(--space-8); font-size: 13px; }
+.an-range .ch-input { min-width: 0; height: var(--h-compact); }
+.an-range .ch-btn { grid-column: 3; grid-row: 1 / span 2; align-self: stretch; height: auto; }
+
+/* What the period holds scrolls as one page of sections. */
+.an-page { min-height: 0; overflow-y: auto; padding: var(--space-24) var(--space-36) var(--space-48); }
+.an-in { display: flex; flex-direction: column; gap: var(--space-24); max-width: var(--w-analysis); }
+.an-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-16); }
+.an-head .ch-tabs, .an-found .ch-tabs { flex: none; width: 240px; }
+.an-search .ch-input { width: 200px; }
+.an-search .an-text { flex: 1 1 200px; max-width: 360px; }
+.an-title { margin-bottom: var(--space-8); font-size: 16px; line-height: 20px; font-weight: 700; }
+.an-title + .ch-cap { max-width: 60ch; margin: calc(-1 * var(--space-4)) 0 var(--space-8); }
+.an-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--space-24) var(--space-36); }
+
+/* A figure: what it is, the figure, and what it is a figure of. */
+.an-figures { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-16) var(--space-24); }
+.an-figures dt { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
+.an-value { font-size: 28px; line-height: 32px; font-weight: 700; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; }
+
+/* Messages as columns on paper: ink for all of them, the pen for the
+   laughing ones at the foot of each, the highlighter behind a column a
+   moment was detected in. The lines across are at round numbers, written
+   in the gutter on the left. */
+.an-chart { margin: 0; }
+.an-chart .ch-axis, .ch-legend + .an-chart { margin-top: var(--space-4); }
+.an-plot { position: relative; height: var(--h-chart); border-top: 1px solid var(--sunk); border-bottom: 1px solid var(--sunk); background: var(--paper); color: var(--ink); }
+.an-level { position: absolute; right: 0; left: 0; padding-left: var(--space-4); border-top: 1px solid var(--grid); font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.an-columns { position: absolute; top: 0; right: 0; bottom: 0; left: var(--w-gutter); display: flex; }
+.an-column { position: relative; flex: 1 1 0; min-width: 0; }
+.an-column.is-moment { background-color: var(--marker); }
+a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.an-column i { position: absolute; right: 1px; bottom: 0; left: 0; }
+.an-all { background: var(--ink); }
+.an-laugh { background: var(--pen); }
+.an-chart .ch-axis { margin-left: var(--w-gutter); }
+.an-chip.is-moment { background: var(--marker); }
+
+/* Tables: who, what, how often. Numbers stand in columns of their own
+   width, the names take the rest. */
+.an-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.an-table th, .an-table td { height: var(--h-tab); padding: 0 var(--space-16) 0 0; border-top: 1px solid var(--quiet); text-align: left; font-weight: 400; }
+.an-table thead th { height: var(--h-compact); border-top: 0; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.an-table tbody th { font-weight: 700; overflow-wrap: anywhere; }
+.an-table tbody th.an-said { font-weight: 400; }
+.an-table .an-number { width: 1%; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.an-table th:last-child, .an-table td:last-child { padding-right: 0; }
+.an-table a, .an-line a, .an-alike a, .an-facts a { text-decoration: none; }
+.an-table a:hover, .an-line a:hover, .an-alike a:hover, .an-facts a:hover { text-decoration: underline; }
+
+/* Stored messages: when each arrived, then the line of chat. The one whose
+   surroundings were asked for is where you are. */
+.an-found { justify-content: space-between; margin-bottom: var(--space-8); }
+.an-found .an-title { margin: 0; }
+.an-line { display: grid; grid-template-columns: var(--w-when) minmax(0, 1fr); align-items: baseline; column-gap: var(--space-8); padding: 1px 0 1px var(--space-8); border-left: 2px solid transparent; }
+.an-line.is-asked { background-color: var(--sunk); border-left-color: var(--lit); }
+.an-line .ch-chat { padding: 0; border: 0; }
+.an-when { font-size: 12px; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+.an-pages { padding-right: 0; padding-left: 0; }
+.an-alike { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+
+/* One chatter: their figures, when they wrote, and what of. */
+.an-card { display: flex; flex-direction: column; gap: var(--space-16); padding-bottom: var(--space-24); border-bottom: 1px solid var(--line); }
+.an-card .an-title { margin: 0; font-size: 21px; line-height: 24px; }
+.an-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-8) var(--space-16); font-size: 13px; }
+.an-facts dt { font-stretch: var(--width-compact); color: var(--text-2); }
+.an-facts dd { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-16); }
+.an-fact { display: inline-flex; align-items: center; gap: var(--space-4); }
+
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 
 @media (max-width: 1100px) {
   body { height: auto; min-height: 100vh; }
   .bar { flex-wrap: wrap; row-gap: var(--space-8); height: auto; padding-top: var(--space-8); padding-bottom: var(--space-8); }
   .bar-nav a { min-height: var(--h-tab); }
-  .review, .moment, .recordings, .recording { display: block; }
+  .review, .moment, .recordings, .recording, .analyze { display: block; }
   .queue { border-right: 0; border-bottom: 1px solid var(--line); }
   .queue-list, .chat-lines { flex: none; max-height: 340px; }
   .chat-lines::before { content: none; }
@@ -548,4 +626,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
   .set-list { width: 100%; }
   .set-foot { bottom: 0; }
+  .an-page { overflow: visible; padding: var(--space-16); }
+  .an-head { flex-wrap: wrap; align-items: flex-start; }
+  .an-pair { grid-template-columns: minmax(0, 1fr); }
 }

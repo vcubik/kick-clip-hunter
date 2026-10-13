@@ -117,6 +117,15 @@ set from the dashboard's Settings page (see `tuning.py` below).
   and has the buttons that delete one or retry one that could not be saved. On every page
   "Recording" means a stream that is being kept whole: a channel whose stream is merely
   coming in for clips is "Live" (the lamp in the bar and the watchlist's "Right now").
+  `GET /dashboard/analyze` is a channel's stored chat in figures (see `chat_stats.py`
+  below). Whose chat and of which period is set in the pane on the left: a tab (24 hours,
+  7 days, 30 days, all), any two times, or one of the sessions the chat came in - the
+  newest of which is what the page opens on. Beside it is either the period's overview
+  (figures, messages over time with the laughing and the detected moments marked, the
+  busiest minutes, the most active chatters, the most used emotes, what was said and who
+  was addressed most) or its messages, a page at a time, which is where a chatter or a
+  text is searched for: a chatter that is found gets figures of their own, and every
+  message leads to the chat around it. The page is links and forms and needs no script.
   `GET /dashboard/settings` is where
   detection and clips are tuned: one form of settings (see `tuning.py`), for all channels
   or - chosen at the top - for one of the watchlist's, which goes by its own values once
@@ -205,7 +214,10 @@ Module map (`src/kick_clip_hunter/`):
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
   /channels/{slug}/own_tuning` (whether it goes by them); what is stored is kept in memory
   (`_tuning_values`) and dropped on every save, together with the keyword weights worked
-  out from it
+  out from it. The Analyze page (`GET /dashboard/analyze`) is put together by `_analysis`
+  on a worker thread, with a connection of its own - a pass over a long period takes
+  seconds - which is handed what it needs of the service's cached state (`_ChatWords`)
+  rather than reading it from there
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page
@@ -222,6 +234,18 @@ Module map (`src/kick_clip_hunter/`):
   and can go below 0, which is where a streamer's own on-screen chat lines up. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
   are placed by estimate: centred on the window they were cut for
+- `chat_stats.py` — a channel's stored chat in figures, behind the Analyze page. Pure,
+  like `chat_trace.py`. One pass over a period's messages (`collect`) counts everything
+  the page shows: who wrote, which emotes were used (as the dashboard draws them - Kick's
+  own, and the channel's 7TV set as it is *now*, so an emote it has since removed is a
+  word again), what was laughing (`detector.is_laughing`, made quick enough for a long
+  pass by `laugh_test`), what was said over and over (`said_key`: capitals, a longer row
+  of one letter, a word repeated and every length of "xDDD" make no difference) and who
+  was addressed with an @. The rest turns the counts into figures, the columns of a chart
+  (`Columns`: the finest step between a minute and a week that keeps a chart to 240
+  columns, on round times of the local clock) and the rows of tables. A period is from a
+  start up to, but not at, an end, and never reaches past now; a session is chat with no
+  silence of half an hour in it (`db.get_chat_sessions`), which as a rule is one stream
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
   sends with every chat message (`sender.identity`). Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
@@ -260,10 +284,11 @@ Module map (`src/kick_clip_hunter/`):
   where the page's own script is not visible - hence `isolated_context=False`. The file
   is large by nature (roughly 3-4 MB per second of clip)
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
-  `review.html`, `recordings.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
+  `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
   without reloading. `_chat_line.html` is one line of chat, shared by the review page, the
-  Recordings page and `chat_video.html`, the page a chat video is made from;
+  Recordings page and `chat_video.html`, the page a chat video is made from - and, as its
+  two halves (who, and what), by the Analyze page's lists and tables;
   `_recording_chat.html` is the box of a recording's chat for one stretch of it, also
   served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`)
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
@@ -398,7 +423,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (about 2000 tests, a few minutes); `python
+- `python -m pytest` runs everything (about 2300 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -491,6 +516,13 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   by asking for byte ranges; Starlette's `StaticFiles` answers those (pinned by a test),
   so the file is written with its index at the end and not rewritten to move it forward.
 
+- The database is in SQLite's default journal mode, where a statement that is still
+  being read holds off every commit - and a chat message that cannot be stored within
+  the five-second busy timeout fails its webhook delivery. So nothing that reads a lot
+  keeps a statement open while it works through the rows: the Analyze page reads a
+  period's chat in chunks (`db.iter_channel_chat`), each fetched whole before the next
+  row is handed out, and counts only a period's newest 100,000 messages
+  (`ANALYZE_MESSAGE_LIMIT`), saying so on the page when that left some out.
 - A channel has two spellings of its name. The watchlist keeps the one it was added
   under, capitals and all; Kick sends chat under its own, all in small letters, and that
   is what chat rows, moments and the per-channel chat delay are stored under. Anything

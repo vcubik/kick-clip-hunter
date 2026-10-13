@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 from . import (
     audio_events,
     chat_identity,
+    chat_stats,
     chat_trace,
     chat_video,
     clip_trim,
@@ -42,22 +43,31 @@ from .db import (
     MOMENT_TYPES,
     STREAM_TYPES,
     TUNING_FOR_ALL,
+    count_channel_chat,
     count_moments,
     count_moments_with_clip,
+    count_returning_chatters,
     count_stream_recordings,
     delete_stream_recording,
     finish_stream_recording,
     get_channel_chat_between,
     get_channel_keywords,
+    get_chat_around,
     get_chat_between,
+    get_chat_channel_ids,
     get_chat_delay,
     get_chat_emotes,
     get_chat_identities,
     get_chat_name,
+    get_chat_sessions,
+    get_chat_span,
+    get_chatter_counts,
     get_connection,
+    get_first_message_time,
     get_flag,
     get_moment,
     get_moment_channels,
+    get_moment_times,
     get_recent_moments,
     get_stream_recording,
     get_stream_recordings,
@@ -69,7 +79,9 @@ from .db import (
     insert_chat_message,
     insert_moment,
     insert_stream_recording,
+    iter_channel_chat,
     replace_tuning,
+    search_channel_chat,
     set_chat_delay,
     set_chat_identity,
     set_flag,
@@ -1806,6 +1818,432 @@ async def dashboard_recording_chat(request: Request, recording_id: int, at: floa
     finally:
         conn.close()
     return templates.TemplateResponse(request, "_recording_chat.html", context)
+
+
+# -- the Analyze page: a channel's stored chat in figures (see chat_stats.py) --
+
+# How many of a period's newest messages its figures are worked out from. A
+# pass over them takes about a second for every forty thousand, next to a
+# service that has chat to keep up with - which is also why it runs on a
+# thread of its own.
+ANALYZE_MESSAGE_LIMIT = 100_000
+
+
+def _now() -> datetime:
+    return datetime.now().astimezone()
+
+
+@dataclass(frozen=True)
+class _ChatWords:
+    """What a channel's chat is read by: its own 7TV emote names, in small
+    letters, and what a laughing message is told by there. Looked up once
+    for a request, where the service keeps them - the thread that counts
+    the chat is given them and stays away from the service's own state."""
+
+    emote_names: tuple[str, ...]
+    laugh_names: tuple[str, ...]
+    laugh_patterns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Asked:
+    """What a request for the Analyze page asked for, beyond the channel."""
+
+    preset: str | None
+    start: datetime | None
+    end: datetime | None
+    view: str
+    chatter: str
+    text: str
+    order: str
+    offset: int
+    top: int
+    around: str
+
+
+def _chat_channels(conn, streamers) -> list[dict]:
+    """The channels that have chat stored, in the order of their names:
+    each one's id, the name the page knows it by - the watchlist's, or for a
+    channel that is no longer on it the one its chat came under - and when
+    its oldest and newest messages arrived."""
+    watched = {row["broadcaster_user_id"]: row["slug"] for row in streamers}
+    channels = []
+    for owner in get_chat_channel_ids(conn):
+        first, last = get_chat_span(conn, owner)
+        channels.append(
+            {"id": owner, "name": watched.get(owner) or get_chat_name(conn, owner), "first": first, "last": last}
+        )
+    return sorted(channels, key=lambda channel: channel["name"].lower())
+
+
+def _named(conn, owner: int, *tables: list[dict]) -> None:
+    """Gives every row of the tables that names a chatter the name as the
+    page draws it: in their colour, behind their badges."""
+    names = {row["name"] for rows in tables for row in rows}
+    identities = get_chat_identities(conn, owner, names)
+    for rows in tables:
+        for row in rows:
+            row["who"] = chat_stats.chatter_name(row["name"], identities)
+
+
+def _analyze_lines(conn, owner: int, rows, emotes, today: date, url, asked: str = "") -> list[dict]:
+    """Stored messages as the page lists them: a line of chat each, with
+    when it arrived, where its writer's other messages are and where the
+    chat around it is. The one whose surroundings were asked for (`asked`,
+    its id) is marked."""
+    chatters = {row["sender_username"] for row in rows if row["sender_username"]}
+    lines = chat_trace.chat_lines(
+        rows, lambda arrived: 0.0, emotes, get_chat_identities(conn, owner, chatters)
+    )
+    for line, row in zip(lines, rows, strict=True):
+        line["when"] = chat_stats.second_words(datetime.fromisoformat(row["received_at"]), today)
+        line["around_href"] = url(around=row["message_id"])
+        line["chatter_href"] = url(chatter=row["sender_username"]) if row["sender_username"] else None
+        line["asked"] = row["message_id"] == asked
+    return lines
+
+
+def _analyze_overview(conn, owner: int, period: chat_stats.Period, words: _ChatWords, today: date, url, top: int):
+    """The overview of a period of a channel's chat: its figures, the chart
+    of its messages, and the tables. None for a period without chat."""
+    total = count_channel_chat(conn, owner, period.start, period.end)
+    if not total:
+        return None
+    emotes = get_chat_emotes(conn, owner)
+    kept = chat_stats.collect(
+        iter_channel_chat(conn, owner, period.start, period.end, limit=ANALYZE_MESSAGE_LIMIT),
+        chat_stats.columns_for(period),
+        emotes=emotes,
+        laugh_names=words.laugh_names,
+        laugh_patterns=words.laugh_patterns,
+    )
+    whole = kept.messages == total
+    moments = [
+        datetime.fromisoformat(detected)
+        for detected in get_moment_times(conn, owner, period.start, period.end, not_for=dashboard_view.IMPORT_REASON)
+    ]
+
+    def column(columns: chat_stats.Columns, number: int) -> str:
+        """A column leads to the stretch it stands for: looked at more
+        closely, or read once it is a single minute."""
+        stretch = chat_stats.Period(columns.start(number), columns.start(number + 1))
+        if columns.seconds == chat_stats.COLUMN_SECONDS[0]:
+            return url(stretch, view=chat_stats.VIEW_MESSAGES, order=chat_stats.ORDER_OLDEST)
+        return url(stretch)
+
+    busiest = []
+    for minute, count in chat_stats.busiest_minutes(kept):
+        stretch = chat_stats.Period(minute, minute + timedelta(minutes=1))
+        said = search_channel_chat(conn, owner, stretch.start, stretch.end, limit=QUEUE_CHAT_LIMIT)
+        busiest.append(
+            {
+                "when": chat_stats.minute_words(minute, today),
+                "href": url(stretch, view=chat_stats.VIEW_MESSAGES, order=chat_stats.ORDER_OLDEST),
+                "messages": chat_stats.whole_words(count),
+                "said": chat_trace.reaction_words(said, words.emote_names) or "",
+            }
+        )
+
+    chatters = chat_stats.top_chatters(kept, top, lambda name: url(chatter=name))
+    mentioned = chat_stats.mentioned_most(kept, chat_stats.SIDE_ROWS, lambda name: url(chatter=name))
+    _named(conn, owner, chatters, mentioned)
+    longer = max(len(kept.by_chatter), len(kept.emote_uses)) > chat_stats.TOP_ROWS
+    return {
+        "figures": chat_stats.overview_figures(
+            kept,
+            today,
+            # Told from everything the period holds, which the figures
+            # beside it are not when only its newest messages were counted.
+            returning=count_returning_chatters(conn, owner, period.start, period.end) if whole else None,
+            moments=len(moments),
+            moments_href=dashboard_view.review_url(dashboard_view.SHOW_ALL, get_chat_name(conn, owner)),
+        ),
+        "activity": chat_stats.activity_chart(
+            kept, today, one_day=chat_stats.one_day(period), moments=moments, link=column
+        ),
+        "hours": chat_stats.hours_chart(kept) if len(kept.days) > 1 else None,
+        "busiest": busiest,
+        "chatters": chatters,
+        "emotes": chat_stats.top_emotes(kept, top),
+        "said": chat_stats.said_most(kept, chat_stats.SIDE_ROWS, emotes),
+        "mentioned": mentioned,
+        "rows": top,
+        "more_href": url(top=chat_stats.TOP_ROWS_MORE) if longer and top == chat_stats.TOP_ROWS else None,
+        "fewer_href": url(top=chat_stats.TOP_ROWS) if top != chat_stats.TOP_ROWS else None,
+        "counted_words": (
+            None
+            if whole
+            else f"Only the newest {chat_stats.whole_words(kept.messages)} "
+            f"of this period's {chat_stats.counted_words(total, 'message')} were counted."
+        ),
+    }
+
+
+def _analyze_chatter(
+    conn,
+    owner: int,
+    period: chat_stats.Period,
+    words: _ChatWords,
+    today: date,
+    url,
+    name: str,
+    counts: list[tuple[str, int]],
+    emotes,
+) -> dict:
+    """What the page says of one chatter in a period they wrote in."""
+    in_period = {"limit": ANALYZE_MESSAGE_LIMIT}
+    kept = chat_stats.collect(
+        iter_channel_chat(conn, owner, period.start, period.end, sender=name, **in_period),
+        chat_stats.columns_for(period),
+        emotes=emotes,
+        laugh_names=words.laugh_names,
+        laugh_patterns=words.laugh_patterns,
+    )
+    addressing = iter_channel_chat(conn, owner, period.start, period.end, text=f"@{name}", **in_period)
+    first_seen = get_first_message_time(conn, owner, name)
+
+    def column(columns: chat_stats.Columns, number: int) -> str:
+        return url(chat_stats.Period(columns.start(number), columns.start(number + 1)), chatter=name)
+
+    talks_to = chat_stats.mentioned_most(kept, chat_stats.CHATTER_ROWS, lambda other: url(chatter=other))
+    card = [{"name": name}]
+    _named(conn, owner, card, talks_to)
+    return {
+        "who": card[0]["who"],
+        "figures": chat_stats.chatter_figures(
+            kept,
+            today,
+            everyone=sum(count for _name, count in counts),
+            rank=chat_stats.rank_of(counts, name),
+            chatters=len(counts),
+            first_seen=datetime.fromisoformat(first_seen) if first_seen else None,
+            mentioned=chat_stats.mentions_of(addressing, name),
+        ),
+        "activity": chat_stats.activity_chart(kept, today, one_day=chat_stats.one_day(period), link=column),
+        "emotes": chat_stats.chatter_emotes(kept),
+        "said": chat_stats.said_most(kept, chat_stats.CHATTER_ROWS, emotes),
+        "talks_to": talks_to,
+    }
+
+
+def _analyze_messages(conn, owner: int, period: chat_stats.Period, words: _ChatWords, today: date, url, asked: _Asked):
+    """A period's messages, a page of them: all, or what a search for a
+    chatter, for a text or for both finds - with what there is to say of
+    the chatter. A name nobody in the period has gets the names that have
+    it in them instead."""
+    emotes = get_chat_emotes(conn, owner)
+    counts = get_chatter_counts(conn, owner, period.start, period.end)
+    text = asked.text.strip()
+    name, alike = chat_stats.find_chatter(counts, asked.chatter) if asked.chatter.strip() else (None, [])
+    if asked.chatter.strip() and name is None:
+        offered = [
+            {
+                "name": other,
+                "href": url(chatter=other, text=text),
+                "messages": chat_stats.counted_words(count, "message"),
+            }
+            for other, count in alike
+        ]
+        _named(conn, owner, offered)
+        return {"nobody": asked.chatter.strip(), "alike": offered}
+
+    found = {"sender": name, "text": text or None}
+    total = count_channel_chat(conn, owner, period.start, period.end, **found)
+    size = chat_stats.MESSAGES_PAGE_SIZE
+    # As in the review queue, a page past the end is the last one.
+    offset = min(max(asked.offset, 0), max(total - 1, 0) // size * size)
+    oldest_first = asked.order == chat_stats.ORDER_OLDEST
+    rows = search_channel_chat(
+        conn, owner, period.start, period.end, newest_first=not oldest_first, limit=size, offset=offset, **found
+    )
+
+    def page(**changes) -> str:
+        shown = {"view": chat_stats.VIEW_MESSAGES, "chatter": name, "text": text, "order": asked.order}
+        return url(**{**shown, **changes})
+
+    return {
+        "nobody": None,
+        "chatter": _analyze_chatter(conn, owner, period, words, today, url, name, counts, emotes) if name else None,
+        "found_words": chat_stats.found_words(total, name, text),
+        "lines": _analyze_lines(conn, owner, rows, emotes, today, url),
+        "orders": [
+            {"label": "Newest first", "href": page(order=chat_stats.ORDER_NEWEST), "current": not oldest_first},
+            {"label": "Oldest first", "href": page(order=chat_stats.ORDER_OLDEST), "current": oldest_first},
+        ],
+        "paging": (
+            {
+                "words": chat_stats.paging_words(offset, len(rows), total),
+                "back_href": page(offset=max(offset - size, 0)) if offset > 0 else None,
+                "on_href": page(offset=offset + size) if offset + len(rows) < total else None,
+            }
+            if total > len(rows)
+            else None
+        ),
+    }
+
+
+def _analyze_around(conn, owner: int, today: date, url, message_id: str) -> dict:
+    """The chat around one message, in the order it was written - what its
+    writer was answering, and what was answered. A message the channel does
+    not have leaves nothing to show."""
+    reach = chat_stats.CONTEXT_MESSAGES
+    rows = get_chat_around(conn, owner, message_id, before=reach, after=reach)
+    if rows is None:
+        return {"lines": [], "when": None, "earlier_href": None, "later_href": None}
+    place = next(index for index, row in enumerate(rows) if row["message_id"] == message_id)
+    return {
+        "lines": _analyze_lines(conn, owner, rows, get_chat_emotes(conn, owner), today, url, asked=message_id),
+        "when": chat_stats.second_words(datetime.fromisoformat(rows[place]["received_at"]), today),
+        # Offered where there may be more that way: as many lines as were
+        # asked for came back.
+        "earlier_href": url(around=rows[0]["message_id"]) if place == reach else None,
+        "later_href": url(around=rows[-1]["message_id"]) if len(rows) - place - 1 == reach else None,
+    }
+
+
+def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, today: date) -> dict:
+    """Everything the Analyze page shows of a channel's chat: the periods
+    on offer, the one that is open, and of that either its overview or its
+    messages. Runs in a thread of its own - a pass over a long period takes
+    seconds - so with a connection of its own."""
+    owner, name = channel["id"], channel["name"]
+    stored = chat_stats.whole_minutes(
+        datetime.fromisoformat(channel["first"]), datetime.fromisoformat(channel["last"])
+    )
+    conn = get_connection()
+    try:
+        sessions = get_chat_sessions(
+            conn,
+            owner,
+            gap_seconds=chat_stats.SESSION_GAP_SECONDS,
+            min_messages=chat_stats.SESSION_MIN_MESSAGES,
+            min_seconds=chat_stats.SESSION_MIN_SECONDS,
+            limit=chat_stats.SESSIONS_LISTED,
+            newest=chat_stats.SESSION_MESSAGE_LIMIT,
+        )
+        period, preset = chat_stats.chosen_period(
+            asked.preset,
+            asked.start,
+            asked.end,
+            now=now,
+            stored=stored,
+            newest_session=chat_stats.session_period(sessions[0]) if sessions else None,
+        )
+
+        def url(other: chat_stats.Period | None = None, **shown) -> str:
+            """The page for this channel and what it is to show: of the
+            period that is open, or of another."""
+            if other is not None:
+                return chat_stats.analyze_url(name, period=other, **shown)
+            shown.setdefault("top", asked.top)
+            return chat_stats.analyze_url(name, preset=preset, period=period, **shown)
+
+        # Messages are what is shown as soon as anything about them is asked.
+        searching = asked.chatter.strip() or asked.text.strip()
+        reading = bool(asked.around or searching or asked.view == chat_stats.VIEW_MESSAGES)
+        page = {
+            "channel": name,
+            "period_words": chat_stats.period_words(period, today),
+            "start": chat_stats.local_text(period.start),
+            "end": chat_stats.local_text(period.end),
+            # What a form on the page sends along to stay in the period.
+            "kept": (
+                [("period", preset)]
+                if preset
+                else [("from", chat_stats.local_text(period.start)), ("to", chat_stats.local_text(period.end))]
+            ),
+            "presets": [
+                {
+                    "label": label,
+                    "href": chat_stats.analyze_url(name, preset=key),
+                    "current": key == preset,
+                }
+                for key, label in chat_stats.preset_labels()
+            ],
+            "sessions": chat_stats.session_rows(sessions, today, period, url),
+            "stored_words": chat_stats.stored_words(stored, today),
+            "views": [
+                {"label": "Overview", "href": url(), "current": not reading},
+                {"label": "Messages", "href": url(view=chat_stats.VIEW_MESSAGES), "current": reading},
+            ],
+            "chatter": asked.chatter.strip(),
+            "text": asked.text.strip(),
+            "all_href": chat_stats.analyze_url(name, preset=chat_stats.PRESET_ALL),
+            "overview": None,
+            "messages": None,
+            "around": None,
+        }
+        if asked.around:
+            page["around"] = _analyze_around(conn, owner, today, url, asked.around)
+        elif reading:
+            page["messages"] = _analyze_messages(conn, owner, period, words, today, url, asked)
+        else:
+            page["overview"] = _analyze_overview(conn, owner, period, words, today, url, asked.top)
+        return page
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/analyze", response_class=HTMLResponse)
+async def dashboard_analyze(
+    request: Request,
+    channel: str | None = None,
+    period: str | None = None,
+    start: str | None = Query(None, alias="from"),
+    end: str | None = Query(None, alias="to"),
+    view: str = chat_stats.VIEW_OVERVIEW,
+    chatter: str = "",
+    q: str = "",
+    order: str = chat_stats.ORDER_NEWEST,
+    offset: int = 0,
+    top: int = chat_stats.TOP_ROWS,
+    around: str = "",
+):
+    """The Analyze page: a channel's stored chat in figures.
+
+    `channel` is whose - left out, the one whose chat is the newest. The
+    period is a preset by its name (`period`: day, week, month, all) or any
+    other by its two ends (`from` and `to`, local time); left out, it is
+    the channel's newest session. Of that period the page shows the
+    overview, or - with `view=messages`, a `chatter` or a text to look for
+    (`q`) - its messages, a page at a time from `offset` on, in `order`.
+    `around` is a message to show the chat around instead, and `top` how
+    long the overview's tables are.
+    """
+    conn = get_connection()
+    try:
+        context = _page_context(conn, "analyze")
+        channels = _chat_channels(conn, context["streamers"])
+        chosen = next((item for item in channels if item["name"].lower() == (channel or "").lower()), None)
+        if channel and chosen is None:
+            raise HTTPException(status_code=404, detail=f"no chat is stored for a channel called {channel!r}")
+        if chosen is None and channels:
+            chosen = max(channels, key=lambda item: item["last"])
+        words = None
+        if chosen is not None:
+            keywords = _channel_keywords(conn, chosen["id"])
+            patterns = tuple(_tuning(conn, chosen["id"]).detector.added_laugh_emote_patterns)
+            words = _ChatWords(tuple(keywords), tuple(detector.laugh_emote_names(keywords, patterns)), patterns)
+    finally:
+        conn.close()
+
+    context["channels"] = [item["name"] for item in channels]
+    context["analysis"] = None
+    if chosen is not None:
+        asked = _Asked(
+            preset=period,
+            start=chat_stats.parse_local(start),
+            end=chat_stats.parse_local(end),
+            view=view,
+            chatter=chatter,
+            text=q,
+            order=chat_stats.ORDER_OLDEST if order == chat_stats.ORDER_OLDEST else chat_stats.ORDER_NEWEST,
+            offset=offset,
+            top=top if top in (chat_stats.TOP_ROWS, chat_stats.TOP_ROWS_MORE) else chat_stats.TOP_ROWS,
+            around=around,
+        )
+        context["analysis"] = await asyncio.to_thread(_analysis, chosen, words, asked, _now(), _today())
+    return templates.TemplateResponse(request, "analyze.html", context)
 
 
 def _moment_status(conn) -> dict[str, int]:
