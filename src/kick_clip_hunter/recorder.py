@@ -185,6 +185,18 @@ class CutClip:
         return (self.ended_at - self.started_at).total_seconds()
 
 
+@dataclass(frozen=True)
+class RunState:
+    """Where a recorder that is running stands, for the Health page: since
+    when the channel's stream has been coming in - through however many
+    restarts - whether the broadcast's own recording was found for it, and
+    when footage it did not have yet last arrived (None until some has)."""
+
+    since: datetime
+    has_vod: bool
+    footage_at: datetime | None = None
+
+
 @dataclass
 class _PlaylistSegment:
     sequence: int
@@ -305,6 +317,13 @@ class ChannelRecorder:
         self._base_dir = RECORDINGS_DIR / channel_slug
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._run: _Run | None = None
+        # Since when it has been running, when it last saved footage it did
+        # not have yet, and how far on the stream's clock that reached. All
+        # three outlast a restart, which is how footage that has stopped
+        # coming in shows (see `state`); stopping it forgets them.
+        self._since: datetime | None = None
+        self._footage_at: datetime | None = None
+        self._footage_until: datetime | None = None
         # What every segment of the live playlist is also handed to as it is
         # saved, while the stream is being kept whole: anything with the
         # `add` of stream_recording.StreamWriter. Set from outside, read by
@@ -322,6 +341,8 @@ class ChannelRecorder:
         )
         run.thread = threading.Thread(target=self._record, args=(run,), daemon=True)
         self._run = run
+        if self._since is None:
+            self._since, self._footage_at, self._footage_until = run.started_at, None, None
         run.thread.start()
         logger.info(
             "[%s] recording started -> %s (VOD %s)",
@@ -399,6 +420,11 @@ class ChannelRecorder:
                     group += 1
                     continue
                 run.last_progress_at = datetime.now(timezone.utc)
+                if self._footage_until is None or last_end > self._footage_until:
+                    # A run that starts over fetches the newest segments it
+                    # finds once more. That is the buffer being filled, not
+                    # the stream coming in.
+                    self._footage_until, self._footage_at = last_end, run.last_progress_at
                 self._hand_on(started_at, segment.duration, group_name, content)
 
             if playlist.ended:
@@ -521,10 +547,22 @@ class ChannelRecorder:
 
     def stop(self) -> None:
         self._stop_run()
+        self._since = None
 
     @property
     def is_active(self) -> bool:
         return self._run is not None
+
+    def state(self) -> RunState | None:
+        """Where the recording stands, or None while nothing is recorded."""
+        run, since, footage_at = self._run, self._since, self._footage_at
+        if run is None or since is None:
+            return None
+        # A thread that was told to stop may still save the segment it was
+        # fetching, after the recording was started anew.
+        if footage_at is not None and footage_at < since:
+            footage_at = None
+        return RunState(since=since, has_vod=run.vod_url is not None, footage_at=footage_at)
 
     def segments_overlapping(self, start: datetime, end: datetime) -> list[_StoredSegment]:
         """All buffered segments whose time range overlaps [start, end], in order."""

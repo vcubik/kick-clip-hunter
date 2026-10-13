@@ -147,6 +147,9 @@ class RunningRecorder:
     def stop(self) -> None:
         self.is_active = False
 
+    def state(self) -> None:
+        return None  # nothing the Health page could say of it
+
 
 class TestEmptyInstallation:
     async def test_the_review_page_renders_with_nothing_in_the_database(self, service):
@@ -185,7 +188,8 @@ class TestEmptyInstallation:
         assert (news.attrs["data-moments"], news.attrs["data-clips"]) == ("0", "0")
 
     @pytest.mark.parametrize(
-        "path", ["/dashboard", "/dashboard/recordings", "/dashboard/channels", "/dashboard/settings"]
+        "path",
+        ["/dashboard", "/dashboard/recordings", "/dashboard/channels", "/dashboard/settings", "/dashboard/health"],
     )
     async def test_the_stylesheet_and_the_script_a_page_asks_for_are_served(self, service, path):
         page = await page_at(service, path)
@@ -208,19 +212,21 @@ class TestTheBarAcrossTheTop:
             ("/dashboard/analyze", "Analyze"),
             ("/dashboard/channels", "Channels"),
             ("/dashboard/settings", "Settings"),
+            ("/dashboard/health", "Health"),
         ],
     )
     async def test_marks_the_page_you_are_on(self, service, path, name):
         page = await page_at(service, path)
 
         links = page.one("nav", class_="bar-nav").find("a")
-        assert [link.text for link in links] == ["Review", "Recordings", "Analyze", "Channels", "Settings"]
+        assert [link.text for link in links] == ["Review", "Recordings", "Analyze", "Channels", "Settings", "Health"]
         assert [link.attrs["href"] for link in links] == [
             "/dashboard",
             "/dashboard/recordings",
             "/dashboard/analyze",
             "/dashboard/channels",
             "/dashboard/settings",
+            "/dashboard/health",
         ]
         assert [link.text for link in links if link.attrs.get("aria-current") == "page"] == [name]
 

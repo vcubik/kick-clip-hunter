@@ -24,7 +24,7 @@ import pytest
 
 from kick_clip_hunter import recording_manager, stream_recording
 from kick_clip_hunter.kick_stream import StreamUrlError
-from kick_clip_hunter.recorder import PRE_ROLL_SECONDS, ChannelRecorder
+from kick_clip_hunter.recorder import PRE_ROLL_SECONDS, ChannelRecorder, RunState
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -817,3 +817,169 @@ class TestChannelsRecordedAlways:
             await rounds(kick_api)
 
         assert recorders["always"].ticks == 0
+
+
+class TestWhatTheLoopSaw:
+    """Kept for the Health page: what the last look at each channel came to
+    and when the loop last got through all of them."""
+
+    def trouble_with(self, slug: str) -> str | None:
+        look = recording_manager.looks().get(slug)
+        return look.trouble if look else None
+
+    async def test_a_live_channel_is_live_since_it_was_first_seen_to_be(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+
+        await run_loop_until(lambda: recorders["live_one"].ticks >= 1, "a look", slugs=["live_one"])
+        first = recording_manager.looks()["live_one"]
+        await run_loop_until(lambda: recorders["live_one"].ticks >= 4, "more looks", slugs=["live_one"])
+        later = recording_manager.looks()["live_one"]
+
+        assert first.live_since is not None and first.trouble is None
+        assert later.at >= first.at
+        assert later.live_since == first.live_since
+
+    async def test_a_channel_that_is_not_live_is_seen_not_to_be(self, kick_api, recorders):
+        kick_api.add_channel("offline_one", 2, is_live=False)
+        recorders["offline_one"] = StandInRecorder()
+
+        await run_a_few_rounds(kick_api, slugs=["offline_one"])
+
+        look = recording_manager.looks()["offline_one"]
+        assert look.live_since is None and look.trouble is None
+
+    async def test_going_off_the_air_is_the_end_of_having_been_live(self, kick_api, recorders):
+        channel = kick_api.add_channel("was_live", 3, is_live=True)
+        recorders["was_live"] = StandInRecorder()
+        await run_loop_until(lambda: recorders["was_live"].is_active, "recording to start", slugs=["was_live"])
+        assert recording_manager.looks()["was_live"].live_since is not None
+
+        channel.is_live = False
+        await run_loop_until(lambda: recorders["was_live"].stops == 1, "recording to stop", slugs=["was_live"])
+
+        assert recording_manager.looks()["was_live"].live_since is None
+
+    async def test_kick_not_answering_is_kept_as_why_and_says_nothing_of_being_live(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        await run_loop_until(lambda: recorders["live_one"].ticks >= 1, "a look", slugs=["live_one"])
+        since = recording_manager.looks()["live_one"].live_since
+
+        kick_api.failures["/channels"] = 503
+        await run_loop_until(lambda: self.trouble_with("live_one") is not None, "a look that fails", slugs=["live_one"])
+
+        look = recording_manager.looks()["live_one"]
+        assert look.trouble == "HTTPStatusError"
+        assert look.live_since == since
+
+    async def test_a_look_that_works_again_clears_it(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        kick_api.failures["/channels"] = 503
+        await run_loop_until(lambda: self.trouble_with("live_one") is not None, "a look that fails", slugs=["live_one"])
+
+        kick_api.failures.clear()
+        await run_loop_until(lambda: recorders["live_one"].ticks >= 1, "a look that works", slugs=["live_one"])
+
+        assert self.trouble_with("live_one") is None
+
+    async def test_a_recorder_that_cannot_be_started_is_kept_as_why(self, kick_api, recorders):
+        kick_api.add_channel("broken", 1, is_live=True)
+        recorders["broken"] = StandInRecorder(tick_error=RuntimeError("disk full"))
+
+        await run_loop_until(
+            lambda: self.trouble_with("broken") == "RuntimeError", "the failed start to be kept", slugs=["broken"]
+        )
+
+        # Kick did say it was live.
+        assert recording_manager.looks()["broken"].live_since is not None
+
+    async def test_so_is_a_channel_kick_calls_live_whose_page_gives_no_stream_address(self, kick_api, recorders):
+        kick_api.add_channel("just_ended", 1, is_live=True)
+        recorders["just_ended"] = StandInRecorder(tick_error=StreamUrlError("No live stream URL captured"))
+
+        await run_loop_until(
+            lambda: self.trouble_with("just_ended") == recording_manager.NO_STREAM_ADDRESS,
+            "the missing address to be kept",
+            slugs=["just_ended"],
+        )
+
+    async def test_one_channels_trouble_is_not_anothers(self, kick_api, recorders):
+        kick_api.add_channel("broken", 1, is_live=True)
+        kick_api.add_channel("healthy", 2, is_live=True)
+        recorders["broken"] = StandInRecorder(tick_error=RuntimeError("disk full"))
+        recorders["healthy"] = StandInRecorder()
+
+        await run_loop_until(
+            lambda: recorders["healthy"].ticks >= 2 and self.trouble_with("broken") is not None,
+            "both channels to be looked at",
+            slugs=["broken", "healthy"],
+        )
+
+        assert self.trouble_with("healthy") is None
+
+    async def test_a_channel_whose_tracking_was_switched_off_is_no_longer_seen(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        await run_loop_until(lambda: "live_one" in recording_manager.looks(), "a look", slugs=["live_one"])
+
+        await run_loop_until(
+            lambda: "live_one" not in recording_manager.looks(),
+            "the look to be dropped",
+            slugs=["live_one"],
+            tracked=lambda slug: False,
+        )
+
+    async def test_nor_is_any_channel_once_watching_is_off(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        await run_loop_until(lambda: "live_one" in recording_manager.looks(), "a look", slugs=["live_one"])
+
+        await run_loop_until(
+            lambda: not recording_manager.looks(), "the looks to be dropped", slugs=["live_one"], enabled=lambda: False
+        )
+
+    async def test_nor_one_that_has_left_the_watchlist(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        await run_loop_until(lambda: "live_one" in recording_manager.looks(), "a look", slugs=["live_one"])
+
+        await run_loop_until(lambda: not recording_manager.looks(), "the look to be dropped", slugs=[])
+
+    async def test_the_loop_says_when_it_last_got_through_its_channels(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+        assert recording_manager.round_finished_at() is None
+        before = datetime.now(timezone.utc)
+
+        await run_loop_until(
+            lambda: recording_manager.round_finished_at() is not None, "a finished round", slugs=["live_one"]
+        )
+
+        assert recording_manager.round_finished_at() >= before
+
+    async def test_a_round_in_which_a_channel_failed_is_still_a_round(self, kick_api, recorders):
+        recorders["unknown_to_kick"] = StandInRecorder()
+
+        await run_loop_until(
+            lambda: recording_manager.round_finished_at() is not None, "a finished round", slugs=["unknown_to_kick"]
+        )
+
+        assert self.trouble_with("unknown_to_kick") == "HTTPStatusError"
+
+    def test_where_the_running_recorders_stand_is_theirs_to_say(self, recorders):
+        since = datetime(2026, 3, 1, 20, 0, tzinfo=timezone.utc)
+
+        class Standing(StandInRecorder):
+            def __init__(self, run: RunState | None) -> None:
+                super().__init__()
+                self.run = run
+
+            def state(self) -> RunState | None:
+                return self.run
+
+        recorders["running"] = Standing(RunState(since=since, has_vod=True))
+        recorders["idle"] = Standing(None)
+
+        assert recording_manager.recorder_runs() == {"running": RunState(since=since, has_vod=True)}

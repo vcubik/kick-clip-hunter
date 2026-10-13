@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -27,8 +27,10 @@ from . import (
     chat_video,
     clip_trim,
     dashboard_view,
+    db,
     detector,
     frame_encoder,
+    health,
     recorder,
     recording_manager,
     recording_moments,
@@ -37,6 +39,7 @@ from . import (
     stream_recording,
     transcriber,
     tuning,
+    tunnel,
     win_console,
 )
 from .config import load_settings
@@ -44,6 +47,7 @@ from .db import (
     MOMENT_TYPES,
     STREAM_TYPES,
     TUNING_FOR_ALL,
+    add_subscription_drop,
     count_channel_chat,
     count_moments,
     count_moments_with_clip,
@@ -77,6 +81,7 @@ from .db import (
     get_streamer_by_slug,
     get_streamer_tracking_enabled,
     get_streamers,
+    get_subscription_drops,
     get_tuning,
     get_tuning_in_force,
     insert_chat_message,
@@ -312,6 +317,50 @@ def _load_flags() -> None:
 # channel's chat subscription.
 SUBSCRIPTION_CHECK_SECONDS = 600
 
+# What the Health page is made from (see health.py): what the service has
+# noticed since it started of the things it depends on. None of it is
+# needed to run, all of it is forgotten by a restart - except the checks
+# that found subscriptions missing, which are also kept in the database.
+_started_at = datetime.now(timezone.utc)
+
+
+@dataclass
+class _Heard:
+    """What has arrived at the webhook receiver: when the last delivery
+    did, when the last chat message of each channel did (by broadcaster id,
+    kept or not), and the deliveries turned away for their signature."""
+
+    last_at: datetime | None = None
+    chat_at: dict[int, datetime] = field(default_factory=dict)
+    refused: int = 0
+    last_refused_at: datetime | None = None
+
+
+_heard = _Heard()
+# What the last check of Kick's chat subscriptions found, and whether one is
+# under way.
+_subscriptions: health.SubscriptionCheck | None = None
+_subscription_check_running = False
+
+
+def _subscriptions_checked(watched: int, **found) -> health.SubscriptionCheck:
+    """Keeps what a check of the subscriptions found; one that found some
+    missing is also remembered past a restart."""
+    global _subscriptions
+    _subscriptions = check = health.SubscriptionCheck(at=datetime.now(timezone.utc), watched=watched, **found)
+    drop = health.drop_of(check)
+    if drop is not None:
+        try:
+            conn = get_connection()
+            try:
+                add_subscription_drop(conn, drop.stored())
+            finally:
+                conn.close()
+        except Exception:
+            # A note for the Health page; the check itself has done its work.
+            logger.exception("could not keep a record of the dropped chat subscriptions")
+    return check
+
 
 async def _ensure_chat_subscriptions(report_all_present: bool = True) -> None:
     """Re-subscribe any watchlisted channel that has no chat.message.sent
@@ -325,38 +374,59 @@ async def _ensure_chat_subscriptions(report_all_present: bool = True) -> None:
     (only the missing ones) so it never duplicates an existing subscription,
     and any API failure is logged but never blocks startup or stops the
     periodic check.
+
+    One at a time: a check asked for from the Health page while the periodic
+    one is under way would find the same channels missing and subscribe them
+    twice. What a check found is kept for that page (_subscriptions_checked).
     """
+    global _subscription_check_running
+    if _subscription_check_running:
+        return
+    _subscription_check_running = True
+    try:
+        await _reconcile_chat_subscriptions(report_all_present)
+    finally:
+        _subscription_check_running = False
+
+
+async def _reconcile_chat_subscriptions(report_all_present: bool) -> None:
     conn = get_connection()
     try:
         watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
     finally:
         conn.close()
     if not watch:
+        _subscriptions_checked(0)
         return
 
     try:
         token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
         subscribed = {sub.get("broadcaster_user_id") for sub in await get_event_subscriptions(token)}
-    except Exception:
+    except Exception as error:
         logger.exception("could not check chat subscriptions")
+        _subscriptions_checked(len(watch), error=type(error).__name__)
         return
 
     missing = [(bid, slug) for bid, slug in watch if bid not in subscribed]
     if not missing:
         if report_all_present:
             logger.info("chat subscriptions present for all %d watched channels", len(watch))
+        _subscriptions_checked(len(watch))
         return
 
     logger.warning(
         "re-subscribing %d channel(s) with no chat subscription: %s",
         len(missing), ", ".join(slug for _, slug in missing),
     )
+    failed = []
     for bid, slug in missing:
         try:
             await subscribe_chat_messages(bid, token)
             logger.info("re-subscribed chat for %s", slug)
         except Exception:
             logger.exception("failed to re-subscribe chat for %s", slug)
+            failed.append(slug)
+    _subscriptions_checked(len(watch), missing=tuple(slug for _, slug in missing), failed=tuple(failed))
 
 
 async def _keep_chat_subscriptions() -> None:
@@ -368,6 +438,45 @@ async def _keep_chat_subscriptions() -> None:
             await _ensure_chat_subscriptions(report_all_present=False)
         except Exception:
             logger.exception("periodic chat subscription check failed")
+
+
+# How often the tunnel Kick reaches the service through is looked at (see
+# tunnel.py), and how old a look may be for the Health page to show it
+# without looking again.
+TUNNEL_CHECK_SECONDS = 300
+TUNNEL_FRESH_SECONDS = 30
+
+# The tunnel as it was last looked at, and when. The port is the one the
+# service was last seen to answer on, which only a request can tell.
+_funnel: tuple[datetime, tunnel.Funnel] | None = None
+_served_port: int | None = None
+# A look the Health page asked for that is still under way; held so that
+# the event loop, which only holds tasks weakly, does not drop it.
+_tunnel_look: asyncio.Task | None = None
+
+
+async def _look_at_tunnel() -> tunnel.Funnel:
+    global _funnel
+    before = _funnel[1].state if _funnel else None
+    funnel = await asyncio.to_thread(tunnel.look, _served_port)
+    _funnel = (datetime.now(timezone.utc), funnel)
+    if funnel.state != before:
+        # Said when it changes, so that the log can be read for when it did.
+        up = funnel.state in (tunnel.UP, tunnel.NOT_INSTALLED)
+        logger.log(
+            logging.INFO if up else logging.WARNING,
+            "tunnel: %s%s", funnel.state, f" ({funnel.said})" if funnel.said else "",
+        )
+    return funnel
+
+
+async def _keep_looking_at_tunnel() -> None:
+    while True:
+        try:
+            await _look_at_tunnel()
+        except Exception:
+            logger.exception("could not look at the tunnel")
+        await asyncio.sleep(TUNNEL_CHECK_SECONDS)
 
 
 async def _refresh_emote_pictures() -> None:
@@ -401,6 +510,8 @@ async def _refresh_emote_pictures() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _started_at
+    _started_at = datetime.now(timezone.utc)
     _load_flags()
     _take_up_stream_recordings()
     await _ensure_chat_subscriptions()
@@ -419,6 +530,7 @@ async def lifespan(app: FastAPI):
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
+        asyncio.create_task(_keep_looking_at_tunnel()),
     ]
     try:
         yield
@@ -1112,7 +1224,9 @@ def _recording_with_file(conn, recording_id: int, to: str) -> tuple:
 
 
 @app.get("/health")
-async def health():
+async def health_check():
+    """That the service answers at all - what a script asks. What it
+    depends on is the Health page's (`GET /dashboard/health`)."""
     return {"status": "ok"}
 
 
@@ -1512,6 +1626,62 @@ def _right_now(streamers) -> dict:
     }
 
 
+def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None, **looked_up) -> health.Facts:
+    """What the Health page, and the count beside its name in the bar of
+    every page, are made from (see health.py): what the service has noticed
+    of the things it depends on. `right_now` is what the channels are doing
+    (see _right_now). The page itself adds what it takes the database or a
+    walk over the disk to know: `stored_chat`, when each channel's newest
+    stored message arrived by broadcaster id, and health.Facts' `drops` and
+    `use` - none of which changes what is trouble."""
+    looks = recording_manager.looks()
+    runs = recording_manager.recorder_runs()
+    channels = []
+    for row in streamers:
+        slug, owner = row["slug"], row["broadcaster_user_id"]
+        look, run = looks.get(slug), runs.get(slug)
+        chat = [at for at in (_heard.chat_at.get(owner), (stored_chat or {}).get(owner)) if at is not None]
+        channels.append(
+            health.Channel(
+                slug=slug,
+                now_words=right_now[slug]["words"],
+                coming_in=right_now[slug]["live"],
+                live_since=look.live_since if look else None,
+                trouble=look.trouble if look else None,
+                last_chat_at=max(chat, default=None),
+                recording_since=run.since if run else None,
+                footage_at=run.footage_at if run else None,
+                has_vod=bool(run and run.has_vod),
+            )
+        )
+    try:
+        free, room = stream_recording.free_bytes(), recording_manager.room_left()
+    except OSError:
+        # Said on the Health page. Every page asks, and none may fail for it.
+        free = room = None
+    looked_at, funnel = _funnel or (None, None)
+    return health.Facts(
+        now=datetime.now(timezone.utc),
+        started_at=_started_at,
+        channels=tuple(channels),
+        watching=_flags.get("watching_enabled", True),
+        last_webhook_at=_heard.last_at,
+        refused=_heard.refused,
+        last_refused_at=_heard.last_refused_at,
+        subscriptions=_subscriptions,
+        check_seconds=SUBSCRIPTION_CHECK_SECONDS,
+        round_finished_at=recording_manager.round_finished_at(),
+        round_seconds=recording_manager.TICK_INTERVAL_SECONDS,
+        free=free,
+        room=room,
+        min_free=recording_manager.MIN_FREE_BYTES,
+        funnel=funnel,
+        funnel_looked_at=looked_at,
+        port=_served_port,
+        **looked_up,
+    )
+
+
 def _page_context(conn, nav: str) -> dict:
     """What every dashboard page needs: which page it is, and the state of
     the service shown in the bar across its top."""
@@ -1519,12 +1689,16 @@ def _page_context(conn, nav: str) -> dict:
     tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
     recording = recording_manager.recording_channels()
     watching = _flags.get("watching_enabled", True)
+    now = _right_now(streamers)
+    troubles = health.report(_health_facts(streamers, now["channels"]), _today())["troubles"]
     return {
         "nav": nav,
         "asset_version": _asset_version(),
         "watching_enabled": watching,
         "streamers": streamers,
-        "now": _right_now(streamers),
+        "now": now,
+        # Beside "Health" in the bar: how much there is trouble with.
+        "health_flag": health.flag_words(troubles),
         "service_words": dashboard_view.service_words(
             # About moments, so only the channels they can come from count.
             recording=sum(1 for slug in recording if slug in tracked),
@@ -1706,6 +1880,104 @@ async def dashboard_channels(request: Request):
         conn.close()
 
     return templates.TemplateResponse(request, "channels.html", context)
+
+
+# What takes the room on the disk is found by walking the folders, which
+# takes a moment once there are thousands of clips - and the Health page
+# asks again every few seconds. So what was measured is kept for this long.
+DISK_USE_SECONDS = 300
+_disk_use: tuple[float, tuple[tuple[str, int], ...]] | None = None
+
+
+def _size_of(path: Path) -> int:
+    """How much room a file takes, or everything under a folder. What can't
+    be looked at counts for nothing."""
+    try:
+        if not path.is_dir():
+            return path.stat().st_size
+    except OSError:
+        return 0
+    total = 0
+    folders = [path]
+    while folders:
+        try:
+            with os.scandir(folders.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            folders.append(Path(entry.path))
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _measure_disk_use() -> tuple[tuple[str, int], ...]:
+    return (
+        ("Clips", _size_of(CLIPS_DIR)),
+        ("Stream recordings", _size_of(STREAMS_DIR)),
+        ("Buffers clips are cut from", _size_of(recorder.RECORDINGS_DIR)),
+        ("Database", _size_of(db.DB_PATH)),
+        ("Logs", _size_of(LOG_FILE.parent)),
+    )
+
+
+async def _disk_use_now() -> tuple[tuple[str, int], ...]:
+    global _disk_use
+    if _disk_use is None or time.monotonic() - _disk_use[0] >= DISK_USE_SECONDS:
+        _disk_use = (time.monotonic(), await asyncio.to_thread(_measure_disk_use))
+    return _disk_use[1]
+
+
+@app.get("/dashboard/health", response_class=HTMLResponse)
+async def dashboard_health(request: Request):
+    """The Health page: whether what the service depends on is there -
+    webhooks arriving, Kick's chat subscriptions, the recorders, room on the
+    disk, the tunnel (see health.py). Its script fetches it again every few
+    seconds and puts what it says now in place of what it said."""
+    global _served_port, _tunnel_look
+    server = request.scope.get("server")
+    if server and server[1]:
+        _served_port = server[1]
+    if _funnel is None:
+        await _look_at_tunnel()
+    elif (datetime.now(timezone.utc) - _funnel[0]).total_seconds() >= TUNNEL_FRESH_SECONDS:
+        # Looked at again behind the page rather than before it: a client
+        # that takes its time to answer must not hold the page up.
+        if _tunnel_look is None or _tunnel_look.done():
+            _tunnel_look = asyncio.create_task(_look_at_tunnel())
+    use = await _disk_use_now()
+
+    conn = get_connection()
+    try:
+        context = _page_context(conn, "health")
+        stored_chat = {}
+        for row in context["streamers"]:
+            span = get_chat_span(conn, row["broadcaster_user_id"])
+            if span is not None:
+                stored_chat[row["broadcaster_user_id"]] = to_local_datetime(span[1])
+        facts = _health_facts(
+            context["streamers"],
+            context["now"]["channels"],
+            stored_chat=stored_chat,
+            drops=health.read_drops(get_subscription_drops(conn)),
+            use=use,
+        )
+    finally:
+        conn.close()
+
+    report = health.report(facts, _today())
+    context.update(
+        {
+            "health": report,
+            "health_flag": health.flag_words(report["troubles"]),
+            "log_file": LOG_FILE.as_posix(),
+        }
+    )
+    return templates.TemplateResponse(request, "health.html", context)
 
 
 @app.get("/dashboard/settings", response_class=HTMLResponse)
@@ -2995,6 +3267,17 @@ async def set_setting(name: str, enabled: int = 1):
     return {"setting": name, "enabled": value}
 
 
+@app.post("/subscriptions/check")
+async def check_subscriptions():
+    """Checks Kick's chat subscriptions now rather than at the next round,
+    and subscribes what is missing - the button on the Health page."""
+    if _subscription_check_running:
+        raise HTTPException(status_code=409, detail="A check is under way already.")
+    logger.info("chat subscriptions checked from the dashboard")
+    await _ensure_chat_subscriptions(report_all_present=False)
+    return {"status": "checked"}
+
+
 @app.post("/shutdown")
 async def shutdown():
     global _shutdown_requested, _shutdown_task
@@ -3645,11 +3928,16 @@ async def kick_webhook(
     if not verify_signature(
         public_key, kick_event_message_id, kick_event_message_timestamp, body, kick_event_signature
     ):
+        _heard.refused += 1
+        _heard.last_refused_at = datetime.now(timezone.utc)
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = await request.json()
+    # For the Health page: that Kick got through, whatever is done with it.
+    _heard.last_at = datetime.now(timezone.utc)
 
     if kick_event_type == "chat.message.sent":
+        _heard.chat_at[(payload.get("broadcaster") or {}).get("user_id")] = _heard.last_at
         watching = _flags.get("watching_enabled", True)
         # The switches are about looking for clips. A channel whose stream
         # is being kept whole has its chat kept with it whatever they say.

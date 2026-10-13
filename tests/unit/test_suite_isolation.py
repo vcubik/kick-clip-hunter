@@ -14,7 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import clip_creator, config, db, kick_stream, recorder, recording_manager, stream_recording
+from kick_clip_hunter import (
+    clip_creator,
+    config,
+    db,
+    kick_stream,
+    recorder,
+    recording_manager,
+    stream_recording,
+    tunnel,
+)
 from tests.conftest import PLENTY_OF_ROOM
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -143,3 +152,8 @@ class TestForbiddenSideEffects:
         os._exit(3)
 
         assert process_exits == [3]
+
+    def test_the_machines_tailscale_client_is_never_run(self, no_tailscale):
+        # Whatever this machine has installed, and whatever it serves.
+        assert tunnel.look() == tunnel.Funnel(tunnel.NOT_INSTALLED)
+        assert no_tailscale.commands == []

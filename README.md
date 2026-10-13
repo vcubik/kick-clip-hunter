@@ -56,6 +56,11 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   most used emotes, what was said and who was addressed most. A chatter can be looked up, with
   everything they wrote and what there is to say of them, and any message read in the chat
   around it.
+- **Says when something it depends on is gone.** Chat stops arriving the same way whether a
+  stream is over, Kick has dropped its chat subscriptions or the tunnel is down. The Health page
+  tells them apart: when the last webhook arrived, what the last check of the subscriptions found
+  and when Kick was found to have dropped some, what each recorder is doing, how much room the disk
+  has, where the tunnel stands. Every page says beside its name when one of them needs a look.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -126,7 +131,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-About 2500 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
+About 2800 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
 no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
 every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
@@ -146,6 +151,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
+| `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
 | `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps. |
 

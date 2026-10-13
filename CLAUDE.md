@@ -143,7 +143,14 @@ set from the dashboard's Settings page (see `tuning.py` below).
   its "Own settings" switch is on. Each setting has a button that puts back what it would
   be if left alone (what is recommended, or for a channel what all channels have), the form
   is saved as a whole, and "Try on stored chat" replays a channel's newest chat under the
-  saved settings and under the form's, without saving anything. No page reloads on its own; the
+  saved settings and under the form's, without saving anything. `GET /dashboard/health` says
+  whether what the service depends on is there (see `health.py` below): when the last webhook
+  arrived and when each channel's chat last spoke, what the last check of Kick's chat
+  subscriptions found - with a button that checks now, and the list of the times Kick was found to
+  have dropped some - what each recorder is doing, how much room the disk has and what takes it,
+  and where the tunnel stands. Each part says it in a sentence, in bold when it is trouble, and
+  how many of them are trouble stands beside "Health" in the bar of every page. Its script fetches
+  the page again every few seconds and swaps in what each part says now. No page reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
   (polled from `GET /moments/status`), and while a stream recording runs or is being saved
   the Channels and Recordings pages ask what it is doing every couple of seconds (`GET
@@ -284,6 +291,27 @@ Module map (`src/kick_clip_hunter/`):
   columns, on round times of the local clock) and the rows of tables. A period is from a
   start up to, but not at, an end, and never reaches past now; a session is chat with no
   silence of half an hour in it (`db.get_chat_sessions`), which as a rule is one stream
+- `health.py` — what the Health page says, and what it calls trouble. Pure, like
+  `dashboard_view.py`: `Facts` in (what the service noticed, and the clock), each part's sentences
+  and rows out, and `report` is the page. What is noticed is kept in memory where it happens -
+  `main._heard` (deliveries at the webhook receiver, before anything is decided about them, so
+  chat that is dropped still counts as arrived), `main._subscriptions` (the last check),
+  `main._funnel` (the tunnel, looked at every five minutes and when the page is asked for),
+  `recording_manager.looks()` and `recorder_runs()` - and gathered by `main._health_facts`, for
+  the page and, without what takes the database or a walk over the disk to know, for the count
+  in every page's bar. A check that found subscriptions missing is also kept in the database
+  (`app_settings`, key `subscription_drops`, the newest 20), so that a restart does not forget
+  it. Trouble is kept rare on purpose: one quiet chat among talking ones is said in its row and
+  no more, silence counts only while a channel has been live for `CHAT_SILENT_SECONDS` and the
+  service up to hear it, a drop that was mended is listed but is no trouble.
+- `tunnel.py` — where the Tailscale Funnel in front of the webhook receiver stands, as the
+  machine's own Tailscale client says (`tailscale status --json`, `tailscale funnel status
+  --json`): not installed, not connected, nothing forwarding `/webhooks/kick`, served inside
+  the tailnet only, forwarding to a port the service does not answer on, or up. `read` is the
+  pure part. It is Tailscale's account of its configuration, not a delivery from outside - a
+  request to the Funnel's address from this machine would not leave the tailnet - so the proof
+  that Kick gets through stays the last webhook, which the page shows beside it. A machine
+  without Tailscale is not trouble: the service may be reached another way.
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
   sends with every chat message (`sender.identity`). Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
@@ -334,7 +362,7 @@ Module map (`src/kick_clip_hunter/`):
   where the page's own script is not visible - hence `isolated_context=False`. The file
   is large by nature (roughly 3-4 MB per second of clip)
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
-  `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, and `_moment.html` - the open moment, which is also
+  `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, `health.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
   without reloading. `_chat_line.html` is one line of chat, shared by the review page, the
   Recordings page and `chat_video.html`, the page a chat video is made from - and, as its
@@ -504,7 +532,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (about 2500 tests, a few minutes); `python
+- `python -m pytest` runs everything (about 2800 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -628,9 +656,9 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   trigger; the running server re-checks every 10 minutes and re-subscribes whatever is
   missing (logged as a warning), as does a restart or re-running `subscribe.py <slug>`
   for a channel (all of them check what Kick still has first, so nothing is ever
-  subscribed twice). If moments stop appearing and the dashboard's
-  watchlist looks right, check `GET events/subscriptions` on the official API before
-  assuming the detector or webhook receiver broke.
+  subscribed twice). Every check that found some missing is listed on the Health page, which
+  is also where to look first when moments stop appearing: it tells a chat that is quiet from
+  one that is not arriving, and its "Check now" asks `GET events/subscriptions` at once.
 
 ## Workflow conventions
 

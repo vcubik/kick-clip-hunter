@@ -648,3 +648,99 @@ class TestHandingTheStreamOn:
 
         assert stored_data(rec) == [segment.data for segment in timeline]
         assert any("could not be handed on" in record.getMessage() for record in caplog.records)
+
+
+class TestWhereItStands:
+    """What a recorder says of itself for the Health page (`state`)."""
+
+    @staticmethod
+    def has_footage(rec) -> bool:
+        return rec.state().footage_at is not None
+
+    def test_a_recorder_that_is_not_running_has_nothing_to_say(self, hls, recording):
+        rec = recording.of(hls(fake_segments(3), published=3))
+        assert rec.state() is None
+
+        start(rec)
+        rec.stop()
+
+        assert rec.state() is None
+
+    def test_a_running_one_says_since_when_and_when_its_newest_footage_arrived(self, hls, recording):
+        before = datetime.now(timezone.utc)
+        rec = recording.of(hls(fake_segments(6), published=3))
+
+        start(rec)
+        wait_until(lambda: self.has_footage(rec), "footage")
+
+        state = rec.state()
+        assert before <= state.since <= state.footage_at <= datetime.now(timezone.utc)
+        assert state.has_vod is False
+
+    def test_until_its_first_segment_it_has_no_footage(self, hls, recording):
+        rec = recording.of(hls(fake_segments(3), published=0))  # nothing to download yet
+
+        rec.tick()
+
+        assert rec.state().footage_at is None
+
+    def test_it_says_whether_the_broadcasts_own_recording_was_found(self, hls, recording):
+        rec = recording.of(hls(fake_segments(6), published=3), vod=hls(fake_segments(6), published=3))
+
+        start(rec)
+
+        assert rec.state().has_vod is True
+
+    def test_starting_over_does_not_make_it_look_freshly_started(self, hls, recording, monkeypatch):
+        monkeypatch.setattr(recorder, "STALL_TIMEOUT_SECONDS", 0.3)
+        rec = recording.of(hls(fake_segments(6), published=3))
+        start(rec)
+        wait_until(lambda: self.has_footage(rec), "footage")
+        before = rec.state()
+
+        wait_until(rec._is_stalled, "the run to count as stalled")
+        rec.tick()
+
+        assert rec._run.started_at > before.since
+        assert rec.state().since == before.since
+
+    def test_fetching_the_same_segments_again_is_not_fresh_footage(self, hls, recording, monkeypatch):
+        # A stream that lists nothing new: the run that starts over downloads
+        # the last few segments once more, and nothing has come in.
+        monkeypatch.setattr(recorder, "STALL_TIMEOUT_SECONDS", 0.3)
+        rec = recording.of(hls(fake_segments(6), published=3))
+        start(rec)
+        wait_until(lambda: self.has_footage(rec), "footage")
+        before = rec.state()
+
+        wait_until(rec._is_stalled, "the run to count as stalled")
+        rec.tick()
+        again = rec._run
+        wait_until(lambda: again.last_progress_at is not None, "the new run to have fetched a segment")
+
+        assert rec.state().footage_at == before.footage_at
+
+    def test_footage_that_is_new_after_starting_over_is(self, hls, recording, monkeypatch):
+        monkeypatch.setattr(recorder, "STALL_TIMEOUT_SECONDS", 0.3)
+        server = hls(fake_segments(8), published=3)
+        rec = recording.of(server)
+        start(rec)
+        wait_until(lambda: self.has_footage(rec), "footage")
+        before = rec.state()
+
+        wait_until(rec._is_stalled, "the run to count as stalled")
+        rec.tick()
+        server.publish_all()
+
+        wait_until(lambda: rec.state().footage_at > before.footage_at, "the new segments to count as footage")
+
+    def test_stopping_it_forgets_how_long_it_had_been_running(self, hls, recording):
+        rec = recording.of(hls(fake_segments(6), published=3))
+        start(rec)
+        wait_until(lambda: self.has_footage(rec), "footage")
+        first = rec.state()
+
+        rec.stop()
+        rec.tick()
+
+        assert rec.state().since > first.since

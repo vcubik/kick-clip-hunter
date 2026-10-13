@@ -25,6 +25,7 @@ from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
+from tests.support.tailscale import FakeTailscale
 from tests.support.waiting import async_wait_until
 from tests.support.webhook import WebhookSigner, chat_payload
 
@@ -103,6 +104,16 @@ def kick_api(signer: WebhookSigner, monkeypatch: pytest.MonkeyPatch) -> FakeKick
 
     monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
     return api
+
+
+@pytest.fixture
+def tailscale(no_tailscale: FakeTailscale) -> FakeTailscale:
+    """The machine's Tailscale client as tunnel.py finds it: installed,
+    connected, and with a Funnel that forwards the webhook's path to port
+    8000 - until the test says otherwise. Without this fixture there is no
+    client at all (see `no_tailscale` in conftest.py)."""
+    no_tailscale.installed = True
+    return no_tailscale
 
 
 @pytest.fixture(scope="session")
