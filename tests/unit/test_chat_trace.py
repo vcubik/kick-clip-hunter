@@ -524,7 +524,9 @@ class TestSparks:
 
 class TestWhatChatSaidMost:
     def said(self, *contents: str, emotes=()) -> str | None:
-        return chat_trace.reaction_words([message(0, content) for content in contents], emotes)
+        """What is said of these messages, each from somebody else."""
+        messages = [message(0, content, sender=f"chatter{index}") for index, content in enumerate(contents)]
+        return chat_trace.reaction_words(messages, emotes)
 
     def test_an_emote_posted_by_many_wins(self):
         assert (
@@ -533,6 +535,23 @@ class TestWhatChatSaidMost:
 
     def test_stacking_it_in_one_message_counts_once(self):
         assert self.said("[emote:1:KEKW][emote:1:KEKW][emote:1:KEKW]", "hm") is None
+
+    def test_one_person_repeating_it_counts_once(self):
+        spam = [message(second, "[emote:1:KEKW]", sender="spammer") for second in range(6)]
+
+        assert chat_trace.reaction_words(spam) is None
+        assert chat_trace.reaction_words([*spam, message(7, "[emote:1:KEKW]", sender="bob")]) == f"KEKW {TIMES}2"
+
+    def test_what_most_people_said_wins_over_what_one_person_said_most(self):
+        spam = [message(second, "[emote:1:dlaha]", sender="spammer") for second in range(6)]
+        laughs = [message(second, "xD", sender=f"chatter{second}") for second in range(3)]
+
+        assert chat_trace.reaction_words([*spam, *laughs]) == f"xD {TIMES}3"
+
+    def test_messages_without_a_sender_are_each_somebody(self):
+        nobody = {"received_at": chat_at(0).isoformat(), "sender_username": None, "content": "W"}
+
+        assert chat_trace.reaction_words([nobody, dict(nobody)]) == f"W {TIMES}2"
 
     def test_every_form_of_the_typed_laugh_is_the_same_word(self):
         assert self.said("xd", "XDDDD", "to je konec xDD", "xD!!") == f"xD {TIMES}4"
@@ -557,7 +576,7 @@ class TestWhatChatSaidMost:
 
     def test_silence_has_nothing_to_name(self):
         assert self.said() is None
-        assert chat_trace.reaction_words([{"received_at": chat_at(0).isoformat(), "content": None}]) is None
+        assert chat_trace.reaction_words([message(0, None)]) is None
 
     def test_the_most_common_of_several_reactions_is_the_one_named(self):
         said = self.said("xD", "[emote:1:KEKW]", "xDDD", "[emote:1:KEKW]", "xd", "W")
@@ -574,7 +593,7 @@ class TestAQueueRowsActivity:
             message(11, "W"),
             message(12, "W"),  # before the moment: in the spark, not in the word
             message(21, "KEKW"),
-            message(22, "KEKW"),
+            message(22, "KEKW", sender="bob"),
             message(40, "W"),
         ]
 
