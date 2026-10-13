@@ -15,9 +15,11 @@ are the good ones - that needs ratings. Nor does it count clips made on
 command (see tuning.py): who posted a stored message, with what badges, is
 not kept with it. A command is left out of the detector here as it is live.
 
-Used by scripts/replay_chat.py and by the Settings page's trial. Nothing is
-written to the database, and the detector's state for the channels that are
-live is not touched: a replay runs under a name of its own.
+Used by scripts/replay_chat.py, by the Settings page's trial and by the
+Recordings page, which looks for moments in a stream that was kept whole
+(see recording_moments.py). Nothing is written to the database, and the
+detector's state for the channels that are live is not touched: a replay
+runs under a name of its own.
 """
 
 from __future__ import annotations
@@ -26,16 +28,24 @@ import itertools
 import json
 import sqlite3
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from . import detector
-from .db import TUNING_FOR_ALL, get_channel_keywords, get_tuning_in_force
+from .db import TUNING_FOR_ALL, get_channel_keywords, get_tuning_in_force, iter_channel_chat_between
 from .tuning import MOMENT_SESSION_POLL_SECONDS, PER_CHANNEL, Tuning, stored, tuned
 
 # Each replay is a channel of its own to the detector. No channel on Kick can
 # be called this: a name there has no space in it.
 _runs = itertools.count(1)
+
+# How often a replay says how far it has got, in messages. The detector looks
+# back over minutes of chat for every message, so a replay is no quicker than
+# the chat was busy: about a fifth of a second for every thousand messages of
+# a chat writing one a second, over a second at five a second, four at
+# fifteen - minutes, for a long stream of a big channel.
+PROGRESS_EVERY = 500
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,9 @@ class ReplayedMoment:
     reasons: tuple[str, ...]
     score: float
     extension_seconds: float
+    # Everything the detector measured when it fired, as a moment is stored
+    # with it. None only for one that was not made by `replay`.
+    spike: detector.Spike | None = None
 
     def clip_seconds(self, tuning: Tuning) -> float:
         """Length of the clip this moment would get: pre-roll, the detection
@@ -113,11 +126,41 @@ def load_messages(
     broadcaster_user_id = None
     for time, user_id, sender, content, emotes in timed:
         broadcaster_user_id = user_id
-        positions = sum(len(emote.get("positions", [])) for emote in json.loads(emotes or "[]"))
-        messages.append(Message(time, sender or "", content or "", positions))
+        messages.append(Message(time, sender or "", content or "", _emote_positions(emotes)))
 
     keywords = get_channel_keywords(conn, broadcaster_user_id) if broadcaster_user_id is not None else {}
     return messages, keywords
+
+
+def _emote_positions(emotes: str | None) -> int:
+    """How many of Kick's own emotes a stored message has in it."""
+    return sum(len(emote.get("positions", [])) for emote in json.loads(emotes or "[]"))
+
+
+def load_between(
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+) -> tuple[list[Message], dict[str, float]]:
+    """A channel's stored chat that arrived from `start` to `end`, in
+    arrival order, and its emote keywords. The channel is told by its id,
+    which is how what has its name from the watchlist finds its chat - a
+    stream recording, whose chat this is for.
+
+    The chat is read a chunk at a time (see db.iter_channel_chat_between):
+    a stream of hours must not be held against the messages arriving
+    meanwhile."""
+    messages = [
+        Message(
+            _timestamp(row["received_at"]),
+            row["sender_username"] or "",
+            row["content"] or "",
+            _emote_positions(row["emotes"]),
+        )
+        for row in iter_channel_chat_between(conn, broadcaster_user_id, start, end, whole=True)
+    ]
+    # The two ways a time is written in the table (see _timestamp) sort a
+    # hair differently as text than as times.
+    messages.sort(key=lambda message: message.time)
+    return messages, get_channel_keywords(conn, broadcaster_user_id)
 
 
 def tuning_in_force(conn: sqlite3.Connection, channel_slug: str) -> Tuning:
@@ -145,10 +188,19 @@ def chat_hours(messages: list[Message]) -> float:
     return seconds / 3600
 
 
-def replay(messages: list[Message], keywords: dict[str, float], tuning: Tuning) -> list[ReplayedMoment]:
+def replay(
+    messages: list[Message],
+    keywords: dict[str, float],
+    tuning: Tuning,
+    progress: Callable[[int], None] | None = None,
+) -> list[ReplayedMoment]:
     """Feeds `messages` through the detector and the moment-session rule
     under `tuning`, with the clock taken from the messages themselves.
-    `keywords` are the channel's emote keywords as they are stored."""
+    `keywords` are the channel's emote keywords as they are stored.
+
+    `progress`, where there is one, is told how many messages have been fed
+    so far, every PROGRESS_EVERY of them. Whatever it raises ends the replay
+    there, which is how a long one is given up."""
     channel = f"replay {next(_runs)}"
     settings = tuning.detector
     weights = detector.keyword_weights(keywords, settings)
@@ -175,6 +227,7 @@ def replay(messages: list[Message], keywords: dict[str, float], tuning: Tuning) 
                         reasons=tuple(spike.reasons),
                         score=spike.score,
                         extension_seconds=open_session["window_end"] - open_session["fired_at"],
+                        spike=spike,
                     )
                 )
                 open_session = None
@@ -182,7 +235,9 @@ def replay(messages: list[Message], keywords: dict[str, float], tuning: Tuning) 
                 open_session["next_poll"] += poll
 
     try:
-        for message in messages:
+        for fed, message in enumerate(messages):
+            if progress is not None and fed % PROGRESS_EVERY == 0:
+                progress(fed)
             run_session_until(message.time)
             if tuning.is_clip_command(message.content):
                 continue

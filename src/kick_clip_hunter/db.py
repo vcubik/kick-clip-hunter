@@ -664,11 +664,13 @@ CHAT_CHUNK = 20_000
 
 
 def iter_channel_chat_between(
-    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
+    conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime, *, whole: bool = False
 ) -> Iterator[sqlite3.Row]:
     """As get_channel_chat_between, but every message there is, one at a
     time and with no name to it - for what goes through the chat of a
-    stream of hours to count it and keeps none of it.
+    stream of hours to count it and keeps none of it. `whole` adds who wrote
+    each message and the emotes Kick found in it: what the detector is fed,
+    for what replays the stretch.
 
     It is read a chunk at a time, each with a statement that is over before
     its rows are handed out: a statement left open while its rows are worked
@@ -678,13 +680,14 @@ def iter_channel_chat_between(
     same instant, by its row - so a message that arrives meanwhile moves
     none of the others."""
     conn.row_factory = sqlite3.Row
+    columns = "received_at, content, rowid" + (", sender_username, emotes" if whole else "")
     last = end.astimezone(timezone.utc).isoformat()
     # Rows are numbered from 1, so to begin with none of the stretch is behind.
     arrived, row = start.astimezone(timezone.utc).isoformat(), 0
     while True:
         rows = conn.execute(
-            """
-            SELECT received_at, content, rowid
+            f"""
+            SELECT {columns}
             FROM chat_messages
             WHERE broadcaster_user_id = ? AND received_at BETWEEN ? AND ? AND (received_at > ? OR rowid > ?)
             ORDER BY received_at, rowid
@@ -1065,14 +1068,18 @@ def insert_moment(
     emote_count: int,
     keyword_hits: int,
     stream_elapsed_seconds: int | None = None,
+    detected_at: str | None = None,
 ) -> int:
+    """Stores a moment and returns its id. It is detected now unless
+    `detected_at` says when - for one found afterwards, in the chat of a
+    stream that was kept whole (see recording_moments.py)."""
     cursor = conn.execute(
         """
         INSERT INTO moments
             (broadcaster_user_id, channel_slug, window_start, window_end, reason, score,
              message_count, baseline_message_rate, current_message_rate, emote_count, keyword_hits,
-             stream_elapsed_seconds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             stream_elapsed_seconds, detected_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
         """,
         (
             broadcaster_user_id,
@@ -1087,10 +1094,18 @@ def insert_moment(
             emote_count,
             keyword_hits,
             stream_elapsed_seconds,
+            detected_at,
         ),
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def delete_moment(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Takes a moment back: for one that was stored a moment ago for a file
+    that then could not be put in its place. Nothing else removes a moment."""
+    conn.execute("DELETE FROM moments WHERE id = ?", (moment_id,))
+    conn.commit()
 
 
 def get_moments_with_clip_alone(conn: sqlite3.Connection) -> list[sqlite3.Row]:

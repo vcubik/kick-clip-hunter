@@ -153,6 +153,107 @@ class TestLoadingStoredChat:
         assert load("nobody") == ([], {})
 
 
+class TestLoadingAStretchOfAChannelToldByItsId:
+    """What a stream recording replays: it has the channel's name from the
+    watchlist, which is not the one its chat is stored under."""
+
+    def between(self, start: datetime, end: datetime, broadcaster_user_id: int = 1):
+        conn = db.get_connection()
+        try:
+            return replay.load_between(conn, broadcaster_user_id, start, end)
+        finally:
+            conn.close()
+
+    def test_it_is_the_channels_chat_whatever_name_it_came_under(self):
+        add_chat("some_channel", "alice", "as kick spells it", START)
+        add_chat("renamed_channel", "bob", "under another name", START + timedelta(seconds=1))
+        add_chat("another_channel", "carol", "elsewhere", START + timedelta(seconds=2), broadcaster_user_id=2)
+
+        messages, _keywords = self.between(START, START + timedelta(minutes=1))
+
+        assert [(message.sender, message.content) for message in messages] == [
+            ("alice", "as kick spells it"),
+            ("bob", "under another name"),
+        ]
+
+    def test_only_what_arrived_in_the_stretch_in_the_order_it_arrived(self):
+        for second in (30, 5, 61, -1, 12):
+            add_chat(CHANNEL, f"second{second}", "x", START + timedelta(seconds=second))
+
+        messages, _keywords = self.between(START, START + timedelta(seconds=60))
+
+        assert [message.sender for message in messages] == ["second5", "second12", "second30"]
+        assert [message.time - START.timestamp() for message in messages] == [5, 12, 30]
+
+    def test_it_gives_what_loading_a_channel_by_name_gives(self, stream):
+        typical_evening(stream)
+
+        by_id = self.between(START - timedelta(hours=1), START + timedelta(hours=3))
+
+        assert by_id == load()
+
+    def test_messages_are_in_time_order_however_their_times_are_written(self):
+        # As text, "…:05.000Z" sorts after "…:05.000500+00:00"; as a time it
+        # is the earlier of the two.
+        conn = db.get_connection()
+        try:
+            for message_id, received_at in (
+                ("z", "2026-03-01T18:00:05.000Z"),
+                ("offset", "2026-03-01T18:00:05.000500+00:00"),
+            ):
+                db.insert_chat_message(
+                    conn,
+                    message_id=message_id,
+                    broadcaster_user_id=1,
+                    channel_slug=CHANNEL,
+                    sender_username=message_id,
+                    content="x",
+                    emotes_json="[]",
+                    created_at=received_at,
+                    received_at=received_at,
+                )
+        finally:
+            conn.close()
+
+        messages, _keywords = self.between(START, START + timedelta(minutes=1))
+
+        assert [message.sender for message in messages] == ["z", "offset"]
+
+    def test_emote_positions_and_the_channels_keywords_come_with_it(self):
+        conn = db.get_connection()
+        try:
+            db.replace_channel_keywords(conn, 77, {"kekw": 3.5})
+            db.insert_chat_message(
+                conn,
+                message_id="with-emotes",
+                broadcaster_user_id=77,
+                channel_slug=CHANNEL,
+                sender_username="alice",
+                content="[emote:1:KEKW] [emote:1:KEKW]",
+                emotes_json='[{"emote_id": "1", "positions": [{"s": 0, "e": 13}, {"s": 15, "e": 28}]}]',
+                created_at=START.isoformat(),
+                received_at=START.isoformat(),
+            )
+        finally:
+            conn.close()
+
+        (message,), keywords = self.between(START, START + timedelta(minutes=1), broadcaster_user_id=77)
+
+        assert message.emote_count == 2 and keywords == {"kekw": 3.5}
+
+    def test_it_is_read_a_chunk_at_a_time(self, monkeypatch):
+        monkeypatch.setattr(db, "CHAT_CHUNK", 3)
+        for second in range(10):
+            add_chat(CHANNEL, f"second{second}", "x", START + timedelta(seconds=second))
+
+        messages, _keywords = self.between(START, START + timedelta(minutes=1))
+
+        assert [message.sender for message in messages] == [f"second{second}" for second in range(10)]
+
+    def test_a_stretch_with_no_chat_is_empty(self):
+        assert self.between(START, START + timedelta(minutes=1)) == ([], {})
+
+
 class TestHowLongChatWasGoing:
     def message(self, seconds: float) -> replay.Message:
         return replay.Message(START.timestamp() + seconds, "viewer", "x", 0)
@@ -341,6 +442,53 @@ class TestReplay:
 
     def test_no_chat_no_moments(self):
         assert replay.replay([], {}, tuning.recommended()) == []
+
+    def test_each_moment_comes_with_what_the_detector_measured(self, stream):
+        # What a moment is stored with, should one be made of it.
+        typical_evening(stream)
+        live = ChatSim(channel="live_run", now=START.timestamp())
+        typical_evening(live)
+
+        moments = replayed()
+
+        assert len(moments) == len(live.moments) == 2
+        for moment, (_time, measured) in zip(moments, live.moments, strict=True):
+            spike = moment.spike
+            assert (tuple(spike.reasons), spike.score) == (moment.reasons, moment.score)
+            assert spike.reasons == measured.reasons
+            assert (spike.message_count, spike.emote_count, spike.keyword_hits) == (
+                measured.message_count,
+                measured.emote_count,
+                measured.keyword_hits,
+            )
+            # A stored time is kept to the microsecond, which shows in a rate.
+            assert spike.score == pytest.approx(measured.score, rel=1e-3)
+            assert spike.baseline_message_rate == pytest.approx(measured.baseline_message_rate, rel=1e-3)
+            assert spike.current_message_rate == pytest.approx(measured.current_message_rate, rel=1e-3)
+
+    def test_it_says_how_far_it_has_got_as_it_goes(self, stream, monkeypatch):
+        monkeypatch.setattr(replay, "PROGRESS_EVERY", 100)
+        stream.chatter(450)
+        messages, keywords = load()
+        said: list[int] = []
+
+        replay.replay(messages, keywords, tuning.recommended(), said.append)
+
+        assert said == [0, 100, 200, 300, 400]
+
+    def test_what_asks_how_far_can_have_it_given_up_and_nothing_of_it_stays(self, stream, monkeypatch):
+        monkeypatch.setattr(replay, "PROGRESS_EVERY", 100)
+        typical_evening(stream)
+        messages, keywords = load()
+
+        def enough(fed: int) -> None:
+            if fed >= 200:
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            replay.replay(messages, keywords, tuning.recommended(), enough)
+
+        assert dict(detector._entries) == {} and detector._last_moment_at == {}
 
     def test_a_moment_still_open_when_the_chat_log_ends_is_counted(self, stream):
         stream.chatter(150)

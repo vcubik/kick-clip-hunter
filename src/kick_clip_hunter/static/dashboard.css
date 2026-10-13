@@ -109,8 +109,8 @@
   /* The same for the Trim dialog: all of it but its picture. */
   --trim-rest: 480px;
   /* And for a recording, which has less around its picture: the trace of
-     its chat and a few lines of words. */
-  --recording-rest: 450px;
+     its chat, a few lines of words and the head of what was found in it. */
+  --recording-rest: 530px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -267,6 +267,11 @@ a { color: inherit; }
    goes from one part of the stream to the next the paper is cut: a slit of
    `field` shows through. */
 .rec-trace .ch-moment { min-width: 3px; }
+/* What was found in the recording's chat afterwards and is no moment yet
+   has the same mark along the foot of the strip only. */
+.rec-trace .ch-moment.is-found { top: auto; height: var(--space-8); mix-blend-mode: normal; }
+.ch-chip-found { align-items: flex-end; }
+.ch-chip-found i { width: 100%; height: var(--space-4); background: var(--marker); }
 .rec-trace .ch-flag { left: clamp(30px, var(--at, 0%), calc(100% - 30px)); }
 .ch-chip-moment { background: var(--marker); }
 .ch-strip .ch-break { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--field); }
@@ -468,6 +473,17 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .recording .stage-in { max-width: max(520px, calc((100vh - var(--recording-rest)) * 16 / 9)); }
 .rec-file { margin-top: var(--space-12); }
 .rec-file .ch-meta { min-width: 0; overflow-wrap: anywhere; }
+
+/* Under a recording: what would have been a moment in its chat, looked for
+   when asked. A row for each - where in the recording it is, which is also
+   the button that plays it from there, what set it off, and the moment it
+   is or the button that makes it one. */
+.rec-moments { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
+.rec-moments h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
+.rec-moments-words { max-width: 80ch; margin-top: var(--space-4); font-size: 13px; color: var(--text-2); }
+.rec-found { margin: var(--space-8) 0 0; padding: 0; list-style: none; font-size: 13px; }
+.rec-found li { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; column-gap: var(--space-12); min-height: var(--h-row); border-top: 1px solid var(--quiet); }
+.rec-found li > .ch-btn:first-child { font-variant-numeric: tabular-nums; }
 
 /* On the Channels page: what a channel's recording is doing, and the button
    that starts or stops it. As wide as its longest words need, so that the

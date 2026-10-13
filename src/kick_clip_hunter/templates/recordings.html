@@ -77,6 +77,11 @@
         {{ delete(recording, "Removes the file, and what was cut out of it, for good.") }}
       </div>
       <p class="status-line" role="status" data-status></p>
+      {#- What would have been a moment in the recording's chat, looked for
+          when asked (see _recording_moments.html). -#}
+      {% with finding = recording.finding %}
+      {% include "_recording_moments.html" %}
+      {% endwith %}
     </div>
     </div>
 
