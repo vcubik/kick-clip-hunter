@@ -192,7 +192,13 @@ Module map (`src/kick_clip_hunter/`):
   The moment session's recommended timing lives here too (`MOMENT_SESSION_*`,
   `DYNAMIC_POST_ROLL_SECONDS`), since both `main.py` and the replay need it. Nothing is
   applied to the past: the webhook resolves the channel's settings for every message, and
-  an open moment keeps the ones it fired with, down to how its clip is cut
+  an open moment keeps the ones it fired with, down to how its clip is cut. Also here:
+  clips on command (`clip_commands`, `clip_command_from_anyone`) - whole chat messages
+  ("!clip") that make a moment by themselves when the channel's streamer or a moderator
+  posts one (`chat_identity.runs_channel`), or anyone with the switch on. The webhook
+  opens the moment without the detector (`reason=command`, its figures zero), so it
+  needs no chat history, only a tracked channel; the detector never sees a command, and
+  a replay leaves commands out without counting them
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
   rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`
   and the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`

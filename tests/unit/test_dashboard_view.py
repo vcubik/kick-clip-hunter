@@ -148,6 +148,10 @@ class TestReasons:
     def test_an_imported_clip_is_called_that(self):
         assert view.queue_label(row(reason=view.IMPORT_REASON)) == "Imported"
 
+    def test_a_clip_made_on_command_is_called_that(self):
+        assert view.queue_label(row(reason=view.COMMAND_REASON)) == "On command"
+        assert view.queue_label(row(reason=view.COMMAND_REASON), "KEKW x3") == "KEKW x3"
+
     def test_a_name_the_reviewer_gave_takes_the_place_of_everything_else(self):
         named = row(title="He fell off the chair")
 
@@ -213,6 +217,11 @@ class TestSummary:
         imported = row(reason=view.IMPORT_REASON, score=0.0, message_count=0, current_message_rate=0.0)
 
         assert view.summary_words(imported) == "Imported clip. No chat was measured for it."
+
+    def test_nor_has_a_clip_made_on_command(self):
+        commanded = row(reason=view.COMMAND_REASON, score=0.0, message_count=0, current_message_rate=0.0)
+
+        assert view.summary_words(commanded) == "Asked for in chat. The detector had no part in it."
 
 
 # One channel's 7TV emotes, as stored: (emote id, width, height) by name.

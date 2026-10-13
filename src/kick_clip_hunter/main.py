@@ -695,6 +695,18 @@ class _MomentSession:
 # One open moment per channel at a time.
 _moment_sessions: dict[str, _MomentSession] = {}
 
+# What a moment made on command is stored with in place of what the detector
+# measured: it measured nothing.
+_COMMANDED = detector.Spike(
+    reasons=[dashboard_view.COMMAND_REASON],
+    score=0.0,
+    message_count=0,
+    baseline_message_rate=0.0,
+    current_message_rate=0.0,
+    emote_count=0,
+    keyword_hits=0,
+)
+
 
 def _session_should_close(session: _MomentSession, reaction_is_active: bool, now: datetime) -> bool:
     """Pure decision for one poll tick: extend the open moment if the reaction
@@ -2838,25 +2850,44 @@ async def kick_webhook(
             # Everything from here on is judged by the channel's settings as
             # they stand for this message.
             tuned = _tuning(conn, broadcaster_user_id)
-            emote_weight = detector.classify_native_emotes(content, tuned.detector)
-            laugh_weight, mention_weight = detector.classify_message(
-                content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
-            )
-            spike = detector.record_message(
-                channel,
-                sender=sender_username,
-                content=content,
-                emote_count=emote_count,
-                emote_weight=emote_weight,
-                laugh_weight=laugh_weight,
-                mention_weight=mention_weight,
-                settings=tuned.detector,
-            )
+            commanded = False
+            if tuned.is_clip_command(content):
+                # One of the channel's clip commands. It is no reaction, so
+                # the detector never sees it, whoever posted it; from someone
+                # who may ask, it is a moment by itself, with none of the
+                # detector's figures to its name.
+                commanded = tuned.clip_command_from_anyone or chat_identity.runs_channel(
+                    sender, broadcaster_user_id
+                )
+                spike = _COMMANDED if commanded else None
+            else:
+                emote_weight = detector.classify_native_emotes(content, tuned.detector)
+                laugh_weight, mention_weight = detector.classify_message(
+                    content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
+                )
+                spike = detector.record_message(
+                    channel,
+                    sender=sender_username,
+                    content=content,
+                    emote_count=emote_count,
+                    emote_weight=emote_weight,
+                    laugh_weight=laugh_weight,
+                    mention_weight=mention_weight,
+                    settings=tuned.detector,
+                )
             if spike is not None and channel in _moment_sessions:
                 # A moment is already open for this channel (a re-fire past the
                 # cooldown) - it's the same reaction continuing, so just keep
                 # it alive rather than opening a duplicate.
-                _moment_sessions[channel].last_active = datetime.now(timezone.utc)
+                session = _moment_sessions[channel]
+                session.last_active = datetime.now(timezone.utc)
+                if commanded:
+                    # What was asked for is what was on screen just now: the
+                    # open moment's clip is made to reach it.
+                    session.window_end = session.last_active
+                    logger.info(
+                        "[%s] clip asked for by %s: moment %d extended", channel, sender_username, session.moment_id
+                    )
             elif spike is not None:
                 window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)

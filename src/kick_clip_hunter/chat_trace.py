@@ -548,20 +548,25 @@ def _reaction_tokens(content: str) -> list[str]:
 
 
 def reaction_words(messages: Iterable[Row], emote_names: Iterable[str] = ()) -> str | None:
-    """What chat said most in a moment and in how many messages, as the
+    """What chat said most in a moment and how many people said it, as the
     word and the count with a times sign between them - or None if nothing
-    was said more than once.
+    was said by more than one.
 
     Chat reacts in single tokens: an emote, a laugh, a "W", a "???", often
     repeated. So a message counts for a token when it consists of nothing
     else, and for any emote or laugh it contains even inside a sentence
     (`emote_names` are the channel's own, lowercased). Ordinary words inside
     sentences are not counted, which keeps "the" from ever winning.
+
+    People are counted, not messages, as the detector counts them: Kick
+    doesn't rate-limit an account, and one person pasting an emote six times
+    is not six people reacting. A message with no sender is somebody of its
+    own.
     """
     emote_names = frozenset(emote_names)
-    counts: Counter[str] = Counter()
+    people: dict[str, set[Any]] = {}
     spellings: dict[str, Counter[str]] = {}
-    for message in messages:
+    for index, message in enumerate(messages):
         content = message["content"] or ""
         tokens = _reaction_tokens(content)
         native = set(NATIVE_EMOTE_TOKEN_PATTERN.findall(content))
@@ -571,13 +576,15 @@ def reaction_words(messages: Iterable[Row], emote_names: Iterable[str] = ()) -> 
             for token in tokens
             if only_one_kind or token in native or token == LAUGH_WORD or token.lower() in emote_names
         }
-        counts.update(counted)
+        sender = message["sender_username"] or index
+        for key in counted:
+            people.setdefault(key, set()).add(sender)
         for token in tokens:
             if token.lower() in counted:
                 spellings.setdefault(token.lower(), Counter())[token] += 1
-    if not counts:
+    if not people:
         return None
-    key, count = counts.most_common(1)[0]
+    key, count = Counter({key: len(senders) for key, senders in people.items()}).most_common(1)[0]
     if count < 2:
         return None
     return f"{spellings[key].most_common(1)[0][0]} {TIMES_SIGN}{count}"

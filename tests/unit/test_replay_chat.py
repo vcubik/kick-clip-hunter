@@ -292,6 +292,19 @@ class TestReplay:
         assert [moment.reasons for moment in listened] == [("emote_mention",)]
         assert ignored == []
 
+    def test_a_clip_command_is_left_out_as_it_is_live(self, stream):
+        # Who posted a stored message, with what badges, is not kept with it,
+        # so a replay makes no clips on command - and, like the service, it
+        # keeps the command away from the detector.
+        typical_evening(stream)
+        messages, keywords = load()
+        laughs = {message.content.lower() for message in messages if detector.classify_message(message.content)[0]}
+
+        deaf = replay.replay(messages, keywords, replace(tuning.recommended(), clip_commands=frozenset(laughs)))
+
+        assert replay.replay(messages, keywords, tuning.recommended()) != []
+        assert deaf == []
+
     def test_replaying_twice_gives_the_same_answer(self, stream):
         # Each replay starts from a clean detector, not the previous one's state.
         typical_evening(stream)

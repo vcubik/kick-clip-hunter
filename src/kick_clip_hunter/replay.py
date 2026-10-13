@@ -11,7 +11,9 @@ been and how long their clips.
 What this can and cannot tell: it reproduces *when* moments fire (on the day
 it was first used it matched the live run 102 to 103), so it answers "how
 many" and "how long". It says nothing about whether the moments that remain
-are the good ones - that needs ratings.
+are the good ones - that needs ratings. Nor does it count clips made on
+command (see tuning.py): who posted a stored message, with what badges, is
+not kept with it. A command is left out of the detector here as it is live.
 
 Used by scripts/replay_chat.py and by the Settings page's trial. Nothing is
 written to the database, and the detector's state for the channels that are
@@ -182,6 +184,8 @@ def replay(messages: list[Message], keywords: dict[str, float], tuning: Tuning) 
     try:
         for message in messages:
             run_session_until(message.time)
+            if tuning.is_clip_command(message.content):
+                continue
             laugh_weight, mention_weight = detector.classify_message(message.content, weights, settings)
             spike = detector.record_message(
                 channel,
