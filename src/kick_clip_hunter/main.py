@@ -47,11 +47,13 @@ from .db import (
     count_stream_recordings,
     delete_stream_recording,
     finish_stream_recording,
+    get_channel_chat_between,
     get_channel_keywords,
     get_chat_between,
     get_chat_delay,
     get_chat_emotes,
     get_chat_identities,
+    get_chat_name,
     get_connection,
     get_flag,
     get_moment,
@@ -1555,19 +1557,29 @@ RECORDING_CHAT_AFTER_SECONDS = 300
 RECORDING_CHAT_LIMIT = 3000
 
 
+def _recording_chat_delay(conn, row) -> int:
+    """How far behind its broadcast a recorded channel's chat is taken to
+    run: what the review page has for the channel. That is kept under the
+    name the channel's chat and moments have - Kick's spelling of it, where
+    a recording has the watchlist's."""
+    return _chat_delay(conn, get_chat_name(conn, row["broadcaster_user_id"]) or row["channel_slug"])
+
+
 def _recording_chat(conn, row, parts: list[stream_recording.Part], at: float) -> dict:
     """The chat that goes with a stretch of a recording's file, around its
     second `at`: the lines, each with the second of the file it belongs to,
     and the stretch they cover. A message is put against the picture its
-    writer was watching, as on the review page (see chat_trace.py)."""
+    writer was watching, as on the review page (see chat_trace.py). The
+    channel's chat is told by the channel's id: its name on the watchlist,
+    which is the one a recording has, is not the one chat is stored under."""
     whole = stream_recording.length(parts)
     at = min(max(at, 0.0), whole)
     first = max(at - RECORDING_CHAT_BEFORE_SECONDS, 0.0)
     last = min(at + RECORDING_CHAT_AFTER_SECONDS, whole)
-    delay = timedelta(seconds=_chat_delay(conn, row["channel_slug"]))
-    messages = get_chat_between(
+    delay = timedelta(seconds=_recording_chat_delay(conn, row))
+    messages = get_channel_chat_between(
         conn,
-        row["channel_slug"],
+        row["broadcaster_user_id"],
         stream_recording.broadcast_time(parts, first) + delay,
         stream_recording.broadcast_time(parts, last) + delay,
         RECORDING_CHAT_LIMIT,
@@ -1601,7 +1613,7 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
     else:
         standing = "failed"
     started = to_local_datetime(row["started_at"] or row["requested_at"])
-    delay = _chat_delay(conn, row["channel_slug"])
+    delay = _recording_chat_delay(conn, row)
     return {
         "id": row["id"],
         "channel": row["channel_slug"],

@@ -67,12 +67,18 @@ def store_moment(connection, channel: str = "some_channel", **overrides) -> int:
 
 
 def store_chat(
-    connection, channel: str, sender: str, content: str, received_at: datetime, message_id: str | None = None
+    connection,
+    channel: str,
+    sender: str,
+    content: str,
+    received_at: datetime,
+    message_id: str | None = None,
+    broadcaster_user_id: int = 1,
 ):
     db.insert_chat_message(
         connection,
         message_id=message_id or f"{channel}-{sender}-{received_at.timestamp()}",
-        broadcaster_user_id=1,
+        broadcaster_user_id=broadcaster_user_id,
         channel_slug=channel,
         sender_username=sender,
         content=content,
@@ -623,6 +629,64 @@ class TestChatMessages:
         chat = db.get_chat_between(conn, "some_channel", T0, T0 + timedelta(seconds=10), limit=3)
 
         assert [row["sender_username"] for row in chat] == ["user00", "user01", "user02"]
+
+
+class TestChatOfAChannelToldByItsId:
+    """Kick sends a channel's chat under its own spelling of the channel's
+    name, which need not be the watchlist's - the id is the same in both."""
+
+    def test_a_stretch_comes_back_whatever_name_it_was_stored_under(self, conn):
+        store_chat(conn, "some_channel", "alice", "first", T0 + timedelta(seconds=1))
+        store_chat(conn, "renamed_channel", "bob", "second", T0 + timedelta(seconds=5))
+
+        chat = db.get_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=10))
+
+        assert [(row["sender_username"], row["content"]) for row in chat] == [("alice", "first"), ("bob", "second")]
+
+    def test_the_stretch_ends_where_it_was_asked_to(self, conn):
+        store_chat(conn, "some_channel", "too_early", "x", T0 - timedelta(milliseconds=1))
+        store_chat(conn, "some_channel", "first", "x", T0)
+        store_chat(conn, "some_channel", "last", "x", T0 + timedelta(seconds=10))
+        store_chat(conn, "some_channel", "too_late", "x", T0 + timedelta(seconds=10, milliseconds=1))
+
+        chat = db.get_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=10))
+
+        assert [row["sender_username"] for row in chat] == ["first", "last"]
+
+    def test_other_channels_are_left_out(self, conn):
+        store_chat(conn, "some_channel", "alice", "here", T0)
+        store_chat(conn, "another_channel", "bob", "elsewhere", T0, broadcaster_user_id=2)
+
+        chat = db.get_channel_chat_between(conn, 1, T0, T0)
+
+        assert [row["sender_username"] for row in chat] == ["alice"]
+
+    def test_a_busy_stretch_is_cut_to_its_first_messages(self, conn):
+        for number in range(30):
+            store_chat(conn, "some_channel", f"user{number:02d}", "x", T0 + timedelta(milliseconds=100 * number))
+
+        chat = db.get_channel_chat_between(conn, 1, T0, T0 + timedelta(seconds=10), limit=3)
+
+        assert [row["sender_username"] for row in chat] == ["user00", "user01", "user02"]
+
+    def test_the_stretch_is_found_through_an_index(self, conn):
+        # A recording's chat is asked for every few minutes of playing it.
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT content FROM chat_messages"
+            " WHERE broadcaster_user_id = 1 AND received_at BETWEEN 'a' AND 'b' ORDER BY received_at"
+        ).fetchall()
+
+        assert any("USING INDEX" in step[-1] for step in plan)
+
+    def test_the_name_its_chat_goes_by_is_the_newest_messages(self, conn):
+        store_chat(conn, "old_name", "alice", "x", T0)
+        store_chat(conn, "some_channel", "bob", "x", T0 + minutes(5))
+        store_chat(conn, "another_channel", "carol", "x", T0 + minutes(9), broadcaster_user_id=2)
+
+        assert db.get_chat_name(conn, 1) == "some_channel"
+
+    def test_a_channel_with_no_chat_has_no_such_name(self, conn):
+        assert db.get_chat_name(conn, 1) is None
 
 
 class TestMoments:

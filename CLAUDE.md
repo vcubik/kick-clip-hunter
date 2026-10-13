@@ -479,6 +479,12 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   by asking for byte ranges; Starlette's `StaticFiles` answers those (pinned by a test),
   so the file is written with its index at the end and not rewritten to move it forward.
 
+- A channel has two spellings of its name. The watchlist keeps the one it was added
+  under, capitals and all; Kick sends chat under its own, all in small letters, and that
+  is what chat rows, moments and the per-channel chat delay are stored under. Anything
+  that starts from a watchlist name (a stream recording does) finds the channel's chat by
+  `broadcaster_user_id`, never by comparing names (`get_channel_chat_between`,
+  `get_chat_name`).
 - Kick's webhook config UI occasionally fails to persist a URL change silently. If a
   channel is confirmed live/chatting but no webhooks are arriving, the fix is: toggle
   **Enable Webhooks** off, re-enter the URL, re-enable, save, then refresh the page to

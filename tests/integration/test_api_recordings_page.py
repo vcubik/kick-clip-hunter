@@ -63,11 +63,17 @@ def footage(channel: str, seconds: int = 6) -> None:
         kept.writer.add(T0 + timedelta(seconds=second), 1.0, "7-0", b"x" * 1000)
 
 
-def said_at(recording_second: float, channel: str = CHANNEL, sender: str = "alice", content: str = "hello") -> None:
+def said_at(
+    recording_second: float,
+    channel: str = CHANNEL,
+    sender: str = "alice",
+    content: str = "hello",
+    broadcaster_user_id: int = 1,
+) -> None:
     """Chat written by someone watching that second of a recording that
     began at T0 - so arriving that much later than it was broadcast as chat
     is taken to run behind."""
-    add_chat(channel, sender, content, T0 + timedelta(seconds=recording_second) + DELAY)
+    add_chat(channel, sender, content, T0 + timedelta(seconds=recording_second) + DELAY, broadcaster_user_id)
 
 
 def chat_lines(box: Element) -> list[tuple[str, str, str]]:
@@ -563,6 +569,32 @@ class TestChatBesideARecording:
         assert chat_lines(self.box(page)) == [("92", "alice", "hello")]
         assert page.one("div", class_="chat-foot").text == "Chat 8 s earlier, as the channel has it on the review page."
 
+    async def test_chat_is_found_under_the_name_kick_sends_it_with(self, service):
+        # The watchlist has the channel as it was typed; chat arrives under
+        # Kick's own spelling of the name, which is all in small letters.
+        add_stream_recording("Some_Channel", seconds=600)
+        said_at(12.5, channel="some_channel", content="there all along")
+
+        box = self.box(await recordings(service))
+
+        assert chat_lines(box) == [("12.5", "alice", "there all along")]
+
+    async def test_and_so_is_the_delay_the_channel_has_on_the_review_page(self, service):
+        # Which is kept under the name its moments have: the chat's.
+        recording_id = add_stream_recording("Some_Channel", seconds=600)
+        add_chat("some_channel", "alice", "hello", T0 + timedelta(seconds=100))
+        conn = db.get_connection()
+        try:
+            db.set_chat_delay(conn, "some_channel", 8)
+        finally:
+            conn.close()
+
+        page = await recordings(service)
+
+        assert chat_lines(self.box(page)) == [("92", "alice", "hello")]
+        assert page.one("div", class_="chat-foot").text == "Chat 8 s earlier, as the channel has it on the review page."
+        assert chat_lines(await self.chunk(service, recording_id, 100)) == [("92", "alice", "hello")]
+
     async def test_chat_from_a_break_in_the_stream_is_shown_where_the_picture_picks_up(self, service):
         # Two parts: a hundred seconds, then - a minute later - fifty more.
         add_stream_recording(CHANNEL, parts=[(T0, 100.0), (T0 + timedelta(seconds=160), 50.0)])
@@ -582,7 +614,7 @@ class TestChatBesideARecording:
         add_stream_recording(CHANNEL, seconds=120)
         said_at(-30, content="before it began")
         said_at(60, content="during")
-        said_at(60, channel="another_channel", content="elsewhere")
+        said_at(60, channel="another_channel", content="elsewhere", broadcaster_user_id=2)
         said_at(200, content="after it ended")
 
         box = self.box(await recordings(service))
@@ -612,7 +644,7 @@ class TestChatBesideARecording:
 
     async def test_emotes_and_who_wrote_are_drawn_as_on_the_review_page(self, service):
         add_stream_recording(CHANNEL, broadcaster_user_id=41, seconds=120)
-        said_at(5, sender="alice", content="KEKW [emote:37226:KEKW]")
+        said_at(5, sender="alice", content="KEKW [emote:37226:KEKW]", broadcaster_user_id=41)
         conn = db.get_connection()
         try:
             db.replace_channel_emotes(conn, 41, {"KEKW": ("7TVKEKW", 32, 32)})
