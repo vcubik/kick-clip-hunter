@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from . import detector
 from .db import TUNING_FOR_ALL, get_channel_keywords, get_tuning_in_force
-from .tuning import MOMENT_SESSION_POLL_SECONDS, Tuning, stored, tuned
+from .tuning import MOMENT_SESSION_POLL_SECONDS, PER_CHANNEL, Tuning, stored, tuned
 
 # Each replay is a channel of its own to the detector. No channel on Kick can
 # be called this: a name there has no space in it.
@@ -123,11 +123,11 @@ def load_messages(
 def tuning_in_force(conn: sqlite3.Connection, channel_slug: str) -> Tuning:
     """The settings the service goes by for a channel right now: the ones
     for all channels, and the channel's own if it is on the watchlist and
-    goes by them."""
+    goes by them - or, if it does not, what is a channel's alone."""
     row = conn.execute(
         "SELECT broadcaster_user_id FROM streamers WHERE lower(slug) = lower(?)", (channel_slug,)
     ).fetchone()
-    texts = get_tuning_in_force(conn)
+    texts = get_tuning_in_force(conn, PER_CHANNEL)
     own = texts.get(row[0], {}) if row else {}
     return tuned(stored(texts.get(TUNING_FOR_ALL, {})), stored(own))
 

@@ -434,7 +434,8 @@ STREAMS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/streams", StaticFiles(directory=STREAMS_DIR.as_posix()), name="streams")
 
 # What is stored of the Settings page's values (see tuning.py), by owner:
-# the ones for every channel and those of each channel that goes by its own.
+# the ones for every channel and those of each channel that goes by its own
+# (of any other channel, only what is a channel's alone).
 # The webhook asks for a channel's settings with every message, so they are
 # read once and kept; saving a setting drops them.
 _tuning_values: dict[int, dict[str, tuning.Value]] | None = None
@@ -476,13 +477,23 @@ def _remember_chat_identity(conn, broadcaster_user_id: int, username: str, sende
 
 def _tuning(conn, broadcaster_user_id: int) -> tuning.Tuning:
     """The settings the service goes by for a channel: what was set for all
-    channels, the channel's own on top where it goes by them, and the
-    constants for everything nobody set (see tuning.py)."""
+    channels, the channel's own on top where it goes by them (what is a
+    channel's alone, like its clip commands, either way), and the constants
+    for everything nobody set (see tuning.py)."""
     global _tuning_values
     if _tuning_values is None:
-        _tuning_values = {owner: tuning.stored(texts) for owner, texts in get_tuning_in_force(conn).items()}
+        in_force = get_tuning_in_force(conn, tuning.PER_CHANNEL)
+        _tuning_values = {owner: tuning.stored(texts) for owner, texts in in_force.items()}
     own = _tuning_values.get(broadcaster_user_id) if broadcaster_user_id != TUNING_FOR_ALL else None
     return tuning.tuned(_tuning_values.get(TUNING_FOR_ALL, {}), own)
+
+
+def _own_values(conn, streamer) -> dict[str, tuning.Value]:
+    """What a watched channel has of its own that is in force: all of it
+    where it goes by its own settings, otherwise only what is a channel's
+    alone."""
+    mine = tuning.stored(get_tuning(conn, streamer["broadcaster_user_id"]))
+    return mine if streamer["own_tuning"] else tuning.per_channel(mine)
 
 
 def _forget_tuning() -> None:
@@ -1678,7 +1689,7 @@ async def dashboard_settings(request: Request, channel: str | None = None):
         else:
             # A channel that does not go by its own settings is shown the
             # ones it does go by.
-            mine = tuning.stored(get_tuning(conn, row["broadcaster_user_id"])) if own else {}
+            mine = _own_values(conn, row)
             every, rest, rest_label = tuning.values(for_all, mine), tuning.values(for_all), "All channels"
             address = f"/channels/{quote(channel)}/tuning"
 
@@ -1691,7 +1702,7 @@ async def dashboard_settings(request: Request, channel: str | None = None):
                 ],
                 "own": own,
                 "editable": row is None or own,
-                "sections": tuning.form(every, rest, rest_label),
+                "sections": tuning.form(every, rest, rest_label, for_channel=row is not None),
                 "save_url": address,
                 "trial_url": f"{address}/trial",
                 "own_url": f"/channels/{quote(channel)}/own_tuning" if channel else None,
@@ -3028,10 +3039,11 @@ async def save_recording_again(recording_id: int):
     return {"recording": recording_id, "state": stream_recording.SAVING}
 
 
-async def _posted_values(request: Request) -> dict[str, tuning.Value]:
+async def _posted_values(request: Request, for_all: bool = False) -> dict[str, tuning.Value]:
     """The settings' values a request brings (`values`, by name), each as
     the value its setting takes. One that can't be taken is a 400 that says
-    why in words for the page."""
+    why in words for the page - as is, among values `for_all` channels, one
+    that is a channel's alone."""
     try:
         asked = await request.json()
     except ValueError:
@@ -3040,9 +3052,13 @@ async def _posted_values(request: Request) -> dict[str, tuning.Value]:
     if not isinstance(posted, dict):
         raise HTTPException(status_code=400, detail="expected the settings' values as JSON")
     try:
-        return tuning.cleaned(posted)
+        given = tuning.cleaned(posted)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    if for_all and (apart := sorted(tuning.per_channel(given))):
+        label = tuning.BY_NAME[apart[0]].label
+        raise HTTPException(status_code=400, detail=f'"{label}" is set for each channel by itself.')
+    return given
 
 
 def _checked(every: dict[str, tuning.Value], whose: str | None = None) -> None:
@@ -3066,10 +3082,10 @@ async def set_tuning(request: Request):
     One given what is recommended goes back to following the code, and one
     that is not mentioned stays as it is. Chat is judged by them from the
     next message on; a moment that is open keeps the ones it fired with."""
-    given = await _posted_values(request)
+    given = await _posted_values(request, for_all=True)
     conn = get_connection()
     try:
-        for_all = {**tuning.stored(get_tuning(conn)), **given}
+        for_all = tuning.shared({**tuning.stored(get_tuning(conn)), **given})
         _checked(tuning.values(for_all))
         # A channel with a value of its own for one half of a pair must not
         # be left with the pair the wrong way round.
@@ -3091,7 +3107,8 @@ async def set_channel_tuning(slug: str, request: Request):
     """Saves a channel's own settings: `values`, by name. One given what
     all channels have goes back to following them. They are in force while
     the channel goes by its own settings (see set_channel_own_tuning), and
-    kept either way."""
+    kept either way - all but what is a channel's alone, which is in force
+    either way."""
     given = await _posted_values(request)
     conn = get_connection()
     try:
@@ -3177,7 +3194,7 @@ async def try_tuning(request: Request, chat: str):
     the newest stored chat of the channel `chat`: how many moments it would
     have made with the settings as they are saved, and with these. Nothing
     is saved."""
-    given = await _posted_values(request)
+    given = await _posted_values(request, for_all=True)
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, chat)
@@ -3185,7 +3202,7 @@ async def try_tuning(request: Request, chat: str):
             raise HTTPException(status_code=404, detail=f"unknown channel {chat!r}")
         owner = row["broadcaster_user_id"]
         for_all = {**tuning.stored(get_tuning(conn)), **given}
-        mine = tuning.stored(get_tuning(conn, owner)) if row["own_tuning"] else {}
+        mine = _own_values(conn, row)
         _checked(tuning.values(for_all))
         _checked(tuning.values(for_all, mine), whose=chat)
         saved = _tuning(conn, owner)

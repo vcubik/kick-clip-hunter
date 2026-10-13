@@ -26,6 +26,8 @@ pytestmark = pytest.mark.anyio
 CHANNEL = "channel_a"
 OTHER = "channel_b"
 RECOMMENDED = tuning.recommended_values()
+# The ones that can be set for all channels: what their page posts.
+SHARED = tuning.shared(RECOMMENDED)
 
 
 def crowd_needed() -> int:
@@ -68,7 +70,7 @@ class TestSavingForAllChannels:
 
     async def test_what_is_recommended_anyway_is_not_stored(self, service):
         # The page posts every setting, the untouched ones too.
-        response = await save(service, **{**RECOMMENDED, "reacting_share": 0.2})
+        response = await save(service, **{**SHARED, "reacting_share": 0.2})
 
         assert response.json()["set"] == ["reacting_share"]
         assert stored() == {"reacting_share": 0.2}
@@ -186,6 +188,37 @@ class TestSavingForAllChannels:
 
         assert response.status_code == 200
 
+    @pytest.mark.parametrize(
+        ("values", "label"),
+        [
+            ({"clip_commands": "!clip"}, "Messages that ask for a clip"),
+            ({"clip_command_from_anyone": True}, "Anyone in chat may ask"),
+        ],
+    )
+    async def test_what_is_a_channels_alone_cannot_be_set_for_all_of_them(self, service, values, label):
+        user_id = service.watch(CHANNEL)
+
+        saved = await save(service, reacting_share=0.2, **values)
+        tried = await service.client.post(f"/tuning/trial?chat={CHANNEL}", json={"values": values})
+
+        assert (saved.status_code, tried.status_code) == (400, 400)
+        assert saved.json()["detail"] == tried.json()["detail"] == f'"{label}" is set for each channel by itself.'
+        assert stored() == {}
+        assert in_force(service, user_id) == tuning.recommended()
+
+    async def test_one_left_over_from_when_it_could_be_holds_for_nobody_and_goes_with_the_next_save(self, service):
+        user_id = service.watch(CHANNEL)
+        conn = db.get_connection()
+        try:
+            db.replace_tuning(conn, db.TUNING_FOR_ALL, tuning.encoded({"clip_commands": ("!clip",)}))
+        finally:
+            conn.close()
+
+        assert in_force(service, user_id).clip_commands == frozenset()
+        await save(service, reacting_share=0.2)
+
+        assert stored() == {"reacting_share": 0.2}
+
 
 class TestAChannelsOwnSettings:
     async def test_they_are_kept_under_the_channel(self, service):
@@ -222,6 +255,19 @@ class TestAChannelsOwnSettings:
         assert response.json() == {"slug": CHANNEL, "own_tuning": False}
         assert in_force(service, user_id) == tuning.recommended()
         assert stored(user_id) == {"reacting_share": 0.3}
+
+    async def test_what_is_the_channels_alone_holds_without_it_going_by_its_own(self, service):
+        user_id, other_id = service.watch(CHANNEL), service.watch(OTHER)
+
+        response = await save(service, CHANNEL, clip_commands="!Clip, clip that", reacting_share=0.3)
+
+        assert response.json()["set"] == ["clip_commands", "reacting_share"]
+        mine = in_force(service, user_id)
+        assert mine.clip_commands == frozenset({"!clip", "clip that"})
+        assert mine.detector.min_reaction_unique_fraction == RECOMMENDED["reacting_share"]
+        assert in_force(service, other_id) == tuning.recommended()
+        service.main._tuning_values = None  # what a fresh process starts with
+        assert in_force(service, user_id) == mine
 
     async def test_what_all_channels_have_anyway_is_not_stored_for_the_channel(self, service):
         user_id = service.watch(CHANNEL)
@@ -521,6 +567,16 @@ def rest_button(page: Element, name: str) -> Element:
     return row_of(page, name).one("button", class_="set-rest")
 
 
+def locked(form: Element) -> list[bool]:
+    """Which of the form's sections cannot be set, in the page's order."""
+    return ["disabled" in fieldset.attrs for fieldset in form.find("fieldset")]
+
+
+def section_of(form: Element, name: str) -> Element:
+    (fieldset,) = [fieldset for fieldset in form.find("fieldset") if fieldset.find(data_setting=name)]
+    return fieldset
+
+
 class TestTheSettingsPage:
     async def test_it_is_one_of_the_pages_in_the_bar(self, service):
         page = await settings_page(service)
@@ -533,12 +589,16 @@ class TestTheSettingsPage:
         page = await settings_page(service)
 
         assert page.one("h2", id="whose-title").text == "Settings for all channels"
-        assert [control.attrs["data-setting"] for control in page.find(data_setting=True)] == [
-            item.name
+        offered = [
+            tuning.BY_NAME[field["name"]]
             for section in tuning.form(RECOMMENDED, RECOMMENDED, "Recommended")
-            for item in [tuning.BY_NAME[field["name"]] for field in [*section["fields"], *section["advanced"]]]
+            for field in [*section["fields"], *section["advanced"]]
         ]
-        for item in tuning.SETTINGS:
+        assert [control.attrs["data-setting"] for control in page.find(data_setting=True)] == [
+            item.name for item in offered
+        ]
+        assert {item.name for item in offered} == SHARED.keys()
+        for item in offered:
             assert shown(page, item.name) == tuning.words(item, RECOMMENDED[item.name]), item.name
             assert "is-set" not in row_of(page, item.name).classes
             assert "disabled" in rest_button(page, item.name).attrs
@@ -600,7 +660,7 @@ class TestTheSettingsPage:
         form = (await settings_page(service)).one("form", data_tuning=True)
 
         assert (form.attrs["data-tuning"], form.attrs["data-trial"]) == ("/tuning", "/tuning/trial")
-        assert "disabled" not in form.one("fieldset").attrs
+        assert locked(form) == [False] * len(form.find("fieldset"))
         assert form.one("button", type="submit").text == "Save"
         assert form.one("button", data_rest_all=True).text == "Put back what is recommended"
 
@@ -639,10 +699,41 @@ class TestTheSettingsPage:
 
         assert page.one("h2", id="whose-title").text == f"Settings of {CHANNEL}"
         assert "goes by the settings for all channels" in page.one("p", class_="set-whose").text
-        assert "disabled" in page.one("form", data_tuning=True).one("fieldset").attrs
+        form = page.one("form", data_tuning=True)
+        assert "disabled" in section_of(form, "reacting_share").attrs
         assert shown(page, "reacting_share") == "0.2"
         assert "is-set" not in row_of(page, "reacting_share").classes
         assert page.find("button", data_trial_go=True) == []
+        assert form.find("button", data_rest_all=True) == []
+
+    async def test_all_but_what_asks_for_a_clip_which_comes_first_and_is_the_channels_alone(self, service):
+        service.watch(CHANNEL)
+        await save(service, CHANNEL, clip_commands="!clip")
+
+        page = await settings_page(service, CHANNEL)
+
+        form = page.one("form", data_tuning=True)
+        assert locked(form) == [False] + [True] * (len(form.find("fieldset")) - 1)
+        first = form.find("fieldset")[0]
+        assert first.one("h2").text == "A clip on command"
+        assert [control.attrs["data-setting"] for control in first.find(data_setting=True)] == [
+            "clip_commands",
+            "clip_command_from_anyone",
+        ]
+        assert (shown(page, "clip_commands"), "is-set" in row_of(page, "clip_commands").classes) == ("!clip", True)
+        assert rest_button(page, "clip_commands").text == "Recommended: none"
+        assert form.attrs["data-tuning"] == f"/channels/{CHANNEL}/tuning"
+        # Outside the locked sections, so what is the channel's can be saved.
+        assert form.one("button", type="submit").text == "Save"
+        assert all(not fieldset.find("button", type="submit") for fieldset in form.find("fieldset"))
+        assert "the channel's own either way" in page.one("p", class_="set-whose").text
+
+    async def test_the_page_for_all_channels_has_no_such_section_and_says_where_it_is(self, service):
+        page = await settings_page(service)
+
+        assert "A clip on command" not in [heading.text for heading in page.find("h2")]
+        assert page.find(data_setting="clip_commands") == []
+        assert "set channel by channel" in page.one("p", class_="set-whose").text
 
     async def test_its_switch_turns_its_own_settings_on(self, service):
         service.watch(CHANNEL)
@@ -666,7 +757,8 @@ class TestTheSettingsPage:
             f"/channels/{CHANNEL}/tuning",
             f"/channels/{CHANNEL}/tuning/trial",
         )
-        assert "disabled" not in form.one("fieldset").attrs
+        assert locked(form) == [False] * len(form.find("fieldset"))
+        assert form.find("fieldset")[0].one("h2").text == "A clip on command"
         assert form.one("button", data_rest_all=True).text == "Put back what all channels have"
         # Its own value, marked; and one it takes from all channels, at rest.
         assert (shown(page, "reacting_least"), "is-set" in row_of(page, "reacting_least").classes) == ("6", True)

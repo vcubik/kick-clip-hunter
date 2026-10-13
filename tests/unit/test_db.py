@@ -411,6 +411,21 @@ class TestTuning:
             7: {"reacting_share": "0.4"},
         }
 
+    def test_what_is_a_channels_alone_is_in_force_for_any_watched_channel(self, conn):
+        db.add_streamer(conn, 7, "its_own")
+        db.add_streamer(conn, 8, "like_the_rest")
+        db.set_streamer_own_tuning(conn, 7, True)
+        db.replace_tuning(conn, db.TUNING_FOR_ALL, {"reacting_share": "0.2"})
+        db.replace_tuning(conn, 7, {"reacting_share": "0.4", "clip_commands": '["!seven"]'})
+        db.replace_tuning(conn, 8, {"reacting_share": "0.6", "clip_commands": '["!eight"]', "lull_seconds": "40"})
+        db.replace_tuning(conn, 9, {"clip_commands": '["!nine"]'})  # a channel no longer watched
+
+        assert db.get_tuning_in_force(conn, ["clip_commands", "lull_seconds"]) == {
+            db.TUNING_FOR_ALL: {"reacting_share": "0.2"},
+            7: {"reacting_share": "0.4", "clip_commands": '["!seven"]'},
+            8: {"clip_commands": '["!eight"]', "lull_seconds": "40"},
+        }
+
     def test_values_persist_across_connections(self, conn):
         db.replace_tuning(conn, 7, {"reacting_share": "0.4"})
 

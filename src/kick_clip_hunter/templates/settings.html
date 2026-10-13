@@ -3,7 +3,9 @@
     setting has a button beside it that puts back what it would be if it
     were left alone - what is recommended, or for a channel what all
     channels have - and what is in the form can be tried on stored chat
-    before it is saved. -#}
+    before it is saved. A channel that goes by the settings for all
+    channels is shown those, locked - all but the section that is a
+    channel's alone, which comes first and can be set either way. -#}
 {% extends "base.html" %}
 {% from "_macros.html" import switch %}
 {% block title %}Settings{% endblock %}
@@ -64,19 +66,19 @@
     </div>
     <p class="section-lead set-whose">
       {%- if not channel -%}
-      These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code.{% if own_words %} {{ own_words }}{% endif %}
+      These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code. The messages that ask for a clip are set channel by channel: choose one above.{% if own_words %} {{ own_words }}{% endif %}
       {%- elif own -%}
       {{ channel }} goes by the settings below. Whatever is the same as for all channels keeps following them.
       {%- else -%}
-      {{ channel }} goes by the settings for all channels, shown below. Switch its own settings on to change any of them for this channel only.
+      {{ channel }} goes by the settings for all channels, shown below. Switch its own settings on to change any of them for this channel only. What asks for a clip on command is the channel's own either way.
       {%- endif -%}
     </p>
     <p class="status-line" role="status" data-status></p>
   </section>
 
   <form class="set-form" data-tuning="{{ save_url }}" data-trial="{{ trial_url }}" data-status-scope novalidate>
-    <fieldset class="set-fields"{% if not editable %} disabled{% endif %}>
-      {% for section in sections %}
+    {% for section in sections %}
+    <fieldset class="set-fields"{% if not (editable or section.per_channel) %} disabled{% endif %}>
       <section aria-labelledby="set-title-{{ loop.index }}">
         <h2 class="title" id="set-title-{{ loop.index }}">{{ section.title }}</h2>
         <p class="section-lead">{{ section.lead }}</p>
@@ -92,13 +94,15 @@
         </details>
         {% endif %}
       </section>
-      {% endfor %}
-      <div class="ch-line set-foot">
-        <button type="submit" class="ch-btn ch-btn-primary">Save</button>
-        <button type="button" class="ch-btn ch-btn-quiet" data-rest-all>{{ "Put back what all channels have" if channel else "Put back what is recommended" }}</button>
-        <p class="status-line" role="status" data-status></p>
-      </div>
     </fieldset>
+    {% endfor %}
+    <div class="ch-line set-foot">
+      <button type="submit" class="ch-btn ch-btn-primary">Save</button>
+      {% if editable %}
+      <button type="button" class="ch-btn ch-btn-quiet" data-rest-all>{{ "Put back what all channels have" if channel else "Put back what is recommended" }}</button>
+      {% endif %}
+      <p class="status-line" role="status" data-status></p>
+    </div>
   </form>
 
   {% if editable and (channel or channels) %}

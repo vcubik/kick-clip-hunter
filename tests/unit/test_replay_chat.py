@@ -414,6 +414,15 @@ class TestTheSettingsInForce:
         assert self.in_force("Some_Channel").detector.min_reaction_unique_fraction == 0.6
         assert self.in_force("another_channel").detector.min_reaction_unique_fraction == 0.4
 
+    def test_what_is_a_channels_alone_holds_whether_or_not_it_goes_by_its_own(self):
+        add_streamer(CHANNEL, 7)
+        store_tuning(db.TUNING_FOR_ALL, clip_commands=("!everyone",))
+        store_tuning(7, clip_commands=("!clip",), reacting_share=0.6)
+
+        assert self.in_force().clip_commands == frozenset({"!clip"})
+        assert self.in_force().detector.min_reaction_unique_fraction == detector.MIN_REACTION_UNIQUE_FRACTION
+        assert self.in_force("another_channel").clip_commands == frozenset()
+
 
 class TestCommandLine:
     def run(self, capsys, *arguments: str) -> tuple[int, str]:
