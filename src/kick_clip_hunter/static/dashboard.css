@@ -483,6 +483,11 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .recording .stage-in { max-width: max(520px, calc((100vh - var(--recording-rest)) * 16 / 9)); }
 .rec-file { margin-top: var(--space-12); }
 .rec-file .ch-meta { min-width: 0; overflow-wrap: anywhere; }
+/* Download chat and what it says while its video is made sit in the line
+   as if they were in it themselves. */
+.rec-chat-file { display: contents; }
+.rec-chat-words { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
+.rec-chat-words:empty { display: none; }
 
 /* Under a recording: what would have been a moment in its chat, looked for
    when asked. A row for each - where in the recording it is, which is also

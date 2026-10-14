@@ -704,6 +704,26 @@ FIND_WORDS = {
 FIND_BUSY = frozenset({FIND_LOOKING, FIND_CUTTING})
 
 
+# Where the chat of a whole recording, as a video of its own, stands (see
+# main._recording_chat_file): never asked for, being made, there to
+# download, or failed.
+CHAT_FILE_NONE = "none"
+CHAT_FILE_MAKING = "making"
+CHAT_FILE_READY = "ready"
+CHAT_FILE_FAILED = "failed"
+
+
+def chat_file_words(state: str, done: float | None = None) -> str:
+    """What the Recordings page says, beside Download chat, of the chat
+    video of a whole recording. `done` is how much of it has been made, as
+    a share, while that goes on."""
+    if state == CHAT_FILE_MAKING:
+        return f"Making the chat video: {int((done or 0.0) * 100)} %."
+    if state == CHAT_FILE_FAILED:
+        return "The chat video could not be made. The server log says why."
+    return ""
+
+
 def find_words(
     state: str,
     *,
