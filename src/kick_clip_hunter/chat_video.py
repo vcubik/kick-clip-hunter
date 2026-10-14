@@ -46,6 +46,7 @@ import math
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -328,8 +329,8 @@ def frames(column: Column, times: Sequence[float]) -> Iterator[bytes]:
     blank = bytes(WIDTH * HEIGHT * 4)
     shown: View | None = None
     picture = blank
-    for time in times:
-        view = view_at(column, time)
+    for second in times:
+        view = view_at(column, second)
         if view != shown:
             shown = view
             picture = blank if view is None else _frame(pages.window(view.top), column, view)
@@ -398,10 +399,8 @@ def _encode(arguments: Sequence[str], frames: Iterable[bytes], output: Path) -> 
             _close(pipe)
             status = process.wait()
         except BaseException:
-            process.kill()
-            process.wait()
-            _close(pipe)
-            unfinished.unlink(missing_ok=True)
+            _stop(process, pipe)
+            _remove(unfinished)
             raise
         if status != 0 or count == 0:
             unfinished.unlink(missing_ok=True)
@@ -411,6 +410,38 @@ def _encode(arguments: Sequence[str], frames: Iterable[bytes], output: Path) -> 
             raise ChatVideoError(f"ffmpeg could not write {output.name}: {reason}")
     unfinished.replace(output)
     return count
+
+
+# How long ffmpeg is given to end by itself once its input is closed, and
+# how long a file it had open may take to be let go of on Windows.
+STOP_SECONDS = 10
+RELEASE_SECONDS = 5
+
+
+def _stop(process: subprocess.Popen, pipe) -> None:
+    """Ends an ffmpeg that is no longer wanted. Its input is closed first,
+    so that it ends by itself: where `ffmpeg` is a launcher that starts the
+    real one (as package managers on Windows install it), killing the
+    launcher would leave the real one running, holding its file open."""
+    _close(pipe)
+    try:
+        process.wait(timeout=STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _remove(path: Path) -> None:
+    """Removes a file, waiting a little for whatever had it open to let go."""
+    deadline = time.monotonic() + RELEASE_SECONDS
+    while True:
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.1)
 
 
 def _close(pipe) -> None:
