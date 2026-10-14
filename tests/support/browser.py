@@ -47,16 +47,14 @@ class FakeBrowser:
     """Lays a page of chat out as the browser would, as far as the frames
     are concerned - a line every LINE_PIXELS from the top, in the order of
     the page, each arriving at the second the page gives it - and remembers
-    the pages it was given, and whether animated emotes were to move.
-    `hold()` makes it wait before laying a page out until `release()`; with
-    `failure` set it raises that instead. With `emote` set to an animated
-    emote's picture, every line has that emote in it, and when emotes are
-    to move it is left out of the pictures and handed over apart, as the
-    browser does. Put in the place of `chat_video.drawn_column`."""
+    the pages it was given. `hold()` makes it wait before laying a page out
+    until `release()`; with `failure` set it raises that instead. With
+    `emote` set to an animated emote's picture, every line has that emote
+    in it, left out of the pictures and handed over apart, as the browser
+    does. Put in the place of `chat_video.drawn_column`."""
 
     def __init__(self) -> None:
         self.pages: list[str] = []
-        self.animated: list[bool] = []
         self.emote: bytes | None = None
         self.failure: Exception | None = None
         self._waiting = threading.Event()
@@ -69,9 +67,8 @@ class FakeBrowser:
         self._waiting.set()
 
     @contextmanager
-    def drawn_column(self, html: str, animated: bool = False) -> Iterator[chat_video.Column]:
+    def drawn_column(self, html: str) -> Iterator[chat_video.Column]:
         self.pages.append(html)
-        self.animated.append(animated)
         assert self._waiting.wait(timeout=20), "the test never released the browser"
         if self.failure is not None:
             raise self.failure
@@ -79,7 +76,7 @@ class FakeBrowser:
         tops = [index * LINE_PIXELS for index in range(len(arrivals))]
         bottoms = [top + LINE_PIXELS for top in tops]
         emotes = []
-        if animated and self.emote is not None:
+        if self.emote is not None:
             emotes = [
                 chat_video.Emote(top + EMOTE_TOP, EMOTE_LEFT, EMOTE_PIXELS, EMOTE_PIXELS, self.emote) for top in tops
             ]

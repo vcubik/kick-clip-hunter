@@ -1561,9 +1561,7 @@ async def _trim_chat_background(
         chat.unlink(missing_ok=True)
         shown = chat_video.lines_from(lines, start, look.shift)
         progress = _making(standing, key, dashboard_view.TRIM_CHAT, early)
-        frames = await asyncio.to_thread(
-            chat_video.render, shown, duration, chat, look.background, progress, look.animated
-        )
+        frames = await asyncio.to_thread(chat_video.render, shown, duration, chat, look.background, progress)
     except _GivenUp:
         standing[key] = {"early": early}
         logger.info("[%s] making the chat video of %s given up: shutting down", channel, what)
@@ -1614,7 +1612,6 @@ async def _burn_background(
             look.where,
             look.background,
             progress,
-            look.animated,
         )
     except _GivenUp:
         standing.pop(key, None)
@@ -3472,7 +3469,7 @@ async def trim_moment(moment_id: int, request: Request):
     lay over it. `start` and `end` are clip time; `chat_shift` moves chat
     that many seconds later than the channel's chat delay has it,
     `chat_background` ("#rrggbb") puts a colour behind it instead of
-    nothing, and `chat_animated` has its animated emotes move. What was cut
+    nothing. Its animated emotes move. What was cut
     for the moment before is replaced."""
     asked = await _asked_trim(request)
     conn = get_connection()
@@ -3608,9 +3605,9 @@ async def trim_moment_chat(moment_id: int, request: Request):
     """Starts making the chat of the video already cut out of a moment's
     footage, for an editor who took the video without it at first: for the
     stretch that video holds, as trim_moment would have made it then.
-    `chat_where`, `chat_shift`, `chat_background` and `chat_animated` are
-    as there - drawn into the picture, the chat takes the place of the
-    video there was once it is made."""
+    `chat_where`, `chat_shift` and `chat_background` are as there - drawn
+    into the picture, the chat takes the place of the video there was once
+    it is made."""
     asked = await _asked_trim(request)
     conn = get_connection()
     try:
