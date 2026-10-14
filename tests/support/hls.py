@@ -48,8 +48,12 @@ class FakeHlsServer:
         first_sequence: int = 100,
         program_date_time: bool = True,
         stream_start: datetime | None = None,
+        init: bytes | None = None,
     ) -> None:
         self.timeline = timeline
+        # The initialization segment of a stream in fragmented MP4 (served at
+        # /segment/init.mp4, its segments as .m4s); None for MPEG-TS.
+        self.init = init
         self.published = published
         self.window = window
         self.first_sequence = first_sequence
@@ -105,7 +109,7 @@ class FakeHlsServer:
     def segment_requests(self) -> list[int]:
         """Timeline indexes of the segments requested so far, in order."""
         with self._lock:
-            return [int(path.split("/")[-1].removesuffix(".ts")) for path in self.requests if "/segment/" in path]
+            return [_index(path) for path in self.requests if "/segment/" in path and not path.endswith("init.mp4")]
 
     def close(self) -> None:
         self._httpd.shutdown()
@@ -138,8 +142,10 @@ class FakeHlsServer:
             body = self._variant_playlist().encode()
         elif path == "/variant/low.m3u8":
             body = b"#EXTM3U\n#EXT-X-TARGETDURATION:6\n"
+        elif path == "/segment/init.mp4" and self.init is not None:
+            body = self.init
         elif path.startswith("/segment/"):
-            body = self.timeline[int(path.split("/")[-1].removesuffix(".ts"))].data
+            body = self.timeline[_index(path)].data
         else:
             handler.send_error(404)
             return
@@ -160,6 +166,9 @@ class FakeHlsServer:
             f"#EXT-X-MEDIA-SEQUENCE:{self.first_sequence + first}",
             '#EXT-X-DATERANGE:ID="playlist",CLASS="timestamp",START-DATE="2026-01-01T12:00:00Z"',
         ]
+        if self.init is not None:
+            lines.append('#EXT-X-MAP:URI="../segment/init.mp4"')
+        suffix = ".ts" if self.init is None else ".m4s"
         for index in range(first, published):
             segment = self.timeline[index]
             if segment.discontinuity:
@@ -170,10 +179,15 @@ class FakeHlsServer:
                 lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{stamp}")
             lines.append(f"#EXTINF:{segment.duration:.3f},{segment.title}")
             # Relative on purpose: the recorder has to resolve it itself.
-            lines.append(f"../segment/{index}.ts")
+            lines.append(f"../segment/{index}{suffix}")
         if ended:
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
+
+
+def _index(path: str) -> int:
+    """The timeline index of a segment by the address it was asked at."""
+    return int(path.split("/")[-1].removesuffix(".ts").removesuffix(".m4s"))
 
 
 def fake_segments(count: int, **kwargs) -> list[Segment]:

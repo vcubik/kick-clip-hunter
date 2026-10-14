@@ -406,3 +406,42 @@ class TestTwitchAdSegments:
         )
 
         assert flags == [False]
+
+
+class TestFragmentedMp4:
+    """Twitch's VOD is fragmented MP4: its segments play only after the
+    initialization segment the playlist names (EXT-X-MAP)."""
+
+    VOD = playlist(
+        '#EXT-X-MAP:URI="init-0.mp4"',
+        "#EXT-X-PROGRAM-DATE-TIME:2026-10-13T15:43:01.893Z",
+        "#EXTINF:10.000,",
+        "0.mp4",
+        "#EXT-X-PROGRAM-DATE-TIME:2026-10-13T15:43:11.893Z",
+        "#EXTINF:10.000,",
+        "1.mp4",
+    )
+
+    def test_each_segment_knows_the_initialization_segment_it_plays_after(self):
+        parsed = recorder._parse_playlist(self.VOD, "https://vod.example/abc/chunked/index-dvr.m3u8?t=1")
+
+        assert {segment.init_url for segment in parsed.segments} == {"https://vod.example/abc/chunked/init-0.mp4"}
+        assert [segment.url.rsplit("/", 1)[1] for segment in parsed.segments] == ["0.mp4", "1.mp4"]
+
+    def test_an_mpeg_ts_segment_has_none(self):
+        assert {segment.init_url for segment in recorder._parse_playlist(VARIANT, VARIANT_URL).segments} == {None}
+
+    @pytest.mark.parametrize(
+        ("init_url", "group"),
+        [
+            (None, "vod"),
+            ("https://vod.example/abc/chunked/init-0.mp4", "vod-init-0"),
+            ("https://vod.example/abc/chunked/init-1.mp4?x=1", "vod-init-1"),
+            ("https://vod.example/abc/chunked/../weird name.mp4", "vod-weird-name"),
+        ],
+    )
+    def test_a_vod_segment_is_kept_in_the_group_of_its_initialization_segment(self, init_url, group):
+        segment = recorder._PlaylistSegment(0, "x", 10.0, "", None, False, init_url=init_url)
+
+        assert recorder._vod_group(segment) == group
+        assert recorder._is_vod_group(group)

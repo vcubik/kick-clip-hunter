@@ -58,7 +58,12 @@ class `twitch-stream-source`, and besides that date ranges of class
 `twitch-stitched-ad` spanning the ad's segments, which carry "Amazon" in
 their titles. A segment any of these call an ad is one. Twitch also lists
 the segments it is about to publish (EXT-X-TWITCH-PREFETCH), which are
-left for when they are published.
+left for when they are published. Twitch's VOD is not MPEG-TS but
+fragmented MP4: each segment a fragment that only plays after the
+playlist's initialization segment (EXT-X-MAP). Such a segment is kept as
+`.m4s`, its group named for the initialization segment, which is kept once
+beside them (`<group>.init`) and goes first when a clip is joined from
+them.
 
 The buffer is only ever a few minutes deep. A stream that is to be kept
 whole (see stream_recording.py) is not kept here: while one is, every
@@ -171,9 +176,16 @@ DEBUG_PLAYLIST_DIR = Path("data/hls_debug")
 DEBUG_PLAYLISTS_KEPT = 20
 
 RECORDINGS_DIR = Path("data/recordings")
+# What a fragmented-MP4 segment is kept as, and the initialization segment
+# its group's fragments play after.
+FRAGMENT_SUFFIX = ".m4s"
+INIT_SUFFIX = ".init"
 CLIPS_DIR = Path("data/clips")
 
-_SEGMENT_NAME = re.compile(r"^(\d+)_(\d+)_(.+)\.ts$")
+_SEGMENT_NAME = re.compile(r"^(\d+)_(\d+)_(.+)\.(ts|m4s)$")
+# What of an initialization segment's address names the group of fragments
+# that play after it.
+_INIT_NAME = re.compile(r"[^0-9A-Za-z]+")
 _ATTRIBUTE = re.compile(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)')
 
 
@@ -227,6 +239,9 @@ class _PlaylistSegment:
     started_at: datetime | None
     discontinuity: bool
     ad: bool = False
+    # The initialization segment a fragmented-MP4 segment plays after; None
+    # for an MPEG-TS one.
+    init_url: str | None = None
 
 
 @dataclass
@@ -251,6 +266,30 @@ class _StoredSegment:
     def is_ad(self) -> bool:
         return self.group.endswith(AD_GROUP_SUFFIX)
 
+    @property
+    def is_vod(self) -> bool:
+        return _is_vod_group(self.group)
+
+    @property
+    def init_path(self) -> Path | None:
+        """Where the initialization segment of a fragmented-MP4 segment is
+        kept; None for an MPEG-TS one."""
+        if self.path.suffix != FRAGMENT_SUFFIX:
+            return None
+        return self.path.with_name(f"{self.group}{INIT_SUFFIX}")
+
+
+def _is_vod_group(group: str) -> bool:
+    return group == VOD_GROUP or group.startswith(f"{VOD_GROUP}-")
+
+
+def _vod_group(segment: _PlaylistSegment) -> str:
+    """The group a VOD segment is kept in: one for MPEG-TS, and one per
+    initialization segment for fragmented MP4."""
+    if segment.init_url is None:
+        return VOD_GROUP
+    name = segment.init_url.rsplit("/", 1)[-1].split("?", 1)[0].rsplit(".", 1)[0]
+    return f"{VOD_GROUP}-{_INIT_NAME.sub('-', name).strip('-') or 'init'}"
 
 @dataclass
 class _Run:
@@ -318,6 +357,7 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
     discontinuity = False
     stream_source = LIVE_STREAM_SOURCE
     stitched_ads: list[tuple[datetime, datetime]] = []
+    init_url: str | None = None
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
@@ -338,6 +378,9 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
             span = _stitched_ad(attributes)
             if span is not None:
                 stitched_ads.append(span)
+        elif line.startswith("#EXT-X-MAP:"):
+            uri = _attributes(line).get("URI")
+            init_url = urljoin(playlist_url, uri) if uri else None
         elif line == "#EXT-X-ENDLIST":
             ended = True
         elif line and not line.startswith("#"):
@@ -345,6 +388,7 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
                 _PlaylistSegment(
                     sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity,
                     ad=stream_source != LIVE_STREAM_SOURCE or AD_TITLE_MARK in title,
+                    init_url=init_url,
                 )
             )
             sequence += 1
@@ -362,8 +406,8 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
     return _Playlist(segments, ended, classes - {""})
 
 
-def _segment_name(started_at: datetime, duration: float, group: str) -> str:
-    return f"{int(started_at.timestamp() * 1000)}_{int(duration * 1000)}_{group}.ts"
+def _segment_name(started_at: datetime, duration: float, group: str, suffix: str = ".ts") -> str:
+    return f"{int(started_at.timestamp() * 1000)}_{int(duration * 1000)}_{group}{suffix}"
 
 
 class ChannelRecorder:
@@ -488,11 +532,11 @@ class ChannelRecorder:
             run.stop_event.wait(PLAYLIST_POLL_SECONDS)
 
     def _download(
-        self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str
+        self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str, suffix: str = ".ts"
     ) -> bytes | None:
         """Saves a segment into the buffer. Returns what it holds, or None
         if it could not be fetched."""
-        name = _segment_name(started_at, segment.duration, group)
+        name = _segment_name(started_at, segment.duration, group, suffix)
         for attempt in (1, 2):
             try:
                 response = client.get(segment.url)
@@ -544,11 +588,11 @@ class ChannelRecorder:
 
     def _stored_segments(self) -> list[_StoredSegment]:
         stored = []
-        for path in self._base_dir.glob("*.ts"):
+        for path in self._base_dir.iterdir():
             match = _SEGMENT_NAME.match(path.name)
             if match is None:
                 continue
-            start_ms, duration_ms, group = match.groups()
+            start_ms, duration_ms, group, _ = match.groups()
             stored.append(
                 _StoredSegment(
                     started_at=datetime.fromtimestamp(int(start_ms) / 1000, tz=timezone.utc),
@@ -562,6 +606,7 @@ class ChannelRecorder:
 
     def _prune(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=BUFFER_RETENTION_SECONDS)
+        kept_groups = set()
         for segment in self._stored_segments():
             if segment.ended_at < cutoff:
                 # A file can be transiently locked (e.g. antivirus scanning a
@@ -569,6 +614,15 @@ class ChannelRecorder:
                 # it and let the next tick's prune retry.
                 try:
                     segment.path.unlink(missing_ok=True)
+                except OSError:
+                    kept_groups.add(segment.group)
+            else:
+                kept_groups.add(segment.group)
+        for init in self._base_dir.glob(f"*{INIT_SUFFIX}"):
+            # Kept for as long as a fragment of its group is.
+            if init.name.removesuffix(INIT_SUFFIX) not in kept_groups:
+                try:
+                    init.unlink(missing_ok=True)
                 except OSError:
                     pass
         for entry in self._base_dir.iterdir():
@@ -623,6 +677,23 @@ class ChannelRecorder:
         """All buffered segments whose time range overlaps [start, end], in order."""
         return [s for s in self._stored_segments() if s.ended_at >= start and s.started_at <= end]
 
+    def _keep_init(self, client: httpx.Client, url: str, group: str) -> bool:
+        """Has the initialization segment of a group of fragments kept
+        beside them, once. Returns whether it is there."""
+        path = self._base_dir / f"{group}{INIT_SUFFIX}"
+        if path.exists():
+            return True
+        try:
+            response = client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("[%s] VOD initialization segment download failed: %s", self.channel_slug, type(exc).__name__)
+            return False
+        partial = path.with_name(path.name + ".part")
+        partial.write_bytes(response.content)
+        partial.replace(path)
+        return True
+
     def backfill_from_vod(self, start: datetime, end: datetime) -> bool:
         """Download the stream's own recording of [start, end] into the buffer,
         as the VOD group. Returns whether any of it is there afterwards.
@@ -632,7 +703,7 @@ class ChannelRecorder:
         run = self._run
         if run is None or run.vod_url is None:
             return False
-        have = {segment.path.name for segment in self._stored_segments() if segment.group == VOD_GROUP}
+        have = {segment.path.name for segment in self._stored_segments() if segment.is_vod}
         deadline = time.monotonic() + VOD_WAIT_SECONDS
         try:
             with httpx.Client(timeout=SEGMENT_TIMEOUT_SECONDS) as client:
@@ -650,12 +721,16 @@ class ChannelRecorder:
                 for segment in timed:
                     if segment.started_at > end or segment.started_at + timedelta(seconds=segment.duration) < start:
                         continue
-                    if _segment_name(segment.started_at, segment.duration, VOD_GROUP) in have:
+                    group = _vod_group(segment)
+                    suffix = ".ts" if segment.init_url is None else FRAGMENT_SUFFIX
+                    if _segment_name(segment.started_at, segment.duration, group, suffix) in have:
                         continue
-                    self._download(client, segment, segment.started_at, VOD_GROUP)
+                    if segment.init_url is not None and not self._keep_init(client, segment.init_url, group):
+                        continue
+                    self._download(client, segment, segment.started_at, group, suffix)
         except (httpx.HTTPError, RecorderError) as exc:
             logger.warning("[%s] VOD backfill failed: %s", self.channel_slug, type(exc).__name__)
-        found = any(segment.group == VOD_GROUP for segment in self.segments_overlapping(start, end))
+        found = any(segment.is_vod for segment in self.segments_overlapping(start, end))
         logger.info(
             "[%s] ad in clip window - footage from the VOD %s", self.channel_slug, "used" if found else "not available"
         )
@@ -778,9 +853,14 @@ def _write_clip(recorder: ChannelRecorder, segments: list[_StoredSegment], outpu
     # Consecutive MPEG-TS segments of one group are a single continuous
     # stream cut into pieces, so they're joined byte-for-byte and remuxed in
     # one go - no per-file timestamp stitching for ffmpeg to get wrong.
-    joined = out_dir / f".{output_name}.ts"
+    # Fragmented-MP4 segments are joined the same way, after the
+    # initialization segment they all play after.
+    init = segments[0].init_path if segments else None
+    joined = out_dir / f".{output_name}{'.mp4' if init else '.ts'}"
     try:
         with open(joined, "wb") as joined_file:
+            if init is not None:
+                joined_file.write(init.read_bytes())
             for segment in segments:
                 joined_file.write(segment.path.read_bytes())
         subprocess.run(

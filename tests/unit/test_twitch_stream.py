@@ -80,3 +80,50 @@ def test_streamlink_leaves_the_names_of_the_log_levels_as_the_service_writes_the
         "WARNING",
         "ERROR",
     ]
+
+
+VOD_MASTER = "https://usher.example/vod/v2/555.m3u8?nauthsig=abc&nauth=def"
+
+
+class TestFindingTheVod:
+    """What an ad covered is in the stream's VOD: the recording Helix says
+    is of the stream that is on, where the channel keeps one."""
+
+    @pytest.fixture
+    def live_stream(self, streamlink):
+        streamlink.answers["https://www.twitch.tv/some_channel"] = {"best": FakeStream(MASTER)}
+        return streamlink
+
+    def test_the_vod_of_the_stream_that_is_on_goes_with_it(self, live_stream, twitch_api):
+        twitch_api.add_channel("some_channel", "101", is_live=True, stream_id="9", archive_id="555")
+        live_stream.answers["https://www.twitch.tv/videos/555"] = {"best": FakeStream(VOD_MASTER)}
+
+        assert twitch_stream.get_stream_urls("some_channel") == StreamUrls(live=MASTER, vod=VOD_MASTER)
+        assert twitch_api.calls("GET", "/helix/videos") == [{"user_id": "101", "type": "archive", "first": "5"}]
+
+    def test_a_recording_of_a_stream_that_is_over_is_not_it(self, live_stream, twitch_api):
+        twitch_api.add_channel("some_channel", "101", is_live=True, older_archives=["444"])
+
+        assert twitch_stream.get_stream_urls("some_channel").vod is None
+        assert "https://www.twitch.tv/videos/444" not in live_stream.asked
+
+    def test_a_channel_that_keeps_no_past_broadcasts_has_none(self, live_stream, twitch_api):
+        twitch_api.add_channel("some_channel", "101", is_live=True)
+
+        assert twitch_stream.get_stream_urls("some_channel").vod is None
+
+    def test_a_vod_streamlink_cannot_open_is_none_and_the_stream_is_recorded_all_the_same(
+        self, live_stream, twitch_api, caplog
+    ):
+        # Kept for its subscribers only, for one.
+        twitch_api.add_channel("some_channel", "101", is_live=True, archive_id="555")
+        live_stream.answers["https://www.twitch.tv/videos/555"] = PluginError("subscribers only")
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            urls = twitch_stream.get_stream_urls("some_channel")
+
+        assert urls == StreamUrls(live=MASTER, vod=None)
+        assert any("VOD of the stream could not be found" in record.getMessage() for record in caplog.records)
+
+    def test_without_twitch_set_up_there_is_no_vod_to_find(self, live_stream, kick_api):
+        assert twitch_stream.get_stream_urls("some_channel") == StreamUrls(live=MASTER, vod=None)

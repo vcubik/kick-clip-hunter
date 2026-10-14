@@ -44,6 +44,11 @@ class FakeTwitchChannel:
     # The same on BetterTTV and FrankerFaceZ; None = no account there.
     bttv_emotes: list[str] | None = field(default_factory=list)
     ffz_emotes: list[str] | None = field(default_factory=list)
+    # The recording Twitch makes of the stream that is on (its VOD); None
+    # for a channel that keeps no past broadcasts. `older_archives` are of
+    # streams that are over.
+    archive_id: str | None = None
+    older_archives: list[str] = field(default_factory=list)
 
     def user_json(self) -> dict:
         return {
@@ -219,6 +224,17 @@ class FakeTwitchApi:
                     if channel.is_live and (channel.login in logins or channel.user_id in ids)
                 ]
                 return httpx.Response(200, json={"data": live, "pagination": {}})
+            if path == "/helix/videos":
+                channel = self._by_id(request.url.params.get("user_id", ""))
+                videos = []
+                if channel is not None and request.url.params.get("type") == "archive":
+                    if channel.archive_id is not None and channel.is_live:
+                        videos.append({"id": channel.archive_id, "stream_id": channel.stream_id, "type": "archive"})
+                    videos.extend(
+                        {"id": video_id, "stream_id": f"old-{video_id}", "type": "archive"}
+                        for video_id in channel.older_archives
+                    )
+                return httpx.Response(200, json={"data": videos, "pagination": {}})
             if path == "/helix/eventsub/subscriptions" and request.method == "POST":
                 return self._subscribe(request, body)  # type: ignore[arg-type]
 
