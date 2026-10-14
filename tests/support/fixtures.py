@@ -26,6 +26,7 @@ from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
 from tests.support.tailscale import FakeTailscale
+from tests.support.twitch_api import FakeTwitchApi
 from tests.support.waiting import async_wait_until
 from tests.support.webhook import WebhookSigner, chat_payload
 
@@ -100,6 +101,35 @@ def kick_api(signer: WebhookSigner, monkeypatch: pytest.MonkeyPatch) -> FakeKick
     class RoutedAsyncClient(httpx.AsyncClient):
         def __init__(self, *args, **kwargs) -> None:
             kwargs.setdefault("transport", api.transport)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
+    return api
+
+
+TWITCH_CLIENT_ID = "twitch-client-id"
+TWITCH_CLIENT_SECRET = "twitch-client-secret"
+
+
+@pytest.fixture
+def twitch_api(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTwitchApi:
+    """A fake Twitch for every `httpx.AsyncClient` the service creates -
+    and what 7TV knows of Twitch channels; everything else still goes to
+    the fake Kick. With it the service is set up for Twitch: without it, it
+    is not (see conftest.py)."""
+    api = FakeTwitchApi()
+    monkeypatch.setenv("TWITCH_CLIENT_ID", TWITCH_CLIENT_ID)
+    monkeypatch.setenv("TWITCH_CLIENT_SECRET", TWITCH_CLIENT_SECRET)
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return api.handle(request) if api.owns(request) else kick_api._handle(request)
+
+    transport = httpx.MockTransport(route)
+    kick_routed = httpx.AsyncClient
+
+    class RoutedAsyncClient(kick_routed):  # type: ignore[valid-type, misc]
+        def __init__(self, *args, **kwargs) -> None:
+            kwargs.setdefault("transport", transport)
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)

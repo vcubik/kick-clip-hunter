@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from kick_clip_hunter import kick_stream, streams
+from kick_clip_hunter import kick_stream, streams, twitch_client
 from kick_clip_hunter.platforms import LiveStatus, StreamUrlError, StreamUrls
 
 pytestmark = pytest.mark.anyio
@@ -48,11 +48,34 @@ class TestKickStream:
         assert asked == ["some_channel"]
 
 
-class TestUnknownWays:
-    async def test_whether_a_channel_of_a_platform_without_a_way_to_ask_is_live_is_refused(self):
-        with pytest.raises(ValueError):
+class TestTwitchLiveStatus:
+    async def test_a_live_twitch_channel_is_live_since_twitch_says(self, twitch_api):
+        twitch_api.add_channel("some_channel", "123", is_live=True, started_at="2026-03-01T20:00:00Z")
+
+        assert await streams.live_status("some_channel@twitch") == LiveStatus(
+            live=True, started_at=datetime(2026, 3, 1, 20, 0, tzinfo=timezone.utc)
+        )
+
+    async def test_an_offline_twitch_channel_is_not_live(self, twitch_api):
+        twitch_api.add_channel("some_channel", "123", is_live=False)
+
+        assert await streams.live_status("some_channel@twitch") == LiveStatus(live=False)
+
+    async def test_twitch_is_asked_by_the_channels_name_there_with_the_apps_token(self, twitch_api):
+        twitch_api.add_channel("some_channel", "123")
+
+        await streams.live_status("some_channel@twitch")
+
+        assert twitch_api.calls("GET", "/helix/streams") == [{"user_login": "some_channel", "type": "live"}]
+        (token_request,) = twitch_api.calls("POST", "/oauth2/token")
+        assert (token_request["client_id"], token_request["grant_type"]) == ("twitch-client-id", "client_credentials")
+
+    async def test_without_a_twitch_application_nothing_can_be_asked(self, kick_api):
+        with pytest.raises(twitch_client.NotSetUp):
             await streams.live_status("some_channel@twitch")
 
+
+class TestUnknownWays:
     def test_the_stream_of_a_channel_of_a_platform_without_a_way_to_find_it_is_not_found(self):
         with pytest.raises(StreamUrlError):
             streams.stream_urls("some_channel@twitch")

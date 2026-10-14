@@ -337,6 +337,29 @@ class TestWatchlistCommands:
         finally:
             connection.close()
 
+    def test_subscribe_adds_a_twitch_channel_by_its_link(self, twitch_api, capsys):
+        twitch_api.add_channel("new_channel", "123", seventv_emotes=["KEKW"])
+
+        asyncio.run(subscribe.main("https://www.twitch.tv/new_channel"))
+
+        output = capsys.readouterr().out
+        assert "Added 'new_channel@twitch' to the watchlist." in output
+        assert self.stored_keywords(-1) == {"kekw": detector.EMOTE_MENTION_LAUGH_WEIGHT}
+
+    def test_refreshing_a_twitch_channels_emotes(self, twitch_api, capsys):
+        channel = twitch_api.add_channel("some_channel", "123", seventv_emotes=["KEKW"])
+        asyncio.run(subscribe.main("some_channel@twitch"))
+        channel.seventv_emotes = ["OMEGALUL"]
+
+        asyncio.run(refresh_emotes.main("twitch.tv/Some_Channel"))
+
+        assert self.stored_keywords(-1) == {"omegalul": detector.EMOTE_MENTION_LAUGH_WEIGHT}
+        assert "Refreshed keywords for 'some_channel@twitch'." in capsys.readouterr().out
+
+    def test_refreshing_a_twitch_channel_that_is_not_watched_says_so(self, twitch_api):
+        with pytest.raises(SystemExit, match="not on the watchlist"):
+            asyncio.run(refresh_emotes.main("some_channel@twitch"))
+
 
 class TestCheckScript:
     """scripts/check.py promises to run "what CI runs"."""

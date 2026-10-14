@@ -21,7 +21,7 @@
         {% for channel in watchlist %}
         {% set whole = channel.whole_stream %}
         <tr>
-          <td title="Kick user id {{ channel.broadcaster_user_id }}">{{ channel.slug }}</td>
+          <td title="{{ channel.platform }} user id {{ channel.platform_user_id }}">{{ channel.slug }}</td>
           <td class="ch-meta">{{ channel.added }}</td>
           <td data-now="{{ channel.slug }}">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
           <td>{{ switch("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", channel.tracking_enabled) }}</td>
@@ -43,7 +43,7 @@
     <p class="lead">No channels on the watchlist yet. Add one to start watching its chat.</p>
     {% endif %}
     <form class="ch-line add-channel" data-add-channel>
-      <input type="text" class="ch-input" name="slug" aria-label="Channel name on Kick" placeholder="Channel name on Kick" autocomplete="off" required>
+      <input type="text" class="ch-input" name="slug" aria-label="Channel name on Kick, or a link to a Kick or Twitch channel" placeholder="Kick channel name, or a Kick or Twitch link" autocomplete="off" required>
       <button type="submit" class="ch-btn">Add to watchlist</button>
     </form>
     <p class="status-line" role="status" data-status></p>

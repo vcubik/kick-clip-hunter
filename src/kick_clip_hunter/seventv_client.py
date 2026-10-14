@@ -51,9 +51,11 @@ def _emote(entry: dict) -> Emote:
     return Emote(entry["name"], emote_id, width, height)
 
 
-async def get_channel_emotes(broadcaster_user_id: int) -> list[Emote]:
+async def get_channel_emotes(user_id: int | str, platform: str = "kick") -> list[Emote]:
+    """The emote set a channel has on 7TV, by its id on its own platform
+    (7TV knows channels of Kick and of Twitch by their own ids)."""
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"{API_BASE}/users/kick/{broadcaster_user_id}")
+        response = await client.get(f"{API_BASE}/users/{platform}/{user_id}")
         if response.status_code == 404:
             return []  # channel has no 7TV emote set connected
         response.raise_for_status()

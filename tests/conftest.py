@@ -44,6 +44,7 @@ from tests.support.fixtures import service as service
 from tests.support.fixtures import signer as signer
 from tests.support.fixtures import tailscale as tailscale
 from tests.support.fixtures import ts_segments as ts_segments
+from tests.support.fixtures import twitch_api as twitch_api
 from tests.support.media import require_ffmpeg
 from tests.support.tailscale import FakeTailscale
 
@@ -62,6 +63,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # variables that already exist.
     os.environ["KICK_CLIENT_ID"] = "test-client-id"
     os.environ["KICK_CLIENT_SECRET"] = "test-client-secret"
+    # Not set up for Twitch unless a test says so (the `twitch_api` fixture):
+    # empty, they are there for python-dotenv not to fill them in either.
+    os.environ["TWITCH_CLIENT_ID"] = ""
+    os.environ["TWITCH_CLIENT_SECRET"] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the
     # trust store is pointed at an empty directory. Every httpx client the
@@ -159,11 +164,12 @@ def isolated_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _reset_module_state() -> None:
-    from kick_clip_hunter import detector, kick_client, recording_manager, webhook_security
+    from kick_clip_hunter import detector, kick_client, recording_manager, twitch_client, webhook_security
 
     detector._entries.clear()
     detector._last_moment_at.clear()
     kick_client._token_cache.clear()
+    twitch_client._token_cache.clear()
     webhook_security._public_key_cache = None
     for recorder in recording_manager._recorders.values():
         recorder.stop()

@@ -2,7 +2,10 @@
 listens for and the pictures the dashboard shows - without touching its
 Kick event subscription at all.
 
-Usage: python scripts/refresh_emotes.py <channel_slug>
+Usage: python scripts/refresh_emotes.py <channel>
+
+<channel> is a Kick channel's name, or a Twitch channel on the watchlist: a
+link to it, or its name followed by @twitch.
 """
 
 import argparse
@@ -12,21 +15,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from kick_clip_hunter import platforms
 from kick_clip_hunter.config import load_settings
-from kick_clip_hunter.db import get_connection
+from kick_clip_hunter.db import get_connection, get_streamer_by_slug
 from kick_clip_hunter.kick_client import get_app_access_token, get_channel_by_slug
 from kick_clip_hunter.seventv_client import get_channel_emotes
 from kick_clip_hunter.watchlist import store_channel_emotes
 
 
-async def main(slug: str) -> None:
-    settings = load_settings()
-    token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+def _watched_elsewhere(platform: str, name: str) -> tuple[str, int, str]:
+    """A channel of another platform than Kick is refreshed by what the
+    watchlist keeps of it: its name there, the id it is kept by, its id on
+    its platform."""
+    slug = platforms.channel_name(platform, name.lower())
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+    finally:
+        conn.close()
+    if row is None:
+        raise SystemExit(f"{slug!r} is not on the watchlist - add it with subscribe.py first.")
+    return slug, row["broadcaster_user_id"], row["platform_user_id"]
 
-    channel = await get_channel_by_slug(slug, token)
-    broadcaster_id = channel["broadcaster_user_id"]
 
-    emotes = await get_channel_emotes(broadcaster_id)
+async def main(channel: str) -> None:
+    platform, name = platforms.parse(channel)
+    if platform == platforms.KICK:
+        settings = load_settings()
+        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+        broadcaster_id = (await get_channel_by_slug(name, token))["broadcaster_user_id"]
+        slug, emotes = name, await get_channel_emotes(broadcaster_id)
+    else:
+        slug, broadcaster_id, user_id = _watched_elsewhere(platform, name)
+        emotes = await get_channel_emotes(user_id, platform)
 
     conn = get_connection()
     try:
@@ -41,7 +62,7 @@ async def main(slug: str) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("slug", help="Kick channel slug/username")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("channel", help="Kick channel name, or a watched Twitch channel's link or <name>@twitch")
     args = parser.parse_args()
-    asyncio.run(main(args.slug))
+    asyncio.run(main(args.channel))

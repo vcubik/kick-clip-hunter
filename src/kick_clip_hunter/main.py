@@ -42,6 +42,7 @@ from . import (
     transcriber,
     tuning,
     tunnel,
+    twitch_client,
     win_console,
 )
 from .chat_message import ChatMessage
@@ -126,7 +127,7 @@ from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
 from .timeutil import to_local_datetime
-from .watchlist import add_channel_to_watchlist, refresh_emote_pictures
+from .watchlist import add_to_watchlist, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -500,12 +501,15 @@ async def _refresh_emote_pictures() -> None:
 
     conn = get_connection()
     try:
-        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn, platforms.KICK)]
+        watch = [
+            (row["broadcaster_user_id"], row["slug"], row["platform"], row["platform_user_id"])
+            for row in get_streamers(conn)
+        ]
     finally:
         conn.close()
-    for broadcaster_user_id, slug in watch:
+    for broadcaster_user_id, slug, platform, platform_user_id in watch:
         try:
-            count = await refresh_emote_pictures(broadcaster_user_id)
+            count = await refresh_emote_pictures(broadcaster_user_id, platform, platform_user_id)
             logger.info("%d 7TV emote picture(s) stored for %s", count, slug)
         except Exception:
             logger.exception("could not refresh the 7TV emote pictures of %s", slug)
@@ -1927,6 +1931,8 @@ async def dashboard_channels(request: Request):
                     {
                         "slug": row["slug"],
                         "broadcaster_user_id": row["broadcaster_user_id"],
+                        "platform": platforms.TITLES.get(row["platform"], row["platform"]),
+                        "platform_user_id": row["platform_user_id"],
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
                         "tracking_enabled": bool(row["tracking_enabled"]),
@@ -3474,13 +3480,17 @@ async def shutdown():
 
 @app.post("/channels")
 async def add_channel(slug: str):
+    """Puts a channel on the watchlist: `slug` is what was typed - a Kick
+    channel's name, a link to a channel's page, `login@twitch`."""
     slug = slug.strip()
     if not slug:
         raise HTTPException(status_code=400, detail="slug must not be empty")
     try:
-        result = await add_channel_to_watchlist(slug)
+        result = await add_to_watchlist(slug)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except twitch_client.NotSetUp as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 400:
             # Kick's API returns 400, not an empty result, for an unknown slug.
@@ -3492,7 +3502,7 @@ async def add_channel(slug: str):
         raise HTTPException(status_code=502, detail=f"could not add {slug!r} - see server log") from e
     logger.info(
         "added %s to the watchlist (broadcaster_user_id=%s, %d emote keyword(s))",
-        slug, result["broadcaster_user_id"], result["emote_count"],
+        result["slug"], result["broadcaster_user_id"], result["emote_count"],
     )
     return result
 

@@ -38,3 +38,23 @@ class TestChannelNames:
 
     def test_every_platform_has_a_name_for_people(self):
         assert set(platforms.TITLES) == set(platforms.PLATFORMS)
+
+
+class TestWhatWasTyped:
+    @pytest.mark.parametrize(
+        ("typed", "meant"),
+        [
+            ("some_channel", ("kick", "some_channel")),
+            ("  some_channel  ", ("kick", "some_channel")),
+            ("some_channel@twitch", ("twitch", "some_channel")),
+            ("https://kick.com/some_channel", ("kick", "some_channel")),
+            ("kick.com/some_channel", ("kick", "some_channel")),
+            ("https://www.twitch.tv/some_channel", ("twitch", "some_channel")),
+            ("https://m.twitch.tv/some_channel/", ("twitch", "some_channel")),
+            ("twitch.tv/some_channel?sr=a", ("twitch", "some_channel")),
+            ("HTTPS://WWW.TWITCH.TV/Some_Channel", ("twitch", "Some_Channel")),
+            ("http://twitch.tv/some_channel/videos", ("twitch", "some_channel")),
+        ],
+    )
+    def test_a_name_or_a_link_says_which_channel_is_meant(self, typed, meant):
+        assert platforms.parse(typed) == meant

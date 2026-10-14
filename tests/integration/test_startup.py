@@ -264,6 +264,21 @@ class TestEmotePictures:
         assert set(self.pictures(user_id)) == {"KEKW"}
         assert any("could not refresh the 7TV emote pictures of channel_a" in r.getMessage() for r in caplog.records)
 
+    async def test_a_twitch_channels_emotes_are_asked_for_by_its_twitch_id(self, service, twitch_api):
+        kick_channel = service.watch("kick_channel")
+        service.api.channels["kick_channel"].seventv_emotes = ["KEKW"]
+        twitch_api.add_channel("twitch_channel", "123", seventv_emotes=["OMEGALUL"])
+        conn = db.get_connection()
+        try:
+            twitch_channel = db.add_platform_streamer(conn, "twitch", "123", "twitch_channel@twitch")
+        finally:
+            conn.close()
+
+        await service.main._refresh_emote_pictures()
+
+        assert set(self.pictures(kick_channel)) == {"KEKW"}
+        assert set(self.pictures(twitch_channel)) == {"OMEGALUL"}
+
     async def test_it_happens_on_startup_without_holding_it_up(self, service, monkeypatch):
         async def no_recording(*_args):
             await asyncio.Event().wait()

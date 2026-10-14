@@ -7,9 +7,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import kick_client, kick_stream, platforms
+from . import kick_client, kick_stream, platforms, twitch_client
 from .config import load_settings
 from .platforms import LiveStatus, StreamUrlError, StreamUrls
+
+
+def _moment(text: str | None) -> datetime | None:
+    return datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
 
 
 async def live_status(channel: str) -> LiveStatus:
@@ -18,6 +22,8 @@ async def live_status(channel: str) -> LiveStatus:
     platform, login = platforms.split(channel)
     if platform == platforms.KICK:
         return await _kick_live_status(login)
+    if platform == platforms.TWITCH:
+        return await _twitch_live_status(login)
     raise ValueError(f"there is no way to tell whether {channel!r} is live")
 
 
@@ -27,8 +33,16 @@ async def _kick_live_status(slug: str) -> LiveStatus:
     stream = (await kick_client.get_channel_by_slug(slug, token)).get("stream") or {}
     if not stream.get("is_live"):
         return LiveStatus(live=False)
-    start = stream.get("start_time")
-    return LiveStatus(live=True, started_at=datetime.fromisoformat(start.replace("Z", "+00:00")) if start else None)
+    return LiveStatus(live=True, started_at=_moment(stream.get("start_time")))
+
+
+async def _twitch_live_status(login: str) -> LiveStatus:
+    settings = load_settings()
+    token = await twitch_client.app_token(settings)
+    stream = await twitch_client.get_stream(login, settings.twitch_client_id, token)
+    if stream is None:
+        return LiveStatus(live=False)
+    return LiveStatus(live=True, started_at=_moment(stream.get("started_at")))
 
 
 def stream_urls(channel: str) -> StreamUrls:

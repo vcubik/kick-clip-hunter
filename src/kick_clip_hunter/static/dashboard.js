@@ -1073,7 +1073,10 @@
     if (response && response.ok) {
       location.reload();
     } else if (response && response.status === 404) {
-      say(form, `No channel called ${name} on Kick. Check the spelling.`);
+      say(form, `No channel called ${name}. Check the spelling.`);
+    } else if (response && response.status === 503) {
+      // What the service lacks to watch a channel of that platform.
+      say(form, (await response.json()).detail || `Could not add ${name}.`);
     } else {
       say(form, `Could not add ${name}. The server log says why.`);
     }

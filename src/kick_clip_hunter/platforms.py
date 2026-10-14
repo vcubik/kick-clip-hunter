@@ -19,6 +19,7 @@ back (see streams.py, which asks it). Pure.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -49,6 +50,23 @@ def split(channel: str) -> tuple[str, str]:
 
 def platform_of(channel: str) -> str:
     return split(channel)[0]
+
+
+# A link to a channel's page, with or without its scheme and its "www.".
+_CHANNEL_LINK = re.compile(r"(?:https?://)?(?:www\.|m\.)?(kick\.com|twitch\.tv)/([^/?#\s]+)", re.IGNORECASE)
+_LINK_HOSTS = {"kick.com": KICK, "twitch.tv": TWITCH}
+
+
+def parse(text: str) -> tuple[str, str]:
+    """Which channel someone means by what they typed: a link to its page,
+    its name with its platform's (`login@twitch`), or a bare name - which is
+    taken for a Kick channel's, as it always was. Returns the platform and
+    the channel's name there."""
+    text = text.strip()
+    link = _CHANNEL_LINK.match(text)
+    if link:
+        return _LINK_HOSTS[link.group(1).lower()], link.group(2)
+    return split(text)
 
 
 def login_of(channel: str) -> str:
