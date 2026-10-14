@@ -1,0 +1,16 @@
+{#- Download chat, beside a recording's Download: the recording's chat as a
+    video as long as the recording, on a colour, to put next to its picture
+    in an editor. Made the first time it is asked for, which only the
+    script can ask, so the button shows once it is there; once the video is
+    there it is a plain link. While it is being made the script fetches
+    this again every couple of seconds
+    (/dashboard/recordings/<id>/chat_video) and puts it in its own place -
+    and once it is there, downloads it for whoever asked. -#}
+<span class="rec-chat-file" data-rec-chat-file data-status-scope data-url="{{ chat_file.url }}" data-page="{{ chat_file.page_url }}"{% if chat_file.busy %} data-busy{% endif %}>
+  {% if chat_file.download_url %}
+  <a class="ch-btn ch-btn-compact" href="{{ chat_file.download_url }}" download title="The recording's chat as a video of its own, as long as the recording" data-chat-file-ready>Download chat</a>
+  {% elif chat_file.chat %}
+  <button type="button" class="ch-btn ch-btn-compact" hidden title="Makes the recording's chat into a video of its own, as long as the recording, and downloads it" data-make-chat-file{% if chat_file.busy %} disabled{% endif %}>Download chat</button>
+  {% endif %}
+  <span class="rec-chat-words" role="status" data-status>{{ chat_file.words }}</span>
+</span>

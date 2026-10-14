@@ -11,6 +11,7 @@ a cut's picture is encoded with x264.
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -256,6 +257,21 @@ class TestRendering:
         with pytest.raises(InterruptedError):
             chat_video.render([line(0.5)], 2.0, tmp_path / "chat.mov", progress=give_up)
 
+        assert list(tmp_path.iterdir()) == []
+
+    def test_on_a_colour_it_can_be_given_up_before_its_first_frame(self, browser, tmp_path, monkeypatch):
+        # ffmpeg is then given no frames at all - which, with the colour
+        # from a source of its own, kept it waiting for one forever.
+        monkeypatch.setattr(chat_video, "STOP_SECONDS", 5)
+
+        def give_up(done: float) -> None:
+            raise InterruptedError("shutting down")
+
+        started = time.monotonic()
+        with pytest.raises(InterruptedError):
+            chat_video.render([line(0.5)], 2.0, tmp_path / "chat.mov", "#18181b", progress=give_up)
+
+        assert time.monotonic() - started < chat_video.STOP_SECONDS
         assert list(tmp_path.iterdir()) == []
 
     def test_without_ffmpeg_it_fails_and_leaves_nothing(self, browser, monkeypatch, tmp_path):

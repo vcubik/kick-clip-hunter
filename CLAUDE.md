@@ -134,7 +134,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
   strip, drawn in steps of several seconds, with the channel's moments and the breaks in
   the file marked on it, and a scrubber like the one under a clip. The page comes without
   it and the script fetches it (`GET /dashboard/recordings/{id}/trace`), because counting
-  the chat of a whole stream takes a second or two. Trim, beside Download, opens the same
+  the chat of a whole stream takes a second or two. Download chat, beside Download, is the
+  recording's chat as a video of its own as long as the recording, on the Trim dialog's
+  default colour (H.264, tens of megabytes an hour): made the first time it is asked for
+  (`POST /recordings/{id}/chat_video`, a tracked background task; the page polls
+  `GET /dashboard/recordings/{id}/chat_video` and downloads it once it is there), kept as
+  `<recording>_chat.mov` beside the file and removed with it. Trim, beside Download, opens the same
   dialog as on the review page over the recording's file (see `clip_trim.py`). Under those is
   "Moments": "Find moments" replays the recording's chat through the detector under the
   channel's settings as they are saved and lists what would have been a moment (see

@@ -1062,7 +1062,7 @@
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
-    for (const button of all("[data-trim-open], [data-find-moments]")) button.hidden = false;
+    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file]")) button.hidden = false;
     markFound();
     const video = one("[data-clip]");
     if (!video) return;
@@ -1210,6 +1210,7 @@
     dress();
     loadRecordingTrace();
     watchFound();
+    watchChatFile();
   }
 
   async function checkRecordings() {
@@ -1592,6 +1593,65 @@
     video.play().catch(() => {});
   }
 
+  // ---- The chat of a whole recording ------------------------------------
+
+  // Download chat, beside a recording's Download: its chat as a video of
+  // its own, made the first time it is asked for. That takes minutes, so
+  // the button is fetched again every couple of seconds while it is made,
+  // and the video is downloaded once it is there - if it was asked for on
+  // this page.
+
+  const CHAT_FILE_POLL_MS = 2000;
+  let chatFileWatch = null;
+  let chatFileAsked = null;
+
+  async function refreshChatFile() {
+    const current = one("[data-rec-chat-file]");
+    if (!current) return;
+    let markup = null;
+    try {
+      const response = await fetch(current.dataset.page);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // what is on the page stays, and is asked about again
+    }
+    const fresh = markup && one("[data-rec-chat-file]", new DOMParser().parseFromString(markup, "text/html"));
+    const now = one("[data-rec-chat-file]");
+    // Another recording may be open by the time the answer is here.
+    if (!fresh || !now || now.dataset.url !== fresh.dataset.url) return;
+    now.replaceWith(fresh);
+    dress();
+    const ready = one("[data-chat-file-ready]", fresh);
+    if (ready && chatFileAsked === fresh.dataset.url) {
+      chatFileAsked = null;
+      ready.click();
+    }
+    watchChatFile();
+  }
+
+  function watchChatFile() {
+    const busy = Boolean(one("[data-rec-chat-file][data-busy]"));
+    if (busy && chatFileWatch === null) {
+      chatFileWatch = setInterval(refreshChatFile, CHAT_FILE_POLL_MS);
+    } else if (!busy && chatFileWatch !== null) {
+      clearInterval(chatFileWatch);
+      chatFileWatch = null;
+    }
+  }
+
+  async function makeChatFile(button) {
+    const place = button.closest("[data-rec-chat-file]");
+    button.disabled = true;
+    const response = await post(place.dataset.url);
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not make the chat video.") : "Could not reach the service.");
+      return;
+    }
+    chatFileAsked = place.dataset.url;
+    await refreshChatFile();
+  }
+
   // ---- Settings ---------------------------------------------------------
 
   // The Settings page is one form, saved as a whole. Each setting has a
@@ -1822,6 +1882,7 @@
     ["[data-subscriptions-check]", checkSubscriptions],
     ["[data-find-moments]", findMoments],
     ["[data-make-clips]", makeClips],
+    ["[data-make-chat-file]", makeChatFile],
     ["[data-found-go]", playFound],
     ["[data-play]", (button) => togglePlay(clipOf(button))],
     ["[data-speed]", (button) => setSpeed(clipOf(button))],
@@ -2051,6 +2112,7 @@
   if (one("[data-recording-clip]")) paintRecording(one("[data-recording-clip]"));
   loadRecordingTrace();
   watchFound();
+  watchChatFile();
   if (one('[data-recording-state="running"], [data-recording-state="saving"], [data-recording-row]')) watchRecordings();
   if (one("[data-always-record], [data-recordings]")) {
     setInterval(() => {
