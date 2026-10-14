@@ -22,7 +22,7 @@ import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # The shortest stretch that can be cut.
 MIN_SECONDS = 1.0
@@ -67,27 +67,38 @@ def record_name(video_name: str) -> str:
     return f"{Path(video_name).stem}.json"
 
 
-def cut_record(begins: float, duration: float) -> str:
+class Cut(NamedTuple):
+    """A cut video, in seconds of the file it was cut from: where it really
+    begins, how long it runs, and the end that was set."""
+
+    begins: float
+    duration: float
+    end: float
+
+
+def cut_record(begins: float, duration: float, end: float) -> str:
     """What is kept beside a cut video so that its chat can be made later
-    as well as now: where in the file it was cut from the video really
-    begins, and how long it runs (see recorder.trim_clip). Neither can be
-    told from the video afterwards - its times start again from nothing,
-    and its start is a keyframe, not the start that was set."""
-    return json.dumps({"begins": round(begins, 3), "duration": round(duration, 3)})
+    as well as now, and the dialog can say which stretch it holds: where in
+    the file it was cut from the video really begins, how long it runs (see
+    recorder.trim_clip) and the end that was set. None of it can be told
+    from the video afterwards - its times start again from nothing, its
+    start is a keyframe, not the start that was set, and it runs on a
+    little past the end that was, for its sound's last frame."""
+    return json.dumps({"begins": round(begins, 3), "duration": round(duration, 3), "end": round(end, 3)})
 
 
-def read_cut_record(text: str) -> tuple[float, float] | None:
-    """Where a cut video begins in the file it was cut from and how long it
-    runs, from what was kept beside it - or None for something that is not
-    such a record."""
+def read_cut_record(text: str) -> Cut | None:
+    """What was kept beside a cut video (see cut_record) - or None for
+    something that is not such a record."""
     try:
         record = json.loads(text)
         begins, duration = _number(record["begins"], "begins"), _number(record["duration"], "duration")
-    except (ValueError, TypeError, KeyError):
+        end = _number(record.get("end", begins + duration), "end")
+    except (ValueError, TypeError, KeyError, AttributeError):
         return None
-    if begins < 0 or duration <= 0:
+    if begins < 0 or duration <= 0 or end <= begins:
         return None
-    return begins, duration
+    return Cut(begins, duration, end)
 
 
 def _number(value: Any, what: str) -> float:

@@ -341,7 +341,9 @@ Module map (`src/kick_clip_hunter/`):
   /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`): for the stretch that video holds,
   not the one set in the dialog now. That needs where the video really begins in the file,
   which nothing can tell from the video afterwards, so it is kept beside it as JSON
-  (`record_name`, `cut_record`) - a cut from before that was kept has to be exported again.
+  (`record_name`, `cut_record`), with the end that was set - which is also how the dialog
+  says which stretch the video that is ready holds. A cut from before that was kept has to be
+  exported again.
   A moment's two files are downloaded through `GET /moments/{id}/trim/video` and `/chat`,
   not their address under /clips, since that is what marks the moment as taken. What
   state a cut is in is kept in memory while one is being made and told

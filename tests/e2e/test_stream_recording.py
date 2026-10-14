@@ -147,7 +147,10 @@ async def test_a_stream_is_recorded_whole_and_played_back_with_its_chat(
     assert asked.json()["state"] == "cutting"
     await service.settle()
     cut = (await service.client.get(address)).json()
-    assert cut["words"].startswith("0:00:10 to 0:00:22 is ready to download.")
+    assert cut["words"].startswith("Ready to download.")
+    # It begins on the last frame a cut can begin on at second 10 or before
+    # it (to the frame: timestamps of synthetic footage are not round).
+    assert cut["cut"]["from"] < 10.1 and cut["cut"]["to"] == 22
     stretch = file.with_name(clip_trim.recording_video_name(file.name, 10, 22))
     assert (await service.client.get(cut["video_url"])).content == stretch.read_bytes()
     assert probe(stretch) == {"duration": pytest.approx(12, abs=1.2), "streams": ["audio", "video"]}

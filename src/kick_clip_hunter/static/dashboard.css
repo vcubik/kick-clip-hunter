@@ -460,7 +460,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-background input:disabled { opacity: 0.45; cursor: not-allowed; }
 .trim-note { max-width: 100ch; margin-top: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
 .trim-foot { display: flex; align-items: center; gap: var(--space-8); margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
-.trim-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
+.trim-foot .trim-said { flex: 1 1 0; min-width: 0; }
+.trim-said .status-line { margin: 0; }
 
 /* ---- Recordings: streams kept whole --------------------------------- */
 
@@ -673,7 +674,7 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .trim-chat { width: auto; height: 200px; }
   .trim-chat .chat-lines { max-height: none; flex: 1 1 0; }
   .trim-foot { flex-wrap: wrap; }
-  .trim-foot .status-line { flex-basis: 100%; }
+  .trim-foot .trim-said { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
   .watchlist { display: block; overflow-x: auto; }
   .health-table { display: block; overflow-x: auto; }

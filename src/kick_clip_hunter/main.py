@@ -1325,10 +1325,10 @@ def _cut_record_path(video: Path) -> Path:
     return video.with_name(clip_trim.record_name(video.name))
 
 
-def _cut_record(video: Path) -> tuple[float, float] | None:
-    """Where a cut video begins in the file it was cut from and how long it
-    runs - or None where that was not kept: a cut from before it was, or one
-    whose video is not there."""
+def _cut_record(video: Path) -> clip_trim.Cut | None:
+    """Where a cut video begins in the file it was cut from, how long it
+    runs and where it was set to end - or None where that was not kept: a
+    cut from before it was, or one whose video is not there."""
     record = _cut_record_path(video)
     if not video.exists() or not record.exists():
         return None
@@ -1343,14 +1343,15 @@ def _trim_standing(
     video: str | None,
     chat: str | None,
     stretch: tuple[float, float] | None = None,
-    recorded: bool = False,
+    held: tuple[float, float] | None = None,
 ) -> dict:
     """Where a stretch cut out of some footage stands: being cut, its chat
     being rendered, there to download, failed, or never asked for. `known`
     is what is remembered of it, `video` and `chat` the addresses of its
     files where those are there, `stretch` which seconds of a recording it
-    holds, `recorded` whether where its video begins was kept - which its
-    chat can be made later by."""
+    holds going by its name, `held` exactly where its video begins and ends
+    in the dialog's times where that was kept (see clip_trim.cut_record) -
+    which its chat can be made later by, too."""
     state = known.get("state")
     if state in (dashboard_view.TRIM_CUTTING, dashboard_view.TRIM_FAILED):
         video = chat = None
@@ -1363,11 +1364,22 @@ def _trim_standing(
         "words": dashboard_view.trim_words(state, known.get("early", 0.0), stretch),
         "video_url": video,
         "chat_url": chat,
+        # What the video that is there holds, for the dialog to say in its
+        # own way of writing times.
+        "cut": {"from": round(held[0], 2), "to": round(held[1], 2)} if held and video else None,
         # A video that is there without its chat can have it made now.
         "chat_later": bool(
-            recorded and video and not chat and state in (dashboard_view.TRIM_READY, dashboard_view.TRIM_CHAT_FAILED)
+            held and video and not chat and state in (dashboard_view.TRIM_READY, dashboard_view.TRIM_CHAT_FAILED)
         ),
     }
+
+
+def _held(record: clip_trim.Cut | None, lead: float) -> tuple[float, float] | None:
+    """Where a cut video begins and was set to end in the dialog's times -
+    in the file's seconds less `lead` - from what was kept of it."""
+    if record is None:
+        return None
+    return record.begins - lead, record.end - lead
 
 
 def _trim_download_url(moment_id: int, what: str, relative: Path) -> str | None:
@@ -1389,7 +1401,8 @@ def _trim(row) -> dict:
         _trims.get(row["id"], {}),
         _trim_download_url(row["id"], "video", video),
         _trim_download_url(row["id"], "chat", chat),
-        recorded=_cut_record(CLIPS_DIR / video) is not None,
+        # A moment's times are clip time.
+        held=_held(_cut_record(CLIPS_DIR / video), row["context_before"] or 0.0),
     )
 
 
@@ -1432,7 +1445,7 @@ async def _trim_background(
     logger.info("[%s] %s trimmed: %s (%.1f s)", channel, what, video.name, duration)
     try:
         # So that its chat can be asked for later as well.
-        _cut_record_path(video).write_text(clip_trim.cut_record(begins, duration), encoding="utf-8")
+        _cut_record_path(video).write_text(clip_trim.cut_record(begins, duration, span[1]), encoding="utf-8")
     except OSError:
         logger.warning("[%s] where the cut of %s begins could not be kept", channel, what, exc_info=True)
     if lines is None:
@@ -2283,9 +2296,10 @@ def _recording_trim(row) -> dict:
         return _trim_standing(known, None, None)
     video, stretch = cuts[0]
     chat = video.with_name(chat_video.video_name(video.name))
-    return _trim_standing(
-        known, _stream_url(video), _stream_url(chat), stretch, recorded=_cut_record(video) is not None
-    )
+    held = _held(_cut_record(video), 0.0)
+    # Where it is known to the tenth of a second, the stretch is not also
+    # named by the seconds in the file's name.
+    return _trim_standing(known, _stream_url(video), _stream_url(chat), None if held else stretch, held)
 
 
 def _recording_has_chat(conn, row, parts: list[stream_recording.Part]) -> bool:
@@ -3259,6 +3273,7 @@ async def trim_state(moment_id: int):
             "words": dashboard_view.trim_words(state),
             "video_url": None,
             "chat_url": None,
+            "cut": None,
             "chat_later": False,
         }
     return {"moment_id": moment_id, **_trim(row)}
@@ -3304,7 +3319,7 @@ async def trim_moment_chat(moment_id: int, request: Request):
         record = _cut_record(video)
         if record is None:
             raise _no_cut_record()
-        begins, duration = record
+        begins, duration, _end = record
         shift, background = _asked_chat_look(asked, duration)
         _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
         if not lines:
@@ -3769,7 +3784,7 @@ async def trim_recording_chat(recording_id: int, request: Request):
         record = _cut_record(video)
         if record is None:
             raise _no_cut_record()
-        begins, duration = record
+        begins, duration, _end = record
         shift, background = _asked_chat_look(asked, duration)
         # As trim_recording takes them, for the stretch the video holds.
         lines = _recording_chat_lines(

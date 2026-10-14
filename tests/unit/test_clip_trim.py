@@ -35,7 +35,10 @@ class TestWhatIsKeptOfACut:
         assert clip_trim.record_name("moment_12_trim.mp4") == "moment_12_trim.json"
 
     def test_it_reads_back_as_it_was_written(self):
-        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25)) == (4.0, 6.25)
+        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25, 10.2)) == (4.0, 6.25, 10.2)
+
+    def test_one_kept_without_its_end_ends_where_the_video_does(self):
+        assert clip_trim.read_cut_record('{"begins": 4, "duration": 6.25}') == (4.0, 6.25, 10.25)
 
     @pytest.mark.parametrize(
         "text",
@@ -48,8 +51,9 @@ class TestWhatIsKeptOfACut:
             '{"begins": -1, "duration": 6}',
             '{"begins": 4, "duration": 0}',
             '{"begins": 4, "duration": Infinity}',
+            '{"begins": 4, "duration": 6, "end": 3}',
         ],
-        ids=["empty", "text", "list", "no-duration", "string", "negative", "no-length", "infinite"],
+        ids=["empty", "text", "list", "no-duration", "string", "negative", "no-length", "infinite", "backwards"],
     )
     def test_anything_else_is_not_one(self, text):
         assert clip_trim.read_cut_record(text) is None
