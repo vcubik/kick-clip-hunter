@@ -615,7 +615,14 @@ class TestACutInWords:
 
     @pytest.mark.parametrize(
         "state",
-        [view.TRIM_CUTTING, view.TRIM_CHAT, view.TRIM_READY, view.TRIM_FAILED, view.TRIM_CHAT_FAILED],
+        [
+            view.TRIM_CUTTING,
+            view.TRIM_CHAT,
+            view.TRIM_BURNING,
+            view.TRIM_READY,
+            view.TRIM_FAILED,
+            view.TRIM_CHAT_FAILED,
+        ],
     )
     def test_every_other_state_is_a_sentence(self, state):
         words = view.trim_words(state)
@@ -623,7 +630,22 @@ class TestACutInWords:
         assert words[0].isupper() and words.endswith(".")
 
     def test_the_states_in_which_more_is_to_come(self):
-        assert view.TRIM_BUSY == {view.TRIM_CUTTING, view.TRIM_CHAT}
+        assert view.TRIM_BUSY == {view.TRIM_CUTTING, view.TRIM_CHAT, view.TRIM_BURNING}
+
+    def test_chat_being_made_says_how_far_it_has_got(self):
+        assert view.trim_words(view.TRIM_BURNING, done=0.427) == "Making the video with its chat in it: 42 %."
+        assert view.trim_words(view.TRIM_CHAT, done=0.5) == "The video is ready. Making its chat: 50 %."
+
+    @pytest.mark.parametrize("state", [view.TRIM_CUTTING, view.TRIM_READY, view.TRIM_FAILED])
+    def test_nothing_else_says_how_far_it_has_got(self, state):
+        assert view.trim_words(state, done=0.5) == view.trim_words(state)
+
+    def test_a_cut_with_its_chat_drawn_in_says_so_once_it_is_ready(self):
+        assert view.trim_words(view.TRIM_READY, burned=True) == "Ready to download, with its chat in it."
+        assert view.trim_words(view.TRIM_READY, stretch=(5025, 5071), burned=True) == (
+            "1:23:45 to 1:24:31 is ready to download, with its chat in it."
+        )
+        assert view.trim_words(view.TRIM_BURNING, burned=True) == view.trim_words(view.TRIM_BURNING)
 
     @pytest.mark.parametrize("state", [view.TRIM_CHAT, view.TRIM_READY, view.TRIM_CHAT_FAILED])
     def test_a_video_that_begins_before_the_start_that_was_set_says_by_how_much(self, state):

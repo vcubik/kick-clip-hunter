@@ -42,9 +42,11 @@ stream
   own where its chat needs something else. What is in the form can be replayed on a channel's
   stored chat before it is saved, to see how many moments it would have made.
 - **Hands the footage to an editor.** From the open moment a stretch of the file can be trimmed
-  out - start and end set on the same timeline, or typed as times - without re-encoding, and its
-  chat rendered as a transparent video to lay over it, moved against the picture if it does not
-  sit right. A stretch of a recorded stream is cut out the same way.
+  out - start and end set on the same timeline, or typed as times - without re-encoding. Its chat
+  can go with it, moved against the picture if it does not sit right: drawn into the picture in a
+  corner (the stretch is then encoded anew, on the graphics card where there is one), or as a video
+  of its own - transparent to lay over it, or on a colour to put beside it. A stretch of a recorded
+  stream is cut out the same way, half an hour with its chat in it as readily as a clip.
 - **Records a whole stream when asked.** A channel's stream can be recorded whole from the
   Channels page - tracked for clips or not, started ahead of the stream or in the middle of it -
   until it is stopped or the stream is over. It ends up as one video file, and the Recordings page
@@ -172,7 +174,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `kick_client.py`, `kick_chat.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, its webhook's chat message, 7TV's emote API, webhook signature verification. |
 | `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
-| `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
+| `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
 | `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps. |

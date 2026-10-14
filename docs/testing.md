@@ -165,8 +165,12 @@ worded as intended? Do rating, tags and notes validate and persist; do the switc
 restart; does shutdown wait for work in flight and stop recorders before exiting? Is a stretch asked
 for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
 its chat video hold the stretch's chat counted from where the video really begins, moved by what was
-asked for; does a new cut replace the one before, and is each state said in words? Does the dialog
-have a field for either end of the cut to be typed into?
+asked for; is each frame of it the column of chat as it stood then - the newest line at the bottom,
+easing in, the oldest fading out at the top - see-through, or on the colour asked for; is chat drawn
+into the cut's picture on the side asked for, from the very frame that was set, with how far it has
+got said and given up at a shutdown; does a new cut replace the one before, and is each state said
+in words? Does the dialog have a field for either end of the cut to be typed into, and a choice of
+where its chat goes?
 
 **9. Settings** - `unit/test_tuning.py`, `integration/test_api_settings.py`, `unit/test_replay_chat.py`
 Is every field of what the service works from settable by exactly one setting, and is what the code
@@ -314,6 +318,9 @@ tries to step outside:
 - **Tailscale.** The Health page asks the machine's Tailscale client where the tunnel stands. As
   far as the suite can tell there is none on the machine; a test about the tunnel says what the
   client answers.
+- **Graphics card.** Chat drawn into a cut is encoded on the machine's graphics card where ffmpeg
+  can use one. As far as the suite can tell there is none: it always encodes with x264, so what a
+  test makes is the same on every machine; a test about finding the encoder sets that back.
 
 ## When to run what
 
@@ -352,7 +359,8 @@ fake:
 | Not covered by the suite | Why |
 |---|---|
 | `kick_stream.get_stream_urls`, `clip_creator.create_clip`, `scripts/kick_login.py`, `scripts/create_clip.py` | They drive a visible browser against kick.com, whose pages only load in a headed browser. |
-| `chat_video.capture_frames`, `static/chat_video.js` | They are a headless browser drawing the chat video's page frame by frame. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, and the encoding of its frames with real ffmpeg (step 9 below). |
+| `chat_video.drawn_column`, `static/chat_video.js` | They are a headless browser laying the chat out and taking pictures of it. Everything around it is tested: which lines go on the page, the page itself, what the browser may load, how the frames are put together from its pictures (from a made-up column), and the encoding of the frames - and their drawing into a cut - with real ffmpeg (step 9 below). |
+| `chat_video.HARDWARE_ENCODERS` on a real graphics card | The suite always encodes on the processor, so that what it makes does not depend on the machine. Which encoder is used is said in the log the first time chat is drawn into a cut (step 9 below). |
 | `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it, reading a time that was typed, the window it shows of a recording | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (steps 9 and 11 below). |
 | `static/dashboard.js` - the trace under a recording: fetching it, the playhead, scrubbing | The same: the trace the service draws is tested, the script that puts it on the page is checked by hand (step 11 below). |
 | `static/dashboard.js` - the moments found in a recording: asking for them, following a replay or the cutting of clips, the marks on the trace, playing from a row | The same: every request and the section the service renders are tested, the script is checked by hand (step 11 below). |
@@ -410,13 +418,23 @@ Run this on a live channel after changing any of the above, or the code right ne
    picture go there; something that is no time is said so and the field goes back to what it
    was. Tick the chat box: chat appears beside the picture and
    follows it, and the slider moves it earlier or later; with "on a background" ticked the chat
-   beside the picture takes the colour picked, and so does the exported chat video behind its text. Export: the dialog says it is cutting,
-   then that the video is ready while its chat is rendered, and a minute or two later offers both
-   to download - and how much before the start that was set the video begins. The log says `moment
-   N trimmed` and `chat video saved for moment N`. Laid over the video in an editor (or with
-   ffmpeg's `overlay` filter) from its first frame, the chat video is as long as the video, has
-   nothing behind the text, and its lines appear when they did beside the picture in the dialog.
-   Closed and opened again, the dialog still has the stretch and the downloads.
+   beside the picture takes the colour picked. Choose "as a video of its own" and Export: the
+   dialog says it is cutting, then that the video is ready while its chat is made, counting up to
+   100 % within seconds, and offers both to download - and how much before the start that was set
+   the video begins. The log says `moment N trimmed` and `chat video saved for moment N`. Laid
+   over the video in an editor (or with ffmpeg's `overlay` filter) from its first frame, the chat
+   video is as long as the video, has nothing behind the text, and its lines appear when they did
+   beside the picture in the dialog, each easing in from the bottom, the oldest fading out at the
+   top, with emotes and badges drawn (an animated emote stands still). With "on a background"
+   ticked it is the colour behind the text and a small H.264 file. Then choose "in the video, on
+   the right" and Export again: the dialog counts up while the video is made with its chat in it,
+   and offers one file to download, which begins on the very frame that was set and has the chat
+   at the bottom right of the picture, as large as two thirds of its height - on a panel of the
+   colour if one was picked. The log says, the first time, which encoder chat is drawn into
+   videos with - `h264_amf` on this host's graphics card - and then `moment N cut with its chat
+   in it`. "Make its chat" on a video exported without chat draws it into that video, in its
+   place. Closed and opened again, the dialog still has the stretch, the downloads and where chat
+   went.
 10. **Change a setting.** On the Settings page, pick a channel that has chat stored and switch
    its own settings on. Raise "At least this many people" and press "Try on stored chat": after a
    few seconds a table says how many moments the saved settings and the form's would each have
@@ -448,8 +466,14 @@ Run this on a live channel after changing any of the above, or the code right ne
    and press Enter - typed far off, the strip moves to show it - and Export: the dialog names
    the stretch that is ready, the downloaded file has the stretch in its name and plays, and
    the log says `stream recording N trimmed`. With the chat box ticked the lines beside the
-   picture follow it, and the chat video is made as for a clip (for a stretch of up to ten
-   minutes; a longer one is refused in a sentence). A second export replaces the first.
+   picture follow it, and its chat is made as for a clip - as a see-through video of its own
+   for a stretch of up to ten minutes (a longer one is refused in a sentence that says what
+   can be done instead). Set half an hour and "in the video, on the right": the dialog counts
+   up for about half as long as the stretch runs on this host (the log says `cut with its chat
+   in it ... encoded with h264_amf`), and the file plays from the frame that was set with chat
+   in the corner throughout, about as large as the recording's own share of it. Shut the
+   service down from the Channels page while one is being made: it does not wait for it, and
+   the log says it was given up. A second export replaces the first.
    The file is where the page says it is and plays in another player.
    Under the file's line is "Moments". Press "Find moments": the section counts through the
    recording's messages - a busy chat of hours takes minutes, and the rest of the dashboard and

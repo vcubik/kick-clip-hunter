@@ -1,13 +1,14 @@
 """A stretch of a stream that was kept whole, cut out for an editor from the
-Recordings page's Trim dialog - with its chat as a video to lay over it, if
-that was asked for.
+Recordings page's Trim dialog - with its chat, if that was asked for: as a
+video of its own to lay over it, or drawn into its picture.
 
 The same cut as from a moment's footage (tests/integration/
 test_api_dashboard.py), which is where what the two share is gone through
 in full; here it is what differs for a recording: its times are seconds of
 its file, its cut is named for the stretch it holds, its chat is told by
 the channel's id and placed by the recording's parts, and its footage is
-long enough to ask too much of.
+long enough to ask too much of - and chat drawn into the picture, which
+makes most sense for a long stretch.
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def footage(tmp_path_factory) -> Path:
 @pytest.fixture
 def browser(monkeypatch) -> Iterator[FakeBrowser]:
     fake = FakeBrowser()
-    monkeypatch.setattr(chat_video, "capture_frames", fake.capture_frames)
+    monkeypatch.setattr(chat_video, "drawn_column", fake.drawn_column)
     yield fake
     fake.release()
 
@@ -340,17 +341,20 @@ class TestItsChat:
         # What was said in the break shows where the picture picks up.
         assert lines(browser) == [("alice", "2"), ("bob", "4"), ("carol", "6")]
 
-    async def test_chat_has_nothing_behind_it_unless_a_colour_is_asked_for(self, service, footage, browser):
-        recording_id, _file = recording_of(footage)
+    async def test_chat_is_see_through_unless_a_colour_is_asked_for(self, service, footage, browser):
+        recording_id, file = recording_of(footage)
         said_at(5)
 
         await ask(service, recording_id, chat=True)
         await service.settle()
+        clear = video_stream(chat_of(cut_of(file, 4, 10)))
         await ask(service, recording_id, chat=True, chat_background="#0A2540")
         await service.settle()
+        coloured = video_stream(chat_of(cut_of(file, 4, 10)))
 
-        clear, coloured = [parse(html).one("html").attrs for html in browser.pages]
-        assert "style" not in clear and coloured["style"] == "background: #0a2540"
+        assert (clear["codec_name"], clear["profile"]) == ("prores", "4444")
+        # On a colour nothing is see-through, and it is a fraction of the size.
+        assert (coloured["codec_name"], coloured["pix_fmt"]) == ("h264", "yuv420p")
 
     async def test_chat_cannot_go_with_a_stretch_that_has_none(self, service, footage, browser):
         recording_id, file = recording_of(footage)
@@ -370,10 +374,157 @@ class TestItsChat:
         await service.settle()
 
         assert refused.status_code == 400
-        assert refused.json()["detail"].startswith("Chat can go as a video with a stretch of up to")
+        assert refused.json()["detail"].startswith("Chat can go as a see-through video with a stretch of up to")
+        assert "drawn into the video, or put on a background" in refused.json()["detail"]
         # The video alone can be as long as the recording.
         assert without.status_code == 200 and cut_of(file, 4, 10).exists()
         assert browser.pages == []
+
+    @pytest.mark.parametrize(
+        "asked", [{"chat_where": "right"}, {"chat_background": "#0a2540"}], ids=["in-the-video", "on-a-colour"]
+    )
+    async def test_drawn_into_the_video_or_on_a_colour_it_can_go_with_any(
+        self, service, footage, browser, monkeypatch, asked
+    ):
+        monkeypatch.setattr(clip_trim, "CHAT_VIDEO_MAX_SECONDS", 5.0)
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+
+        response = await ask(service, recording_id, start=4, end=10, chat=True, **asked)
+        await service.settle()
+
+        assert response.status_code == 200
+        assert (await state(service, recording_id))["state"] == "ready"
+
+
+class TestChatInTheVideo:
+    """Chat drawn into the cut's picture: the cut is made with it, encoded
+    anew - which is why it begins where it was asked to."""
+
+    async def test_it_is_made_together_with_the_cut_to_the_frame_asked_for(self, service, footage, browser):
+        recording_id, file = recording_of(footage)
+        said_at(5)
+
+        response = await ask(service, recording_id, start=5, end=9, chat=True, chat_where="right")
+
+        assert response.json()["state"] == "burning"
+        await service.settle()
+        video = cut_of(file, 5, 9)
+        # A copied cut would begin on the frame at second 4.
+        assert probe(video) == {"duration": pytest.approx(4, abs=0.1), "streams": ["audio", "video"]}
+        assert decodes_cleanly(video)
+        assert not chat_of(video).exists()
+        now = await state(service, recording_id)
+        assert (now["state"], now["words"]) == ("ready", view.trim_words(view.TRIM_READY, burned=True))
+        assert now["cut"] == {"from": 5, "to": 9}
+        assert now["chat_url"] is None and now["chat_later"] is False
+        record = clip_trim.read_cut_record(record_of(video).read_text(encoding="utf-8"))
+        assert record == clip_trim.Cut(5, pytest.approx(4, abs=0.1), 9, burned=True)
+
+    async def test_its_chat_is_counted_from_where_it_was_asked_to_begin(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(3, "alice")
+        said_at(6.5, "bob")
+
+        await ask(service, recording_id, start=5, end=9, chat=True, chat_where="left", chat_shift=0.5)
+        await service.settle()
+
+        assert lines(browser) == [("alice", "-1.5"), ("bob", "2")]
+
+    async def test_how_far_it_has_got_is_said_while_it_is_made(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+        browser.hold()
+
+        await ask(service, recording_id, start=4, end=10, chat=True, chat_where="right")
+        await async_wait_until(lambda: browser.pages, "the chat to reach the browser")
+
+        now = await state(service, recording_id)
+        assert (now["state"], now["words"]) == ("burning", view.trim_words(view.TRIM_BURNING, done=0.0))
+        assert now["video_url"] is None
+        # Nothing else is started meanwhile.
+        again = await ask(service, recording_id, start=2, end=8)
+        assert again.json()["state"] == "burning"
+        browser.release()
+        await service.settle()
+        assert (await state(service, recording_id))["state"] == "ready"
+
+    async def test_it_is_given_up_when_the_service_shuts_down(self, service, footage, browser, monkeypatch, caplog):
+        recording_id, file = recording_of(footage)
+        said_at(5)
+        browser.hold()
+        await ask(service, recording_id, start=4, end=10, chat=True, chat_where="right")
+        await async_wait_until(lambda: browser.pages, "the chat to reach the browser")
+
+        monkeypatch.setattr(service.main, "_shutdown_requested", True)
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            browser.release()
+            await service.settle()
+
+        # Not minutes later, and with nothing half-made left behind.
+        assert recording_id not in service.main._recording_trims
+        assert sorted(path.name for path in file.parent.iterdir()) == [file.name]
+        assert any("given up: shutting down" in record.getMessage() for record in caplog.records)
+
+    async def test_one_that_cannot_be_made_says_so_and_leaves_nothing(self, service, footage, browser, caplog):
+        recording_id, file = recording_of(footage)
+        said_at(5)
+        browser.failure = RuntimeError("the browser would not start")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await ask(service, recording_id, start=4, end=10, chat=True, chat_where="right")
+            await service.settle()
+
+        now = await state(service, recording_id)
+        assert (now["state"], now["words"]) == ("failed", view.trim_words(view.TRIM_FAILED))
+        assert sorted(path.name for path in file.parent.iterdir()) == [file.name]
+        assert any("drawing chat into the cut" in record.getMessage() for record in caplog.records)
+
+    async def test_a_cut_taken_without_chat_can_have_it_drawn_in_later(self, service, footage, browser):
+        recording_id, file = recording_of(footage)
+        said_at(5)
+        await ask(service, recording_id, start=5, end=9)
+        await service.settle()
+        video = cut_of(file, 5, 9)
+        copied = probe(video)["duration"]
+
+        response = await service.client.post(f"/recordings/{recording_id}/trim/chat", json={"chat_where": "right"})
+
+        assert response.status_code == 200 and response.json()["state"] == "burning"
+        await service.settle()
+        # In the cut's place, as long as it was: it begins on the frame the
+        # copied cut began on, a second before the start that was set.
+        assert probe(video)["duration"] == pytest.approx(copied, abs=0.15)
+        assert lines(browser) == [("alice", "1")]
+        now = await state(service, recording_id)
+        assert (now["state"], now["chat_later"], now["cut"]) == ("ready", False, {"from": 4, "to": 9})
+        assert clip_trim.read_cut_record(record_of(video).read_text(encoding="utf-8")).burned
+        assert sorted(path.name for path in file.parent.iterdir()) == sorted(
+            [file.name, video.name, record_of(video).name]
+        )
+
+    async def test_but_not_twice(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+        await ask(service, recording_id, start=5, end=9, chat=True, chat_where="right")
+        await service.settle()
+
+        again = await service.client.post(f"/recordings/{recording_id}/trim/chat", json={"chat_where": "left"})
+        apart = await service.client.post(f"/recordings/{recording_id}/trim/chat", json={})
+
+        assert again.status_code == apart.status_code == 409
+        assert again.json()["detail"] == "This video has its chat in it already."
+        assert len(browser.pages) == 1
+
+    async def test_where_it_goes_must_be_one_of_the_places_there_are(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+
+        response = await ask(service, recording_id, chat=True, chat_where="top")
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Chat_where must be one of right, left, apart."
+        assert browser.pages == [] and service.main._background_tasks == set()
 
 
 class TestWhatIsRefused:

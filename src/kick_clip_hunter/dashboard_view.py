@@ -178,32 +178,46 @@ def stream_time_words(seconds: int | None) -> str | None:
 TRIM_NONE = "none"
 TRIM_CUTTING = "cutting"
 TRIM_CHAT = "chat"
+TRIM_BURNING = "burning"
 TRIM_READY = "ready"
 TRIM_FAILED = "failed"
 TRIM_CHAT_FAILED = "chat_failed"
 TRIM_WORDS = {
     TRIM_NONE: "",
     TRIM_CUTTING: "Cutting the video.",
-    TRIM_CHAT: "The video is ready. Rendering its chat, which takes about twice as long as the video runs.",
+    TRIM_CHAT: "The video is ready. Making its chat.",
+    TRIM_BURNING: "Making the video with its chat in it.",
     TRIM_READY: "Ready to download.",
-    TRIM_FAILED: "The video could not be cut. The server log says why.",
-    TRIM_CHAT_FAILED: "The video is ready, but its chat could not be rendered. The server log says why.",
+    TRIM_FAILED: "The video could not be made. The server log says why.",
+    TRIM_CHAT_FAILED: "The video is ready, but its chat could not be made. The server log says why.",
 }
 # The states in which more is still to come.
-TRIM_BUSY = frozenset({TRIM_CUTTING, TRIM_CHAT})
+TRIM_BUSY = frozenset({TRIM_CUTTING, TRIM_CHAT, TRIM_BURNING})
 # A video that begins less than this before the start that was set is not
 # worth a sentence.
 TRIM_EARLY_SECONDS = 0.1
 
 
-def trim_words(state: str, early: float = 0.0, stretch: tuple[float, float] | None = None) -> str:
+def trim_words(
+    state: str,
+    early: float = 0.0,
+    stretch: tuple[float, float] | None = None,
+    done: float | None = None,
+    burned: bool = False,
+) -> str:
     """What the Trim dialog says of a cut. `early` is how long before the
     start that was set the video begins (see recorder.trim_clip). `stretch`
     is which seconds of a recording the cut holds: from hours of footage
-    more than one is cut, so one that is there to download is named."""
+    more than one is cut, so one that is there to download is named. `done`
+    is how much of its chat has been made, as a share, while that goes on;
+    `burned`, that the video has its chat drawn into it."""
     words = TRIM_WORDS[state]
     if stretch is not None and state == TRIM_READY:
         words = f"{stream_time_words(stretch[0])} to {stream_time_words(stretch[1])} is ready to download."
+    if burned and state == TRIM_READY:
+        words = f"{words.removesuffix('.')}, with its chat in it."
+    if done is not None and state in (TRIM_CHAT, TRIM_BURNING):
+        words = f"{words.removesuffix('.')}: {int(done * 100)} %."
     if early >= TRIM_EARLY_SECONDS and state in (TRIM_CHAT, TRIM_READY, TRIM_CHAT_FAILED):
         words += f" It begins {number_words(early, 1)} s before the start you set, on a frame a cut can begin on."
     return words

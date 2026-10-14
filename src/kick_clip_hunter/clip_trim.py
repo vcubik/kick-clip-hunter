@@ -1,5 +1,6 @@
 """A stretch of footage, chosen in the Trim dialog, as a file to take away -
-and, if asked for, its chat as a video to lay over it.
+and, if asked for, its chat: drawn into its picture, or as a video of its
+own to lay over it or put beside it.
 
 A moment's file holds the clip with the footage around it, and what an
 editor wants of it is rarely exactly the clip: the review page's Trim
@@ -8,7 +9,8 @@ The Recordings page has the same dialog over a stream that was kept whole,
 where the stretch can be any part of hours of footage. This module is what
 either comes to before anything is cut: what the files are called, what may
 be asked for, and where in the file it lies. The cutting itself is
-`recorder.trim_clip`, the chat video `chat_video.py`.
+`recorder.trim_clip`, the chat `chat_video.py` - which also cuts the
+stretch when chat is drawn into it, as its picture is encoded anew then.
 
 Times of a moment are clip time, as everywhere on the review page: seconds
 from the clip's first frame, negative in the footage before it. Times of a
@@ -35,10 +37,17 @@ CHAT_SHIFT_LIMIT_SECONDS = 10.0
 # from what was stored when the file was cut. A time this far past an end is
 # taken to mean the end.
 SLACK_SECONDS = 1.0
-# The longest stretch chat can go with as a video. Rendering one takes about
-# twice as long as it runs and three or four megabytes for every second of
-# it (see chat_video.py), which nobody means to ask for by ticking a box
-# over half an hour of a recording. A moment's file is never this long.
+# Where chat can go: drawn into the cut's picture, at the bottom on the
+# right or on the left, or a video of its own (APART).
+CHAT_RIGHT = "right"
+CHAT_LEFT = "left"
+CHAT_APART = "apart"
+CHAT_PLACES = (CHAT_RIGHT, CHAT_LEFT, CHAT_APART)
+# The longest stretch chat can go with as a see-through video of its own.
+# Every frame of one is whole, three to five megabytes for every second of
+# a busy chat (see chat_video.py): ten minutes of it are gigabytes. Chat
+# drawn into the picture, or put on a colour, takes no more room than the
+# picture does, and has no such limit. A moment's file is never this long.
 CHAT_VIDEO_MAX_SECONDS = 600.0
 # How much of the chat from before a stretch of a recording is looked at
 # for the lines its chat video starts out with (chat_video.PREFILL_LINES).
@@ -69,22 +78,28 @@ def record_name(video_name: str) -> str:
 
 class Cut(NamedTuple):
     """A cut video, in seconds of the file it was cut from: where it really
-    begins, how long it runs, and the end that was set."""
+    begins, how long it runs, and the end that was set - and whether its
+    chat is drawn into its picture."""
 
     begins: float
     duration: float
     end: float
+    burned: bool = False
 
 
-def cut_record(begins: float, duration: float, end: float) -> str:
+def cut_record(begins: float, duration: float, end: float, burned: bool = False) -> str:
     """What is kept beside a cut video so that its chat can be made later
     as well as now, and the dialog can say which stretch it holds: where in
     the file it was cut from the video really begins, how long it runs (see
     recorder.trim_clip) and the end that was set. None of it can be told
     from the video afterwards - its times start again from nothing, its
     start is a keyframe, not the start that was set, and it runs on a
-    little past the end that was, for its sound's last frame."""
-    return json.dumps({"begins": round(begins, 3), "duration": round(duration, 3), "end": round(end, 3)})
+    little past the end that was, for its sound's last frame. A video that
+    has its chat drawn into it already is `burned`."""
+    record = {"begins": round(begins, 3), "duration": round(duration, 3), "end": round(end, 3)}
+    if burned:
+        record["burned"] = True
+    return json.dumps(record)
 
 
 def read_cut_record(text: str) -> Cut | None:
@@ -98,7 +113,7 @@ def read_cut_record(text: str) -> Cut | None:
         return None
     if begins < 0 or duration <= 0 or end <= begins:
         return None
-    return Cut(begins, duration, end)
+    return Cut(begins, duration, end, record.get("burned") is True)
 
 
 def _number(value: Any, what: str) -> float:
@@ -134,13 +149,25 @@ def file_span(row: Mapping[str, Any], start: Any, end: Any) -> tuple[float, floa
     return start - first, end - first
 
 
-def with_chat(seconds: float) -> None:
-    """Raises TrimError for a stretch too long for its chat to go with it
-    as a video (see CHAT_VIDEO_MAX_SECONDS)."""
-    if seconds > CHAT_VIDEO_MAX_SECONDS:
+def chat_where(value: Any) -> str:
+    """Where chat is to go (see CHAT_PLACES), from what was asked for: a
+    video of its own unless it says otherwise, as it was before chat could
+    be drawn into the picture."""
+    if value is None:
+        return CHAT_APART
+    if value not in CHAT_PLACES:
+        raise TrimError(f"chat_where must be one of {', '.join(CHAT_PLACES)}")
+    return value
+
+
+def with_chat(seconds: float, where: str = CHAT_APART, background: str | None = None) -> None:
+    """Raises TrimError for a stretch too long for its chat to go `where`
+    it is to go (see CHAT_VIDEO_MAX_SECONDS)."""
+    if where == CHAT_APART and background is None and seconds > CHAT_VIDEO_MAX_SECONDS:
         raise TrimError(
-            f"chat can go as a video with a stretch of up to {CHAT_VIDEO_MAX_SECONDS / 60:g} minutes, "
-            f"and this one is {seconds / 60:.1f} minutes long"
+            f"chat can go as a see-through video with a stretch of up to {CHAT_VIDEO_MAX_SECONDS / 60:g} "
+            f"minutes, and this one is {seconds / 60:.1f} minutes long. "
+            "Have it drawn into the video, or put on a background, for a stretch this long"
         )
 
 

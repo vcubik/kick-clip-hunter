@@ -1792,7 +1792,8 @@ FOOTAGE_EXTENT = {"context_before": 4.0, "clip_duration": 4.0, "context_after": 
 
 class TestTrimming:
     """A stretch of a moment's footage cut out for an editor from the Trim
-    dialog, with its chat as a video to lay over it if that was asked for."""
+    dialog, with its chat if that was asked for: as a video of its own to
+    lay over it, or drawn into its picture."""
 
     CLIP = "channel_a/moment_1.mp4"
     SOURCE = Path("data/clips/channel_a/moment_1.mp4")
@@ -1803,7 +1804,7 @@ class TestTrimming:
     @pytest.fixture
     def browser(self, monkeypatch) -> Iterator[FakeBrowser]:
         fake = FakeBrowser()
-        monkeypatch.setattr(chat_video, "capture_frames", fake.capture_frames)
+        monkeypatch.setattr(chat_video, "drawn_column", fake.drawn_column)
         yield fake
         fake.release()
 
@@ -1891,6 +1892,20 @@ class TestTrimming:
         colour = dialog.one("input", type="color")
         assert colour.attrs["value"] == clip_trim.DEFAULT_CHAT_BACKGROUND and "disabled" in colour.attrs
         assert "checked" not in dialog.one("input", data_trim_background=True).attrs
+
+    async def test_chat_can_go_into_the_video_on_either_side_or_be_a_video_of_its_own(self, service, footage):
+        self.clip_with_chat(footage)
+
+        dialog = await self.dialog(service)
+
+        where = dialog.one("select", data_trim_where=True)
+        assert [(option.attrs["value"], option.text) for option in where.find("option")] == [
+            ("right", "in the video, on the right"),
+            ("left", "in the video, on the left"),
+            ("apart", "as a video of its own"),
+        ]
+        # Nowhere to choose until chat is wanted.
+        assert "disabled" in where.attrs
 
     async def test_a_clip_without_chat_is_trimmed_without_it(self, service, footage):
         self.SOURCE.parent.mkdir(parents=True, exist_ok=True)
@@ -2050,17 +2065,18 @@ class TestTrimming:
 
         assert self.lines(browser) == lines
 
-    async def test_chat_has_nothing_behind_it_unless_a_colour_is_asked_for(self, service, footage, browser):
+    async def test_chat_is_see_through_unless_a_colour_is_asked_for(self, service, footage, browser):
         moment_id = self.clip_with_chat(footage)
 
         await self.ask(service, moment_id, chat=True)
         await service.settle()
+        clear = video_stream(self.CHAT)
         await self.ask(service, moment_id, chat=True, chat_background="#0A2540")
         await service.settle()
+        coloured = video_stream(self.CHAT)
 
-        clear, coloured = [parse(html).one("html").attrs for html in browser.pages]
-        assert "style" not in clear
-        assert coloured["style"] == "background: #0a2540"
+        assert (clear["codec_name"], clear["profile"]) == ("prores", "4444")
+        assert (coloured["codec_name"], coloured["pix_fmt"]) == ("h264", "yuv420p")
 
     async def test_chat_starts_from_where_the_channels_chat_delay_puts_it(self, service, footage, browser):
         moment_id = self.clip_with_chat(footage)
@@ -2085,7 +2101,7 @@ class TestTrimming:
         assert (state["state"], state["words"]) == ("chat_failed", view.trim_words(view.TRIM_CHAT_FAILED))
         assert state["video_url"] is not None and state["chat_url"] is None
         assert self.VIDEO.exists() and not self.CHAT.exists()
-        assert any("rendering the chat video failed for moment 1" in r.getMessage() for r in caplog.records)
+        assert any("making the chat video failed for moment 1" in r.getMessage() for r in caplog.records)
 
         browser.failure = None
         await self.ask(service, moment_id, chat=True)
@@ -2132,7 +2148,63 @@ class TestTrimming:
         await service.settle()
 
         assert self.lines(browser) == [("alice", "0.5"), ("bob", "4"), ("carol", "7")]
-        assert parse(browser.pages[0]).one("html").attrs["style"] == "background: #0a2540"
+        assert video_stream(self.CHAT)["codec_name"] == "h264"
+
+    # -- its chat in the video
+
+    async def test_chat_drawn_into_it_makes_it_with_its_chat_from_the_start_asked_for(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+
+        # A second before the clip is second 3 of the file: a copied cut
+        # would begin at second 2.
+        response = await self.ask(service, moment_id, start=-1, end=3, chat=True, chat_where="right")
+
+        assert response.json()["state"] == "burning"
+        await service.settle()
+        assert probe(self.VIDEO) == {"duration": pytest.approx(4, abs=0.1), "streams": ["audio", "video"]}
+        assert decodes_cleanly(self.VIDEO) and not self.CHAT.exists()
+        # Counted from a second before the clip: carol, three and a half
+        # seconds into it, comes after its end.
+        assert self.lines(browser) == [("alice", "-2"), ("bob", "1.5")]
+        state = await self.state(service, moment_id)
+        assert (state["state"], state["words"]) == ("ready", view.trim_words(view.TRIM_READY, burned=True))
+        assert (state["cut"], state["chat_url"], state["chat_later"]) == ({"from": -1, "to": 3}, None, False)
+        # Taking it marks the moment, as for any cut.
+        assert (await service.client.get(state["video_url"])).status_code == 200
+        assert service.moments()[0]["downloaded_at"] is not None
+
+    async def test_a_cut_taken_without_chat_can_have_it_drawn_in_later(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, start=-1, end=3)
+        await service.settle()
+        copied = probe(self.VIDEO)["duration"]
+
+        response = await self.ask_chat(service, moment_id, chat_where="left")
+
+        assert response.status_code == 200 and response.json()["state"] == "burning"
+        await service.settle()
+        # As long as the copied cut, which begins two seconds before the clip.
+        assert probe(self.VIDEO)["duration"] == pytest.approx(copied, abs=0.15)
+        assert self.lines(browser) == [("alice", "-1"), ("bob", "2.5")]
+        state = await self.state(service, moment_id)
+        assert (state["state"], state["chat_later"], state["cut"]) == ("ready", False, {"from": -2, "to": 3})
+        assert (await self.ask_chat(service, moment_id)).status_code == 409
+
+    async def test_a_cut_that_cannot_have_its_chat_drawn_in_later_is_kept(self, service, footage, browser, caplog):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, start=-1, end=3)
+        await service.settle()
+        video = self.VIDEO.read_bytes()
+        browser.failure = RuntimeError("the browser would not start")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await self.ask_chat(service, moment_id, chat_where="right")
+            await service.settle()
+
+        state = await self.state(service, moment_id)
+        assert (state["state"], state["chat_later"]) == ("chat_failed", True)
+        assert self.VIDEO.read_bytes() == video
+        assert any("drawing chat into the cut of moment 1 failed" in r.getMessage() for r in caplog.records)
 
     async def test_chat_made_later_survives_a_restart_in_between(self, service, footage, browser):
         moment_id = self.clip_with_chat(footage)

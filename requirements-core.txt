@@ -9,3 +9,7 @@ jinja2
 patchright
 # Finds where a live Twitch stream is (twitch_stream.py).
 streamlink
+# The frames of a chat video are put together from the browser's pictures
+# of its chat (chat_video.py).
+Pillow
+numpy

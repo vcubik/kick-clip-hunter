@@ -526,11 +526,12 @@
   // ---- Trimming ---------------------------------------------------------
   //
   // The Trim dialog cuts a stretch of footage out for an editor, with its
-  // chat as a video to lay over it if that is wanted. It has a player of
-  // its own on the same file and a strip with a handle at either end of the
-  // stretch; either end can be typed as a time as well. The cutting is done
-  // on the server and takes a while with chat; the dialog asks now and then
-  // how far it has got, for as long as it is open.
+  // chat if that is wanted: drawn into the picture, or as a video of its
+  // own to lay over it. It has a player of its own on the same file and a
+  // strip with a handle at either end of the stretch; either end can be
+  // typed as a time as well. The cutting is done on the server and takes a
+  // while with chat; the dialog asks now and then how far it has got, for
+  // as long as it is open.
   //
   // A moment's dialog shows all of the moment's footage, on a copy of the
   // strip under the clip, and its times are clip time. A recording's is
@@ -540,7 +541,10 @@
   // seconds of the file, written as the recording's player writes them.
 
   const TRIM_POLL_MS = 2000;
-  const TRIM_BUSY = ["cutting", "chat"];
+  const TRIM_BUSY = ["cutting", "chat", "burning"];
+  // Where chat goes is kept from one cut to the next, and from one visit to
+  // the next where the browser lets the page remember it.
+  const TRIM_WHERE_KEY = "clip-hunter-chat-where";
   // Past its end by less than this, the player ran there; by more, it was put there.
   const TRIM_RAN_PAST_SECONDS = 1;
   // An end of the stretch closer than this share of the window's length to
@@ -875,6 +879,16 @@
       one("[data-trim-lines]", dialog)?.replaceChildren(...copies(all("[data-chat] > [data-at]", article)));
     }
 
+    const where = one("[data-trim-where]", dialog);
+    if (where) {
+      try {
+        const kept = localStorage.getItem(TRIM_WHERE_KEY);
+        if (Array.from(where.options).some((option) => option.value === kept)) where.value = kept;
+      } catch {
+        // no storage here: the first choice stands
+      }
+    }
+
     dialog.showModal();
     // To begin with a moment's stretch is the clip, as it was cut.
     if (dialog.dataset.from === undefined) {
@@ -895,14 +909,24 @@
   }
 
   // Whether the chat goes with the video: its lines are then shown beside
-  // the picture, and can be moved against it and given a background.
+  // the picture, and where it goes can be chosen, and it can be moved
+  // against the picture and given a background.
   function wantTrimChat(box) {
     const dialog = trimOf(box);
     one("[data-trim-chat-pane]", dialog).hidden = !box.checked;
+    one("[data-trim-where]", dialog).disabled = !box.checked;
     one("[data-trim-shift]", dialog).disabled = !box.checked;
     one("[data-trim-background]", dialog).disabled = !box.checked;
     paintTrimBackground(dialog);
     paintTrim(dialog);
+  }
+
+  function chooseTrimWhere(where) {
+    try {
+      localStorage.setItem(TRIM_WHERE_KEY, where.value);
+    } catch {
+      // kept for this page only, then
+    }
   }
 
   // The colour the chat video is to have behind its text, or null for
@@ -982,6 +1006,7 @@
       start: from,
       end: to,
       chat: Boolean(chat && chat.checked),
+      chat_where: chat ? one("[data-trim-where]", dialog).value : null,
       chat_shift: shift ? Number(shift.value) : 0,
       chat_background: chat ? trimBackground(dialog) : null,
     });
@@ -998,13 +1023,15 @@
     showTrim(dialog, await response.json());
   }
 
-  // The chat video of the video that is ready, made after it: for the
-  // stretch that video holds, as the options have it now.
+  // The chat of the video that is ready, made after it: for the stretch
+  // that video holds, as the options have it now - drawn into it, or as a
+  // video of its own.
   async function trimChatLater(button) {
     const dialog = trimOf(button);
     const shift = one("[data-trim-shift]", dialog);
     button.disabled = true;
     const response = await post(`${dialog.dataset.trim}/chat`, {
+      chat_where: one("[data-trim-where]", dialog).value,
       chat_shift: Number(shift.value),
       chat_background: trimBackground(dialog),
     });
@@ -1974,6 +2001,7 @@
     else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
+    else if (target.matches("[data-trim-where]")) chooseTrimWhere(target);
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();

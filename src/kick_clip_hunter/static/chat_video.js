@@ -1,28 +1,15 @@
-// The page a chat video is made from (chat_video.py).
+// The page chat is laid out on for a chat video (chat_video.py).
 //
-// Nothing here runs on a clock. The page is told what second of the clip it
-// is and shows chat as it stood then; whoever is stepping it takes a picture
-// and asks for the next frame. A new line eases in - it fades up while the
-// column makes room for it - and how far along that is depends only on the
-// time asked for, so the same second always looks the same.
+// Every line is laid out once, one under another, and stays where it is:
+// whoever drives the page takes pictures of the column a screenful at a
+// time and puts the frames together from them. Nothing here runs on a clock.
 (() => {
   "use strict";
 
-  // How long a new line takes to come in, in seconds of the clip.
-  const ENTER_SECONDS = 0.25;
-  // Lines kept laid out: more than fit, the rest have left the top.
-  const KEPT = 40;
-
-  const box = document.querySelector("[data-chat]");
-  // In the order they arrived, as the page was written.
-  const lines = Array.from(box.querySelectorAll("[data-at]"));
-  const arrivals = lines.map((line) => Number(line.dataset.at));
-  for (const line of lines) line.hidden = true;
-
   window.chatVideo = {
     // Resolves once the typeface and every picture are there to be drawn,
-    // or after `limit` milliseconds if some never arrive. A hidden line's
-    // pictures load too: none of them is lazy.
+    // or after `limit` milliseconds if some never arrive. None of the
+    // pictures is lazy: the page is scrolled only to take its pictures.
     ready(limit) {
       const pictures = Array.from(document.images, (image) => image.decode().catch(() => {}));
       const everything = Promise.all([document.fonts.ready, ...pictures]);
@@ -30,21 +17,18 @@
       return Promise.race([everything, patience]).then(() => undefined);
     },
 
-    // Shows chat as it stood `time` seconds into the clip.
-    showAt(time) {
-      let arrived = 0;
-      while (arrived < lines.length && arrivals[arrived] <= time) arrived += 1;
-
-      let stillToCome = 0;
-      lines.forEach((line, index) => {
-        const shown = index < arrived && index >= arrived - KEPT;
-        line.hidden = !shown;
-        if (!shown) return;
-        const entered = Math.min(1, (time - arrivals[index]) / ENTER_SECONDS);
-        line.style.opacity = String(entered);
-        if (entered < 1) stillToCome += line.offsetHeight * (1 - entered);
+    // Each line, in the order they arrive: the second it arrives at and
+    // where it starts and ends, in pixels from the top - and how many
+    // pictures `page` pixels tall the column takes. The page is made that
+    // many pictures tall, so that it can be scrolled to the top of each.
+    layOut(page) {
+      const lines = Array.from(document.querySelectorAll("[data-at]"), (line) => {
+        const box = line.getBoundingClientRect();
+        return [Number(line.dataset.at), box.top + window.scrollY, box.bottom + window.scrollY];
       });
-      box.style.transform = `translateY(${Math.round(stillToCome)}px)`;
+      const pages = Math.max(1, Math.ceil(document.documentElement.scrollHeight / page));
+      document.body.style.minHeight = `${pages * page}px`;
+      return { lines, pages };
     },
   };
 })();
