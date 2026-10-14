@@ -931,6 +931,12 @@
   function showTrim(dialog, trim) {
     const busy = TRIM_BUSY.includes(trim.state);
     one("[data-trim-state]", dialog).textContent = trim.words;
+    const cut = one("[data-trim-cut]", dialog);
+    cut.hidden = !trim.cut;
+    if (trim.cut) {
+      const span = trimSpan(dialog);
+      cut.textContent = `The video holds ${trimWords(trim.cut.from, span)} to ${trimWords(trim.cut.to, span)} (${(trim.cut.to - trim.cut.from).toFixed(1)} s).`;
+    }
     for (const [part, url] of [["[data-trim-video]", trim.video_url], ["[data-trim-chat-video]", trim.chat_url]]) {
       const link = one(part, dialog);
       link.hidden = !url;

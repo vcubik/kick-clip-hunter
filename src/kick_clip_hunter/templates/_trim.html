@@ -78,7 +78,12 @@
     {%- if trim.chat %} Its chat is lined up with where it really begins{% if trim.window %}, and can go with a stretch of up to {{ trim.window.chat_most }}{% endif %}.{% endif %}
     {%- if trim.window %} A recording keeps one cut at a time: the next one takes its place, so download each as it is made.{% endif %}</p>
   <div class="trim-foot">
-    <p class="status-line" role="status" data-trim-state></p>
+    <div class="trim-said">
+      {#- Which stretch the video that is there holds: the script writes it
+          as the times above are written. -#}
+      <p class="status-line" hidden data-trim-cut></p>
+      <p class="status-line" role="status" data-trim-state></p>
+    </div>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
     {%- if trim.chat %}

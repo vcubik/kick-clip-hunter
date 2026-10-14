@@ -1936,6 +1936,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "cut": None,
             "chat_later": False,
         }
         await service.settle()
@@ -1945,6 +1946,8 @@ class TestTrimming:
         state = await self.state(service, moment_id)
         assert (state["state"], state["words"]) == ("ready", view.trim_words(view.TRIM_READY))
         assert state["video_url"].startswith(f"/moments/{moment_id}/trim/video?v=") and state["chat_url"] is None
+        # Which stretch it holds, in clip time as the dialog writes it.
+        assert state["cut"] == {"from": -2, "to": 5}
         served = await service.client.get(state["video_url"])
         assert served.status_code == 200 and served.content == self.VIDEO.read_bytes()
         # The moment's own file is what it was.
@@ -1959,7 +1962,10 @@ class TestTrimming:
         await service.settle()
 
         assert probe(self.VIDEO)["duration"] == pytest.approx(5, abs=self.TOLERANCE)
-        assert (await self.state(service, moment_id))["words"] == view.trim_words(view.TRIM_READY, early=1.0)
+        state = await self.state(service, moment_id)
+        assert state["words"] == view.trim_words(view.TRIM_READY, early=1.0)
+        # Where it really begins, not where it was asked to.
+        assert state["cut"]["from"] == -2
 
     async def test_the_whole_file_can_be_asked_for(self, service, footage):
         moment_id = self.clip_with_chat(footage)
@@ -2153,7 +2159,8 @@ class TestTrimming:
         await service.settle()
         self.VIDEO.with_name(clip_trim.record_name(self.VIDEO.name)).unlink()
 
-        assert (await self.state(service, moment_id))["chat_later"] is False
+        state = await self.state(service, moment_id)
+        assert (state["chat_later"], state["cut"]) == (False, None)
         response = await self.ask_chat(service, moment_id)
 
         assert response.status_code == 409 and "Export it again" in response.json()["detail"]
@@ -2309,6 +2316,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_FAILED),
             "video_url": None,
             "chat_url": None,
+            "cut": None,
             "chat_later": False,
         }
         assert not self.VIDEO.exists()

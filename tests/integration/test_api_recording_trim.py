@@ -107,6 +107,7 @@ class TestTheVideo:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "cut": None,
             "chat_later": False,
         }
         await service.settle()
@@ -116,7 +117,9 @@ class TestTheVideo:
         assert probe(video) == {"duration": pytest.approx(6, abs=TOLERANCE), "streams": ["audio", "video"]}
         assert decodes_cleanly(video)
         now = await state(service, recording_id)
-        assert (now["state"], now["words"]) == ("ready", "0:00:04 to 0:00:10 is ready to download.")
+        assert (now["state"], now["words"]) == ("ready", view.trim_words(view.TRIM_READY))
+        # Which stretch it holds is said as the dialog writes its times.
+        assert now["cut"] == {"from": 4, "to": 10}
         assert now["video_url"].startswith(f"/streams/{CHANNEL}/{video.name}?v=") and now["chat_url"] is None
         served = await service.client.get(now["video_url"])
         assert served.status_code == 200 and served.content == video.read_bytes()
@@ -131,9 +134,9 @@ class TestTheVideo:
         await service.settle()
 
         assert probe(cut_of(file, 5, 9))["duration"] == pytest.approx(5, abs=TOLERANCE)
-        assert (await state(service, recording_id))["words"] == view.trim_words(
-            view.TRIM_READY, early=1.0, stretch=(5, 9)
-        )
+        now = await state(service, recording_id)
+        assert now["words"] == view.trim_words(view.TRIM_READY, early=1.0)
+        assert now["cut"] == {"from": 4, "to": 9}
 
     async def test_the_whole_recording_can_be_asked_for(self, service, footage):
         recording_id, file = recording_of(footage)
@@ -191,7 +194,7 @@ class TestOneCutAtATime:
             [file.name, second.name, record_of(second).name]
         )
         now = await state(service, recording_id)
-        assert now["words"] == "0:00:12 to 0:00:18 is ready to download."
+        assert now["cut"]["from"] == 12
         assert second.name in now["video_url"] and now["chat_url"] is None
 
     async def test_asking_again_while_one_is_being_made_starts_nothing_more(self, service, footage, browser):
@@ -235,7 +238,7 @@ class TestOneCutAtATime:
 
         now = await state(service, recording_id)
         # ... which is how far before the start that was set it begins.
-        assert (now["state"], now["words"]) == ("ready", "0:00:05 to 0:00:09 is ready to download.")
+        assert (now["state"], now["cut"]["from"]) == ("ready", 4)
         assert now["video_url"] is not None and now["chat_url"] is not None
 
     async def test_each_recording_has_its_own(self, service, footage):
@@ -483,7 +486,10 @@ class TestItsChatLater:
         await service.settle()
         record_of(cut_of(file, 4, 10)).unlink()
 
-        assert (await state(service, recording_id))["chat_later"] is False
+        now = await state(service, recording_id)
+        assert now["chat_later"] is False
+        # Then only its name says which stretch it holds, to the second.
+        assert (now["cut"], now["words"]) == (None, "0:00:04 to 0:00:10 is ready to download.")
         assert (await self.ask_chat(service, recording_id)).status_code == 409
         assert browser.pages == []
 
