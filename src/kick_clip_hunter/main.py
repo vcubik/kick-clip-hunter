@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import logging.handlers
 import math
@@ -31,6 +30,7 @@ from . import (
     detector,
     frame_encoder,
     health,
+    kick_chat,
     recorder,
     recording_manager,
     recording_moments,
@@ -42,6 +42,7 @@ from . import (
     tunnel,
     win_console,
 )
+from .chat_message import ChatMessage
 from .config import load_settings
 from .db import (
     MOMENT_TYPES,
@@ -592,8 +593,9 @@ _chat_identity_cache: dict[tuple[int, str], chat_identity.Identity] = {}
 CHAT_IDENTITY_CACHE_LIMIT = 50_000
 
 
-def _remember_chat_identity(conn, broadcaster_user_id: int, username: str, sender: dict) -> None:
-    identity = chat_identity.from_sender(sender)
+def _remember_chat_identity(
+    conn, broadcaster_user_id: int, username: str, identity: chat_identity.Identity | None
+) -> None:
     if identity is None or not username:
         return
     key = (broadcaster_user_id, username)
@@ -4166,163 +4168,164 @@ async def kick_webhook(
     # For the Health page: that Kick got through, whatever is done with it.
     _heard.last_at = datetime.now(timezone.utc)
 
-    if kick_event_type == "chat.message.sent":
-        _heard.chat_at[(payload.get("broadcaster") or {}).get("user_id")] = _heard.last_at
-        watching = _flags.get("watching_enabled", True)
-        # The switches are about looking for clips. A channel whose stream
-        # is being kept whole has its chat kept with it whatever they say.
-        kept_whole = recording_manager.keeps_chat_of((payload.get("broadcaster") or {}).get("user_id"))
-        if _shutdown_requested or not (watching or kept_whole):
-            # Watching paused (or a shutdown is in progress) - drop the
-            # message without storing or running detection, so no new
-            # moments pile up.
-            return {"status": "watching disabled"}
-
-        broadcaster = payload.get("broadcaster", {})
-        sender = payload.get("sender", {})
-        channel = broadcaster.get("channel_slug", "?")
-        content = payload.get("content", "")
-        broadcaster_user_id = broadcaster["user_id"]
-        sender_username = sender.get("username", "")
-        emotes = payload.get("emotes", [])
-        emote_count = sum(len(e.get("positions", [])) for e in emotes)
-
-        conn = get_connection()
-        try:
-            tracked = watching and get_streamer_tracking_enabled(conn, broadcaster_user_id)
-            if not tracked and not kept_whole:
-                # Tracking paused for this one channel - same drop as the
-                # global pause, scoped to it.
-                return {"status": "channel tracking disabled"}
-
-            logger.info("[%s] %s: %s", channel, sender.get("username", "?"), content)
-            is_new = insert_chat_message(
-                conn,
-                message_id=payload["message_id"],
-                broadcaster_user_id=broadcaster_user_id,
-                channel_slug=channel,
-                sender_username=sender_username,
-                content=content,
-                emotes_json=json.dumps(emotes),
-                created_at=payload.get("created_at", ""),
-                received_at=datetime.now(timezone.utc).isoformat(),
-            )
-            if not is_new:
-                # Kick delivers a webhook again when it doesn't see it
-                # acknowledged in time - i.e. exactly when this service is
-                # struggling. The message is already stored and counted;
-                # feeding it to the detector a second time would inflate the
-                # very burst it is trying to measure.
-                return {"status": "duplicate"}
-
-            _remember_chat_identity(conn, broadcaster_user_id, sender_username, sender)
-            if not tracked:
-                # Kept to go with the recording of the stream. Nobody is
-                # looking for moments in it.
-                return {"status": "stored"}
-
-            # Everything from here on is judged by the channel's settings as
-            # they stand for this message.
-            tuned = _tuning(conn, broadcaster_user_id)
-            commanded = False
-            if tuned.is_clip_command(content):
-                # One of the channel's clip commands. It is no reaction, so
-                # the detector never sees it, whoever posted it; from someone
-                # who may ask, it is a moment by itself, with none of the
-                # detector's figures to its name.
-                commanded = tuned.clip_command_from_anyone or chat_identity.runs_channel(
-                    sender, broadcaster_user_id
-                )
-                spike = _COMMANDED if commanded else None
-            else:
-                emote_weight = detector.classify_native_emotes(content, tuned.detector)
-                laugh_weight, mention_weight = detector.classify_message(
-                    content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
-                )
-                spike = detector.record_message(
-                    channel,
-                    sender=sender_username,
-                    content=content,
-                    emote_count=emote_count,
-                    emote_weight=emote_weight,
-                    laugh_weight=laugh_weight,
-                    mention_weight=mention_weight,
-                    settings=tuned.detector,
-                )
-            if spike is not None and channel in _moment_sessions:
-                # A moment is already open for this channel (a re-fire past the
-                # cooldown) - it's the same reaction continuing, so just keep
-                # it alive rather than opening a duplicate.
-                session = _moment_sessions[channel]
-                session.last_active = datetime.now(timezone.utc)
-                if commanded:
-                    # What was asked for is what was on screen just now: the
-                    # open moment's clip is made to reach it.
-                    session.window_end = session.last_active
-                    logger.info(
-                        "[%s] clip asked for by %s: moment %d extended", channel, sender_username, session.moment_id
-                    )
-            elif spike is not None:
-                window_end = datetime.now(timezone.utc)
-                window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
-                reason = ",".join(spike.reasons)
-                try:
-                    stream_elapsed = await _stream_elapsed_seconds(channel)
-                except Exception:
-                    # Stream time is a label on the dashboard. The detector
-                    # has already started its cooldown, so a moment dropped
-                    # here because Kick's API hiccuped would simply be gone.
-                    logger.warning("[%s] could not look up the stream's start time", channel, exc_info=True)
-                    stream_elapsed = None
-                moment_id = insert_moment(
-                    conn,
-                    broadcaster_user_id=broadcaster_user_id,
-                    channel_slug=channel,
-                    window_start=window_start.isoformat(),
-                    window_end=window_end.isoformat(),
-                    reason=reason,
-                    score=spike.score,
-                    message_count=spike.message_count,
-                    baseline_message_rate=spike.baseline_message_rate,
-                    current_message_rate=spike.current_message_rate,
-                    emote_count=spike.emote_count,
-                    keyword_hits=spike.keyword_hits,
-                    stream_elapsed_seconds=stream_elapsed,
-                )
-                # Open a moment session: hold it open and extend the clip while
-                # the reaction lasts, then cut one clip covering all of it.
-                session = _MomentSession(
-                    moment_id=moment_id,
-                    channel=channel,
-                    window_start=window_start,
-                    trigger_time=window_end,
-                    window_end=window_end,
-                    last_active=window_end,
-                    triggered_at=time.monotonic(),
-                    tuned=tuned,
-                )
-                _moment_sessions[channel] = session
-                # Tracked (not just held via _moment_sessions) so there's no
-                # gap between the session closing and its clip-cut task
-                # existing - both would otherwise look "idle" to
-                # _shutdown_when_idle for the moment in between.
-                _track_task(_run_moment_session(session))
-                stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
-                logger.info(
-                    "MOMENT detected in [%s] (%s) at stream time %s: "
-                    "%d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
-                    channel,
-                    reason,
-                    stream_time,
-                    spike.message_count,
-                    spike.emote_count,
-                    spike.keyword_hits,
-                    detector.SHORT_WINDOW_SECONDS,
-                    spike.score,
-                )
-        finally:
-            conn.close()
-    else:
+    if kick_event_type != "chat.message.sent":
         logger.info("Received %s event: %s", kick_event_type, payload)
+        return {"status": "received"}
+    return {"status": await _take_chat(kick_chat.chat_message(payload))}
 
-    return {"status": "received"}
+
+async def _take_chat(message: ChatMessage) -> str:
+    """What becomes of a chat message, whichever platform it came from:
+    stored with its channel's chat, counted by the detector, made a moment
+    of - or dropped. Returns what was done with it, in a word or two."""
+    channel, broadcaster_user_id = message.channel, message.broadcaster_user_id
+    # For the Health page: that the channel's chat is coming in, kept or not.
+    _heard.chat_at[broadcaster_user_id] = datetime.now(timezone.utc)
+    watching = _flags.get("watching_enabled", True)
+    # The switches are about looking for clips. A channel whose stream is
+    # being kept whole has its chat kept with it whatever they say.
+    kept_whole = recording_manager.keeps_chat_of(broadcaster_user_id)
+    if _shutdown_requested or not (watching or kept_whole):
+        # Watching paused (or a shutdown is in progress) - drop the message
+        # without storing or running detection, so no new moments pile up.
+        return "watching disabled"
+
+    conn = get_connection()
+    try:
+        tracked = watching and get_streamer_tracking_enabled(conn, broadcaster_user_id)
+        if not tracked and not kept_whole:
+            # Tracking paused for this one channel - same drop as the global
+            # pause, scoped to it.
+            return "channel tracking disabled"
+
+        logger.info("[%s] %s: %s", channel, message.sender or "?", message.content)
+        is_new = insert_chat_message(
+            conn,
+            message_id=message.message_id,
+            broadcaster_user_id=broadcaster_user_id,
+            channel_slug=channel,
+            sender_username=message.sender,
+            content=message.content,
+            emotes_json=message.emotes_json(),
+            created_at=message.created_at,
+            received_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if not is_new:
+            # A platform delivers a message again when it doesn't see it
+            # acknowledged in time - i.e. exactly when this service is
+            # struggling. The message is already stored and counted; feeding
+            # it to the detector a second time would inflate the very burst it
+            # is trying to measure.
+            return "duplicate"
+
+        _remember_chat_identity(conn, broadcaster_user_id, message.sender, message.identity)
+        if not tracked:
+            # Kept to go with the recording of the stream. Nobody is looking
+            # for moments in it.
+            return "stored"
+
+        # Everything from here on is judged by the channel's settings as they
+        # stand for this message.
+        tuned = _tuning(conn, broadcaster_user_id)
+        commanded = False
+        if tuned.is_clip_command(message.content):
+            # One of the channel's clip commands. It is no reaction, so the
+            # detector never sees it, whoever posted it; from someone who may
+            # ask, it is a moment by itself, with none of the detector's
+            # figures to its name.
+            commanded = tuned.clip_command_from_anyone or message.runs_channel
+            spike = _COMMANDED if commanded else None
+        else:
+            emote_weight = detector.classify_native_emotes(message.content, tuned.detector)
+            laugh_weight, mention_weight = detector.classify_message(
+                message.content, _channel_keywords(conn, broadcaster_user_id), tuned.detector
+            )
+            spike = detector.record_message(
+                channel,
+                sender=message.sender,
+                content=message.content,
+                emote_count=message.emote_count,
+                emote_weight=emote_weight,
+                laugh_weight=laugh_weight,
+                mention_weight=mention_weight,
+                settings=tuned.detector,
+            )
+        if spike is not None and channel in _moment_sessions:
+            # A moment is already open for this channel (a re-fire past the
+            # cooldown) - it's the same reaction continuing, so just keep it
+            # alive rather than opening a duplicate.
+            session = _moment_sessions[channel]
+            session.last_active = datetime.now(timezone.utc)
+            if commanded:
+                # What was asked for is what was on screen just now: the open
+                # moment's clip is made to reach it.
+                session.window_end = session.last_active
+                logger.info(
+                    "[%s] clip asked for by %s: moment %d extended", channel, message.sender, session.moment_id
+                )
+        elif spike is not None:
+            await _open_moment_session(conn, message, spike, tuned)
+    finally:
+        conn.close()
+    return "received"
+
+
+async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike, tuned: tuning.Tuning) -> None:
+    """Stores the moment a message set off and holds it open while the
+    reaction lasts; its clip is cut once it closes (_run_moment_session)."""
+    channel = message.channel
+    window_end = datetime.now(timezone.utc)
+    window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
+    reason = ",".join(spike.reasons)
+    try:
+        stream_elapsed = await _stream_elapsed_seconds(channel)
+    except Exception:
+        # Stream time is a label on the dashboard. The detector has already
+        # started its cooldown, so a moment dropped here because the
+        # platform's API hiccuped would simply be gone.
+        logger.warning("[%s] could not look up the stream's start time", channel, exc_info=True)
+        stream_elapsed = None
+    moment_id = insert_moment(
+        conn,
+        broadcaster_user_id=message.broadcaster_user_id,
+        channel_slug=channel,
+        window_start=window_start.isoformat(),
+        window_end=window_end.isoformat(),
+        reason=reason,
+        score=spike.score,
+        message_count=spike.message_count,
+        baseline_message_rate=spike.baseline_message_rate,
+        current_message_rate=spike.current_message_rate,
+        emote_count=spike.emote_count,
+        keyword_hits=spike.keyword_hits,
+        stream_elapsed_seconds=stream_elapsed,
+    )
+    # Open a moment session: hold it open and extend the clip while the
+    # reaction lasts, then cut one clip covering all of it.
+    session = _MomentSession(
+        moment_id=moment_id,
+        channel=channel,
+        window_start=window_start,
+        trigger_time=window_end,
+        window_end=window_end,
+        last_active=window_end,
+        triggered_at=time.monotonic(),
+        tuned=tuned,
+    )
+    _moment_sessions[channel] = session
+    # Tracked (not just held via _moment_sessions) so there's no gap between
+    # the session closing and its clip-cut task existing - both would
+    # otherwise look "idle" to _shutdown_when_idle for the moment in between.
+    _track_task(_run_moment_session(session))
+    stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
+    logger.info(
+        "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",
+        channel,
+        reason,
+        stream_time,
+        spike.message_count,
+        spike.emote_count,
+        spike.keyword_hits,
+        detector.SHORT_WINDOW_SECONDS,
+        spike.score,
+    )
