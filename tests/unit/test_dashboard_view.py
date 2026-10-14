@@ -43,6 +43,7 @@ def row(**overrides) -> dict:
         "clip_path": "some_channel/moment_1.mp4",
         "rating": None,
         "title": None,
+        "downloaded_at": None,
     }
     values.update(overrides)
     return values
@@ -362,6 +363,7 @@ class TestQueueGroups:
             "what": "Laughing",
             "unnamed": "Laughing",
             "has_clip": True,
+            "downloaded": False,
             "rating": 4,
             "rating_words": "rated 4 of 5",
         }

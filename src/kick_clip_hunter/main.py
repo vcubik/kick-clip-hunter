@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -101,6 +101,7 @@ from .db import (
     update_moment_audio_events,
     update_moment_clip_duration,
     update_moment_clip_path,
+    update_moment_downloaded,
     update_moment_frame_embedding,
     update_moment_notes,
     update_moment_rating,
@@ -1319,23 +1320,37 @@ def _trim_paths(clip_path: str) -> tuple[Path, Path]:
     return video, video.with_name(chat_video.video_name(video.name))
 
 
-def _download_url(relative: Path) -> str | None:
-    """The address of a file under CLIPS_DIR, or None if it is not there."""
-    file = CLIPS_DIR / relative
-    if not file.exists():
+def _cut_record_path(video: Path) -> Path:
+    """Where what is kept of a cut video is (see clip_trim.cut_record)."""
+    return video.with_name(clip_trim.record_name(video.name))
+
+
+def _cut_record(video: Path) -> tuple[float, float] | None:
+    """Where a cut video begins in the file it was cut from and how long it
+    runs - or None where that was not kept: a cut from before it was, or one
+    whose video is not there."""
+    record = _cut_record_path(video)
+    if not video.exists() or not record.exists():
         return None
-    # Made again, it is a different file under the same name.
-    return f"{_clip_url(relative.as_posix())}?v={int(file.stat().st_mtime)}"
+    try:
+        return clip_trim.read_cut_record(record.read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
 def _trim_standing(
-    known: dict, video: str | None, chat: str | None, stretch: tuple[float, float] | None = None
+    known: dict,
+    video: str | None,
+    chat: str | None,
+    stretch: tuple[float, float] | None = None,
+    recorded: bool = False,
 ) -> dict:
     """Where a stretch cut out of some footage stands: being cut, its chat
     being rendered, there to download, failed, or never asked for. `known`
     is what is remembered of it, `video` and `chat` the addresses of its
     files where those are there, `stretch` which seconds of a recording it
-    holds."""
+    holds, `recorded` whether where its video begins was kept - which its
+    chat can be made later by."""
     state = known.get("state")
     if state in (dashboard_view.TRIM_CUTTING, dashboard_view.TRIM_FAILED):
         video = chat = None
@@ -1348,13 +1363,34 @@ def _trim_standing(
         "words": dashboard_view.trim_words(state, known.get("early", 0.0), stretch),
         "video_url": video,
         "chat_url": chat,
+        # A video that is there without its chat can have it made now.
+        "chat_later": bool(
+            recorded and video and not chat and state in (dashboard_view.TRIM_READY, dashboard_view.TRIM_CHAT_FAILED)
+        ),
     }
+
+
+def _trim_download_url(moment_id: int, what: str, relative: Path) -> str | None:
+    """The address a moment's cut video or its chat video is downloaded
+    from, or None if it is not there. Not the file's own address under
+    /clips: a download through this one is what marks the moment as taken
+    (see download_trim)."""
+    file = CLIPS_DIR / relative
+    if not file.exists():
+        return None
+    # Made again, it is a different file under the same name.
+    return f"/moments/{moment_id}/trim/{what}?v={int(file.stat().st_mtime)}"
 
 
 def _trim(row) -> dict:
     """Where the stretch cut out of a moment's footage stands."""
-    video, chat = (_download_url(path) for path in _trim_paths(row["clip_path"]))
-    return _trim_standing(_trims.get(row["id"], {}), video, chat)
+    video, chat = _trim_paths(row["clip_path"])
+    return _trim_standing(
+        _trims.get(row["id"], {}),
+        _trim_download_url(row["id"], "video", video),
+        _trim_download_url(row["id"], "chat", chat),
+        recorded=_cut_record(CLIPS_DIR / video) is not None,
+    )
 
 
 def _trim_refused(error: clip_trim.TrimError) -> HTTPException:
@@ -1385,7 +1421,7 @@ async def _trim_background(
     try:
         # What was cut before goes first: a chat video left over from it
         # would not belong to the new video.
-        for old in (chat, video, *replaced):
+        for old in (chat, video, _cut_record_path(video), *replaced):
             old.unlink(missing_ok=True)
         begins, duration = await asyncio.to_thread(recorder.trim_clip, clip, *span, video)
     except Exception:
@@ -1394,15 +1430,41 @@ async def _trim_background(
         return
     early = max(span[0] - begins, 0.0)
     logger.info("[%s] %s trimmed: %s (%.1f s)", channel, what, video.name, duration)
+    try:
+        # So that its chat can be asked for later as well.
+        _cut_record_path(video).write_text(clip_trim.cut_record(begins, duration), encoding="utf-8")
+    except OSError:
+        logger.warning("[%s] where the cut of %s begins could not be kept", channel, what, exc_info=True)
     if lines is None:
         standing[key] = {"early": early}
         return
+    # The chat video starts on the trimmed video's first frame, wherever in
+    # the file that turned out to be.
+    await _trim_chat_background(
+        standing, key, what, channel, lines, begins - lead, duration, shift, background, chat, early
+    )
 
+
+async def _trim_chat_background(
+    standing: dict[int, dict],
+    key: int,
+    what: str,
+    channel: str,
+    lines: list[dict],
+    start: float,
+    duration: float,
+    shift: float,
+    background: str | None,
+    chat: Path,
+    early: float = 0.0,
+) -> None:
+    # The chat video of a cut, made with it or later for a cut that is
+    # there: `start` is where the cut's first frame is on the time its
+    # chat lines are placed on, `duration` how long the cut runs.
     standing[key] = {"state": dashboard_view.TRIM_CHAT, "early": early}
     try:
-        # The chat video starts on the trimmed video's first frame, wherever
-        # in the file that turned out to be.
-        shown = chat_video.lines_from(lines, begins - lead, shift)
+        chat.unlink(missing_ok=True)
+        shown = chat_video.lines_from(lines, start, shift)
         frames = await asyncio.to_thread(chat_video.render, shown, duration, chat, background)
     except Exception:
         logger.exception("[%s] rendering the chat video failed for %s", channel, what)
@@ -2205,7 +2267,11 @@ def _recording_cut_files(file: Path) -> tuple[Path, ...]:
     """Every file that is a stretch cut out of a recording's file, and where
     the chat video of each is or would be."""
     videos = [video for video, _stretch in _recording_cuts(file)]
-    return (*videos, *(video.with_name(chat_video.video_name(video.name)) for video in videos))
+    return (
+        *videos,
+        *(video.with_name(chat_video.video_name(video.name)) for video in videos),
+        *(_cut_record_path(video) for video in videos),
+    )
 
 
 def _recording_trim(row) -> dict:
@@ -2217,7 +2283,9 @@ def _recording_trim(row) -> dict:
         return _trim_standing(known, None, None)
     video, stretch = cuts[0]
     chat = video.with_name(chat_video.video_name(video.name))
-    return _trim_standing(known, _stream_url(video), _stream_url(chat), stretch)
+    return _trim_standing(
+        known, _stream_url(video), _stream_url(chat), stretch, recorded=_cut_record(video) is not None
+    )
 
 
 def _recording_has_chat(conn, row, parts: list[stream_recording.Part]) -> bool:
@@ -3191,8 +3259,102 @@ async def trim_state(moment_id: int):
             "words": dashboard_view.trim_words(state),
             "video_url": None,
             "chat_url": None,
+            "chat_later": False,
         }
     return {"moment_id": moment_id, **_trim(row)}
+
+
+def _no_cut_record() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Where this video begins was not kept when it was cut, so its chat can't be made now. Export it again.",
+    )
+
+
+def _asked_chat_look(asked: dict, seconds: float) -> tuple[float, str | None]:
+    """How the chat video of a cut `seconds` long is to look, as asked for:
+    how far its lines are moved and what is behind them."""
+    try:
+        clip_trim.with_chat(seconds)
+        return clip_trim.chat_shift(asked.get("chat_shift")), clip_trim.chat_background(asked.get("chat_background"))
+    except clip_trim.TrimError as e:
+        raise _trim_refused(e) from None
+
+
+@app.post("/moments/{moment_id}/trim/chat")
+async def trim_moment_chat(moment_id: int, request: Request):
+    """Starts making the chat video of the video already cut out of a
+    moment's footage, for an editor who took the video without it at
+    first: for the stretch that video holds, as trim_moment would have made
+    it then. `chat_shift` and `chat_background` are as there."""
+    asked = await _asked_trim(request)
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        row = await _with_clip_length(conn, row)
+        if not row["clip_path"] or not row["clip_duration"]:
+            raise HTTPException(status_code=409, detail="The moment has no clip to trim.")
+        video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
+        if _trims.get(moment_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+            return {"moment_id": moment_id, **_trim(row)}
+        if not video.exists():
+            raise HTTPException(status_code=409, detail="Nothing has been cut out of this moment yet.")
+        record = _cut_record(video)
+        if record is None:
+            raise _no_cut_record()
+        begins, duration = record
+        shift, background = _asked_chat_look(asked, duration)
+        _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
+        if not lines:
+            raise HTTPException(status_code=409, detail="No chat was stored for this moment.")
+    finally:
+        conn.close()
+
+    early = _trims.get(moment_id, {}).get("early", 0.0)
+    _trims[moment_id] = {"state": dashboard_view.TRIM_CHAT, "early": early}
+    _track_task(
+        _trim_chat_background(
+            _trims,
+            moment_id,
+            f"moment {moment_id}",
+            row["channel_slug"],
+            lines,
+            # Chat lines are placed in clip time.
+            begins - (row["context_before"] or 0.0),
+            duration,
+            shift,
+            background,
+            chat,
+            early,
+        )
+    )
+    return {"moment_id": moment_id, **_trim(row)}
+
+
+@app.get("/moments/{moment_id}/trim/{what}")
+async def download_trim(moment_id: int, what: str):
+    """The video cut out of a moment's footage (`video`) or its chat video
+    (`chat`), to save. Downloading either marks the moment as taken by an
+    editor, which the review queue shows."""
+    if what not in ("video", "chat"):
+        raise HTTPException(status_code=404, detail=f"no such file of a cut: {what}")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        file = None
+        if row["clip_path"]:
+            video, chat = _trim_paths(row["clip_path"])
+            file = CLIPS_DIR / (video if what == "video" else chat)
+        if file is None or not file.exists():
+            raise HTTPException(status_code=404, detail="That file has not been made.")
+        update_moment_downloaded(conn, moment_id, datetime.now(timezone.utc).isoformat())
+    finally:
+        conn.close()
+    return FileResponse(file, filename=file.name)
 
 
 @app.post("/moments/{moment_id}/stream_type")
@@ -3587,6 +3749,59 @@ async def recording_trim_state(recording_id: int):
         conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+    return {"recording_id": recording_id, **_recording_trim(row)}
+
+
+@app.post("/recordings/{recording_id}/trim/chat")
+async def trim_recording_chat(recording_id: int, request: Request):
+    """Starts making the chat video of the stretch already cut out of a
+    recording, as trim_moment_chat does for a moment's."""
+    asked = await _asked_trim(request)
+    conn = get_connection()
+    try:
+        row, parts, file = _recording_with_file(conn, recording_id, "make chat for")
+        if _recording_trims.get(recording_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+            return {"recording_id": recording_id, **_recording_trim(row)}
+        cuts = _recording_cuts(file)
+        if not cuts:
+            raise HTTPException(status_code=409, detail="Nothing has been cut out of this recording yet.")
+        video = cuts[0][0]
+        record = _cut_record(video)
+        if record is None:
+            raise _no_cut_record()
+        begins, duration = record
+        shift, background = _asked_chat_look(asked, duration)
+        # As trim_recording takes them, for the stretch the video holds.
+        lines = _recording_chat_lines(
+            conn,
+            row,
+            parts,
+            begins - clip_trim.CHAT_VIDEO_LEAD_SECONDS,
+            begins + duration + clip_trim.CHAT_SHIFT_LIMIT_SECONDS,
+            RECORDING_CHAT_VIDEO_LIMIT,
+        )
+        if not lines:
+            raise HTTPException(status_code=409, detail="No chat was stored for this stretch of the recording.")
+    finally:
+        conn.close()
+
+    early = _recording_trims.get(recording_id, {}).get("early", 0.0)
+    _recording_trims[recording_id] = {"state": dashboard_view.TRIM_CHAT, "early": early}
+    _track_task(
+        _trim_chat_background(
+            _recording_trims,
+            recording_id,
+            f"stream recording {recording_id}",
+            row["channel_slug"],
+            lines,
+            begins,
+            duration,
+            shift,
+            background,
+            video.with_name(chat_video.video_name(video.name)),
+            early,
+        )
+    )
     return {"recording_id": recording_id, **_recording_trim(row)}
 
 

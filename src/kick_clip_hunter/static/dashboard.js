@@ -938,6 +938,11 @@
       else link.removeAttribute("href");
     }
     one("[data-trim-go]", dialog).disabled = busy;
+    const later = one("[data-trim-chat-later]", dialog);
+    if (later) {
+      later.hidden = !trim.chat_later;
+      later.disabled = busy;
+    }
     clearTimeout(trimWatch);
     if (busy) trimWatch = setTimeout(() => askTrim(dialog), TRIM_POLL_MS);
   }
@@ -985,6 +990,35 @@
       return;
     }
     showTrim(dialog, await response.json());
+  }
+
+  // The chat video of the video that is ready, made after it: for the
+  // stretch that video holds, as the options have it now.
+  async function trimChatLater(button) {
+    const dialog = trimOf(button);
+    const shift = one("[data-trim-shift]", dialog);
+    button.disabled = true;
+    const response = await post(`${dialog.dataset.trim}/chat`, {
+      chat_shift: Number(shift.value),
+      chat_background: trimBackground(dialog),
+    });
+    if (!dialog.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      one("[data-trim-state]", dialog).textContent = response
+        ? await problem(response, "Could not start making the chat. Try again.")
+        : "Could not reach the service.";
+      return;
+    }
+    showTrim(dialog, await response.json());
+  }
+
+  // A moment something was downloaded from is marked so in the queue; the
+  // service notes it as it hands the file over.
+  function markTaken(link) {
+    const article = link.closest(".moment");
+    const row = article && one(`a.ch-row[data-moment="${article.dataset.moment}"] [data-taken]`);
+    if (row) row.hidden = false;
   }
 
   // Fits what the script looks after to markup that has just arrived.
@@ -1724,6 +1758,8 @@
     ["[data-trim-play]", (button) => toggleTrimPlay(trimOf(button))],
     ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
     ["[data-trim-go]", exportTrim],
+    ["[data-trim-chat-later]", trimChatLater],
+    ["[data-trim-video], [data-trim-chat-video]", markTaken],
     ["[data-switch] button", flip],
     ["[data-setting] button", chooseSetting],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],

@@ -75,6 +75,10 @@ def chat_of(video: Path) -> Path:
     return video.with_name(chat_video.video_name(video.name))
 
 
+def record_of(video: Path) -> Path:
+    return video.with_name(clip_trim.record_name(video.name))
+
+
 async def ask(service, recording_id: int, **asked):
     return await service.client.post(f"/recordings/{recording_id}/trim", json={"start": 4, "end": 10, **asked})
 
@@ -103,6 +107,7 @@ class TestTheVideo:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "chat_later": False,
         }
         await service.settle()
 
@@ -182,7 +187,9 @@ class TestOneCutAtATime:
         await service.settle()
 
         second = cut_of(file, 12, 18)
-        assert sorted(path.name for path in file.parent.iterdir()) == sorted([file.name, second.name])
+        assert sorted(path.name for path in file.parent.iterdir()) == sorted(
+            [file.name, second.name, record_of(second).name]
+        )
         now = await state(service, recording_id)
         assert now["words"] == "0:00:12 to 0:00:18 is ready to download."
         assert second.name in now["video_url"] and now["chat_url"] is None
@@ -240,9 +247,10 @@ class TestOneCutAtATime:
 
         assert (await state(service, one))["state"] == "ready"
         assert (await state(service, other))["state"] == "none"
-        assert [path.name for path in other_file.parent.iterdir() if "_trim_" in path.name] == [
-            cut_of(one_file, 4, 10).name
-        ]
+        cut = cut_of(one_file, 4, 10)
+        assert sorted(path.name for path in other_file.parent.iterdir() if "_trim_" in path.name) == sorted(
+            [cut.name, record_of(cut).name]
+        )
 
 
 class TestItsChat:
@@ -445,6 +453,58 @@ class TestWhatIsRefused:
         assert not cut_of(file, 4, 10).exists()
 
 
+class TestItsChatLater:
+    """The chat of a stretch whose video was taken without it."""
+
+    async def ask_chat(self, service, recording_id: int, **asked):
+        return await service.client.post(f"/recordings/{recording_id}/trim/chat", json=asked)
+
+    async def test_it_is_made_for_the_stretch_the_video_holds(self, service, footage, browser):
+        recording_id, file = recording_of(footage)
+        said_at(5.5, "bob")
+        # Asked to start at second 5, the video begins at second 4.
+        await ask(service, recording_id, start=5, end=9)
+        await service.settle()
+        assert (await state(service, recording_id))["chat_later"] is True
+
+        response = await self.ask_chat(service, recording_id, chat_shift=0.5)
+
+        assert response.status_code == 200 and response.json()["state"] == "chat"
+        await service.settle()
+        now = await state(service, recording_id)
+        assert now["state"] == "ready" and now["chat_later"] is False
+        assert now["chat_url"].startswith(f"/streams/{CHANNEL}/{chat_of(cut_of(file, 5, 9)).name}?v=")
+        assert lines(browser) == [("bob", "2")]
+
+    async def test_not_for_a_video_cut_before_where_it_begins_was_kept(self, service, footage, browser):
+        recording_id, file = recording_of(footage)
+        said_at(5)
+        await ask(service, recording_id)
+        await service.settle()
+        record_of(cut_of(file, 4, 10)).unlink()
+
+        assert (await state(service, recording_id))["chat_later"] is False
+        assert (await self.ask_chat(service, recording_id)).status_code == 409
+        assert browser.pages == []
+
+    async def test_nor_where_nothing_has_been_cut(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+
+        assert (await self.ask_chat(service, recording_id)).status_code == 409
+        assert browser.pages == []
+
+    async def test_nor_for_a_stretch_without_chat(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        await ask(service, recording_id)
+        await service.settle()
+
+        response = await self.ask_chat(service, recording_id)
+
+        assert response.status_code == 409 and "No chat" in response.json()["detail"]
+        assert browser.pages == []
+
+
 class TestDeletingTheRecording:
     async def test_what_was_cut_out_of_it_goes_with_it(self, service, footage, browser):
         recording_id, file = recording_of(footage)
@@ -460,8 +520,9 @@ class TestDeletingTheRecording:
 
         assert response.status_code == 200
         # Another recording's cut, next to it, is left alone.
+        other_cut = cut_of(other_file, 4, 10)
         assert sorted(path.name for path in file.parent.iterdir()) == sorted(
-            [other_file.name, cut_of(other_file, 4, 10).name]
+            [other_file.name, other_cut.name, record_of(other_cut).name]
         )
         assert (await service.client.get(f"/recordings/{recording_id}/trim")).status_code == 404
 
