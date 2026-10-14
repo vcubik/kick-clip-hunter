@@ -411,19 +411,26 @@ Module map (`src/kick_clip_hunter/`):
   is the pure part - names, limits, clip time to file time; the cut is
   `recorder.trim_clip`. Nothing is re-encoded, so the video begins on the last keyframe at
   or before the start that was set (a couple of seconds earlier at most on a real stream)
-  and the dialog says by how much. With "chat" ticked the stretch's chat is rendered as a
-  video to lay over it (`chat_video.py`), lined up with where the video really begins;
-  the dialog's slider moves its lines up to 10s either way against the picture, for that
-  one video, on top of the channel's chat delay - and shows them beside the picture as
-  they will be. The chat video is see-through unless a background colour is picked
-  for it there (`chat_background`, "#rrggbb"), for putting chat next to the picture. A video
-  taken without its chat can have it made afterwards ("Make its chat", `POST
-  /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`): for the stretch that video holds,
-  not the one set in the dialog now. That needs where the video really begins in the file,
-  which nothing can tell from the video afterwards, so it is kept beside it as JSON
-  (`record_name`, `cut_record`), with the end that was set - which is also how the dialog
-  says which stretch the video that is ready holds. A cut from before that was kept has to be
-  exported again.
+  and the dialog says by how much. With "chat" ticked the stretch's chat goes with it
+  (`chat_video.py`), where the dialog's select says (`chat_where`, the script remembers the
+  last choice): drawn into the cut's picture at the bottom on the right or the left - the
+  cut is then made together with it, its picture encoded anew, so it begins exactly where
+  it was set (state `burning`, with how far it has got) - or as a video of its own
+  (`apart`), lined up with where the video really begins. The dialog's slider moves the
+  lines up to 10s either way against the picture, for that one video, on top of the
+  channel's chat delay - and shows them beside the picture as they will be. Chat is
+  see-through unless a background colour is picked there (`chat_background`, "#rrggbb"):
+  in the picture a panel behind it, as a video of its own a video to put next to the
+  picture. A video taken without its chat can have it made afterwards ("Make its chat",
+  `POST /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`, `chat_where` as above -
+  drawn in, it takes the copied cut's place): for the stretch that video holds, not the
+  one set in the dialog now. That needs where the video really begins in the file, which
+  nothing can tell from the video afterwards, so it is kept beside it as JSON
+  (`record_name`, `cut_record`), with the end that was set and whether its chat is drawn
+  into it (`burned`, which makes "Make its chat" refused) - which is also how the dialog
+  says which stretch the video that is ready holds. A cut from before that was kept has to
+  be exported again. Making chat is given up when the service shuts down, rather than
+  holding the shutdown up for minutes.
   A moment's two files are downloaded through `GET /moments/{id}/trim/video` and `/chat`,
   not their address under /clips, since that is what marks the moment as taken. What
   state a cut is in is kept in memory while one is being made and told
@@ -437,26 +444,37 @@ Module map (`src/kick_clip_hunter/`):
   starts out as the minute around where the recording was being watched; the cut is
   written next to the recording's file and named for the stretch it holds
   (`..._trim_1h23m45s-1h24m30s.mp4`, see `recording_video_name`), one at a time, and is
-  removed with the recording; chat can go with a stretch of up to
-  `CHAT_VIDEO_MAX_SECONDS` only; and a cut that would leave the disk short of what a
-  running recording needs is refused
-- `chat_video.py` — chat as a video with a transparent background (ProRes 4444,
-  `moment_<id>_trim_chat.mov`), for an editor to lay over the video cut out with Trim.
-  Made only when asked for there: it takes about twice the video's length. A headless
-  `patchright` browser opens a page with the clip's chat lines and is stepped through the
-  clip a frame at a time - the page is told the second, shows chat as it stood then, a
-  screenshot is taken without the background - and ffmpeg joins the PNGs. Nothing runs on
-  a clock except animated emotes, which move but out of step. The browser is served the
-  page and `static/` from memory under a made-up address, may fetch emote pictures from
-  the two CDNs and is refused everything else; it never opens kick.com, which is why
-  headless works here. `patchright` runs `page.evaluate` in an isolated world by default,
-  where the page's own script is not visible - hence `isolated_context=False`. The file
-  is large by nature (roughly 3-4 MB per second of clip)
+  removed with the recording; chat as a see-through video of its own can go with a stretch
+  of up to `CHAT_VIDEO_MAX_SECONDS` only (drawn into the picture or on a colour, with any);
+  and a cut that would leave the disk short of what a running recording needs is refused
+- `chat_video.py` — chat as video for the stretch cut out with Trim, made only when asked
+  for there. A headless `patchright` browser lays every chat line of the stretch out once,
+  one under another in a column 480px wide, and takes pictures of it a screenful
+  (`PAGE_PIXELS`) at a time without the background, as the frames come to need them
+  (`drawn_column`); each frame is then put together in numpy from those pictures
+  (`view_at`, `frames`): the lines that had arrived, the newest at the bottom easing in
+  over `ENTER_SECONDS`, the oldest fading out at the top - identical frames are the same
+  bytes. That makes half an hour of a busy chat a minute or two of work instead of twice its
+  length; animated emotes stand still on whichever frame was drawn. Raw RGBA frames go to
+  ffmpeg for one of three files: a see-through video of its own (ProRes 4444,
+  `..._trim_chat.mov`, large by nature - 3-5 MB per second of a busy chat), one on a colour
+  (H.264 in the same `.mov`, a fraction of that), or the cut itself with chat drawn into its
+  picture (`burn`: the column scaled to two thirds of the picture's shorter side, at the
+  bottom on the chosen side, overlaid while the stretch is re-encoded from the very frame
+  set - with `-t` on the output, or the last chat frame would keep the picture going).
+  The picture is encoded with the first of `HARDWARE_ENCODERS` that works on the machine
+  (AMF on this host's RX 480: 1080p60 at roughly 1.5-2x as fast as it plays), else x264
+  (`video_encoder`, found out once and kept; the test suite pins x264), at a little over
+  the source's bitrate. The browser is served the page and `static/` from memory under a
+  made-up address, may fetch emote pictures from their CDNs and is refused everything
+  else; it never opens kick.com, which is why headless works here. `patchright` runs
+  `page.evaluate` in an isolated world by default, where the page's own script is not
+  visible - hence `isolated_context=False`
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, `health.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
   without reloading. `_chat_line.html` is one line of chat, shared by the review page, the
-  Recordings page and `chat_video.html`, the page a chat video is made from - and, as its
+  Recordings page and `chat_video.html`, the page chat is laid out on for a chat video - and, as its
   two halves (who, and what), by the Analyze page's lists and tables;
   `_recording_chat.html` is the box of a recording's chat for one stretch of it, also
   served on its own (`GET /dashboard/recordings/{id}/chat?at=<second>`);
@@ -474,7 +492,8 @@ Module map (`src/kick_clip_hunter/`):
   a recording while there is one, a recording's chat and the trace under it, and the moments
   found in a recording - which it also marks on that trace) and the bundled typeface,
   Archivo, with its licence;
-  `chat_video.css`/`chat_video.js` dress and step the chat video's page
+  `chat_video.css`/`chat_video.js` dress the page chat is laid out on for a chat video
+  and say where each line of it is
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
 - `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
@@ -632,8 +651,9 @@ run what, the manual live checklist). What matters when changing code:
   detector, anything spanning several modules), where `check.py` is run first.
 - The suite is hermetic by construction (`tests/conftest.py`): it runs in a throwaway working
   directory with its own database per test, the disk is always taken to have plenty of
-  room, and any attempt to reach a non-loopback host,
-  launch a browser or exit the process fails the test. It is safe to run while the live
+  room, video is always encoded on the processor (whatever graphics card the machine has),
+  and any attempt to reach a non-loopback host, launch a browser or exit the process fails
+  the test. It is safe to run while the live
   server is running from the same checkout - but don't *edit* production files in place for
   experiments while it is (a restart would pick them up); use a copy.
 - A behaviour change comes with a test that would fail without it; a bug gets a failing test
@@ -655,7 +675,7 @@ run what, the manual live checklist). What matters when changing code:
 - `tests/` is kept formatter-clean (`python -m ruff format tests`); application code is only
   linted.
 - Not covered, and why: the browser-driven parts (`kick_stream.py`, `clip_creator.create_clip`,
-  `chat_video.capture_frames`,
+  `chat_video.drawn_column`,
   the login script) and actually running the ML models. After touching those or the code next
   to them, go through the live checklist in docs/testing.md. A stream recording is tested
   on tiny synthetic footage; a real, hours-long one is a step of that checklist.

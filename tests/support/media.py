@@ -140,12 +140,12 @@ def probe(path: Path) -> dict:
 
 def video_stream(path: Path) -> dict:
     """What ffprobe says of a file's video stream: codec, profile, pixel
-    format, frame rate, frame count and duration, as it prints them."""
+    format, size, frame rate, frame count and duration, as it prints them."""
     # fmt: off
     result = subprocess.run(
         [
             FFPROBE, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,profile,pix_fmt,r_frame_rate,nb_frames,duration",
+            "-show_entries", "stream=codec_name,profile,pix_fmt,width,height,r_frame_rate,nb_frames,duration",
             "-of", "json", str(path),
         ],
         check=True, capture_output=True, text=True,

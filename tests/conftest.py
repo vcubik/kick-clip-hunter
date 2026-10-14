@@ -289,11 +289,11 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture(autouse=True)
 def no_browser(monkeypatch: pytest.MonkeyPatch):
     """The real stream-URL capture and clip publishing drive a visible
-    browser against kick.com, and rendering a chat video drives one without
-    a window. Finding a Twitch stream asks streamlink, which may start one
-    for Twitch's integrity check. Tests replace the functions that need it;
-    this makes forgetting to do so a failure rather than a browser
-    starting."""
+    browser against kick.com, and laying out the chat of a chat video
+    drives one without a window. Finding a Twitch stream asks streamlink,
+    which may start one for Twitch's integrity check. Tests replace the
+    functions that need it; this makes forgetting to do so a failure rather
+    than a browser starting."""
     from kick_clip_hunter import chat_video, clip_creator, kick_stream, twitch_stream
 
     launches: list[str] = []
@@ -313,6 +313,18 @@ def no_browser(monkeypatch: pytest.MonkeyPatch):
     yield launches
     if launches:
         pytest.fail("a browser launch was attempted")
+
+
+@pytest.fixture(autouse=True)
+def video_encoded_on_the_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chat drawn into a cut is encoded on the machine's graphics card where
+    ffmpeg can use one (chat_video.video_encoder). What a test makes must
+    not depend on the machine it runs on, so as far as the service can tell
+    there is no card: it encodes with x264. A test about finding the
+    encoder sets chat_video's choice back to unmade."""
+    from kick_clip_hunter import chat_video
+
+    monkeypatch.setattr(chat_video, "_encoder", chat_video.SOFTWARE_ENCODER)
 
 
 @pytest.fixture(autouse=True)

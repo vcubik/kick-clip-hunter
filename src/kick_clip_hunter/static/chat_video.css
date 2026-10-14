@@ -1,9 +1,12 @@
-/* The page a chat video is made from (chat_video.py).
+/* The page chat is laid out on for a chat video (chat_video.py).
 
-   Chat lines and nothing else: no background, because the video is laid
-   over a clip. What is behind the text is therefore unknown, so every
-   letter carries a dark edge of its own. The lines are the review page's
-   (templates/_chat_line.html), drawn larger. */
+   Chat lines and nothing else, one under another, with nothing behind
+   them: the video is laid over a clip, or drawn into its picture. What is
+   behind the text is therefore unknown, so every letter carries a dark
+   edge of its own. The lines are the review page's
+   (templates/_chat_line.html), drawn larger. A colour behind them, and the
+   fade at the top of the column, are put in where the frames are put
+   together. */
 
 @font-face {
   font-family: Archivo;
@@ -26,22 +29,19 @@
 
   --emote: 28px;          /* as tall as a line of text */
   --badge: 20px;
-  --fade: 72px;           /* over which the oldest lines go out at the top */
 }
 
-html, body { height: 100%; margin: 0; overflow: hidden; background: transparent; }
+/* Scrolled only to take pictures of, never by hand: no scrollbar. */
+html, body { margin: 0; overflow: hidden; background: transparent; }
 body {
-  position: relative;
   font: 600 21px/30px Archivo, "Segoe UI", system-ui, sans-serif;
   color: var(--text);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade));
-  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade));
 }
 
-/* The newest line sits at the bottom; the script moves the column down by
-   whatever of a new line has not eased in yet. */
-.chat-lines { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 12px 10px; }
+.chat-lines { padding: 0 12px; }
 
+/* A line's box holds all of it, the edge of its letters included: the
+   frames are put together from the boxes. */
 .ch-chat {
   margin: 0;
   padding: 3px 0;
@@ -51,7 +51,6 @@ body {
     1px 1px 0 var(--edge), -1px -1px 0 var(--edge), 1px -1px 0 var(--edge), -1px 1px 0 var(--edge),
     0 2px 0 var(--edge), 1px 2px 0 var(--edge), -1px 2px 0 var(--edge);
 }
-.ch-chat[hidden] { display: none; }
 .ch-chat b { margin-right: 6px; font-weight: 800; }
 .ch-nick-1 { color: var(--nick-1); }
 .ch-nick-2 { color: var(--nick-2); }

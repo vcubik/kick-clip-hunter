@@ -35,10 +35,22 @@ class TestWhatIsKeptOfACut:
         assert clip_trim.record_name("moment_12_trim.mp4") == "moment_12_trim.json"
 
     def test_it_reads_back_as_it_was_written(self):
-        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25, 10.2)) == (4.0, 6.25, 10.2)
+        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25, 10.2)) == clip_trim.Cut(4.0, 6.25, 10.2)
 
     def test_one_kept_without_its_end_ends_where_the_video_does(self):
-        assert clip_trim.read_cut_record('{"begins": 4, "duration": 6.25}') == (4.0, 6.25, 10.25)
+        assert clip_trim.read_cut_record('{"begins": 4, "duration": 6.25}') == clip_trim.Cut(4.0, 6.25, 10.25)
+
+    def test_a_cut_with_its_chat_drawn_into_it_says_so(self):
+        cut = clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25, 10.2, burned=True))
+
+        assert cut == (4.0, 6.25, 10.2, True) and cut.burned
+
+    def test_one_without_says_nothing_of_it_and_reads_back_as_without(self):
+        assert "burned" not in clip_trim.cut_record(4.0, 6.25, 10.2)
+        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25, 10.2)).burned is False
+
+    def test_only_a_plain_yes_is_taken_for_chat_drawn_in(self):
+        assert clip_trim.read_cut_record('{"begins": 4, "duration": 6, "burned": "yes"}').burned is False
 
     @pytest.mark.parametrize(
         "text",
@@ -173,15 +185,41 @@ class TestAStretchOfAnyFootage:
             clip_trim.stretch(0.0, 7200.0, "1:23:45", 5070)
 
 
+class TestWhereChatGoes:
+    @pytest.mark.parametrize("place", clip_trim.CHAT_PLACES)
+    def test_into_the_picture_on_either_side_or_a_video_of_its_own(self, place):
+        assert clip_trim.chat_where(place) == place
+
+    def test_a_video_of_its_own_unless_it_is_said(self):
+        # As it was before chat could be drawn into the picture.
+        assert clip_trim.chat_where(None) == clip_trim.CHAT_APART
+
+    @pytest.mark.parametrize("value", ["top", "", "RIGHT", 1, ["right"]])
+    def test_anywhere_else_is_refused(self, value):
+        with pytest.raises(TrimError, match="chat_where must be one of right, left, apart"):
+            clip_trim.chat_where(value)
+
+
 class TestChatGoingWithAStretch:
     def test_a_stretch_as_long_as_the_longest_can_have_its_chat_as_a_video(self):
         clip_trim.with_chat(clip_trim.CHAT_VIDEO_MAX_SECONDS)
 
-    def test_a_longer_one_is_refused_and_told_how_long_it_may_be(self):
+    def test_a_longer_one_is_refused_and_told_how_long_it_may_be_and_what_can_be(self):
         with pytest.raises(TrimError) as refused:
             clip_trim.with_chat(25.5 * 60)
 
-        assert str(refused.value).endswith("a stretch of up to 10 minutes, and this one is 25.5 minutes long")
+        assert str(refused.value) == (
+            "chat can go as a see-through video with a stretch of up to 10 minutes, "
+            "and this one is 25.5 minutes long. "
+            "Have it drawn into the video, or put on a background, for a stretch this long"
+        )
+
+    @pytest.mark.parametrize("place", [clip_trim.CHAT_RIGHT, clip_trim.CHAT_LEFT])
+    def test_drawn_into_the_picture_it_goes_with_any(self, place):
+        clip_trim.with_chat(3 * 3600, place)
+
+    def test_on_a_background_it_goes_with_any(self):
+        clip_trim.with_chat(3 * 3600, clip_trim.CHAT_APART, "#18181b")
 
     def test_the_lines_a_chat_video_starts_out_with_are_looked_for_far_enough_back(self):
         assert clip_trim.CHAT_VIDEO_LEAD_SECONDS >= 60

@@ -1,11 +1,9 @@
-{#- The page a chat video is made from (chat_video.py): every chat line of
-    the clip, none of them shown until the script is told what second of
-    the clip it is. Nothing but chat on it, and no background. -#}
+{#- The page chat is laid out on for a chat video (chat_video.py): every
+    chat line of the video, one under another in the order they arrive.
+    Nothing but chat on it, and nothing behind it. -#}
 {% from "_chat_line.html" import chat_line with context -%}
 <!doctype html>
-{#- A background goes on the root, which the fade at the top of the
-    column (on the body) leaves alone. -#}
-<html lang="en"{% if background %} style="background: {{ background }}"{% endif %}>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Chat</title>
