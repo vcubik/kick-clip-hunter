@@ -428,12 +428,18 @@ def set_chat_identity(
 ) -> None:
     """Stores a chatter's name colour and badges in a channel, in place of
     what was known of them there."""
-    conn.execute(
+    set_chat_identities(conn, [(broadcaster_user_id, username, colour, badges)])
+
+
+def set_chat_identities(conn: sqlite3.Connection, identities: Iterable[tuple[int, str, str | None, str]]) -> None:
+    """The same for several chatters - (channel id, name, colour, badges)
+    each - in one go, with one commit."""
+    conn.executemany(
         """
         INSERT INTO chat_identities (broadcaster_user_id, username, colour, badges) VALUES (?, ?, ?, ?)
         ON CONFLICT (broadcaster_user_id, username) DO UPDATE SET colour = excluded.colour, badges = excluded.badges
         """,
-        (broadcaster_user_id, username, colour, badges),
+        identities,
     )
     conn.commit()
 
@@ -1078,25 +1084,38 @@ def insert_chat_message(
 ) -> bool:
     """Stores a chat message. Returns False if a message with this id was
     already stored (a redelivered webhook), in which case nothing changes."""
-    cursor = conn.execute(
-        """
-        INSERT OR IGNORE INTO chat_messages
-            (message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes, created_at, received_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            message_id,
-            broadcaster_user_id,
-            channel_slug,
-            sender_username,
-            content,
-            emotes_json,
-            created_at,
-            received_at,
-        ),
+    row = (
+        message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes_json, created_at, received_at
     )
+    return message_id in insert_chat_messages(conn, [row])
+
+
+# A chat message as it is stored: its id, the channel's id and name, who
+# wrote it, what it says, its emotes as JSON, when the platform says it was
+# sent and when it arrived (both ISO).
+ChatRow = tuple[str, int, str, str, str, str, str, str]
+
+
+def insert_chat_messages(conn: sqlite3.Connection, rows: Iterable[ChatRow]) -> set[str]:
+    """Stores chat messages in one go, with one commit however many there
+    are - each commit is a tenth of a second on a spinning disk. Returns the
+    ids of those that were not stored already; a message given twice is new
+    once."""
+    new: set[str] = set()
+    for row in rows:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO chat_messages
+                (message_id, broadcaster_user_id, channel_slug, sender_username, content, emotes, created_at,
+                 received_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            row,
+        )
+        if cursor.rowcount == 1:
+            new.add(row[0])
     conn.commit()
-    return cursor.rowcount == 1
+    return new
 
 
 def insert_moment(

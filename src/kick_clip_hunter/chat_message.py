@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .chat_identity import Identity
@@ -49,6 +50,9 @@ class ChatMessage:
     # Whether the sender is the channel's streamer or one of its moderators -
     # by what the platform sent, which a chatter has no say over.
     runs_channel: bool = False
+    # When the service got it, if that was a while before it is taken in;
+    # None for "just now".
+    received_at: datetime | None = None
 
     @property
     def emote_count(self) -> int:
