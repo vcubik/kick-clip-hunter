@@ -218,3 +218,37 @@ def chat_background(value: Any) -> str | None:
     if not isinstance(value, str) or not _COLOUR.fullmatch(value):
         raise TrimError("chat_background must be a colour written as #rrggbb")
     return value.lower()
+
+
+def chat_animated(value: Any) -> bool:
+    """Whether animated emotes move in the chat, from what was asked for:
+    they stand still unless it says so, as they did before they could
+    move."""
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise TrimError("chat_animated must be true or false")
+    return value
+
+
+class ChatLook(NamedTuple):
+    """How a cut's chat is to be: how many seconds later than where they
+    stand its lines are shown (earlier, if negative), the colour behind
+    them if there is one, where it goes (see CHAT_PLACES) and whether its
+    animated emotes move."""
+
+    shift: float = 0.0
+    background: str | None = None
+    where: str = CHAT_APART
+    animated: bool = False
+
+
+def chat_look(asked: Mapping[str, Any]) -> ChatLook:
+    """How a cut's chat is to be, from what the Trim dialog posted. Raises
+    TrimError for what can't be."""
+    return ChatLook(
+        chat_shift(asked.get("chat_shift")),
+        chat_background(asked.get("chat_background")),
+        chat_where(asked.get("chat_where")),
+        chat_animated(asked.get("chat_animated")),
+    )

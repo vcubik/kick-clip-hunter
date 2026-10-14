@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import math
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ import pytest
 from PIL import Image
 
 from kick_clip_hunter import chat_video
+from tests.support.browser import animated_picture
 from tests.support.html import parse
 
 STATIC = chat_video.STATIC_DIR
@@ -252,16 +254,34 @@ class TestWhatTheBrowserMayLoad:
 
 # -- the frames ----------------------------------------------------------------
 
+RED, BLUE, GREEN = (255, 0, 0, 255), (0, 0, 255, 255), (0, 255, 0, 255)
+# Where an animated emote of a made-up column is in its line, and how big
+# it is drawn.
+EMOTE_TOP, EMOTE = 4, 28
+
 
 class MadeUpColumn:
     """A column as the browser would hand it over, made up: a line every
     LINE pixels from the top, each a band of opaque white, arriving at the
-    given seconds. Remembers which pictures of it were asked for."""
+    given seconds - and animated emotes, each given as the line it is in,
+    how far in from the left it is and its picture, which are left out of
+    the column's pictures as the browser leaves them out (unless
+    `set_aside` is False). Remembers which pictures of it were asked for."""
 
-    def __init__(self, arrivals: list[float], line_pixels: int = LINE) -> None:
+    def __init__(
+        self,
+        arrivals: list[float],
+        line_pixels: int = LINE,
+        emotes: Iterable[tuple[int, int, bytes]] = (),
+        set_aside: bool = True,
+    ) -> None:
         self.tops = [index * line_pixels for index in range(len(arrivals))]
         self.bottoms = [top + line_pixels for top in self.tops]
         self.arrivals = arrivals
+        self.emotes = [
+            chat_video.Emote(self.tops[line] + EMOTE_TOP, left, EMOTE, EMOTE, picture) for line, left, picture in emotes
+        ]
+        self.set_aside = set_aside
         self.asked: list[int] = []
 
     def picture(self, index: int) -> bytes | None:
@@ -274,17 +294,25 @@ class MadeUpColumn:
             upper, lower = max(top - index * page, 0), min(bottom - index * page, page)
             if lower > upper:
                 image.paste((255, 255, 255, 255), (0, upper, WIDTH, lower))
+        for emote in self.emotes if self.set_aside else ():
+            upper, lower = max(emote.top - index * page, 0), min(emote.top + emote.height - index * page, page)
+            if lower > upper:
+                image.paste((0, 0, 0, 0), (emote.left, upper, emote.left + emote.width, lower))
         buffer = io.BytesIO()
         image.save(buffer, "PNG")
         return buffer.getvalue()
 
     def column(self) -> chat_video.Column:
-        return chat_video.Column(self.arrivals, self.tops, self.bottoms, self.picture)
+        return chat_video.Column(self.arrivals, self.tops, self.bottoms, self.picture, self.emotes)
+
+
+def pixels(frame: bytes) -> np.ndarray:
+    return np.frombuffer(frame, np.uint8).reshape(HEIGHT, WIDTH, 4)
 
 
 def seen(frame: bytes) -> np.ndarray:
     """How much of each pixel row of a frame is seen, in its middle."""
-    return np.frombuffer(frame, np.uint8).reshape(HEIGHT, WIDTH, 4)[:, WIDTH // 2, 3]
+    return pixels(frame)[:, WIDTH // 2, 3]
 
 
 def frame_at(made_up: MadeUpColumn, time: float) -> bytes:
@@ -292,36 +320,36 @@ def frame_at(made_up: MadeUpColumn, time: float) -> bytes:
     return frame
 
 
-class TestView:
+# Where the top of the newest line is in a frame, and of the one before it.
+NEWEST = HEIGHT - BOTTOM - LINE
+BEFORE_IT = NEWEST - LINE
+
+
+def emote_middle(frame: bytes, line_top: int, left: int) -> tuple[int, ...]:
+    """The pixel in the middle of an emote `left` pixels in from the left,
+    in the line whose top is `line_top` rows down the frame."""
+    return tuple(pixels(frame)[line_top + EMOTE_TOP + EMOTE // 2, left + EMOTE // 2].tolist())
+
+
+class TestWhereTheFrameIs:
     def test_nothing_is_shown_before_the_first_line_arrives(self):
-        assert chat_video.view_at(MadeUpColumn([2.0]).column(), 1.9) is None
+        assert chat_video.frame_top(MadeUpColumn([2.0]).column(), 1.9) is None
 
-    def test_the_newest_line_sits_at_the_bottom_once_it_has_come_in(self):
+    def test_the_newest_line_is_at_the_bottom_from_the_frame_it_arrives_in(self):
         column = MadeUpColumn([1.0, 2.0]).column()
 
-        view = chat_video.view_at(column, 5.0)
+        assert chat_video.frame_top(column, 1.99) == LINE + BOTTOM - HEIGHT
+        assert chat_video.frame_top(column, 2.0) == 2 * LINE + BOTTOM - HEIGHT
 
-        assert view == chat_video.View(2 * LINE + BOTTOM - HEIGHT, ())
-
-    def test_a_line_coming_in_is_still_partly_below_the_frame_and_partly_seen(self):
-        column = MadeUpColumn([1.0, 2.0]).column()
-
-        view = chat_video.view_at(column, 2.0 + chat_video.ENTER_SECONDS / 2)
-
-        assert view == chat_video.View(round(2 * LINE + BOTTOM - HEIGHT - LINE / 2), ((1, 128),))
-
-    def test_lines_arriving_together_come_in_together(self):
+    def test_lines_arriving_together_are_there_together(self):
         column = MadeUpColumn([1.0, 3.0, 3.0]).column()
 
-        view = chat_video.view_at(column, 3.0)
-
-        # Neither of them seen yet, both still below the frame.
-        assert view == chat_video.View(3 * LINE + BOTTOM - HEIGHT - 2 * LINE, ((2, 0), (1, 0)))
+        assert chat_video.frame_top(column, 3.0) == 3 * LINE + BOTTOM - HEIGHT
 
     def test_the_column_only_ever_moves_on_down(self):
         column = MadeUpColumn([0.5 + step * 0.1 for step in range(60)]).column()
 
-        tops = [chat_video.view_at(column, time).top for time in chat_video.frame_times(8.0)[30:]]
+        tops = [chat_video.frame_top(column, time) for time in chat_video.frame_times(8.0)[30:]]
 
         assert tops == sorted(tops)
 
@@ -330,28 +358,33 @@ class TestComposition:
     def test_before_any_chat_a_frame_is_nothing_at_all(self):
         assert frame_at(MadeUpColumn([3.0]), 1.0) == bytes(WIDTH * HEIGHT * 4)
 
-    def test_a_line_that_has_come_in_is_whole_just_above_the_bottom(self):
+    def test_a_line_that_has_arrived_is_whole_just_above_the_bottom(self):
         rows = seen(frame_at(MadeUpColumn([1.0]), 2.0))
 
-        assert rows[HEIGHT - BOTTOM - LINE : HEIGHT - BOTTOM].tolist() == [255] * LINE
+        assert rows[NEWEST : HEIGHT - BOTTOM].tolist() == [255] * LINE
         assert rows[HEIGHT - BOTTOM :].tolist() == [0] * BOTTOM
-        assert rows[: HEIGHT - BOTTOM - LINE].max() == 0
+        assert rows[:NEWEST].max() == 0
 
-    def test_the_next_line_moves_it_up(self):
-        rows = seen(frame_at(MadeUpColumn([1.0, 1.5]), 2.0))
+    def test_a_new_line_is_there_whole_at_once_and_moves_the_one_before_up(self):
+        made_up = MadeUpColumn([1.0, 1.5])
 
-        assert rows[HEIGHT - BOTTOM - 2 * LINE : HEIGHT - BOTTOM].tolist() == [255] * 2 * LINE
+        before, arriving = (seen(frame_at(made_up, time)) for time in (1.49, 1.5))
 
-    def test_a_line_eases_in_rising_from_under_the_bottom(self):
-        halfway = 1.5 + chat_video.ENTER_SECONDS / 2
+        assert before[NEWEST:].tolist() == [255] * LINE + [0] * BOTTOM
+        assert arriving[BEFORE_IT:].tolist() == [255] * 2 * LINE + [0] * BOTTOM
+        assert arriving[:BEFORE_IT].max() == 0
 
-        rows = seen(frame_at(MadeUpColumn([1.0, 1.5]), halfway))
+    def test_lines_arriving_together_come_in_together(self):
+        rows = seen(frame_at(MadeUpColumn([1.0, 3.0, 3.0, 3.0]), 3.0))
 
-        # The column is half a line lower than it will be, the new line
-        # half seen - and its lower half under the frame's bottom edge.
-        first = HEIGHT - BOTTOM - 2 * LINE + LINE // 2
-        assert rows[first : first + LINE].tolist() == [255] * LINE
-        assert set(rows[first + LINE :].tolist()) == {128}
+        assert rows[HEIGHT - BOTTOM - 4 * LINE :].tolist() == [255] * 4 * LINE + [0] * BOTTOM
+
+    def test_a_line_still_to_come_does_not_show_under_the_newest(self):
+        # In the column, the next line starts right under the newest one,
+        # in the room the frame leaves below it.
+        frame = pixels(frame_at(MadeUpColumn([1.0, 5.0]), 2.0))
+
+        assert frame[HEIGHT - BOTTOM :, :, 3].max() == 0
 
     def test_the_oldest_lines_fade_out_at_the_top(self):
         rows = seen(frame_at(MadeUpColumn([0.1 * step for step in range(40)]), 9.0))
@@ -385,34 +418,162 @@ class TestComposition:
 
         assert rows[HEIGHT - BOTTOM - 3 * LINE : HEIGHT - BOTTOM].tolist() == [255] * 3 * LINE
 
-    def test_a_column_that_ends_on_the_edge_of_a_picture_is_drawn_whole(self, monkeypatch):
-        # The frame reaches past the column's last picture by the room under
-        # the newest line: there is no picture there.
+    def test_a_column_that_ends_on_the_edge_of_a_picture_needs_none_past_it(self, monkeypatch):
+        # The room under the newest line would be the next picture's.
         monkeypatch.setattr(chat_video, "PAGE_PIXELS", 2 * LINE)
+        made_up = MadeUpColumn([0.1, 0.2])
 
-        rows = seen(frame_at(MadeUpColumn([0.1, 0.2]), 5.0))
+        rows = seen(frame_at(made_up, 5.0))
 
-        assert rows[HEIGHT - BOTTOM - 2 * LINE : HEIGHT - BOTTOM].tolist() == [255] * 2 * LINE
-
-    def test_lines_arriving_together_rise_in_together(self):
-        made_up = MadeUpColumn([1.0, 3.0, 3.0, 3.0])
-
-        arriving, halfway = (frame_at(made_up, time) for time in (3.0, 3.0 + chat_video.ENTER_SECONDS / 2))
-
-        # As they arrive, all three are still below the frame, and only the
-        # line before them is seen...
-        assert seen(arriving)[HEIGHT - BOTTOM - LINE : HEIGHT - BOTTOM].tolist() == [255] * LINE
-        assert seen(arriving)[HEIGHT - BOTTOM :].max() == 0
-        # ... and halfway in, half of the three is above the bottom, half seen.
-        rows = seen(halfway)
-        top_of_first = HEIGHT - BOTTOM - 4 * LINE + 3 * LINE // 2
-        assert rows[top_of_first : top_of_first + LINE].tolist() == [255] * LINE
-        assert set(rows[top_of_first + LINE :].tolist()) == {128}
+        assert rows[BEFORE_IT:].tolist() == [255] * 2 * LINE + [0] * BOTTOM
+        assert made_up.asked == [0]
 
     def test_as_many_frames_as_times(self):
         times = chat_video.frame_times(2.0)
 
         assert len(list(chat_video.frames(MadeUpColumn([0.5]).column(), times))) == len(times)
+
+
+class TestAnimatedEmotes:
+    """Emotes that move: drawn into each frame by the column's frames, on
+    the frame of their animation the video is at."""
+
+    # Red for a tenth of a second, blue for one, green for two, over and
+    # over from the video's first frame: green from 0.2 s to 0.4 s, red
+    # again from 0.4 s.
+    PICTURE = animated_picture([RED, BLUE, GREEN], [100, 100, 200])
+
+    def test_one_is_drawn_where_it_is_on_the_frame_its_animation_is_at(self):
+        made_up = MadeUpColumn([0.5], emotes=[(0, 100, self.PICTURE)])
+
+        drawn = chat_video.frames(made_up.column(), [1.25, 1.35, 1.45, 1.55, 1.65])
+
+        assert [emote_middle(frame, NEWEST, 100) for frame in drawn] == [RED, BLUE, GREEN, GREEN, RED]
+
+    def test_every_copy_of_a_picture_is_on_the_same_frame_of_it(self):
+        made_up = MadeUpColumn([0.5, 1.0], emotes=[(0, 100, self.PICTURE), (1, 300, self.PICTURE)])
+
+        for frame, colour in zip(chat_video.frames(made_up.column(), [1.25, 1.35]), [RED, BLUE], strict=True):
+            assert emote_middle(frame, BEFORE_IT, 100) == emote_middle(frame, NEWEST, 300) == colour
+
+    def test_it_moves_up_with_its_line(self):
+        made_up = MadeUpColumn([0.5, 1.0], emotes=[(0, 100, self.PICTURE)])
+
+        before, after = chat_video.frames(made_up.column(), [0.65, 1.05])
+
+        assert emote_middle(before, NEWEST, 100) == GREEN
+        assert emote_middle(after, BEFORE_IT, 100) == GREEN
+        # Where it was is the line that has arrived since.
+        assert emote_middle(after, NEWEST, 100) == (255, 255, 255, 255)
+
+    def test_one_in_a_line_still_to_come_is_not_drawn(self):
+        made_up = MadeUpColumn([0.5, 5.0], emotes=[(1, 100, self.PICTURE)])
+
+        frame = pixels(frame_at(made_up, 1.0))
+
+        assert frame[HEIGHT - BOTTOM :, :, 3].max() == 0
+
+    def test_it_fades_out_at_the_top_like_its_line(self):
+        arrivals = [0.1 * step for step in range(40)]
+        # The line whose top is 26 rows down the frame once all forty have
+        # arrived.
+        line = (40 * LINE + BOTTOM - HEIGHT + 26) // LINE
+        made_up = MadeUpColumn(arrivals, emotes=[(line, 100, self.PICTURE)])
+
+        frame = pixels(frame_at(made_up, 9.05))
+
+        row = 26 + EMOTE_TOP + EMOTE // 2
+        assert tuple(frame[row, 100 + EMOTE // 2].tolist()) == (0, 255, 0, round(255 * row / chat_video.FADE_PIXELS))
+
+    def test_what_is_see_through_in_it_shows_what_is_under_it(self):
+        half_seen = animated_picture([(255, 0, 0, 128), (0, 0, 255, 128)], [500, 500], "WEBP")
+        on_its_own = MadeUpColumn([0.5], emotes=[(0, 100, half_seen)])
+        over_its_line = MadeUpColumn([0.5], emotes=[(0, 100, half_seen)], set_aside=False)
+
+        alone, over = (emote_middle(frame_at(made_up, 1.2), NEWEST, 100) for made_up in (on_its_own, over_its_line))
+
+        assert alone == (255, 0, 0, 128)
+        # Half of the white line under it shows through.
+        assert over == pytest.approx((255, 127, 127, 255), abs=1)
+
+    def test_a_frame_stays_the_one_before_until_an_emote_on_it_moves_on(self):
+        made_up = MadeUpColumn([0.5], emotes=[(0, 100, self.PICTURE)])
+
+        first, second, third, moved = chat_video.frames(made_up.column(), [1.0, 1.0 + 1 / 30, 1.0 + 2 / 30, 1.2])
+
+        assert second is first and third is first
+        assert moved != first
+
+    def test_each_picture_is_taken_apart_once_however_often_it_is_shown(self, monkeypatch):
+        taken: list[bytes] = []
+
+        def taking_apart(picture: bytes, width: int, height: int) -> chat_video.Animation:
+            taken.append(picture)
+            return animation(picture, width, height)
+
+        animation = chat_video.animation
+        monkeypatch.setattr(chat_video, "animation", taking_apart)
+        made_up = MadeUpColumn([0.5, 1.0, 1.5], emotes=[(line, 100, self.PICTURE) for line in range(3)])
+
+        for _frame in chat_video.frames(made_up.column(), chat_video.frame_times(3.0)):
+            pass
+
+        assert taken == [self.PICTURE]
+
+
+class TestAnimations:
+    """An emote's picture taken apart into its frames, as hosts of emotes
+    hand them out."""
+
+    @pytest.mark.parametrize("kind", ["GIF", "WEBP", "PNG"])
+    def test_a_picture_of_more_than_one_frame_is_animated(self, kind):
+        assert chat_video.is_animated(animated_picture([RED, BLUE], [100, 100], kind))
+
+    def test_one_of_one_frame_is_not(self):
+        assert not chat_video.is_animated(animated_picture([RED], [100], "WEBP"))
+
+    def test_nor_is_one_that_cannot_be_read_whole(self):
+        picture = animated_picture([RED, BLUE, GREEN], [100, 100, 100])
+
+        assert not chat_video.is_animated(picture[: len(picture) // 2])
+        assert not chat_video.is_animated(b"<html>not found</html>")
+
+    def test_each_frame_lasts_as_long_as_the_picture_says(self):
+        made = chat_video.animation(animated_picture([RED, BLUE, GREEN], [100, 250, 50]), EMOTE, EMOTE)
+
+        assert made.ends == [100, 350, 400]
+        assert [tuple(frame[0, 0].tolist()) for frame in made.frames] == [RED, BLUE, GREEN]
+
+    def test_a_frame_that_says_it_flashes_by_lasts_a_tenth_of_a_second(self):
+        made = chat_video.animation(animated_picture([RED, BLUE, GREEN], [0, 5, 20], "WEBP"), EMOTE, EMOTE)
+
+        assert made.ends == [100, 200, 220]
+
+    def test_it_runs_through_its_frames_over_and_over(self):
+        made = chat_video.animation(animated_picture([RED, BLUE, GREEN], [100, 100, 200]), EMOTE, EMOTE)
+
+        indexes = [made.index(second) for second in (0.0, 0.099, 0.1, 0.2, 0.399, 0.4, 1.35, 3600.25)]
+
+        assert indexes == [0, 0, 1, 2, 2, 0, 1, 2]
+
+    def test_its_frames_are_the_size_it_is_drawn_at(self):
+        made = chat_video.animation(animated_picture([RED, BLUE], [100, 100], size=(112, 64)), 49, 28)
+
+        assert [frame.shape for frame in made.frames] == [(28, 49, 4)] * 2
+
+    def test_made_smaller_its_edges_keep_their_colour(self):
+        # Red on the left half, nothing on the right: made smaller, the
+        # pixels between them are partly seen - and red, not darkened.
+        frame = Image.new("RGBA", (8, 8))
+        frame.paste(RED, (0, 0, 4, 8))
+        buffer = io.BytesIO()
+        frame.save(buffer, "WEBP", save_all=True, append_images=[frame.copy()], duration=[100, 100], lossless=True)
+
+        made = chat_video.animation(buffer.getvalue(), 3, 3)
+
+        middle = made.frames[0][1, 1]
+        assert 0 < middle[3] < 255
+        assert middle[:3].tolist() == [255, 0, 0]
 
 
 class TestProgress:

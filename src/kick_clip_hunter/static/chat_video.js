@@ -2,7 +2,8 @@
 //
 // Every line is laid out once, one under another, and stays where it is:
 // whoever drives the page takes pictures of the column a screenful at a
-// time and puts the frames together from them. Nothing here runs on a clock.
+// time and puts the frames together from them - drawing animated emotes
+// into them itself, when they are to move. Nothing here runs on a clock.
 (() => {
   "use strict";
 
@@ -29,6 +30,25 @@
       const pages = Math.max(1, Math.ceil(document.documentElement.scrollHeight / page));
       document.body.style.minHeight = `${pages * page}px`;
       return { lines, pages };
+    },
+
+    // Leaves the emotes whose pictures are at these addresses - the
+    // animated ones - out of the pictures taken of the column, still taking
+    // up their room, and says where each of them is: its top, its left, its
+    // width and its height, in whole pixels as the browser draws it, and
+    // its picture's address.
+    setAside(addresses) {
+      const animated = new Set(addresses);
+      return Array.from(document.querySelectorAll("img.ch-emote"))
+        .filter((image) => animated.has(image.src))
+        .map((image) => {
+          image.style.visibility = "hidden";
+          const box = image.getBoundingClientRect();
+          const top = Math.round(box.top + window.scrollY);
+          const left = Math.round(box.left);
+          return [top, left, Math.round(box.right) - left, Math.round(box.bottom + window.scrollY) - top, image.src];
+        })
+        .filter(([, , width, height]) => width > 0 && height > 0);
     },
   };
 })();

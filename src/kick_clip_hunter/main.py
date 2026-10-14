@@ -1498,12 +1498,10 @@ async def _trim_background(
     span: tuple[float, float],
     lead: float,
     lines: list[dict] | None,
-    shift: float,
-    background: str | None,
+    look: clip_trim.ChatLook,
     video: Path,
     chat: Path,
     replaced: tuple[Path, ...] = (),
-    where: str = clip_trim.CHAT_APART,
 ) -> None:
     # The cut takes a moment, and its chat as a video of its own a while
     # after it; chat drawn into its picture is made together with it, and
@@ -1516,12 +1514,12 @@ async def _trim_background(
     # What was cut before goes first: a chat video left over from it would
     # not belong to the new video.
     old = (chat, video, _cut_record_path(video), *replaced)
-    if lines is not None and where != clip_trim.CHAT_APART:
+    if lines is not None and look.where != clip_trim.CHAT_APART:
         # Encoded anew, it begins on the very frame that was set.
         cut = clip_trim.Cut(span[0], span[1] - span[0], span[1], burned=True)
         await _burn_background(
             standing, key, what, channel, source=clip, first=span[0], cut=cut, start=span[0] - lead,
-            lines=lines, shift=shift, background=background, where=where, video=video, old=old,
+            lines=lines, look=look, video=video, old=old,
         )
         return
     try:
@@ -1540,9 +1538,7 @@ async def _trim_background(
         return
     # The chat video starts on the trimmed video's first frame, wherever in
     # the file that turned out to be.
-    await _trim_chat_background(
-        standing, key, what, channel, lines, begins - lead, duration, shift, background, chat, early
-    )
+    await _trim_chat_background(standing, key, what, channel, lines, begins - lead, duration, look, chat, early)
 
 
 async def _trim_chat_background(
@@ -1553,8 +1549,7 @@ async def _trim_chat_background(
     lines: list[dict],
     start: float,
     duration: float,
-    shift: float,
-    background: str | None,
+    look: clip_trim.ChatLook,
     chat: Path,
     early: float = 0.0,
 ) -> None:
@@ -1564,9 +1559,11 @@ async def _trim_chat_background(
     standing[key] = {"state": dashboard_view.TRIM_CHAT, "early": early}
     try:
         chat.unlink(missing_ok=True)
-        shown = chat_video.lines_from(lines, start, shift)
+        shown = chat_video.lines_from(lines, start, look.shift)
         progress = _making(standing, key, dashboard_view.TRIM_CHAT, early)
-        frames = await asyncio.to_thread(chat_video.render, shown, duration, chat, background, progress)
+        frames = await asyncio.to_thread(
+            chat_video.render, shown, duration, chat, look.background, progress, look.animated
+        )
     except _GivenUp:
         standing[key] = {"early": early}
         logger.info("[%s] making the chat video of %s given up: shutting down", channel, what)
@@ -1589,9 +1586,7 @@ async def _burn_background(
     cut: clip_trim.Cut,
     start: float,
     lines: list[dict],
-    shift: float,
-    background: str | None,
-    where: str,
+    look: clip_trim.ChatLook,
     video: Path,
     old: tuple[Path, ...] = (),
 ) -> None:
@@ -1607,10 +1602,19 @@ async def _burn_background(
     try:
         for path in old:
             path.unlink(missing_ok=True)
-        shown = chat_video.lines_from(lines, start, shift)
+        shown = chat_video.lines_from(lines, start, look.shift)
         progress = _making(standing, key, dashboard_view.TRIM_BURNING)
         encoder = await asyncio.to_thread(
-            chat_video.burn, shown, source, first, cut.duration, video, where, background, progress
+            chat_video.burn,
+            shown,
+            source,
+            first,
+            cut.duration,
+            video,
+            look.where,
+            look.background,
+            progress,
+            look.animated,
         )
     except _GivenUp:
         standing.pop(key, None)
@@ -3466,9 +3470,10 @@ async def trim_moment(moment_id: int, request: Request):
     into its picture at the bottom on the right or on the left if
     `chat_where` says "right" or "left", otherwise a video of its own to
     lay over it. `start` and `end` are clip time; `chat_shift` moves chat
-    that many seconds later than the channel's chat delay has it, and
+    that many seconds later than the channel's chat delay has it,
     `chat_background` ("#rrggbb") puts a colour behind it instead of
-    nothing. What was cut for the moment before is replaced."""
+    nothing, and `chat_animated` has its animated emotes move. What was cut
+    for the moment before is replaced."""
     asked = await _asked_trim(request)
     conn = get_connection()
     try:
@@ -3480,9 +3485,9 @@ async def trim_moment(moment_id: int, request: Request):
             raise HTTPException(status_code=409, detail="The moment has no clip to trim.")
         try:
             span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
-            shift, background, where = _asked_chat(asked)
+            look = clip_trim.chat_look(asked)
             if asked.get("chat"):
-                clip_trim.with_chat(span[1] - span[0], where, background)
+                clip_trim.with_chat(span[1] - span[0], look.where, look.background)
         except clip_trim.TrimError as e:
             raise _trim_refused(e) from None
         lines = None
@@ -3494,7 +3499,7 @@ async def trim_moment(moment_id: int, request: Request):
         conn.close()
 
     if _trims.get(moment_id, {}).get("state") not in dashboard_view.TRIM_BUSY:
-        _trims[moment_id] = {"state": _first_trim_state(lines, where)}
+        _trims[moment_id] = {"state": _first_trim_state(lines, look.where)}
         video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
         _track_task(
             _trim_background(
@@ -3506,11 +3511,9 @@ async def trim_moment(moment_id: int, request: Request):
                 span,
                 row["context_before"] or 0.0,
                 lines,
-                shift,
-                background,
+                look,
                 video,
                 chat,
-                where=where,
             )
         )
     return {"moment_id": moment_id, **_trim(row)}
@@ -3548,26 +3551,16 @@ def _no_cut_record() -> HTTPException:
     )
 
 
-def _asked_chat(asked: dict) -> tuple[float, str | None, str]:
-    """How a cut's chat is to be, as asked for: how far its lines are moved,
-    what is behind them and where it goes. Raises clip_trim.TrimError for
-    what can't be."""
-    return (
-        clip_trim.chat_shift(asked.get("chat_shift")),
-        clip_trim.chat_background(asked.get("chat_background")),
-        clip_trim.chat_where(asked.get("chat_where")),
-    )
-
-
-def _asked_chat_look(asked: dict, seconds: float) -> tuple[float, str | None, str]:
+def _asked_chat_look(asked: dict, seconds: float) -> clip_trim.ChatLook:
     """How the chat of a cut `seconds` long that is there already is to
-    be, as asked for (see _asked_chat), refused in words where it can't."""
+    be, as asked for (see clip_trim.chat_look), refused in words where it
+    can't."""
     try:
-        shift, background, where = _asked_chat(asked)
-        clip_trim.with_chat(seconds, where, background)
+        look = clip_trim.chat_look(asked)
+        clip_trim.with_chat(seconds, look.where, look.background)
     except clip_trim.TrimError as e:
         raise _trim_refused(e) from None
-    return shift, background, where
+    return look
 
 
 def _first_trim_state(lines: list[dict] | None, where: str) -> str:
@@ -3592,24 +3585,20 @@ def _chat_later(
     record: clip_trim.Cut,
     lines: list[dict],
     start: float,
-    shift: float,
-    background: str | None,
-    where: str,
+    look: clip_trim.ChatLook,
 ) -> None:
     """Starts making the chat of a cut video that is there (see
     trim_moment_chat): `record` is what was kept of it, `start` where its
     first frame is on the time its chat `lines` are placed on."""
-    if where == clip_trim.CHAT_APART:
+    if look.where == clip_trim.CHAT_APART:
         early = standing.get(key, {}).get("early", 0.0)
         standing[key] = {"state": dashboard_view.TRIM_CHAT, "early": early}
-        task = _trim_chat_background(
-            standing, key, what, channel, lines, start, record.duration, shift, background, chat, early
-        )
+        task = _trim_chat_background(standing, key, what, channel, lines, start, record.duration, look, chat, early)
     else:
         standing[key] = {"state": dashboard_view.TRIM_BURNING, "done": 0.0}
         task = _burn_background(
             standing, key, what, channel, source=video, first=0.0, cut=record, start=start,
-            lines=lines, shift=shift, background=background, where=where, video=video, old=(chat,),
+            lines=lines, look=look, video=video, old=(chat,),
         )
     _track_task(task)
 
@@ -3619,9 +3608,9 @@ async def trim_moment_chat(moment_id: int, request: Request):
     """Starts making the chat of the video already cut out of a moment's
     footage, for an editor who took the video without it at first: for the
     stretch that video holds, as trim_moment would have made it then.
-    `chat_where`, `chat_shift` and `chat_background` are as there - drawn
-    into the picture, the chat takes the place of the video there was once
-    it is made."""
+    `chat_where`, `chat_shift`, `chat_background` and `chat_animated` are
+    as there - drawn into the picture, the chat takes the place of the
+    video there was once it is made."""
     asked = await _asked_trim(request)
     conn = get_connection()
     try:
@@ -3641,7 +3630,7 @@ async def trim_moment_chat(moment_id: int, request: Request):
             raise _no_cut_record()
         if record.burned:
             raise _burned_already()
-        shift, background, where = _asked_chat_look(asked, record.duration)
+        look = _asked_chat_look(asked, record.duration)
         _strip, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
         if not lines:
             raise HTTPException(status_code=409, detail="No chat was stored for this moment.")
@@ -3652,7 +3641,7 @@ async def trim_moment_chat(moment_id: int, request: Request):
     start = record.begins - (row["context_before"] or 0.0)
     what = f"moment {moment_id}"
     channel = row["channel_slug"]
-    _chat_later(_trims, moment_id, what, channel, video, chat, record, lines, start, shift, background, where)
+    _chat_later(_trims, moment_id, what, channel, video, chat, record, lines, start, look)
     return {"moment_id": moment_id, **_trim(row)}
 
 
@@ -4016,9 +4005,9 @@ async def trim_recording(recording_id: int, request: Request):
         whole = stream_recording.length(parts)
         try:
             start, end = clip_trim.stretch(0.0, whole, asked.get("start"), asked.get("end"))
-            shift, background, where = _asked_chat(asked)
+            look = clip_trim.chat_look(asked)
             if asked.get("chat"):
-                clip_trim.with_chat(end - start, where, background)
+                clip_trim.with_chat(end - start, look.where, look.background)
         except clip_trim.TrimError as e:
             raise _trim_refused(e) from None
         lines = None
@@ -4047,7 +4036,7 @@ async def trim_recording(recording_id: int, request: Request):
         )
 
     if _recording_trims.get(recording_id, {}).get("state") not in dashboard_view.TRIM_BUSY:
-        _recording_trims[recording_id] = {"state": _first_trim_state(lines, where)}
+        _recording_trims[recording_id] = {"state": _first_trim_state(lines, look.where)}
         video = file.with_name(clip_trim.recording_video_name(file.name, start, end))
         _track_task(
             _trim_background(
@@ -4059,12 +4048,10 @@ async def trim_recording(recording_id: int, request: Request):
                 (start, end),
                 0.0,
                 lines,
-                shift,
-                background,
+                look,
                 video,
                 video.with_name(chat_video.video_name(video.name)),
                 _recording_cut_files(file),
-                where=where,
             )
         )
     return {"recording_id": recording_id, **_recording_trim(row)}
@@ -4103,7 +4090,7 @@ async def trim_recording_chat(recording_id: int, request: Request):
             raise _no_cut_record()
         if record.burned:
             raise _burned_already()
-        shift, background, where = _asked_chat_look(asked, record.duration)
+        look = _asked_chat_look(asked, record.duration)
         # As trim_recording takes them, for the stretch the video holds.
         lines = _recording_chat_lines(
             conn,
@@ -4120,10 +4107,8 @@ async def trim_recording_chat(recording_id: int, request: Request):
 
     chat = video.with_name(chat_video.video_name(video.name))
     what = f"stream recording {recording_id}"
-    _chat_later(
-        _recording_trims, recording_id, what, row["channel_slug"], video, chat, record, lines, record.begins, shift,
-        background, where,
-    )
+    channel = row["channel_slug"]
+    _chat_later(_recording_trims, recording_id, what, channel, video, chat, record, lines, record.begins, look)
     return {"recording_id": recording_id, **_recording_trim(row)}
 
 

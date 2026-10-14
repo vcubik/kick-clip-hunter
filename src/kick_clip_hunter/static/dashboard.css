@@ -453,6 +453,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); min-height: var(--h-control); margin-top: var(--space-8); }
 .trim-check { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: 600; cursor: pointer; }
 .trim-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lit); }
+.trim-check input:disabled { opacity: 0.45; cursor: not-allowed; }
 .trim-where { height: var(--h-compact); }
 .trim-where:disabled { opacity: 0.45; cursor: not-allowed; }
 .trim-shift { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
