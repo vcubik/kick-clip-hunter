@@ -1907,15 +1907,13 @@ class TestTrimming:
         # Nowhere to choose until chat is wanted.
         assert "disabled" in where.attrs
 
-    async def test_its_animated_emotes_can_be_asked_to_move(self, service, footage):
+    async def test_there_is_no_choice_whether_animated_emotes_move(self, service, footage):
+        # They always do (see tests/integration/test_chat_video.py).
         self.clip_with_chat(footage)
 
         dialog = await self.dialog(service)
 
-        box = dialog.one("input", data_trim_animated=True)
-        assert box.attrs["type"] == "checkbox" and "checked" not in box.attrs
-        # Nothing to move until chat is wanted.
-        assert "disabled" in box.attrs
+        assert dialog.find("input", data_trim_animated=True) == []
 
     async def test_a_clip_without_chat_is_trimmed_without_it(self, service, footage):
         self.SOURCE.parent.mkdir(parents=True, exist_ok=True)
@@ -2119,16 +2117,6 @@ class TestTrimming:
 
         assert (await self.state(service, moment_id))["chat_url"] is not None
 
-    async def test_its_animated_emotes_move_only_when_asked_to(self, service, footage, browser):
-        moment_id = self.clip_with_chat(footage)
-
-        await self.ask(service, moment_id, chat=True)
-        await service.settle()
-        await self.ask(service, moment_id, chat=True, chat_where="right", chat_animated=True)
-        await service.settle()
-
-        assert browser.animated == [False, True]
-
     # -- its chat, later
 
     async def ask_chat(self, service, moment_id: int, **asked):
@@ -2169,16 +2157,6 @@ class TestTrimming:
 
         assert self.lines(browser) == [("alice", "0.5"), ("bob", "4"), ("carol", "7")]
         assert video_stream(self.CHAT)["codec_name"] == "h264"
-
-    async def test_chat_made_later_can_have_its_animated_emotes_move(self, service, footage, browser):
-        moment_id = self.clip_with_chat(footage)
-        await self.ask(service, moment_id, start=-1, end=3)
-        await service.settle()
-
-        await self.ask_chat(service, moment_id, chat_where="left", chat_animated=True)
-        await service.settle()
-
-        assert browser.animated == [True]
 
     # -- its chat in the video
 
@@ -2295,9 +2273,8 @@ class TestTrimming:
         [
             {"chat_shift": clip_trim.CHAT_SHIFT_LIMIT_SECONDS + 1},
             {"chat_background": "navy"},
-            {"chat_animated": "yes"},
         ],
-        ids=["too-far", "colour-name", "animated-in-words"],
+        ids=["too-far", "colour-name"],
     )
     async def test_what_cannot_be_made_is_refused_in_words(self, service, footage, browser, asked):
         moment_id = self.clip_with_chat(footage)
@@ -2450,7 +2427,6 @@ class TestTrimming:
             {"chat_shift": "later"},
             {"chat_background": "navy"},
             {"chat_background": "#000; background: url(//example.com)"},
-            {"chat_animated": 1},
         ],
         ids=[
             "too-short",
@@ -2464,7 +2440,6 @@ class TestTrimming:
             "words",
             "colour-name",
             "more-than-a-colour",
-            "animated-a-number",
         ],
     )
     async def test_a_stretch_that_cannot_be_cut_is_refused(self, service, footage, asked):

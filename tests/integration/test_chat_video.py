@@ -226,16 +226,13 @@ class TestRendering:
         (html,) = browser.pages
         assert "before it" in html and "during it" in html
         assert "after it" not in html
-        # Animated emotes standing still, unless asked otherwise.
-        assert browser.animated == [False]
 
-    def test_animated_emotes_move_in_it_when_asked_to(self, browser, tmp_path):
+    def test_animated_emotes_move_in_it(self, browser, tmp_path):
         browser.emote = RED_THEN_BLUE
         output = tmp_path / "chat.mov"
 
-        chat_video.render([line(0.0)], 2.0, output, animated=True)
+        chat_video.render([line(0.0)], 2.0, output)
 
-        assert browser.animated == [True]
         # On the frame of its animation the video is at, from its first frame.
         colours = [picture(output, at)[EMOTE_ROW, EMOTE_COLUMN] for at in (0.25, 0.75, 1.25)]
         assert [near(colour, expected) for colour, expected in zip(colours, [RED, BLUE, RED], strict=True)] == [
@@ -347,9 +344,8 @@ class TestBurning:
         browser.emote = RED_THEN_BLUE
         output = tmp_path / "cut.mp4"
 
-        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, "right", animated=True)
+        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, "right")
 
-        assert browser.animated == [True]
         row, column = TOP + round(EMOTE_ROW * DOWN / HEIGHT), LEFT + round(EMOTE_COLUMN * ACROSS / WIDTH)
         early, late = (picture(output, at, "rgb24")[row, column] for at in (0.25, 0.75))
         assert near(early, RED) and near(late, BLUE)

@@ -200,34 +200,19 @@ class TestWhereChatGoes:
             clip_trim.chat_where(value)
 
 
-class TestWhetherEmotesMove:
-    @pytest.mark.parametrize("value", [True, False])
-    def test_as_it_is_said(self, value):
-        assert clip_trim.chat_animated(value) is value
-
-    def test_they_stand_still_unless_it_is_said(self):
-        # As they did before they could move.
-        assert clip_trim.chat_animated(None) is False
-
-    @pytest.mark.parametrize("value", ["true", "yes", 1, 0, []])
-    def test_anything_but_true_or_false_is_refused(self, value):
-        with pytest.raises(TrimError, match="chat_animated must be true or false"):
-            clip_trim.chat_animated(value)
-
-
 class TestHowChatIsToBe:
     def test_everything_the_dialog_says_of_it(self):
-        asked = {"chat_shift": -2.5, "chat_background": "#0A2540", "chat_where": "left", "chat_animated": True}
+        asked = {"chat_shift": -2.5, "chat_background": "#0A2540", "chat_where": "left"}
 
-        assert clip_trim.chat_look(asked) == clip_trim.ChatLook(-2.5, "#0a2540", "left", animated=True)
+        assert clip_trim.chat_look(asked) == clip_trim.ChatLook(-2.5, "#0a2540", "left")
 
     def test_as_it_always_was_where_nothing_is_said(self):
-        assert clip_trim.chat_look({}) == clip_trim.ChatLook(0.0, None, clip_trim.CHAT_APART, animated=False)
+        assert clip_trim.chat_look({}) == clip_trim.ChatLook(0.0, None, clip_trim.CHAT_APART)
 
     @pytest.mark.parametrize(
         "asked",
-        [{"chat_shift": 99}, {"chat_background": "navy"}, {"chat_where": "top"}, {"chat_animated": "yes"}],
-        ids=["shift", "background", "where", "animated"],
+        [{"chat_shift": 99}, {"chat_background": "navy"}, {"chat_where": "top"}],
+        ids=["shift", "background", "where"],
     )
     def test_any_of_it_that_cannot_be_is_refused(self, asked):
         with pytest.raises(TrimError):

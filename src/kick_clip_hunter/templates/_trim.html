@@ -3,8 +3,7 @@
     Where the stretch starts and ends is set on a strip, with a handle at
     either end, or typed; its chat can go with it - drawn into its picture,
     or as a video of its own to lay over it - moved against the picture if
-    it does not sit right, with its animated emotes moving or standing
-    still. The script opens
+    it does not sit right, with its animated emotes moving. The script opens
     this and draws the strip in it: a moment's from the one on the page, a
     recording's - which is hours, so the strip shows a window of it around
     the stretch - from what the service draws for that window. -#}
@@ -84,9 +83,6 @@
       <label class="trim-check"><input type="checkbox" disabled data-trim-background> on a background</label>
       <input type="color" value="{{ trim.chat_background }}" aria-label="Colour behind the chat" disabled data-trim-background-colour>
     </span>
-    {#- Animated emotes stand still in the video unless this is ticked. The
-        script keeps what was chosen last. -#}
-    <label class="trim-check" title="Animated emotes move as they do in chat, instead of standing still on one of their frames. Making the chat takes longer with them."><input type="checkbox" disabled data-trim-animated> animated emotes</label>
   </div>
   {% endif %}
   <p class="trim-note">Cut without re-encoding, so the video begins on the last frame a cut can begin on before the start you set: up to a couple of seconds earlier.

@@ -14,13 +14,13 @@ drawn twice and nothing runs on a clock: no frame is ever dropped, and
 half an hour of a busy chat is ready in a minute or two - when the browser
 drew every frame, it took twice as long as the video runs.
 
-An animated emote stands still in those pictures, on whichever of its
-frames the browser drew - unless it is asked to move. Then the browser
-leaves the animated ones out of its pictures, their pictures are taken
-apart into their frames here (see Animation), and each frame of the video
-has them drawn in, on the frame of their animation it shows. That takes
-longer: a frame with an emote moving on it is seldom the one before it
-over again.
+An animated emote would stand still in those pictures, on whichever of
+its frames the browser drew. So the browser leaves the animated ones out
+of its pictures, their pictures are taken apart into their frames here
+(see Animation), and each frame of the video has them drawn in, on the
+frame of their animation it shows. That takes longer than a column that
+stands still: a frame with an emote moving on it is seldom the one before
+it over again.
 
 The frames go to ffmpeg as raw pictures, for one of three files:
 
@@ -225,12 +225,12 @@ class Column(NamedTuple):
 
 
 @contextmanager
-def drawn_column(html: str, animated: bool = False) -> Iterator[Column]:
+def drawn_column(html: str) -> Iterator[Column]:
     """The page's chat laid out by a browser without a window, which stays
     open for as long as the `with` block runs: the column's pictures are
-    taken as the frames come to need them. With `animated`, the emotes that
-    are animated are left out of those pictures and handed over apart, to
-    be drawn in moving."""
+    taken as the frames come to need them. The emotes that are animated are
+    left out of those pictures and handed over apart, to be drawn in
+    moving."""
     fetched: dict[str, bytes] = {}
 
     def serve(route) -> None:
@@ -239,7 +239,7 @@ def drawn_column(html: str, animated: bool = False) -> Iterator[Column]:
             route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
         elif kind == "file":
             route.fulfill(path=str(file))
-        elif kind == "fetch" and animated:
+        elif kind == "fetch":
             # Fetched here and handed on to the browser, to keep the picture:
             # whether an emote is animated is told from that.
             try:
@@ -251,8 +251,6 @@ def drawn_column(html: str, animated: bool = False) -> Iterator[Column]:
             if response.ok:
                 fetched[route.request.url] = picture
             route.fulfill(response=response, body=picture)
-        elif kind == "fetch":
-            route.continue_()
         elif kind == "missing":
             route.fulfill(status=404, body="")
         else:
@@ -271,7 +269,7 @@ def drawn_column(html: str, animated: bool = False) -> Iterator[Column]:
             page.evaluate(
                 "limit => chatVideo.ready(limit)", PICTURES_TIMEOUT_SECONDS * 1000, isolated_context=False
             )
-            emotes = _set_aside(page, fetched) if animated else []
+            emotes = _set_aside(page, fetched)
             laid_out = page.evaluate("page => chatVideo.layOut(page)", PAGE_PIXELS, isolated_context=False)
             pages = int(laid_out["pages"])
 
@@ -636,17 +634,16 @@ def render(
     output: Path,
     background: str | None = None,
     progress: Callable[[float], None] | None = None,
-    animated: bool = False,
 ) -> int:
     """Renders the chat video of a video `duration` seconds long from its
     chat lines (see chat_trace.chat_replay) and returns its frame count.
     With a `background` colour the video is that colour behind the text, to
     put next to the picture; without one it is see-through, to lay over it.
     `progress` is told how far it has got, as a share, and may raise to
-    give up. `animated` has animated emotes move."""
+    give up. Animated emotes move in it."""
     html = page_html(lines_for_clip(lines, duration))
     times = frame_times(duration)
-    with _one_at_a_time, drawn_column(html, animated) as column:
+    with _one_at_a_time, drawn_column(html) as column:
         return encode(_told(frames(column, times), len(times), progress), output, background)
 
 
@@ -752,13 +749,12 @@ def burn(
     side: str,
     background: str | None = None,
     progress: Callable[[float], None] | None = None,
-    animated: bool = False,
 ) -> str:
     """Cuts `duration` seconds of `source` out from its second `start`,
     with the chat of `lines` (counted from there, see lines_from) drawn
     into its picture on `side`, into `output`, and returns the encoder the
     picture was encoded with. Unlike a cut that is copied, it begins on the
-    very frame at `start`. `progress` and `animated` are as for render."""
+    very frame at `start`. `progress` is as for render."""
     picture = footage(source)
     across, down, left, top = placement(picture.width, picture.height, side)
     encoder, options = video_encoder()
@@ -781,7 +777,7 @@ def burn(
     # fmt: on
     html = page_html(lines_for_clip(lines, duration))
     times = frame_times(duration)
-    with _one_at_a_time, drawn_column(html, animated) as column:
+    with _one_at_a_time, drawn_column(html) as column:
         _encode(arguments, _told(frames(column, times), len(times), progress), output)
     return encoder
 
