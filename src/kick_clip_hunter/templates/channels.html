@@ -62,18 +62,6 @@
     <p class="status-line" role="status" data-status></p>
   </section>
 
-  <section aria-labelledby="shutdown-title" data-shutdown data-status-scope>
-    <h2 class="title" id="shutdown-title">Shut down</h2>
-    <div class="ch-line" data-shutdown-ask>
-      <button type="button" class="ch-btn" data-shutdown-open{% if shutdown_requested %} disabled{% endif %}>{{ "Shutting down" if shutdown_requested else "Shut down" }}</button>
-    </div>
-    <div class="ch-line" data-shutdown-confirm hidden>
-      <span>Stops watching, ends any stream recording and shuts down once the clips and recordings in progress are saved.</span>
-      <button type="button" class="ch-btn ch-btn-primary" data-shutdown-go>Shut down</button>
-      <button type="button" class="ch-btn ch-btn-quiet" data-shutdown-cancel>Cancel</button>
-    </div>
-    <p class="status-line" role="status" data-status></p>
-  </section>
 </div>
 </main>
 {% endblock %}

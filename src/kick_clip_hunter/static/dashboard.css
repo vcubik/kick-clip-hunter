@@ -88,6 +88,7 @@
   --w-queue: 400px;
   --w-chat: 340px;
   --w-dialog: 1120px;
+  --w-confirm: 480px;
   --w-trim-chat: 300px;
   --w-recording: 340px;
   --w-handle: 12px;
@@ -329,6 +330,9 @@ a { color: inherit; }
 /* Dialog: one job done over the page, which waits under a shade. Square and
    flat like a pane, with a `sunk` edge. */
 .ch-dialog { width: min(var(--w-dialog), calc(100vw - var(--space-48))); max-height: calc(100vh - var(--space-48)); padding: var(--space-16); border: 1px solid var(--sunk); background: var(--field); color: var(--text); overflow-y: auto; }
+.ch-dialog-small { width: min(var(--w-confirm), calc(100vw - var(--space-48))); }
+.ch-dialog-small > * + * { margin-top: var(--space-12); }
+.ch-dialog-small > [data-status]:empty { display: none; }
 .ch-dialog::backdrop { background: var(--shade); }
 .ch-dialog-head { display: flex; align-items: center; gap: var(--space-16); margin-bottom: var(--space-12); }
 .ch-dialog-head .ch-btn { margin-left: auto; }

@@ -2,8 +2,9 @@
     pages - and, beside Health, how much of what the service depends on is
     in trouble - what the service is doing right now - whether a watched
     channel is live, and whether a stream is being recorded whole - and the
-    switch that pauses it, and the banner that takes over once a shutdown
-    has been asked for. -#}
+    switch that pauses it, and at its far end the button that shuts the
+    service down - and the banner that takes over once a shutdown has been
+    asked for. -#}
 {%- from "_macros.html" import switch -%}
 <!DOCTYPE html>
 <html lang="en">
@@ -35,8 +36,20 @@
       <span aria-hidden="true">Watching</span>
       {{ switch("Watching", "/settings/watching", watching_enabled, disabled=shutdown_requested) }}
     </span>
+    {#- Shutting down is asked for twice: this, then the same word again in
+        the dialog, next to a sentence that says what it will do. -#}
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-shutdown-open{% if shutdown_requested %} disabled{% endif %}>{{ "Shutting down" if shutdown_requested else "Shut down" }}</button>
   </div>
 </header>
+<dialog class="ch-dialog ch-dialog-small" aria-labelledby="shutdown-title" data-shutdown data-status-scope>
+  <h2 class="title" id="shutdown-title">Shut down</h2>
+  <p>Stops watching, ends any stream recording and shuts down once the clips and recordings in progress are saved.</p>
+  <div class="ch-line" data-shutdown-confirm>
+    <button type="button" class="ch-btn ch-btn-primary" data-shutdown-go>Shut down</button>
+    <button type="button" class="ch-btn ch-btn-quiet" data-shutdown-cancel>Cancel</button>
+  </div>
+  <p class="status-line" role="status" data-status></p>
+</dialog>
 {% if shutdown_requested %}
 <div class="ch-banner ch-banner-halt" role="status"><span><b>Shutting down.</b> {{ shutdown_words }}</span></div>
 {% endif %}
