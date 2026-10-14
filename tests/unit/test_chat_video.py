@@ -218,6 +218,8 @@ class TestWhatTheBrowserMayLoad:
             "https://cdn.7tv.app/emote/ID1/2x.webp",
             "https://files.kick.com/emotes/37226/fullsize",
             "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0",
+            "https://cdn.betterttv.net/emote/5f1b0186cf6d2144653d2970/2x",
+            "https://cdn.frankerfacez.com/emote/139407/2",
         ],
     )
     def test_emote_pictures_from_where_they_are_kept(self, url):

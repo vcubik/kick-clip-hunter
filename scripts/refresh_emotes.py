@@ -1,6 +1,7 @@
-"""CLI to refresh a watched channel's 7TV emotes - the keywords the detector
-listens for and the pictures the dashboard shows - without touching its
-Kick event subscription at all.
+"""CLI to refresh a watched channel's emotes - 7TV's, and on Twitch also
+BetterTTV's and FrankerFaceZ's: the keywords the detector listens for and the
+pictures the dashboard shows - without touching its Kick event subscription
+at all.
 
 Usage: python scripts/refresh_emotes.py <channel>
 
@@ -20,7 +21,7 @@ from kick_clip_hunter.config import load_settings
 from kick_clip_hunter.db import get_connection, get_streamer_by_slug
 from kick_clip_hunter.kick_client import get_app_access_token, get_channel_by_slug
 from kick_clip_hunter.seventv_client import get_channel_emotes
-from kick_clip_hunter.watchlist import store_channel_emotes
+from kick_clip_hunter.watchlist import EMOTE_SOURCES, channel_emotes, store_channel_emotes
 
 
 def _watched_elsewhere(platform: str, name: str) -> tuple[str, int, str]:
@@ -47,7 +48,7 @@ async def main(channel: str) -> None:
         slug, emotes = name, await get_channel_emotes(broadcaster_id)
     else:
         slug, broadcaster_id, user_id = _watched_elsewhere(platform, name)
-        emotes = await get_channel_emotes(user_id, platform)
+        emotes = await channel_emotes(platform, user_id)
 
     conn = get_connection()
     try:
@@ -55,7 +56,7 @@ async def main(channel: str) -> None:
     finally:
         conn.close()
     print(
-        f"Fetched {len(emotes)} 7TV emote name(s) for {slug!r} "
+        f"Fetched {len(emotes)} {EMOTE_SOURCES[platform]} emote name(s) for {slug!r} "
         f"({laugh_count} classified as laugh-related)"
     )
     print(f"Refreshed keywords for {slug!r}.")

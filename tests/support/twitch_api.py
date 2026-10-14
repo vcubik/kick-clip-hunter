@@ -17,7 +17,17 @@ import httpx
 
 from tests.support.kick_api import seventv_emote_id
 
-HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv"})
+HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv", "api.betterttv.net", "api.frankerfacez.com"})
+
+
+def bttv_emote_id(name: str) -> str:
+    """The id the fake BetterTTV gives an emote of that name."""
+    return "b" + name.encode().hex()
+
+
+def ffz_emote_id(name: str) -> int:
+    """The id the fake FrankerFaceZ gives an emote of that name."""
+    return int.from_bytes(name.encode()[:6], "big")
 
 
 @dataclass
@@ -31,6 +41,9 @@ class FakeTwitchChannel:
     stream_id: str = "1"
     # 7TV emote names of the channel; None = no 7TV account at all.
     seventv_emotes: list[str] | None = field(default_factory=list)
+    # The same on BetterTTV and FrankerFaceZ; None = no account there.
+    bttv_emotes: list[str] | None = field(default_factory=list)
+    ffz_emotes: list[str] | None = field(default_factory=list)
 
     def user_json(self) -> dict:
         return {
@@ -209,6 +222,25 @@ class FakeTwitchApi:
             if path == "/helix/eventsub/subscriptions" and request.method == "POST":
                 return self._subscribe(request, body)  # type: ignore[arg-type]
 
+        if request.url.host == "api.betterttv.net" and path.startswith("/3/cached/users/twitch/"):
+            channel = self._by_id(path.rsplit("/", 1)[1])
+            if channel is None or channel.bttv_emotes is None:
+                return httpx.Response(404, json={"message": "user not found"})
+            emotes = [
+                {"id": bttv_emote_id(name), "code": name, "imageType": "png", "animated": False}
+                for name in channel.bttv_emotes
+            ]
+            return httpx.Response(200, json={"id": "x", "bots": [], "channelEmotes": emotes, "sharedEmotes": []})
+
+        if request.url.host == "api.frankerfacez.com" and path.startswith("/v1/room/id/"):
+            channel = self._by_id(path.rsplit("/", 1)[1])
+            if channel is None or channel.ffz_emotes is None:
+                return httpx.Response(404, json={"error": "Not Found", "status": 404})
+            emotes = [
+                {"id": ffz_emote_id(name), "name": name, "width": 64, "height": 32} for name in channel.ffz_emotes
+            ]
+            return httpx.Response(200, json={"room": {"set": 1}, "sets": {"1": {"id": 1, "emoticons": emotes}}})
+
         if request.url.host == "7tv.io" and path.startswith("/v3/users/twitch/"):
             user_id = path.rsplit("/", 1)[1]
             channel = next((c for c in self.channels.values() if c.user_id == user_id), None)
@@ -242,6 +274,9 @@ class FakeTwitchApi:
         }
         self.eventsub_subscriptions.append(subscription)
         return httpx.Response(202, json={"data": [subscription], "total": len(self.eventsub_subscriptions)})
+
+    def _by_id(self, user_id: str) -> FakeTwitchChannel | None:
+        return next((channel for channel in self.channels.values() if channel.user_id == user_id), None)
 
     def subscribed_on(self, session_id: str) -> list[str]:
         """The channels (Twitch ids) whose chat is subscribed to a session."""

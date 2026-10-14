@@ -10,7 +10,7 @@ Shared by scripts/subscribe.py (CLI) and the dashboard's "add channel" form
 in main.py, so the two stay in lockstep instead of drifting apart.
 """
 
-from . import platforms, twitch_client
+from . import platforms, twitch_client, twitch_emotes
 from .config import load_settings
 from .db import (
     GLOBAL_EMOTES_OWNER,
@@ -40,18 +40,32 @@ def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
     return sum(1 for weight in keyword_weights.values() if weight == EMOTE_MENTION_LAUGH_WEIGHT)
 
 
+# Which sets a channel's emotes beyond its platform's own come from, in words.
+EMOTE_SOURCES = {platforms.KICK: "7TV", platforms.TWITCH: "7TV, BetterTTV and FrankerFaceZ"}
+
+
+async def channel_emotes(platform: str, user_id: int | str) -> list[Emote]:
+    """A channel's emotes beyond its platform's own, by its id there: its
+    7TV set - and on Twitch its BetterTTV and FrankerFaceZ ones too (see
+    twitch_emotes.py)."""
+    if platform == platforms.TWITCH:
+        return await twitch_emotes.get_channel_emotes_on_twitch(str(user_id))
+    return await get_channel_emotes(user_id, platform)
+
+
 async def refresh_emote_pictures(
     broadcaster_id: int = GLOBAL_EMOTES_OWNER, platform: str = platforms.KICK, platform_user_id: str | None = None
 ) -> int:
-    """Fetches a channel's 7TV emote set again and stores its pictures,
-    leaving the detector's keywords as they are. A channel is asked about by
-    its id on its own platform (a Kick channel's is the id it is kept by).
-    Without a channel it is 7TV's global emotes, the ones every channel has,
-    that are fetched. Returns how many pictures there are."""
+    """Fetches a channel's emote sets again (see channel_emotes) and stores
+    their pictures, leaving the detector's keywords as they are. A channel
+    is asked about by its id on its own platform (a Kick channel's is the id
+    it is kept by). Without a channel it is 7TV's global emotes, the ones
+    every channel has, that are fetched. Returns how many pictures there
+    are."""
     if broadcaster_id == GLOBAL_EMOTES_OWNER:
         emotes = await get_global_emotes()
     else:
-        emotes = await get_channel_emotes(platform_user_id or broadcaster_id, platform)
+        emotes = await channel_emotes(platform, platform_user_id or broadcaster_id)
     pictures = emote_pictures(emotes)
     conn = get_connection()
     try:
@@ -104,7 +118,7 @@ async def add_twitch_channel(login: str) -> dict:
     settings = load_settings()
     token = await twitch_client.app_token(settings)
     user = await twitch_client.get_user(login, settings.twitch_client_id, token)
-    emotes = await get_channel_emotes(user["id"], platforms.TWITCH)
+    emotes = await channel_emotes(platforms.TWITCH, user["id"])
 
     slug = platforms.channel_name(platforms.TWITCH, user["login"])
     conn = get_connection()

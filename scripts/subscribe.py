@@ -16,7 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kick_clip_hunter.watchlist import add_to_watchlist
+from kick_clip_hunter import platforms
+from kick_clip_hunter.watchlist import EMOTE_SOURCES, add_to_watchlist
 
 
 async def main(channel: str) -> None:
@@ -24,7 +25,7 @@ async def main(channel: str) -> None:
     slug = result["slug"]
     print(f"Found channel {slug!r}: broadcaster_user_id={result['broadcaster_user_id']}")
     print(
-        f"Fetched {result['emote_count']} 7TV emote name(s) for {slug!r} "
+        f"Fetched {result['emote_count']} {EMOTE_SOURCES[platforms.platform_of(slug)]} emote name(s) for {slug!r} "
         f"({result['laugh_emote_count']} classified as laugh-related)"
     )
     print(f"Added {slug!r} to the watchlist.")
