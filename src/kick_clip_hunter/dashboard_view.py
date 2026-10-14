@@ -390,6 +390,7 @@ def queue_groups(
                 # What the row goes back to saying if its name is taken away.
                 "unnamed": queue_label(row, (reactions or {}).get(row["id"]), named=False),
                 "has_clip": bool(row["clip_path"]),
+                "downloaded": row["downloaded_at"] is not None,
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
             }

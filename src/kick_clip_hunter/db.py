@@ -304,6 +304,12 @@ def get_connection() -> sqlite3.Connection:
     if "context_after" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN context_after REAL")
 
+    # When something cut out of a moment's footage was last downloaded from
+    # the Trim dialog (see clip_trim.py) - what the queue marks a moment by
+    # that an editor has already taken. NULL for one nobody has.
+    if "downloaded_at" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN downloaded_at TEXT")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -516,7 +522,7 @@ _MOMENT_COLUMNS = """
     id, broadcaster_user_id, channel_slug, detected_at, window_start, window_end, reason, score,
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
-    context_before, context_after,
+    context_before, context_after, downloaded_at,
     rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type
 """
 
@@ -1201,6 +1207,11 @@ def update_moment_type(conn: sqlite3.Connection, moment_id: int, moment_type: st
 
 def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int | None) -> None:
     conn.execute("UPDATE moments SET rating = ? WHERE id = ?", (rating, moment_id))
+    conn.commit()
+
+
+def update_moment_downloaded(conn: sqlite3.Connection, moment_id: int, downloaded_at: str) -> None:
+    conn.execute("UPDATE moments SET downloaded_at = ? WHERE id = ?", (downloaded_at, moment_id))
     conn.commit()
 
 

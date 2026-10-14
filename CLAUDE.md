@@ -105,7 +105,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   start with, the frame broadcast 3s before it arrived), so under the chat is a slider that
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
-  below). `GET /dashboard/channels` has the
+  below); a moment something was downloaded from there is marked in the queue, beside its
+  rating (`moments.downloaded_at`). `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else, and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
@@ -335,7 +336,15 @@ Module map (`src/kick_clip_hunter/`):
   the dialog's slider moves its lines up to 10s either way against the picture, for that
   one video, on top of the channel's chat delay - and shows them beside the picture as
   they will be. The chat video is see-through unless a background colour is picked
-  for it there (`chat_background`, "#rrggbb"), for putting chat next to the picture. What state a cut is in is kept in memory while one is being made and told
+  for it there (`chat_background`, "#rrggbb"), for putting chat next to the picture. A video
+  taken without its chat can have it made afterwards ("Make its chat", `POST
+  /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`): for the stretch that video holds,
+  not the one set in the dialog now. That needs where the video really begins in the file,
+  which nothing can tell from the video afterwards, so it is kept beside it as JSON
+  (`record_name`, `cut_record`) - a cut from before that was kept has to be exported again.
+  A moment's two files are downloaded through `GET /moments/{id}/trim/video` and `/chat`,
+  not their address under /clips, since that is what marks the moment as taken. What
+  state a cut is in is kept in memory while one is being made and told
   from the files otherwise. Either end of the stretch can also be typed into the dialog
   as a time (the script reads it; the server is only ever given seconds). The Recordings
   page has the same dialog over a recording's file (`POST`/`GET /recordings/{id}/trim`,

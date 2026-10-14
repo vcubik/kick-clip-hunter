@@ -116,7 +116,7 @@ class TestSchema:
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
-            "context_before", "context_after",
+            "context_before", "context_after", "downloaded_at",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):

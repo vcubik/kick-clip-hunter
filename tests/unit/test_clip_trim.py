@@ -27,6 +27,34 @@ class TestName:
         assert clip_trim.video_name("moment_12.mp4") == "moment_12_trim.mp4"
 
 
+class TestWhatIsKeptOfACut:
+    """Where a cut video begins in its file and how long it runs, kept
+    beside it so that its chat can be made later."""
+
+    def test_it_is_named_after_the_video(self):
+        assert clip_trim.record_name("moment_12_trim.mp4") == "moment_12_trim.json"
+
+    def test_it_reads_back_as_it_was_written(self):
+        assert clip_trim.read_cut_record(clip_trim.cut_record(4.0, 6.25)) == (4.0, 6.25)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "not json",
+            "[4, 6]",
+            '{"begins": 4}',
+            '{"begins": "4", "duration": 6}',
+            '{"begins": -1, "duration": 6}',
+            '{"begins": 4, "duration": 0}',
+            '{"begins": 4, "duration": Infinity}',
+        ],
+        ids=["empty", "text", "list", "no-duration", "string", "negative", "no-length", "infinite"],
+    )
+    def test_anything_else_is_not_one(self, text):
+        assert clip_trim.read_cut_record(text) is None
+
+
 class TestFootage:
     def test_it_reaches_as_far_as_the_context_either_side_of_the_clip(self):
         assert clip_trim.footage(row()) == (-30.0, 100.0)

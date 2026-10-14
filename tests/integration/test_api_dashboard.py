@@ -1936,6 +1936,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "chat_later": False,
         }
         await service.settle()
 
@@ -1943,7 +1944,7 @@ class TestTrimming:
         assert decodes_cleanly(self.VIDEO)
         state = await self.state(service, moment_id)
         assert (state["state"], state["words"]) == ("ready", view.trim_words(view.TRIM_READY))
-        assert state["video_url"].startswith("/clips/channel_a/moment_1_trim.mp4?v=") and state["chat_url"] is None
+        assert state["video_url"].startswith(f"/moments/{moment_id}/trim/video?v=") and state["chat_url"] is None
         served = await service.client.get(state["video_url"])
         assert served.status_code == 200 and served.content == self.VIDEO.read_bytes()
         # The moment's own file is what it was.
@@ -1987,7 +1988,7 @@ class TestTrimming:
 
         state = await self.state(service, moment_id)
         assert state["state"] == "ready"
-        assert state["chat_url"].startswith("/clips/channel_a/moment_1_trim_chat.mov?v=")
+        assert state["chat_url"].startswith(f"/moments/{moment_id}/trim/chat?v=")
         stream = video_stream(self.CHAT)
         assert (stream["codec_name"], stream["profile"]) == ("prores", "4444")
         assert stream["pix_fmt"].startswith("yuva444p")
@@ -2086,6 +2087,158 @@ class TestTrimming:
 
         assert (await self.state(service, moment_id))["chat_url"] is not None
 
+    # -- its chat, later
+
+    async def ask_chat(self, service, moment_id: int, **asked):
+        return await service.client.post(f"/moments/{moment_id}/trim/chat", json=asked)
+
+    async def test_a_video_taken_without_its_chat_can_have_it_made_later(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, start=-1, end=5)
+        await service.settle()
+        video = self.VIDEO.read_bytes()
+
+        state = await self.state(service, moment_id)
+        assert state["chat_later"] is True and state["chat_url"] is None
+        response = await self.ask_chat(service, moment_id)
+
+        assert response.status_code == 200
+        assert response.json()["state"] == "chat" and response.json()["chat_later"] is False
+        await service.settle()
+
+        state = await self.state(service, moment_id)
+        assert state["state"] == "ready" and state["chat_url"] is not None and state["chat_later"] is False
+        # As it would have been made with the video: lined up with where the
+        # video really begins, two seconds before the clip.
+        assert self.lines(browser) == [("alice", "-1"), ("bob", "2.5"), ("carol", "5.5")]
+        assert int(video_stream(self.CHAT)["nb_frames"]) == pytest.approx(
+            probe(self.VIDEO)["duration"] * chat_video.FPS, abs=2
+        )
+        # The video is left as it was.
+        assert self.VIDEO.read_bytes() == video
+
+    async def test_chat_made_later_can_be_moved_and_given_a_background(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, start=-2, end=5)
+        await service.settle()
+
+        await self.ask_chat(service, moment_id, chat_shift=1.5, chat_background="#0A2540")
+        await service.settle()
+
+        assert self.lines(browser) == [("alice", "0.5"), ("bob", "4"), ("carol", "7")]
+        assert parse(browser.pages[0]).one("html").attrs["style"] == "background: #0a2540"
+
+    async def test_chat_made_later_survives_a_restart_in_between(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, start=-1, end=5)
+        await service.settle()
+
+        service.main._trims.clear()  # all that a restart forgets
+        assert (await self.state(service, moment_id))["chat_later"] is True
+        await self.ask_chat(service, moment_id)
+        await service.settle()
+
+        assert self.lines(browser) == [("alice", "-1"), ("bob", "2.5"), ("carol", "5.5")]
+
+    async def test_it_is_not_offered_once_the_video_has_its_chat(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, chat=True)
+        await service.settle()
+
+        assert (await self.state(service, moment_id))["chat_later"] is False
+
+    async def test_nor_for_a_video_cut_before_where_it_begins_was_kept(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id)
+        await service.settle()
+        self.VIDEO.with_name(clip_trim.record_name(self.VIDEO.name)).unlink()
+
+        assert (await self.state(service, moment_id))["chat_later"] is False
+        response = await self.ask_chat(service, moment_id)
+
+        assert response.status_code == 409 and "Export it again" in response.json()["detail"]
+        assert browser.pages == []
+
+    async def test_nor_where_nothing_has_been_cut(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+
+        response = await self.ask_chat(service, moment_id)
+
+        assert response.status_code == 409
+        assert browser.pages == [] and service.main._background_tasks == set()
+
+    async def test_nor_for_a_moment_without_chat(self, service, footage, browser):
+        self.SOURCE.parent.mkdir(parents=True, exist_ok=True)
+        self.SOURCE.write_bytes(footage.read_bytes())
+        moment_id = add_moment(
+            "channel_a", detected_at=T0, clip_path=self.CLIP, **{**clip_cut_at(T0, 4.0), **FOOTAGE_EXTENT}
+        )
+        await self.ask(service, moment_id)
+        await service.settle()
+
+        response = await self.ask_chat(service, moment_id)
+
+        assert response.status_code == 409
+        assert browser.pages == [] and not self.CHAT.exists()
+
+    @pytest.mark.parametrize(
+        "asked",
+        [{"chat_shift": clip_trim.CHAT_SHIFT_LIMIT_SECONDS + 1}, {"chat_background": "navy"}],
+        ids=["too-far", "colour-name"],
+    )
+    async def test_what_cannot_be_made_is_refused_in_words(self, service, footage, browser, asked):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id)
+        await service.settle()
+
+        response = await self.ask_chat(service, moment_id, **asked)
+
+        assert response.status_code == 400 and response.json()["detail"].endswith(".")
+        assert browser.pages == []
+
+    async def test_the_dialog_has_a_button_for_it_which_the_script_shows(self, service, footage):
+        self.clip_with_chat(footage)
+
+        dialog = await self.dialog(service)
+
+        assert "hidden" in dialog.one("button", data_trim_chat_later=True).attrs
+
+    async def test_an_unknown_moment_has_none_made(self, service):
+        assert (await self.ask_chat(service, 999)).status_code == 404
+
+    # -- downloading
+
+    async def test_a_download_hands_the_file_over_and_marks_the_moment_in_the_queue(self, service, footage, browser):
+        moment_id = self.clip_with_chat(footage)
+        await self.ask(service, moment_id, chat=True)
+        await service.settle()
+        (row,) = queue_rows(await review(service))
+        assert "hidden" in row.one("span", data_taken=True).attrs
+
+        state = await self.state(service, moment_id)
+        for url, file in ((state["video_url"], self.VIDEO), (state["chat_url"], self.CHAT)):
+            served = await service.client.get(url)
+
+            assert served.status_code == 200 and served.content == file.read_bytes()
+            assert served.headers["content-disposition"] == f'attachment; filename="{file.name}"'
+
+        (row,) = queue_rows(await review(service))
+        assert "hidden" not in row.one("span", data_taken=True).attrs
+
+    async def test_only_a_file_that_is_there_is_handed_over(self, service, footage):
+        moment_id = self.clip_with_chat(footage)
+        no_clip = add_moment("channel_a", detected_at=T0)
+
+        for url in (
+            f"/moments/{moment_id}/trim/video",
+            f"/moments/{moment_id}/trim/clip",
+            f"/moments/{no_clip}/trim/video",
+            "/moments/999/trim/video",
+        ):
+            assert (await service.client.get(url)).status_code == 404, url
+        # Nothing was taken.
+        assert all("hidden" in row.one("span", data_taken=True).attrs for row in queue_rows(await review(service)))
+
     # -- one after another
 
     async def test_asking_again_while_one_is_being_made_starts_nothing_more(self, service, footage, browser):
@@ -2156,6 +2309,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_FAILED),
             "video_url": None,
             "chat_url": None,
+            "chat_later": False,
         }
         assert not self.VIDEO.exists()
         assert any("trimming failed for moment 1" in r.getMessage() for r in caplog.records)

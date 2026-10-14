@@ -81,6 +81,12 @@
     <p class="status-line" role="status" data-trim-state></p>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
+    {%- if trim.chat %}
+    {#- For a video that was taken without its chat: the chat of the stretch
+        it holds - not of the one set above, if that has been moved since -
+        as the options above have it. -#}
+    <button type="button" class="ch-btn ch-btn-compact" hidden title="Makes the chat video of the stretch the video that is ready holds, moved and with a background as set above." data-trim-chat-later>Make its chat</button>
+    {%- endif %}
     <button type="button" class="ch-btn ch-btn-primary" data-trim-go>Export</button>
   </div>
 </dialog>
