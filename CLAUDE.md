@@ -421,8 +421,10 @@ Module map (`src/kick_clip_hunter/`):
   channel's chat delay - and shows them beside the picture as they will be. Chat is
   see-through unless a background colour is picked there (`chat_background`, "#rrggbb"):
   in the picture a panel behind it, as a video of its own a video to put next to the
-  picture. A video taken without its chat can have it made afterwards ("Make its chat",
-  `POST /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`, `chat_where` as above -
+  picture. Its animated emotes stand still unless "animated emotes" is ticked there
+  (`chat_animated`, remembered by the script too). The options travel together as a
+  `ChatLook` (`chat_look`). A video taken without its chat can have it made afterwards ("Make its chat",
+  `POST /moments/{id}/trim/chat`, `/recordings/{id}/trim/chat`, the options as above -
   drawn in, it takes the copied cut's place): for the stretch that video holds, not the
   one set in the dialog now. That needs where the video really begins in the file, which
   nothing can tell from the video afterwards, so it is kept beside it as JSON
@@ -452,10 +454,17 @@ Module map (`src/kick_clip_hunter/`):
   one under another in a column 480px wide, and takes pictures of it a screenful
   (`PAGE_PIXELS`) at a time without the background, as the frames come to need them
   (`drawn_column`); each frame is then put together in numpy from those pictures
-  (`view_at`, `frames`): the lines that had arrived, the newest at the bottom easing in
-  over `ENTER_SECONDS`, the oldest fading out at the top - identical frames are the same
-  bytes. That makes half an hour of a busy chat a minute or two of work instead of twice its
-  length; animated emotes stand still on whichever frame was drawn. Raw RGBA frames go to
+  (`frame_top`, `frames`): the lines that had arrived, the newest at the bottom from the
+  frame it arrives in (the column jumps up to make room, as chat does), the oldest fading
+  out at the top - identical frames are the same bytes. That makes half an hour of a busy
+  chat a minute or two of work instead of twice its length. Animated emotes stand still on
+  whichever frame was drawn, unless they are asked to move (`animated`): then the browser
+  is handed the emote pictures by the route that serves it (`route.fetch`), and those of
+  more than one frame are hidden in the column (`chatVideo.setAside`) and taken apart into
+  their frames with Pillow (`Animation`: GIF, WebP, APNG and AVIF, a frame of 10 ms or
+  less shown for 100 ms as browsers do), to be drawn into each frame on the one their
+  animation is at - every copy of a picture on the same one, running from the video's first
+  frame (`_Moving`). Raw RGBA frames go to
   ffmpeg for one of three files: a see-through video of its own (ProRes 4444,
   `..._trim_chat.mov`, large by nature - 3-5 MB per second of a busy chat), one on a colour
   (H.264 in the same `.mov`, a fraction of that), or the cut itself with chat drawn into its

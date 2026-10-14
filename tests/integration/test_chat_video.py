@@ -17,7 +17,14 @@ import numpy as np
 import pytest
 
 from kick_clip_hunter import chat_video
-from tests.support.browser import FakeBrowser
+from tests.support.browser import (
+    EMOTE_LEFT,
+    EMOTE_PIXELS,
+    EMOTE_TOP,
+    LINE_PIXELS,
+    FakeBrowser,
+    animated_picture,
+)
 from tests.support.media import FFMPEG, decodes_cleanly, make_video, probe, require_ffmpeg, video_stream
 
 pytestmark = pytest.mark.usefixtures("ffmpeg")
@@ -43,6 +50,20 @@ def raw(rgba: tuple[int, int, int, int]) -> bytes:
 
 
 HALF_SEEN = raw((255, 0, 0, 128))
+
+RED, BLUE = (255, 0, 0, 255), (0, 0, 255, 255)
+# An emote that is red for half a second, then blue for one, over and over.
+RED_THEN_BLUE = animated_picture([RED, BLUE], [500, 500])
+# Where the middle of the newest line's emote is in a chat video of its own
+# (see FakeBrowser).
+EMOTE_ROW = HEIGHT - chat_video.BOTTOM_PIXELS - LINE_PIXELS + EMOTE_TOP + EMOTE_PIXELS // 2
+EMOTE_COLUMN = EMOTE_LEFT + EMOTE_PIXELS // 2
+
+
+def near(colour: np.ndarray, expected: tuple[int, ...]) -> bool:
+    """Whether a pixel is the colour expected, give or take what encoding
+    it changed."""
+    return bool(np.abs(colour[:3] - np.array(expected[:3])).max() <= 24)
 
 
 def picture(path: Path, at: float = 0.0, pixel_format: str = "rgba") -> np.ndarray:
@@ -204,6 +225,21 @@ class TestRendering:
         (html,) = browser.pages
         assert "before it" in html and "during it" in html
         assert "after it" not in html
+        # Animated emotes standing still, unless asked otherwise.
+        assert browser.animated == [False]
+
+    def test_animated_emotes_move_in_it_when_asked_to(self, browser, tmp_path):
+        browser.emote = RED_THEN_BLUE
+        output = tmp_path / "chat.mov"
+
+        chat_video.render([line(0.0)], 2.0, output, animated=True)
+
+        assert browser.animated == [True]
+        # On the frame of its animation the video is at, from its first frame.
+        colours = [picture(output, at)[EMOTE_ROW, EMOTE_COLUMN] for at in (0.25, 0.75, 1.25)]
+        assert [near(colour, expected) for colour, expected in zip(colours, [RED, BLUE, RED], strict=True)] == [
+            True
+        ] * 3
 
     def test_how_far_it_has_got_is_told_as_it_goes(self, browser, tmp_path):
         said: list[float] = []
@@ -290,6 +326,17 @@ class TestBurning:
         after = difference(picture(output, 1.0, "rgb24"), picture(footage, 1.0, "rgb24"))
         assert after[top : top + down, left : left + across].max() > 200
         assert after[:, left + across :].mean() < 8
+
+    def test_animated_emotes_move_in_the_picture_too(self, browser, footage, tmp_path):
+        browser.emote = RED_THEN_BLUE
+        output = tmp_path / "cut.mp4"
+
+        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, "right", animated=True)
+
+        assert browser.animated == [True]
+        row, column = TOP + round(EMOTE_ROW * DOWN / HEIGHT), LEFT + round(EMOTE_COLUMN * ACROSS / WIDTH)
+        early, late = (picture(output, at, "rgb24")[row, column] for at in (0.25, 0.75))
+        assert near(early, RED) and near(late, BLUE)
 
     def test_a_background_is_drawn_behind_the_chat(self, browser, footage, tmp_path):
         output = tmp_path / "cut.mp4"

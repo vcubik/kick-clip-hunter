@@ -165,8 +165,10 @@ worded as intended? Do rating, tags and notes validate and persist; do the switc
 restart; does shutdown wait for work in flight and stop recorders before exiting? Is a stretch asked
 for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
 its chat video hold the stretch's chat counted from where the video really begins, moved by what was
-asked for; is each frame of it the column of chat as it stood then - the newest line at the bottom,
-easing in, the oldest fading out at the top - see-through, or on the colour asked for; is chat drawn
+asked for; is each frame of it the column of chat as it stood then - the newest line at the bottom
+from the frame it arrives in, none of the lines still to come, the oldest fading out at the top -
+see-through, or on the colour asked for; do animated emotes, when asked to move, show the frame of
+their animation the video is at, every copy of one alike, moving with their line; is chat drawn
 into the cut's picture on the side asked for, from the very frame that was set, with how far it has
 got said and given up at a shutdown; does a new cut replace the one before, and is each state said
 in words? Does the dialog have a field for either end of the cut to be typed into, and a choice of
@@ -424,9 +426,12 @@ Run this on a live channel after changing any of the above, or the code right ne
    the video begins. The log says `moment N trimmed` and `chat video saved for moment N`. Laid
    over the video in an editor (or with ffmpeg's `overlay` filter) from its first frame, the chat
    video is as long as the video, has nothing behind the text, and its lines appear when they did
-   beside the picture in the dialog, each easing in from the bottom, the oldest fading out at the
-   top, with emotes and badges drawn (an animated emote stands still). With "on a background"
-   ticked it is the colour behind the text and a small H.264 file. Then choose "in the video, on
+   beside the picture in the dialog, each there at once at the bottom, the ones before moving up
+   for it, the oldest fading out at the top, with emotes and badges drawn (an animated emote
+   stands still). With "on a background" ticked it is the colour behind the text and a small
+   H.264 file. Tick "animated emotes" and Export again: it takes longer, and the animated emotes
+   in the chat video move as they do beside the picture, in their places, with every copy of an
+   emote alike; the box is still ticked when the dialog is opened again. Then choose "in the video, on
    the right" and Export again: the dialog counts up while the video is made with its chat in it,
    and offers one file to download, which begins on the very frame that was set and has the chat
    at the bottom right of the picture, as large as two thirds of its height - on a panel of the

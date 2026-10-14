@@ -431,6 +431,16 @@ class TestChatInTheVideo:
 
         assert lines(browser) == [("alice", "-1.5"), ("bob", "2")]
 
+    async def test_its_animated_emotes_can_move_in_it(self, service, footage, browser):
+        recording_id, _file = recording_of(footage)
+        said_at(5)
+
+        await ask(service, recording_id, start=5, end=9, chat=True, chat_where="right", chat_animated=True)
+        await service.settle()
+
+        assert browser.animated == [True]
+        assert (await state(service, recording_id))["state"] == "ready"
+
     async def test_how_far_it_has_got_is_said_while_it_is_made(self, service, footage, browser):
         recording_id, _file = recording_of(footage)
         said_at(5)
@@ -539,8 +549,19 @@ class TestWhatIsRefused:
             {"start": None},
             {"chat_shift": clip_trim.CHAT_SHIFT_LIMIT_SECONDS + 1},
             {"chat_background": "navy"},
+            {"chat_animated": "true"},
         ],
-        ids=["too-short", "backwards", "before-footage", "past-footage", "text", "no-start", "too-far", "colour-name"],
+        ids=[
+            "too-short",
+            "backwards",
+            "before-footage",
+            "past-footage",
+            "text",
+            "no-start",
+            "too-far",
+            "colour-name",
+            "animated-in-words",
+        ],
     )
     async def test_a_stretch_that_cannot_be_cut_is_refused_in_words(self, service, footage, asked):
         recording_id, _file = recording_of(footage)

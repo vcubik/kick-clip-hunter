@@ -542,9 +542,11 @@
 
   const TRIM_POLL_MS = 2000;
   const TRIM_BUSY = ["cutting", "chat", "burning"];
-  // Where chat goes is kept from one cut to the next, and from one visit to
-  // the next where the browser lets the page remember it.
+  // Where chat goes, and whether its animated emotes move, are kept from
+  // one cut to the next, and from one visit to the next where the browser
+  // lets the page remember them.
   const TRIM_WHERE_KEY = "clip-hunter-chat-where";
+  const TRIM_ANIMATED_KEY = "clip-hunter-chat-animated";
   // Past its end by less than this, the player ran there; by more, it was put there.
   const TRIM_RAN_PAST_SECONDS = 1;
   // An end of the stretch closer than this share of the window's length to
@@ -884,8 +886,9 @@
       try {
         const kept = localStorage.getItem(TRIM_WHERE_KEY);
         if (Array.from(where.options).some((option) => option.value === kept)) where.value = kept;
+        one("[data-trim-animated]", dialog).checked = localStorage.getItem(TRIM_ANIMATED_KEY) === "yes";
       } catch {
-        // no storage here: the first choice stands
+        // no storage here: the first choices stand
       }
     }
 
@@ -910,20 +913,20 @@
 
   // Whether the chat goes with the video: its lines are then shown beside
   // the picture, and where it goes can be chosen, and it can be moved
-  // against the picture and given a background.
+  // against the picture, given a background and have its emotes move.
   function wantTrimChat(box) {
     const dialog = trimOf(box);
     one("[data-trim-chat-pane]", dialog).hidden = !box.checked;
-    one("[data-trim-where]", dialog).disabled = !box.checked;
-    one("[data-trim-shift]", dialog).disabled = !box.checked;
-    one("[data-trim-background]", dialog).disabled = !box.checked;
+    for (const option of ["[data-trim-where]", "[data-trim-shift]", "[data-trim-background]", "[data-trim-animated]"]) {
+      one(option, dialog).disabled = !box.checked;
+    }
     paintTrimBackground(dialog);
     paintTrim(dialog);
   }
 
-  function chooseTrimWhere(where) {
+  function keepTrimChoice(key, value) {
     try {
-      localStorage.setItem(TRIM_WHERE_KEY, where.value);
+      localStorage.setItem(key, value);
     } catch {
       // kept for this page only, then
     }
@@ -1009,6 +1012,7 @@
       chat_where: chat ? one("[data-trim-where]", dialog).value : null,
       chat_shift: shift ? Number(shift.value) : 0,
       chat_background: chat ? trimBackground(dialog) : null,
+      chat_animated: Boolean(chat && one("[data-trim-animated]", dialog).checked),
     });
     if (!dialog.isConnected) return; // another moment was opened meanwhile
     if (!response || !response.ok) {
@@ -1034,6 +1038,7 @@
       chat_where: one("[data-trim-where]", dialog).value,
       chat_shift: Number(shift.value),
       chat_background: trimBackground(dialog),
+      chat_animated: one("[data-trim-animated]", dialog).checked,
     });
     if (!dialog.isConnected) return;
     if (!response || !response.ok) {
@@ -2001,7 +2006,8 @@
     else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
-    else if (target.matches("[data-trim-where]")) chooseTrimWhere(target);
+    else if (target.matches("[data-trim-where]")) keepTrimChoice(TRIM_WHERE_KEY, target.value);
+    else if (target.matches("[data-trim-animated]")) keepTrimChoice(TRIM_ANIMATED_KEY, target.checked ? "yes" : "no");
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();

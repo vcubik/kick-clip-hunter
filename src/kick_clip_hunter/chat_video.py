@@ -8,12 +8,19 @@ another in a column as wide as the video, and takes pictures of that
 column a screenful at a time, background left out. Each frame is then put
 together here from those pictures: the part of the column chat showed at
 that moment - the lines that had arrived by then, the newest at the
-bottom, each new one easing in while the column makes room for it, the
-oldest fading out at the top. Nothing is drawn twice and nothing runs on a
-clock: no frame is ever dropped, and half an hour of a busy chat is ready
-in a minute or two - when the browser drew every frame, it took twice as
-long as the video runs. The price is that an animated emote stands still,
-on whichever of its frames the browser drew.
+bottom, the oldest fading out at the top. A new line is there at once,
+the ones before it moved up to make room, as in chat itself. Nothing is
+drawn twice and nothing runs on a clock: no frame is ever dropped, and
+half an hour of a busy chat is ready in a minute or two - when the browser
+drew every frame, it took twice as long as the video runs.
+
+An animated emote stands still in those pictures, on whichever of its
+frames the browser drew - unless it is asked to move. Then the browser
+leaves the animated ones out of its pictures, their pictures are taken
+apart into their frames here (see Animation), and each frame of the video
+has them drawn in, on the frame of their animation it shows. That takes
+longer: a frame with an emote moving on it is seldom the one before it
+over again.
 
 The frames go to ffmpeg as raw pictures, for one of three files:
 
@@ -55,6 +62,7 @@ from urllib.parse import urlsplit
 
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
+from patchright.sync_api import Error as BrowserError
 from patchright.sync_api import sync_playwright
 from PIL import Image
 
@@ -80,9 +88,6 @@ COLOUR_QUALITY = 18
 # Chat already on screen when the video starts: the last lines from before
 # its first frame. More than fit, so the column starts out full.
 PREFILL_LINES = 40
-# How long a new line takes to come in, in seconds of the video: it fades
-# up while the column makes room for it.
-ENTER_SECONDS = 0.25
 # Over how much of the column's top the oldest lines fade out.
 FADE_PIXELS = 72
 # Room under the newest line.
@@ -191,24 +196,42 @@ def answer(url: str, resource_type: str) -> tuple[str, Path | None]:
 # -- the column ---------------------------------------------------------------
 
 
+class Emote(NamedTuple):
+    """An animated emote in the column, left out of its pictures for every
+    frame to have it drawn in moving (see drawn_column): where it is, in
+    pixels from the column's top and left, the size it is drawn at, and its
+    picture as it was fetched."""
+
+    top: int
+    left: int
+    width: int
+    height: int
+    picture: bytes
+
+
 class Column(NamedTuple):
     """Chat laid out once (see drawn_column): for each line, in the order
     they arrive, the second of the video it arrives at and where it starts
     and ends in the column, in pixels from the column's top. `picture(n)`
     is a PNG of the column from PAGE_PIXELS * n down, PAGE_PIXELS of it -
-    or None past its end."""
+    or None past its end. `emotes` are the animated emotes left out of
+    those pictures, if they were asked to move."""
 
     arrivals: Sequence[float]
     tops: Sequence[float]
     bottoms: Sequence[float]
     picture: Callable[[int], bytes | None]
+    emotes: Sequence[Emote] = ()
 
 
 @contextmanager
-def drawn_column(html: str) -> Iterator[Column]:
+def drawn_column(html: str, animated: bool = False) -> Iterator[Column]:
     """The page's chat laid out by a browser without a window, which stays
     open for as long as the `with` block runs: the column's pictures are
-    taken as the frames come to need them."""
+    taken as the frames come to need them. With `animated`, the emotes that
+    are animated are left out of those pictures and handed over apart, to
+    be drawn in moving."""
+    fetched: dict[str, bytes] = {}
 
     def serve(route) -> None:
         kind, file = answer(route.request.url, route.request.resource_type)
@@ -216,6 +239,18 @@ def drawn_column(html: str) -> Iterator[Column]:
             route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
         elif kind == "file":
             route.fulfill(path=str(file))
+        elif kind == "fetch" and animated:
+            # Fetched here and handed on to the browser, to keep the picture:
+            # whether an emote is animated is told from that.
+            try:
+                response = route.fetch()
+                picture = response.body()
+            except BrowserError:
+                route.abort()
+                return
+            if response.ok:
+                fetched[route.request.url] = picture
+            route.fulfill(response=response, body=picture)
         elif kind == "fetch":
             route.continue_()
         elif kind == "missing":
@@ -236,6 +271,7 @@ def drawn_column(html: str) -> Iterator[Column]:
             page.evaluate(
                 "limit => chatVideo.ready(limit)", PICTURES_TIMEOUT_SECONDS * 1000, isolated_context=False
             )
+            emotes = _set_aside(page, fetched) if animated else []
             laid_out = page.evaluate("page => chatVideo.layOut(page)", PAGE_PIXELS, isolated_context=False)
             pages = int(laid_out["pages"])
 
@@ -247,40 +283,34 @@ def drawn_column(html: str) -> Iterator[Column]:
 
             lines = laid_out["lines"]
             yield Column(
-                [line[0] for line in lines], [line[1] for line in lines], [line[2] for line in lines], picture
+                [line[0] for line in lines],
+                [line[1] for line in lines],
+                [line[2] for line in lines],
+                picture,
+                emotes,
             )
         finally:
             browser.close()
 
 
-class View(NamedTuple):
-    """What a frame shows of the column: where in it the frame's top is
-    (above the column's own while the lines so far do not fill a frame),
-    and each line that is still coming in, with how far it has, 0 to 255."""
+def _set_aside(page, fetched: Mapping[str, bytes]) -> list[Emote]:
+    """Has the browser leave the emotes whose pictures are animated out of
+    the column's pictures - of the pictures it was given, by their
+    addresses - and says where each of those emotes is."""
+    animated = {url: picture for url, picture in fetched.items() if is_animated(picture)}
+    boxes = page.evaluate("urls => chatVideo.setAside(urls)", list(animated), isolated_context=False)
+    return [Emote(top, left, width, height, animated[url]) for top, left, width, height, url in boxes]
 
-    top: int
-    entering: tuple[tuple[int, int], ...]
 
-
-def view_at(column: Column, time: float) -> View | None:
-    """What of the column the frame `time` seconds into the video shows,
-    or None before the first line has arrived."""
+def frame_top(column: Column, time: float) -> int | None:
+    """Where in the column the top of the frame `time` seconds into the
+    video is - above the column's own while the lines so far do not fill a
+    frame - or None before the first line has arrived. The newest line is
+    at the bottom from the frame it arrives in."""
     arrived = bisect.bisect_right(column.arrivals, time)
     if not arrived:
         return None
-    newest = arrived - 1
-    still_to_come = 0.0
-    entering = []
-    index = newest
-    while index >= 0 and time - column.arrivals[index] < ENTER_SECONDS:
-        share = (time - column.arrivals[index]) / ENTER_SECONDS
-        still_to_come += (column.bottoms[index] - column.tops[index]) * (1 - share)
-        entering.append((index, round(share * 255)))
-        index -= 1
-    # The column is moved down by what of the new lines has not come in
-    # yet, so they rise into the frame from under its bottom edge.
-    top = round(column.bottoms[newest] + BOTTOM_PIXELS - HEIGHT - still_to_come)
-    return View(top, tuple(entering))
+    return round(column.bottoms[arrived - 1]) + BOTTOM_PIXELS - HEIGHT
 
 
 class _Pages:
@@ -299,18 +329,21 @@ class _Pages:
         return self._kept[index]
 
     def window(self, top: int) -> np.ndarray:
-        """The column from `top` down, a frame's height of it: HEIGHT rows
-        of WIDTH pixels of red, green, blue and how much of it is seen."""
+        """The column from `top` down to the bottom of its newest line, as
+        a frame whose top is there (see frame_top): HEIGHT rows of WIDTH
+        pixels of red, green, blue and how much of it is seen - nothing in
+        the room under that line, where the lines still to come are."""
+        rows = HEIGHT - BOTTOM_PIXELS
         first = max(top, 0) // PAGE_PIXELS
         for index in [index for index in self._kept if index < first]:
             del self._kept[index]
         frame = np.zeros((HEIGHT, WIDTH, 4), np.uint8)
-        for index in range(first, max(top + HEIGHT - 1, 0) // PAGE_PIXELS + 1):
+        for index in range(first, max(top + rows - 1, 0) // PAGE_PIXELS + 1):
             page = self._page(index)
             if page is None:
                 break
             start = index * PAGE_PIXELS
-            upper, lower = max(top, start), min(top + HEIGHT, start + len(page))
+            upper, lower = max(top, start), min(top + rows, start + len(page))
             if lower > upper:
                 frame[upper - top : lower - top] = page[upper - start : lower - start, :WIDTH]
         return frame
@@ -326,26 +359,139 @@ def frames(column: Column, times: Sequence[float]) -> Iterator[bytes]:
     where there is no chat. A frame that would be the same as the one
     before it is that one."""
     pages = _Pages(column.picture)
+    moving = _Moving(column.emotes)
     blank = bytes(WIDTH * HEIGHT * 4)
-    shown: View | None = None
+    shown: tuple[int, tuple[tuple[int, int], ...]] | None = None
     picture = blank
     for second in times:
-        view = view_at(column, second)
-        if view != shown:
-            shown = view
-            picture = blank if view is None else _frame(pages.window(view.top), column, view)
+        top = frame_top(column, second)
+        now = None if top is None else (top, moving.shown(top, second))
+        if now != shown:
+            shown = now
+            picture = blank if now is None else _frame(pages.window(now[0]), moving, *now)
         yield picture
 
 
-def _frame(frame: np.ndarray, column: Column, view: View) -> bytes:
-    seen = frame[:, :, 3]
-    for index, share in view.entering:
-        upper = max(0, round(column.tops[index]) - view.top)
-        lower = min(HEIGHT, round(column.bottoms[index]) - view.top)
-        if lower > upper:
-            seen[upper:lower] = seen[upper:lower] * np.uint16(share) // 255
-    seen[:FADE_PIXELS] = seen[:FADE_PIXELS] * _FADE // 255
+def _frame(frame: np.ndarray, moving: _Moving, top: int, shown: Iterable[tuple[int, int]]) -> bytes:
+    moving.draw(frame, top, shown)
+    frame[:FADE_PIXELS, :, 3] = frame[:FADE_PIXELS, :, 3] * _FADE // 255
     return frame.tobytes()
+
+
+# -- animated emotes ------------------------------------------------------------
+
+# A frame of an animated picture that says it lasts this many milliseconds
+# or less - as one can, to flash by as fast as it can be shown - is shown
+# for BLINK_SHOWN_MILLISECONDS, as browsers show it.
+BLINK_MILLISECONDS = 10
+BLINK_SHOWN_MILLISECONDS = 100
+
+
+class Animation(NamedTuple):
+    """An animated emote's picture as it is drawn: its frames, at the size
+    it is drawn at, and when each of them ends, in milliseconds from the
+    start of a run through them. It runs through them over and over from
+    the video's first frame on, every copy of it at once - as a browser
+    runs the copies of a picture."""
+
+    frames: Sequence[np.ndarray]
+    ends: Sequence[int]
+
+    def index(self, second: float) -> int:
+        """Which of its frames is shown `second` seconds into the video."""
+        return bisect.bisect_right(self.ends, round(second * 1000) % self.ends[-1])
+
+
+def is_animated(picture: bytes) -> bool:
+    """Whether an emote's picture is one that can be drawn moving here: of
+    more than one frame, each of which can be read. Any other is left to
+    the browser, which draws it standing still."""
+    try:
+        with Image.open(io.BytesIO(picture)) as image:
+            count = getattr(image, "n_frames", 1)
+            if count < 2:
+                return False
+            for index in range(count):
+                image.seek(index)
+                image.load()
+    except Exception:  # whatever an emote's host may hand out
+        return False
+    return True
+
+
+def animation(picture: bytes, width: int, height: int) -> Animation:
+    """An animated emote's picture - a GIF, a WebP, ... - as it is drawn,
+    `width` x `height`."""
+    frames: list[np.ndarray] = []
+    ends: list[int] = []
+    elapsed = 0
+    with Image.open(io.BytesIO(picture)) as image:
+        for index in range(image.n_frames):
+            image.seek(index)
+            # A WebP frame says how long it lasts once it has been read.
+            image.load()
+            lasts = round(image.info.get("duration") or 0)
+            elapsed += lasts if lasts > BLINK_MILLISECONDS else BLINK_SHOWN_MILLISECONDS
+            ends.append(elapsed)
+            # Made smaller with each colour weighed by how much of it is
+            # seen, or its edges would go dark.
+            drawn = image.convert("RGBA").convert("RGBa").resize((width, height), Image.Resampling.LANCZOS)
+            frames.append(np.asarray(drawn.convert("RGBA")))
+    return Animation(frames, ends)
+
+
+class _Moving:
+    """A column's animated emotes, for its frames: which of them a frame
+    shows and on which frame of their animation, and drawing them into it.
+    An emote's picture is taken apart into its frames the first time a
+    frame shows it."""
+
+    def __init__(self, emotes: Sequence[Emote]) -> None:
+        self._emotes = sorted(emotes, key=lambda emote: emote.top)
+        self._tops = [emote.top for emote in self._emotes]
+        self._tallest = max((emote.height for emote in self._emotes), default=0)
+        self._animations: dict[tuple[bytes, int, int], Animation] = {}
+
+    def _animation(self, emote: Emote) -> Animation:
+        key = (emote.picture, emote.width, emote.height)
+        if key not in self._animations:
+            self._animations[key] = animation(*key)
+        return self._animations[key]
+
+    def shown(self, top: int, second: float) -> tuple[tuple[int, int], ...]:
+        """The ones the frame `second` seconds into the video shows, its top
+        being at `top` in the column: each as where it is in their order,
+        with the frame of its animation it is on."""
+        first = bisect.bisect_left(self._tops, top - self._tallest + 1)
+        last = bisect.bisect_left(self._tops, top + HEIGHT - BOTTOM_PIXELS)
+        return tuple(
+            (index, self._animation(emote).index(second))
+            for index, emote in enumerate(self._emotes[first:last], start=first)
+            if emote.top + emote.height > top
+        )
+
+    def draw(self, frame: np.ndarray, top: int, shown: Iterable[tuple[int, int]]) -> None:
+        """Draws the ones a frame shows (see shown) into it."""
+        for index, at in shown:
+            emote = self._emotes[index]
+            _lay_over(frame, self._animation(emote).frames[at], emote.top - top, emote.left)
+
+
+def _lay_over(frame: np.ndarray, picture: np.ndarray, top: int, left: int) -> None:
+    """Draws a picture over a frame, its top left corner `top` and `left`
+    pixels into it - as much of it as is above the room under the newest
+    line, where the lines still to come are."""
+    height, width = picture.shape[:2]
+    upper, lower = max(top, 0), min(top + height, HEIGHT - BOTTOM_PIXELS)
+    first, last = max(left, 0), min(left + width, WIDTH)
+    if lower <= upper or last <= first:
+        return
+    over = picture[upper - top : lower - top, first - left : last - left].astype(np.float32) / 255
+    under = frame[upper:lower, first:last].astype(np.float32) / 255
+    over_seen, under_seen = over[:, :, 3:], under[:, :, 3:]
+    seen = over_seen + under_seen * (1 - over_seen)
+    colour = (over[:, :, :3] * over_seen + under[:, :, :3] * under_seen * (1 - over_seen)) / np.maximum(seen, 1e-6)
+    frame[upper:lower, first:last] = np.rint(np.concatenate((colour, seen), axis=2) * 255).astype(np.uint8)
 
 
 def _told(pictures: Iterable[bytes], count: int, progress: Callable[[float], None] | None) -> Iterator[bytes]:
@@ -486,16 +632,17 @@ def render(
     output: Path,
     background: str | None = None,
     progress: Callable[[float], None] | None = None,
+    animated: bool = False,
 ) -> int:
     """Renders the chat video of a video `duration` seconds long from its
     chat lines (see chat_trace.chat_replay) and returns its frame count.
     With a `background` colour the video is that colour behind the text, to
     put next to the picture; without one it is see-through, to lay over it.
     `progress` is told how far it has got, as a share, and may raise to
-    give up."""
+    give up. `animated` has animated emotes move."""
     html = page_html(lines_for_clip(lines, duration))
     times = frame_times(duration)
-    with _one_at_a_time, drawn_column(html) as column:
+    with _one_at_a_time, drawn_column(html, animated) as column:
         return encode(_told(frames(column, times), len(times), progress), output, background)
 
 
@@ -601,12 +748,13 @@ def burn(
     side: str,
     background: str | None = None,
     progress: Callable[[float], None] | None = None,
+    animated: bool = False,
 ) -> str:
     """Cuts `duration` seconds of `source` out from its second `start`,
     with the chat of `lines` (counted from there, see lines_from) drawn
     into its picture on `side`, into `output`, and returns the encoder the
     picture was encoded with. Unlike a cut that is copied, it begins on the
-    very frame at `start`. `progress` is as for render."""
+    very frame at `start`. `progress` and `animated` are as for render."""
     picture = footage(source)
     across, down, left, top = placement(picture.width, picture.height, side)
     encoder, options = video_encoder()
@@ -629,7 +777,7 @@ def burn(
     # fmt: on
     html = page_html(lines_for_clip(lines, duration))
     times = frame_times(duration)
-    with _one_at_a_time, drawn_column(html) as column:
+    with _one_at_a_time, drawn_column(html, animated) as column:
         _encode(arguments, _told(frames(column, times), len(times), progress), output)
     return encoder
 

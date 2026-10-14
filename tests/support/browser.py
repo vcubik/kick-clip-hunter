@@ -9,7 +9,7 @@ import io
 import math
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
 from PIL import Image
@@ -21,18 +21,43 @@ from kick_clip_hunter import chat_video
 # any frame - and in any picture it is drawn into.
 LINE_PIXELS = 36
 LINE_COLOUR = (255, 255, 255, 255)
+# Where an animated emote is in a line - this far down from its top and in
+# from the column's left - and how big it is drawn.
+EMOTE_TOP = 4
+EMOTE_LEFT = 60
+EMOTE_PIXELS = 28
+
+
+def animated_picture(
+    colours: Sequence[tuple[int, int, int, int]],
+    milliseconds: Sequence[int],
+    kind: str = "GIF",
+    size: tuple[int, int] = (EMOTE_PIXELS, EMOTE_PIXELS),
+) -> bytes:
+    """An animated emote's picture as its host hands it out: a frame all of
+    each colour in turn, each lasting as many milliseconds as given."""
+    frames = [Image.new("RGBA", size, colour) for colour in colours]
+    buffer = io.BytesIO()
+    exact = {"lossless": True} if kind == "WEBP" else {}
+    frames[0].save(buffer, kind, save_all=True, append_images=frames[1:], duration=list(milliseconds), loop=0, **exact)
+    return buffer.getvalue()
 
 
 class FakeBrowser:
     """Lays a page of chat out as the browser would, as far as the frames
     are concerned - a line every LINE_PIXELS from the top, in the order of
     the page, each arriving at the second the page gives it - and remembers
-    the pages it was given. `hold()` makes it wait before laying a page out
-    until `release()`; with `failure` set it raises that instead. Put in
-    the place of `chat_video.drawn_column`."""
+    the pages it was given, and whether animated emotes were to move.
+    `hold()` makes it wait before laying a page out until `release()`; with
+    `failure` set it raises that instead. With `emote` set to an animated
+    emote's picture, every line has that emote in it, and when emotes are
+    to move it is left out of the pictures and handed over apart, as the
+    browser does. Put in the place of `chat_video.drawn_column`."""
 
     def __init__(self) -> None:
         self.pages: list[str] = []
+        self.animated: list[bool] = []
+        self.emote: bytes | None = None
         self.failure: Exception | None = None
         self._waiting = threading.Event()
         self._waiting.set()
@@ -44,14 +69,20 @@ class FakeBrowser:
         self._waiting.set()
 
     @contextmanager
-    def drawn_column(self, html: str) -> Iterator[chat_video.Column]:
+    def drawn_column(self, html: str, animated: bool = False) -> Iterator[chat_video.Column]:
         self.pages.append(html)
+        self.animated.append(animated)
         assert self._waiting.wait(timeout=20), "the test never released the browser"
         if self.failure is not None:
             raise self.failure
         arrivals = [float(at) for at in re.findall(r'data-at="([^"]*)"', html)]
         tops = [index * LINE_PIXELS for index in range(len(arrivals))]
         bottoms = [top + LINE_PIXELS for top in tops]
+        emotes = []
+        if animated and self.emote is not None:
+            emotes = [
+                chat_video.Emote(top + EMOTE_TOP, EMOTE_LEFT, EMOTE_PIXELS, EMOTE_PIXELS, self.emote) for top in tops
+            ]
         page = chat_video.PAGE_PIXELS
         count = max(1, math.ceil((bottoms[-1] if bottoms else 0) / page))
 
@@ -59,12 +90,15 @@ class FakeBrowser:
             if not 0 <= index < count:
                 return None
             image = Image.new("RGBA", (chat_video.WIDTH, page))
-            for top, bottom in zip(tops, bottoms, strict=True):
+            spans = [(top, bottom, LINE_COLOUR, 0, chat_video.WIDTH) for top, bottom in zip(tops, bottoms, strict=True)]
+            # Where an emote that moves is, there is nothing.
+            spans += [(e.top, e.top + e.height, (0, 0, 0, 0), e.left, e.left + e.width) for e in emotes]
+            for top, bottom, colour, left, right in spans:
                 upper, lower = max(top - index * page, 0), min(bottom - index * page, page)
                 if lower > upper:
-                    image.paste(LINE_COLOUR, (0, upper, chat_video.WIDTH, lower))
+                    image.paste(colour, (left, upper, right, lower))
             buffer = io.BytesIO()
             image.save(buffer, "PNG")
             return buffer.getvalue()
 
-        yield chat_video.Column(arrivals, tops, bottoms, picture)
+        yield chat_video.Column(arrivals, tops, bottoms, picture, emotes)
