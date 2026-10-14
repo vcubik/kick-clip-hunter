@@ -52,15 +52,68 @@ class FakeTwitchChannel:
         }
 
 
+@dataclass(frozen=True)
+class FakeAccount:
+    """A Twitch account that can sign in for the service to read chat as."""
+
+    login: str = "chat_reader"
+    user_id: str = "777"
+
+
+@dataclass
+class _DeviceFlow:
+    # Who confirms the code shown, after how many polls; None = nobody yet.
+    account: FakeAccount | None = None
+    polls_before: int = 0
+    denied: bool = False
+    polls: int = 0
+
+
 @dataclass
 class FakeTwitchApi:
     channels: dict[str, FakeTwitchChannel] = field(default_factory=dict)
     token_lifetime_seconds: int = 3600
+    user_token_lifetime_seconds: int = 14400
     # Force an HTTP status for every request whose URL contains the key.
     failures: dict[str, int] = field(default_factory=dict)
     # Every request received, as (method, host + path, parsed body or query).
     requests: list[tuple[str, str, object]] = field(default_factory=list)
     tokens_issued: int = 0
+    # The device flows started, by their device code.
+    device_flows: dict[str, _DeviceFlow] = field(default_factory=dict)
+    # What the next device flow started comes to, as sign_in_will_happen set it.
+    next_sign_in: _DeviceFlow = field(default_factory=_DeviceFlow)
+    # The accounts' tokens that work: access tokens, and refresh tokens
+    # (each works once).
+    user_tokens: dict[str, FakeAccount] = field(default_factory=dict)
+    refresh_tokens: dict[str, FakeAccount] = field(default_factory=dict)
+    # Scopes an access token was given, by token.
+    token_scopes: dict[str, list[str]] = field(default_factory=dict)
+    user_tokens_issued: int = 0
+
+    def sign_in_will_happen(
+        self, account: FakeAccount | None = None, *, after_polls: int = 0, denied: bool = False
+    ) -> None:
+        """The code the next device flow shows is confirmed by `account`
+        after that many polls have been answered "pending" - or turned down."""
+        self.next_sign_in = _DeviceFlow(account=account or FakeAccount(), polls_before=after_polls, denied=denied)
+
+    def tokens_for(self, account: FakeAccount | None = None, scopes: tuple[str, ...] = ("user:read:chat",)) -> dict:
+        """A working pair of tokens for an account, as the token endpoint
+        hands them out."""
+        account = account or FakeAccount()
+        self.user_tokens_issued += 1
+        access, refresh = f"user-token-{self.user_tokens_issued}", f"refresh-token-{self.user_tokens_issued}"
+        self.user_tokens[access] = account
+        self.refresh_tokens[refresh] = account
+        self.token_scopes[access] = list(scopes)
+        return {
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_in": self.user_token_lifetime_seconds,
+            "scope": list(scopes),
+            "token_type": "bearer",
+        }
 
     def add_channel(self, login: str, user_id: str, **kwargs) -> FakeTwitchChannel:
         channel = FakeTwitchChannel(login=login, user_id=user_id, **kwargs)
@@ -96,6 +149,35 @@ class FakeTwitchApi:
 
         if request.url.host == "id.twitch.tv" and path == "/oauth2/token":
             return self._token(body)  # type: ignore[arg-type]
+        if request.url.host == "id.twitch.tv" and path == "/oauth2/device":
+            device_code = f"device-{len(self.device_flows) + 1}"
+            self.device_flows[device_code] = self.next_sign_in
+            self.next_sign_in = _DeviceFlow()
+            return httpx.Response(
+                200,
+                json={
+                    "device_code": device_code,
+                    "user_code": "ABCDEFGH",
+                    "verification_uri": "https://www.twitch.tv/activate?public=true&device-code=ABCDEFGH",
+                    "expires_in": 1800,
+                    "interval": 5,
+                },
+            )
+        if request.url.host == "id.twitch.tv" and path == "/oauth2/validate":
+            token = request.headers.get("authorization", "").removeprefix("OAuth ")
+            account = self.user_tokens.get(token)
+            if account is None:
+                return httpx.Response(401, json={"status": 401, "message": "invalid access token"})
+            return httpx.Response(
+                200,
+                json={
+                    "client_id": "twitch-client-id",
+                    "login": account.login,
+                    "scopes": self.token_scopes.get(token, []),
+                    "user_id": account.user_id,
+                    "expires_in": self.user_token_lifetime_seconds,
+                },
+            )
 
         if request.url.host == "api.twitch.tv":
             if not request.headers.get("client-id"):
@@ -145,4 +227,20 @@ class FakeTwitchApi:
                     "token_type": "bearer",
                 },
             )
+        if body.get("grant_type") == "urn:ietf:params:oauth:grant-type:device_code":
+            flow = self.device_flows.get(body.get("device_code", ""))
+            if flow is None:
+                return httpx.Response(400, json={"status": 400, "message": "invalid device code"})
+            if flow.denied:
+                return httpx.Response(400, json={"status": 400, "message": "access_denied"})
+            flow.polls += 1
+            if flow.account is None or flow.polls <= flow.polls_before:
+                return httpx.Response(400, json={"status": 400, "message": "authorization_pending"})
+            del self.device_flows[body["device_code"]]
+            return httpx.Response(200, json=self.tokens_for(flow.account))
+        if body.get("grant_type") == "refresh_token":
+            account = self.refresh_tokens.pop(body.get("refresh_token", ""), None)
+            if account is None:
+                return httpx.Response(400, json={"status": 400, "message": "Invalid refresh token"})
+            return httpx.Response(200, json=self.tokens_for(account))
         return httpx.Response(400, json={"status": 400, "message": "invalid grant type"})
