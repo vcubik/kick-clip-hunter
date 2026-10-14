@@ -90,6 +90,10 @@ class FakeTwitchApi:
     # Scopes an access token was given, by token.
     token_scopes: dict[str, list[str]] = field(default_factory=dict)
     user_tokens_issued: int = 0
+    # The EventSub subscriptions made, in order, and the status a
+    # subscription to a channel (by its Twitch id) is refused with.
+    eventsub_subscriptions: list[dict] = field(default_factory=list)
+    subscribe_failures: dict[str, int] = field(default_factory=dict)
 
     def sign_in_will_happen(
         self, account: FakeAccount | None = None, *, after_polls: int = 0, denied: bool = False
@@ -202,6 +206,8 @@ class FakeTwitchApi:
                     if channel.is_live and (channel.login in logins or channel.user_id in ids)
                 ]
                 return httpx.Response(200, json={"data": live, "pagination": {}})
+            if path == "/helix/eventsub/subscriptions" and request.method == "POST":
+                return self._subscribe(request, body)  # type: ignore[arg-type]
 
         if request.url.host == "7tv.io" and path.startswith("/v3/users/twitch/"):
             user_id = path.rsplit("/", 1)[1]
@@ -215,6 +221,35 @@ class FakeTwitchApi:
             return httpx.Response(200, json={"emote_set": {"emotes": emotes}})
 
         return httpx.Response(404, json={"message": f"fake Twitch has no route for {request.method} {url}"})
+
+    def _subscribe(self, request: httpx.Request, body: dict) -> httpx.Response:
+        """An EventSub subscription, made with an account's token."""
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        account = self.user_tokens.get(token)
+        if account is None:
+            return httpx.Response(401, json={"status": 401, "message": "Invalid OAuth token"})
+        broadcaster = body["condition"]["broadcaster_user_id"]
+        if broadcaster in self.subscribe_failures:
+            status = self.subscribe_failures[broadcaster]
+            return httpx.Response(status, json={"status": status, "message": "subscription refused"})
+        subscription = {
+            "id": f"subscription-{len(self.eventsub_subscriptions) + 1}",
+            "type": body["type"],
+            "version": body["version"],
+            "condition": body["condition"],
+            "transport": body["transport"],
+            "account": account.login,
+        }
+        self.eventsub_subscriptions.append(subscription)
+        return httpx.Response(202, json={"data": [subscription], "total": len(self.eventsub_subscriptions)})
+
+    def subscribed_on(self, session_id: str) -> list[str]:
+        """The channels (Twitch ids) whose chat is subscribed to a session."""
+        return [
+            subscription["condition"]["broadcaster_user_id"]
+            for subscription in self.eventsub_subscriptions
+            if subscription["transport"].get("session_id") == session_id
+        ]
 
     def _token(self, body: dict) -> httpx.Response:
         if body.get("grant_type") == "client_credentials":

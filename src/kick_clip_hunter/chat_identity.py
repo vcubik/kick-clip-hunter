@@ -1,15 +1,16 @@
 """Who a chatter is in a channel: the colour of their name and the badges
 in front of it.
 
-Kick sends both with every chat message (`sender.identity`). They belong to
-the person in that channel, not to the message, so they are kept once per
-chatter (db.chat_identities) and only written when they change - the
-dashboard looks them up by name when it draws chat. What is shown is
-therefore the latest known state, also beside an older moment.
+Kick sends both with every chat message (`sender.identity`), and so does
+Twitch (`color`, `badges`), whose badges are put in the form Kick's are
+kept in. They belong to the person in that channel, not to the message, so
+they are kept once per chatter (db.chat_identities) and only written when
+they change - the dashboard looks them up by name when it draws chat. What
+is shown is therefore the latest known state, also beside an older moment.
 
-Pure: what Kick sent comes in, what is stored or drawn comes out. Everything
-a chatter controls is checked here before it is stored, because the colour
-ends up in a style attribute and a badge's type in a file name.
+Pure: what a platform sent comes in, what is stored or drawn comes out.
+Everything a chatter controls is checked here before it is stored, because
+the colour ends up in a style attribute and a badge's type in a file name.
 """
 
 from __future__ import annotations
@@ -75,6 +76,39 @@ def from_sender(sender: Mapping[str, Any]) -> Identity | None:
     listed = identity.get("badges")
     badges = [badge for badge in map(_badge, listed if isinstance(listed, list) else []) if badge]
     return (colour.lower() if colour else None, json.dumps(badges[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
+
+
+# Twitch's badges by the type Kick's same badge has, where the two differ;
+# any other is kept under its own name, with "_" for its "-".
+TWITCH_BADGE_TYPES = {"sub-gifter": "sub_gifter", "partner": "verified"}
+# The Twitch badges whose count says how much: months subscribed (`info`),
+# subscriptions gifted and bits given (the badge's own `id`, its tier).
+_TWITCH_BADGE_COUNTS = {"subscriber": "info", "founder": "info", "sub-gifter": "id", "bits": "id"}
+
+
+def _twitch_badge(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, Mapping) or not isinstance(entry.get("set_id"), str):
+        return None
+    set_id = entry["set_id"]
+    count_field = _TWITCH_BADGE_COUNTS.get(set_id)
+    count = entry.get(count_field) if count_field else None
+    return _badge(
+        {
+            "type": TWITCH_BADGE_TYPES.get(set_id, set_id.replace("-", "_")),
+            "text": set_id.replace("-", " ").capitalize(),
+            "count": int(count) if isinstance(count, str) and count.isdigit() else None,
+        }
+    )
+
+
+def from_twitch(colour: Any, badges: Any) -> Identity:
+    """A Twitch chatter's identity as it is stored: the colour of their name
+    (Twitch sends none for someone who never chose one) and their badges, as
+    a chat message of theirs lists them (`color`, `badges`)."""
+    if not isinstance(colour, str) or not _COLOUR.fullmatch(colour):
+        colour = None
+    kept = [badge for badge in map(_twitch_badge, badges if isinstance(badges, list) else []) if badge]
+    return (colour.lower() if colour else None, json.dumps(kept[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
 
 
 # The badges of those who run a channel: its streamer and its moderators.

@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, recording_manager
+from kick_clip_hunter import db, detector, recording_manager, twitch_auth, twitch_chat
+from kick_clip_hunter.config import load_settings
 from tests.support.data import add_streamer
+from tests.support.eventsub import chat_event
 from tests.support.kick_api import seventv_emote_id
+from tests.support.twitch_api import FakeAccount
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -182,6 +186,71 @@ class TestLifespan:
             )
 
         assert not any(recorder.is_active for recorder in recording_manager._recorders.values())
+
+
+class TestTwitchChat:
+    """Set up for Twitch, the service reads the chat of the Twitch channels
+    on the watchlist from its start, and takes it in as it takes Kick's."""
+
+    @pytest.fixture
+    def twitch_service(self, service, twitch_api, eventsub, monkeypatch):
+        async def no_recording(*_args):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", no_recording)
+        monkeypatch.setattr(service.main, "settings", load_settings())
+        monkeypatch.setattr(twitch_chat, "EVENTSUB_URL", eventsub.url)
+        monkeypatch.setattr(twitch_chat, "BATCH_SECONDS", 0.01)
+        tokens = twitch_api.tokens_for(FakeAccount())
+        twitch_auth.save(
+            twitch_auth.AccountToken(
+                tokens["access_token"],
+                tokens["refresh_token"],
+                datetime.now(timezone.utc) + timedelta(hours=4),
+                FakeAccount().user_id,
+                FakeAccount().login,
+            )
+        )
+        return service
+
+    def watch_on_twitch(self, login: str, twitch_id: str) -> int:
+        conn = db.get_connection()
+        try:
+            return db.add_platform_streamer(conn, "twitch", twitch_id, f"{login}@twitch")
+        finally:
+            conn.close()
+
+    async def test_a_twitch_channels_chat_is_stored_and_counted(self, twitch_service, twitch_api, eventsub):
+        key = self.watch_on_twitch("some_channel", "101")
+
+        async with twitch_service.main.lifespan(twitch_service.main.app):
+            await async_wait_until(lambda: twitch_api.subscribed_on("session-1") == ["101"], "the chat subscription")
+            await eventsub.notify(chat_event("101", "some_channel", "alice", "xDDD", message_id="m-1"))
+            await async_wait_until(lambda: twitch_service.rows("SELECT * FROM chat_messages"), "the message")
+
+        (row,) = twitch_service.rows("SELECT * FROM chat_messages")
+        stored = (row["message_id"], row["broadcaster_user_id"], row["channel_slug"])
+        assert stored == ("m-1", key, "some_channel@twitch")
+        assert (row["sender_username"], row["content"]) == ("alice", "xDDD")
+        assert [entry[1] for entry in detector._entries["some_channel@twitch"]] == ["alice"]
+
+    async def test_a_kick_channel_is_none_of_the_readers_business(self, twitch_service, twitch_api, eventsub):
+        twitch_service.watch("kick_channel")
+        self.watch_on_twitch("some_channel", "101")
+
+        async with twitch_service.main.lifespan(twitch_service.main.app):
+            await async_wait_until(lambda: twitch_api.subscribed_on("session-1"), "the chat subscription")
+
+        assert twitch_api.subscribed_on("session-1") == ["101"]
+
+    async def test_without_twitch_set_up_there_is_no_reader(self, service, monkeypatch):
+        async def no_recording(*_args):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", no_recording)
+
+        async with service.main.lifespan(service.main.app):
+            assert service.main._twitch_reader is None
 
 
 class TestEmotePictures:

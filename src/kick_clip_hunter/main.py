@@ -43,6 +43,8 @@ from . import (
     transcriber,
     tuning,
     tunnel,
+    twitch_auth,
+    twitch_chat,
     twitch_client,
     win_console,
 )
@@ -517,6 +519,36 @@ async def _refresh_emote_pictures() -> None:
             logger.exception("could not refresh the 7TV emote pictures of %s", slug)
 
 
+# What reads the chat of the Twitch channels on the watchlist (see
+# twitch_chat.py), while the service is set up for Twitch; None otherwise.
+_twitch_reader: twitch_chat.ChatReader | None = None
+
+
+def _twitch_channels() -> list[twitch_chat.Channel]:
+    """The Twitch channels whose chat is read: every one on the watchlist.
+    What is done with it - kept, looked for moments in - is decided message
+    by message, as for Kick's (see _take_chats)."""
+    conn = get_connection()
+    try:
+        return [
+            twitch_chat.Channel(row["broadcaster_user_id"], row["slug"], row["platform_user_id"])
+            for row in get_streamers(conn, platforms.TWITCH)
+        ]
+    finally:
+        conn.close()
+
+
+def _start_reading_twitch_chat() -> twitch_chat.ChatReader | None:
+    """The reader of Twitch's chat, if the service is set up for Twitch."""
+    global _twitch_reader
+    if not settings.twitch:
+        _twitch_reader = None
+        return None
+    tokens = twitch_auth.TokenKeeper(settings.twitch_client_id, settings.twitch_client_secret)
+    _twitch_reader = twitch_chat.ChatReader(_twitch_channels, _take_chats, tokens, settings.twitch_client_id)
+    return _twitch_reader
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _started_at
@@ -541,11 +573,17 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_keep_chat_subscriptions()),
         asyncio.create_task(_keep_looking_at_tunnel()),
     ]
+    reader = _start_reading_twitch_chat()
+    if reader is not None:
+        tasks.append(asyncio.create_task(reader.run_forever()))
     try:
         yield
     finally:
         for task in tasks:
             task.cancel()
+        # Let each finish what it does when it is stopped - the chat reader
+        # closes its connection.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(lifespan=lifespan)

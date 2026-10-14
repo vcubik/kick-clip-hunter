@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +22,7 @@ import pytest
 from kick_clip_hunter import db, detector, recorder
 from kick_clip_hunter.platforms import StreamUrls
 from kick_clip_hunter.recorder import ChannelRecorder
+from tests.support.eventsub import FakeEventSub
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
@@ -134,6 +135,14 @@ def twitch_api(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTw
 
     monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
     return api
+
+
+@pytest.fixture
+async def eventsub() -> AsyncIterator[FakeEventSub]:
+    """A fake EventSub WebSocket server on loopback (see FakeEventSub)."""
+    server = await FakeEventSub().start()
+    yield server
+    await server.close()
 
 
 @pytest.fixture

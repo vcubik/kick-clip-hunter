@@ -37,6 +37,7 @@ import pytest
 # Shared fixtures live in tests/support/fixtures.py; importing them here is
 # what registers them for every test directory (the `x as x` form marks each
 # one as a deliberate re-export rather than an unused import).
+from tests.support.fixtures import eventsub as eventsub
 from tests.support.fixtures import hls as hls
 from tests.support.fixtures import kick_api as kick_api
 from tests.support.fixtures import recording as recording
@@ -209,6 +210,7 @@ def _reset_module_state() -> None:
         main._served_port = None
         main._tunnel_look = None
         main._disk_use = None
+        main._twitch_reader = None
 
 
 @pytest.fixture(autouse=True)
