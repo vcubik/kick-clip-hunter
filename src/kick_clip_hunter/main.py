@@ -1764,6 +1764,7 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         channels.append(
             health.Channel(
                 slug=slug,
+                platform=row["platform"],
                 now_words=right_now[slug]["words"],
                 coming_in=right_now[slug]["live"],
                 live_since=look.live_since if look else None,
@@ -1798,7 +1799,30 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         funnel=funnel,
         funnel_looked_at=looked_at,
         port=_served_port,
+        twitch=_twitch_facts(sum(1 for row in streamers if row["platform"] == platforms.TWITCH)),
         **looked_up,
+    )
+
+
+def _twitch_facts(channels: int) -> health.TwitchChat | None:
+    """Where reading Twitch's chat stands, for the Health page: None while
+    the service neither is set up for Twitch nor watches a Twitch channel."""
+    if not settings.twitch:
+        return health.TwitchChat(set_up=False, channels=channels) if channels else None
+    reader = _twitch_reader
+    if reader is None:
+        return health.TwitchChat(set_up=True, channels=channels)
+    return health.TwitchChat(
+        set_up=True,
+        channels=channels,
+        account=reader.account,
+        reading=len(reader.subscribed),
+        connected_since=reader.connected_since,
+        last_heard_at=reader.last_heard_at,
+        trouble=reader.trouble,
+        trouble_since=reader.trouble_since,
+        needs_sign_in=reader.needs_sign_in,
+        refused=tuple(reader.refused_channels()),
     )
 
 

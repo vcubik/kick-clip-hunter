@@ -168,14 +168,20 @@ class ChatReader:
         self._url = url or EVENTSUB_URL
         # For the Health page: since when a connection has been open (None
         # while there is none), when it last said anything, whose chat is
-        # subscribed on it, whose was refused and why, and why there is no
-        # connection when there is none.
+        # subscribed on it, whose was refused and why, and what is wrong
+        # when something is - since when, and whether it takes an account
+        # signed in again.
         self.connected_since: datetime | None = None
         self.last_heard_at: datetime | None = None
         self.subscribed: dict[str, Channel] = {}
         self.refused: dict[str, str] = {}
         self.trouble: str | None = None
+        self.trouble_since: datetime | None = None
+        self.needs_sign_in = False
         self._refused_at: dict[str, float] = {}
+        # Every channel whose chat was wanted the last time that was asked,
+        # by its Twitch id.
+        self._known: dict[str, Channel] = {}
         # The connection chat is coming over right now.
         self._socket: ClientConnection
 
@@ -187,13 +193,13 @@ class ChatReader:
                 if not wanted:
                     # Nothing to read: a connection without a subscription
                     # is closed by Twitch as unused.
-                    self.trouble = None
+                    self.trouble, self.trouble_since, self.needs_sign_in = None, None, False
                     await asyncio.sleep(CHANNELS_SECONDS)
                     continue
                 await self._session(wanted)
                 failures = 0
             except SignInNeeded as missing:
-                self._lost(str(missing))
+                self._lost(str(missing), sign_in=True)
                 await asyncio.sleep(CHANNELS_SECONDS)
                 continue
             except (OSError, ConnectionClosed, ConnectionLost, httpx.HTTPError, TimeoutError) as error:
@@ -206,13 +212,28 @@ class ChatReader:
             await asyncio.sleep(RETRY_SECONDS[min(failures, len(RETRY_SECONDS) - 1)])
             failures += 1
 
-    def _lost(self, why: str) -> None:
+    def _lost(self, why: str, *, sign_in: bool = False) -> None:
         self.connected_since = None
         self.subscribed.clear()
-        self.trouble = why
+        self.trouble, self.needs_sign_in = why, sign_in
+        self.trouble_since = self.trouble_since or datetime.now(timezone.utc)
 
     def _wanted(self) -> dict[str, Channel]:
-        return {channel.twitch_id: channel for channel in self._channels()}
+        self._known = {channel.twitch_id: channel for channel in self._channels()}
+        return dict(self._known)
+
+    @property
+    def account(self) -> str | None:
+        """The name of the account chat is read as, if one is signed in."""
+        token = self._tokens.account
+        return token.login if token else None
+
+    def refused_channels(self) -> list[tuple[str, str]]:
+        """The channels whose chat was refused, by name, and why."""
+        return [
+            (self._known[twitch_id].channel if twitch_id in self._known else twitch_id, why)
+            for twitch_id, why in sorted(self.refused.items())
+        ]
 
     async def _receive(self, socket: ClientConnection, timeout: float) -> dict[str, Any] | None:
         """The next message, or None if none came in `timeout` seconds."""
@@ -251,7 +272,8 @@ class ChatReader:
             await self._subscribe(session["id"], wanted, token)
             if not self.subscribed:
                 raise ConnectionLost("no channel's chat could be subscribed")
-            self.connected_since, self.trouble = datetime.now(timezone.utc), None
+            self.connected_since = datetime.now(timezone.utc)
+            self.trouble, self.trouble_since, self.needs_sign_in = None, None, False
             logger.info("twitch chat: reading %d channel(s) as %s", len(self.subscribed), token.login)
             await self._read(session)
         finally:
@@ -321,7 +343,10 @@ class ChatReader:
         try:
             await self._subscribe(session_id, wanted, await self._tokens.token())
         except SignInNeeded as missing:
-            self.trouble = str(missing)
+            # What is subscribed comes in still; what is not, and the next
+            # connection, wait for an account.
+            self.trouble, self.needs_sign_in = str(missing), True
+            self.trouble_since = self.trouble_since or datetime.now(timezone.utc)
         except httpx.HTTPError as error:
             logger.warning("twitch chat: could not subscribe new channels (%s) - trying again later", error)
 

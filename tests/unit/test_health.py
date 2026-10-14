@@ -14,7 +14,7 @@ import pytest
 
 from kick_clip_hunter import health, tunnel
 from kick_clip_hunter.dashboard_view import since_words, when_words
-from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck
+from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TwitchChat
 
 NOW = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 TODAY = NOW.astimezone().date()
@@ -667,10 +667,150 @@ class TestThePageAsAWhole:
     def test_every_part_of_the_page_is_there(self):
         report = health.report(facts(), TODAY)
 
-        assert [name for name, _, _ in health.PARTS] == ["webhooks", "subscriptions", "recorders", "disk", "tunnel"]
+        assert [name for name, _, _ in health.PARTS] == [
+            "webhooks",
+            "subscriptions",
+            "twitch",
+            "recorders",
+            "disk",
+            "tunnel",
+        ]
         for name, _, _ in health.PARTS:
             assert {"trouble", "said", "more"} <= report[name].keys()
 
     @pytest.mark.parametrize(("troubles", "words"), [(0, ""), (1, "1 problem"), (3, "3 problems")])
     def test_the_bar_says_how_much_is_wrong_and_nothing_while_all_is_well(self, troubles, words):
         assert health.flag_words(troubles) == words
+
+
+class TestTwitchChat:
+    """Where reading Twitch's chat stands: a part of the page only while the
+    service is set up for Twitch or watches a Twitch channel."""
+
+    def test_without_twitch_there_is_no_such_part(self):
+        report = health.report(facts(last_webhook_at=ago(2)), TODAY)
+
+        assert report["twitch"]["shown"] is False
+        assert "Twitch" not in report["lead"]
+
+    def test_a_twitch_channel_watched_without_twitch_set_up_is_trouble(self):
+        part = health.twitch_part(facts(twitch=TwitchChat(set_up=False, channels=2)), TODAY)
+
+        assert part["trouble"]
+        assert part["said"] == (
+            "2 Twitch channels are on the watchlist, but the service is not set up for Twitch: "
+            "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are not in .env."
+        )
+
+    def test_set_up_with_no_twitch_channel_there_is_nothing_to_read(self):
+        part = health.twitch_part(facts(twitch=TwitchChat(set_up=True)), TODAY)
+
+        assert (part["shown"], part["trouble"]) == (True, False)
+        assert part["said"] == "No Twitch channels are on the watchlist."
+
+    def test_chat_coming_in_says_whose_and_as_whom(self):
+        chat = TwitchChat(
+            set_up=True, channels=3, account="chat_reader", reading=3, connected_since=ago(600), last_heard_at=ago(5)
+        )
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert not part["trouble"]
+        assert part["said"] == "The chat of all 3 Twitch channels comes in, read as chat_reader."
+        assert part["more"] == ["Connected 10 minutes ago.", "The last word from Twitch came 5 seconds ago."]
+
+    def test_a_channel_whose_chat_twitch_refused_is_trouble_and_listed(self):
+        chat = TwitchChat(
+            set_up=True,
+            channels=2,
+            account="chat_reader",
+            reading=1,
+            connected_since=ago(60),
+            refused=(("banned_one@twitch", "403 subscription refused"),),
+        )
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert part["trouble"]
+        assert part["said"] == "The chat of 1 of the 2 Twitch channels comes in, read as chat_reader."
+        assert part["rows"] == [{"slug": "banned_one@twitch", "why": "403 subscription refused"}]
+
+    def test_no_account_signed_in_is_trouble_at_once_and_says_what_to_do(self):
+        chat = TwitchChat(
+            set_up=True,
+            channels=1,
+            trouble="No Twitch account has signed in to read chat as.",
+            trouble_since=ago(5),
+            needs_sign_in=True,
+        )
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert part["trouble"]
+        assert part["said"] == "No Twitch account has signed in to read chat as. So no Twitch chat comes in."
+        assert "scripts/twitch_login.py" in part["more"][0]
+
+    def test_a_sign_in_that_lapsed_while_chat_comes_in_is_trouble_too(self):
+        chat = TwitchChat(
+            set_up=True,
+            channels=1,
+            account="chat_reader",
+            reading=1,
+            connected_since=ago(60),
+            trouble="The account's sign-in has lapsed (Invalid refresh token).",
+            needs_sign_in=True,
+        )
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert part["trouble"]
+        assert any("lapsed" in sentence for sentence in part["more"])
+
+    def test_a_connection_lost_a_moment_ago_is_no_trouble_yet(self):
+        chat = TwitchChat(set_up=True, channels=1, trouble="ConnectionLost", trouble_since=ago(10))
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert not part["trouble"]
+        assert part["said"] == "Connecting to Twitch's chat again (ConnectionLost)."
+
+    def test_a_connection_lost_for_long_is_trouble(self):
+        chat = TwitchChat(
+            set_up=True, channels=1, trouble="ConnectionLost", trouble_since=ago(health.TWITCH_LOST_SECONDS + 60)
+        )
+
+        part = health.twitch_part(facts(twitch=chat), TODAY)
+
+        assert part["trouble"]
+        assert part["said"] == "No Twitch chat has come in for 3 minutes: ConnectionLost."
+
+    def test_before_the_first_connection_it_is_connecting(self):
+        part = health.twitch_part(facts(twitch=TwitchChat(set_up=True, channels=1)), TODAY)
+
+        assert (part["trouble"], part["said"]) == (False, "Connecting to Twitch's chat.")
+
+    def test_it_is_named_in_the_lead_where_it_is_trouble_and_where_all_is_fine(self):
+        fine = TwitchChat(set_up=True, channels=1, account="a", reading=1, connected_since=ago(5))
+        wrong = TwitchChat(set_up=False, channels=1)
+
+        assert health.report(facts(last_webhook_at=ago(2), twitch=fine), TODAY)["lead"] == (
+            "Webhooks, subscriptions, Twitch chat, the recorders, the disk and the tunnel all look fine."
+        )
+        report = health.report(facts(last_webhook_at=ago(2), twitch=wrong), TODAY)
+        assert (report["troubles"], report["lead"]) == (1, "Twitch chat needs a look.")
+
+
+class TestWebhooksAreKicks:
+    def test_a_live_twitch_channel_does_not_make_kicks_silence_trouble(self):
+        twitch = live("twitch_channel@twitch", since=LONG_LIVE, platform="twitch")
+
+        part = health.webhooks(facts(channels=(twitch,)), TODAY)
+
+        assert not part["trouble"]
+
+    def test_a_quiet_twitch_channel_is_still_said_in_its_row(self):
+        twitch = live("twitch_channel@twitch", since=LONG_LIVE, platform="twitch", last_chat_at=LONG_AGO)
+
+        (row,) = health.webhooks(facts(channels=(twitch,)), TODAY)["rows"]
+
+        assert row["note"].startswith("Quiet for")
