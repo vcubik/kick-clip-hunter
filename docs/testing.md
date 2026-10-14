@@ -346,7 +346,8 @@ and on demand:
 
 ## What is not automated - the live checklist
 
-Some things only exist against the real Kick, and faking them would only test the fake:
+Some things only exist against the real Kick and Twitch, and faking them would only test the
+fake:
 
 | Not covered by the suite | Why |
 |---|---|
@@ -357,6 +358,7 @@ Some things only exist against the real Kick, and faking them would only test th
 | `static/dashboard.js` - the moments found in a recording: asking for them, following a replay or the cutting of clips, the marks on the trace, playing from a row | The same: every request and the section the service renders are tested, the script is checked by hand (step 11 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
+| Twitch's actual API, chat connection and playlists: Helix, the device flow of `scripts/twitch_login.py`, the EventSub WebSocket, streamlink finding a stream and its VOD | `FakeTwitchApi`, `FakeEventSub` and `FakeHlsServer` encode what Twitch documents and what was observed (a live playlist's tags, a VOD in fragmented MP4); streamlink itself is never run - a test that would reach it fails. Step 14 below is what notices a change. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
 | A stream recording of real length | The suite records and saves seconds of synthetic footage. Hours of a real stream - gigabytes on disk, a file made in minutes, a player moving about in it - are step 11 below. |
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. What the Health page makes of Tailscale's answers is tested; that those answers are still what Tailscale prints is step 1 below. |
@@ -479,6 +481,21 @@ Run this on a live channel after changing any of the above, or the code right ne
 13. **Shut down from the Channels page.** It asks once more before doing it; then a banner shows
    how much work is still in flight, and the process exits on its own once that is done, and not
    before. A stream recording that was running is ended and saved first.
+14. **Watch a Twitch channel.** With `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` in `.env`, run
+   `scripts/twitch_login.py`: it shows a code, and confirmed on twitch.tv/activate it says whose
+   account signed in. Add a live Twitch channel on the Channels page by a link to it: it is listed
+   as `<name>@twitch` with its Twitch id in the tooltip. Within half a minute the log says
+   `twitch chat: reading N channel(s) as <account>`, its chat lines follow, and the Health page's
+   Twitch part says whose chat comes in and as whom - nothing beside "Health" in the bar. No
+   browser window opens for its recording: the log says `recording started`, with a VOD found if
+   the channel keeps its past broadcasts. A moment of it plays like a Kick one, its emotes drawn
+   as pictures - Twitch's own, and the channel's 7TV, BetterTTV and FrankerFaceZ ones - and its
+   chat sits against the picture after the same calibration as in step 6 (Twitch's player runs a
+   few seconds behind the broadcast, as Kick's does). If its stream runs an ad, the log shows a
+   discontinuity with `ad=True`; a moment through it logs `footage from the VOD used`, the
+   channel's folder under `data/recordings/` holds `.m4s` fragments and a `.init` file beside its
+   `.ts` segments, and nowhere in the clip is the ad. Restart the service: the reader connects
+   again on its own, and the Health page shows how long ago.
 
 ## Checking a detector change against a real stream
 
