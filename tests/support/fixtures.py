@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, recorder
-from kick_clip_hunter.kick_stream import StreamUrls
+from kick_clip_hunter.platforms import StreamUrls
 from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
@@ -65,7 +65,7 @@ class Recording:
             self.url_requests.append(slug)
             return StreamUrls(live=server.master_url, vod=vod.master_url if vod else None)
 
-        self._monkeypatch.setattr(recorder, "get_stream_urls", stream_urls)
+        self._monkeypatch.setattr(recorder, "stream_urls", stream_urls)
         channel_recorder = ChannelRecorder(channel)
         self._recorders.append(channel_recorder)
         return channel_recorder

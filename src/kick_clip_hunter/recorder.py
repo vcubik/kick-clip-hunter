@@ -74,7 +74,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from .kick_stream import get_stream_urls
+from .streams import stream_urls
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -331,7 +331,7 @@ class ChannelRecorder:
         self.whole_stream = None
 
     def _start_run(self) -> None:
-        urls = get_stream_urls(self.channel_slug)
+        urls = stream_urls(self.channel_slug)
         response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
         response.raise_for_status()
         run = _Run(

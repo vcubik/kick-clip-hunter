@@ -1,13 +1,14 @@
 """Background management of one ChannelRecorder per watched channel.
 
-Before doing anything that touches a browser, each tick checks is_live via
-the official Kick public API - the cheap, no-browser way
-to answer "is there any point recording this channel right now." Only a
+Before doing anything that touches a browser, each tick asks the channel's
+platform whether it is live (streams.live_status) - the cheap, no-browser
+way to answer "is there any point recording this channel right now." Only a
 channel confirmed live gets its recorder ticked, which is what actually
-launches the headed patchright browser to (re)fetch the stream URL. Without
-this check, an offline watchlist entry would pop a browser window open
-every TICK_INTERVAL_SECONDS forever, since ChannelRecorder.tick() alone has
-no way to know a channel is offline until it's already tried and failed.
+finds its stream - on Kick by launching the headed patchright browser to
+(re)fetch the stream URL. Without this check, an offline Kick channel would
+pop a browser window open every TICK_INTERVAL_SECONDS forever, since
+ChannelRecorder.tick() alone has no way to know a channel is offline until
+it's already tried and failed.
 
 A channel's recorder runs for either of two reasons: the channel is tracked
 for clips, or its stream is being kept whole (see stream_recording.py). The
@@ -23,10 +24,11 @@ recording of it is started without anyone asking. Once per stream: a channel
 whose recording was ended while its stream was still on is left alone until
 that stream is over (`hold_off`).
 
-What the loop saw of each channel on its last round - whether Kick said it
-was live, and since when, or why it could not be looked at - is kept for the
-Health page, together with when the loop last finished a round: a loop that
-has stopped going round fails as quietly as a channel that is not live.
+What the loop saw of each channel on its last round - whether its platform
+said it was live, and since when, or why it could not be looked at - is kept
+for the Health page, together with when the loop last finished a round: a
+loop that has stopped going round fails as quietly as a channel that is not
+live.
 """
 
 import asyncio
@@ -35,10 +37,8 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import stream_recording
-from .config import load_settings
-from .kick_client import get_app_access_token, get_channel_by_slug
-from .kick_stream import StreamUrlError
+from . import stream_recording, streams
+from .platforms import StreamUrlError
 from .recorder import (
     POST_ROLL_SECONDS,
     PRE_ROLL_SECONDS,
@@ -94,10 +94,11 @@ class Look:
     """What the loop saw of a channel the last time it looked at it."""
 
     at: datetime
-    # Since when Kick has said the channel is live; None while it is not.
+    # Since when its platform has said the channel is live; None while it is
+    # not.
     live_since: datetime | None = None
-    # Why the look came to nothing, if it did: Kick could not be asked, or
-    # the channel's recorder could not be started.
+    # Why the look came to nothing, if it did: the platform could not be
+    # asked, or the channel's recorder could not be started.
     trouble: str | None = None
 
 
@@ -107,8 +108,8 @@ _looks: dict[str, Look] = {}
 # When the loop last got through all of its channels.
 _round_finished_at: datetime | None = None
 
-# What a look says went wrong when Kick calls a channel live and its page
-# gives no stream address. Once is a stream that ended in between.
+# What a look says went wrong when a platform calls a channel live and no
+# stream address can be found for it. Once is a stream that ended in between.
 NO_STREAM_ADDRESS = "no stream address could be captured"
 
 
@@ -146,10 +147,7 @@ def _get_recorder(channel_slug: str) -> ChannelRecorder:
 
 
 async def _is_live(channel_slug: str) -> bool:
-    settings = load_settings()
-    token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
-    channel = await get_channel_by_slug(channel_slug, token)
-    return bool((channel.get("stream") or {}).get("is_live"))
+    return (await streams.live_status(channel_slug)).live
 
 
 def _tick_one(channel_slug: str) -> None:

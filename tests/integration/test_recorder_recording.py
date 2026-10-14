@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import recorder
-from kick_clip_hunter.kick_stream import StreamUrlError
+from kick_clip_hunter.platforms import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
 from kick_clip_hunter.stream_recording import StreamWriter
 from tests.support.hls import SEGMENT_SECONDS, Segment, fake_segments
@@ -369,7 +369,7 @@ class TestFailures:
             raise StreamUrlError(f"No live stream URL captured for {slug!r} - is it live?")
 
         rec = recorder.ChannelRecorder("offline_channel")
-        monkeypatch.setattr(recorder, "get_stream_urls", not_live)
+        monkeypatch.setattr(recorder, "stream_urls", not_live)
 
         with pytest.raises(StreamUrlError):
             rec.tick()

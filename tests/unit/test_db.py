@@ -296,6 +296,22 @@ class TestUpgradingOlderDatabases:
         finally:
             connection.close()
 
+    def test_channels_watched_before_there_were_other_platforms_are_kick_channels(self):
+        legacy_database(
+            "CREATE TABLE streamers (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "broadcaster_user_id INTEGER UNIQUE NOT NULL, slug TEXT UNIQUE NOT NULL, "
+            "added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))",
+            "INSERT INTO streamers (broadcaster_user_id, slug) VALUES (7, 'old_channel')",
+        )
+
+        connection = db.get_connection()
+        try:
+            (row,) = db.get_streamers(connection)
+            assert (row["platform"], row["platform_user_id"], row["broadcaster_user_id"]) == ("kick", "7", 7)
+            assert [row["slug"] for row in db.get_streamers(connection, "kick")] == ["old_channel"]
+        finally:
+            connection.close()
+
 
 class TestStreamers:
     def test_added_channels_are_listed_in_the_order_they_were_added(self, conn):
@@ -361,6 +377,60 @@ class TestStreamers:
         assert {row["slug"]: row["own_tuning"] for row in db.get_streamers(conn)} == {"its_own": 1, "like_the_rest": 0}
         db.set_streamer_own_tuning(conn, 1, False)
         assert db.get_streamer_by_slug(conn, "its_own")["own_tuning"] == 0
+
+
+class TestChannelsOfOtherPlatforms:
+    """A channel of any platform but Kick is kept by an id given out here,
+    with its id on its own platform beside it."""
+
+    def test_a_kick_channel_is_kept_by_its_kick_id(self, conn):
+        db.add_streamer(conn, 42, "some_channel")
+
+        row = db.get_streamer_by_slug(conn, "some_channel")
+        assert (row["broadcaster_user_id"], row["platform"], row["platform_user_id"]) == (42, "kick", "42")
+
+    def test_another_platforms_channels_are_given_ids_no_kick_channel_can_have(self, conn):
+        db.add_streamer(conn, 1, "kick_channel")
+
+        first = db.add_platform_streamer(conn, "twitch", "1", "first@twitch")
+        second = db.add_platform_streamer(conn, "twitch", "71092938", "second@twitch")
+
+        assert (first, second) == (-1, -2)
+        row = db.get_streamer_by_slug(conn, "second@twitch")
+        assert (row["broadcaster_user_id"], row["platform"], row["platform_user_id"]) == (-2, "twitch", "71092938")
+
+    def test_a_channel_added_again_keeps_its_id(self, conn):
+        first = db.add_platform_streamer(conn, "twitch", "123", "some_channel@twitch")
+
+        again = db.add_platform_streamer(conn, "twitch", "123", "some_channel@twitch")
+
+        assert again == first
+        assert len(db.get_streamers(conn)) == 1
+
+    def test_the_same_name_on_two_platforms_is_two_channels(self, conn):
+        db.add_streamer(conn, 5, "some_channel")
+        key = db.add_platform_streamer(conn, "twitch", "5", "some_channel@twitch")
+
+        assert {row["slug"]: row["broadcaster_user_id"] for row in db.get_streamers(conn)} == {
+            "some_channel": 5,
+            "some_channel@twitch": key,
+        }
+        assert key != 5
+
+    def test_the_watchlist_of_one_platform(self, conn):
+        db.add_streamer(conn, 5, "kick_channel")
+        db.add_platform_streamer(conn, "twitch", "9", "twitch_channel@twitch")
+
+        assert [row["slug"] for row in db.get_streamers(conn, "kick")] == ["kick_channel"]
+        assert [row["slug"] for row in db.get_streamers(conn, "twitch")] == ["twitch_channel@twitch"]
+        assert len(db.get_streamers(conn)) == 2
+
+    def test_a_channel_of_another_platform_is_tracked_and_switched_like_any(self, conn):
+        key = db.add_platform_streamer(conn, "twitch", "9", "twitch_channel@twitch")
+
+        assert db.get_streamer_tracking_enabled(conn, key) is True
+        db.set_streamer_tracking(conn, key, False)
+        assert db.get_streamer_tracking_enabled(conn, key) is False
 
 
 class TestTuning:

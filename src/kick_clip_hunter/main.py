@@ -31,12 +31,14 @@ from . import (
     frame_encoder,
     health,
     kick_chat,
+    platforms,
     recorder,
     recording_manager,
     recording_moments,
     replay,
     sound_events,
     stream_recording,
+    streams,
     transcriber,
     tuning,
     tunnel,
@@ -116,11 +118,10 @@ from .db import (
 )
 from .kick_client import (
     get_app_access_token,
-    get_channel_by_slug,
     get_event_subscriptions,
     subscribe_chat_messages,
 )
-from .kick_stream import StreamUrlError
+from .platforms import StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
@@ -394,7 +395,7 @@ async def _ensure_chat_subscriptions(report_all_present: bool = True) -> None:
 async def _reconcile_chat_subscriptions(report_all_present: bool) -> None:
     conn = get_connection()
     try:
-        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
+        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn, platforms.KICK)]
     finally:
         conn.close()
     if not watch:
@@ -499,7 +500,7 @@ async def _refresh_emote_pictures() -> None:
 
     conn = get_connection()
     try:
-        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn)]
+        watch = [(row["broadcaster_user_id"], row["slug"]) for row in get_streamers(conn, platforms.KICK)]
     finally:
         conn.close()
     for broadcaster_user_id, slug in watch:
@@ -650,13 +651,7 @@ async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
     cached = _stream_start_cache.get(channel_slug)
     now = time.monotonic()
     if cached is None or now - cached[1] > STREAM_INFO_CACHE_SECONDS:
-        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
-        channel = await get_channel_by_slug(channel_slug, token)
-        stream = channel.get("stream") or {}
-        start_time = None
-        if stream.get("is_live") and stream.get("start_time"):
-            start_time = datetime.fromisoformat(stream["start_time"].replace("Z", "+00:00"))
-        _stream_start_cache[channel_slug] = (start_time, now)
+        _stream_start_cache[channel_slug] = ((await streams.live_status(channel_slug)).started_at, now)
 
     start_time, _ = _stream_start_cache[channel_slug]
     if start_time is None:

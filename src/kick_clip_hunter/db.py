@@ -11,6 +11,8 @@ from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .platforms import KICK
+
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "kick_clip_hunter.db"
 
 # Manual categorization tags set from the dashboard while reviewing a clip -
@@ -329,15 +331,47 @@ def get_connection() -> sqlite3.Connection:
     if "always_record" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN always_record INTEGER NOT NULL DEFAULT 0")
 
+    # Which platform a channel is on, and its id there (see platforms.py).
+    # Every channel from before there were others is on Kick, where that id
+    # is the one it is kept by here as well.
+    if "platform" not in columns:
+        conn.execute(f"ALTER TABLE streamers ADD COLUMN platform TEXT NOT NULL DEFAULT '{KICK}'")
+    if "platform_user_id" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN platform_user_id TEXT")
+        conn.execute("UPDATE streamers SET platform_user_id = CAST(broadcaster_user_id AS TEXT)")
+        conn.commit()
+
     return conn
 
 
 def add_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) -> None:
+    """Puts a Kick channel on the watchlist, unless it is there already. Its
+    Kick user id is the id it is kept by."""
     conn.execute(
-        "INSERT OR IGNORE INTO streamers (broadcaster_user_id, slug) VALUES (?, ?)",
-        (broadcaster_user_id, slug),
+        "INSERT OR IGNORE INTO streamers (broadcaster_user_id, slug, platform, platform_user_id) VALUES (?, ?, ?, ?)",
+        (broadcaster_user_id, slug, KICK, str(broadcaster_user_id)),
     )
     conn.commit()
+
+
+def add_platform_streamer(conn: sqlite3.Connection, platform: str, platform_user_id: str, slug: str) -> int:
+    """Puts a channel of any other platform than Kick on the watchlist,
+    under `slug` (see platforms.channel_name), and returns the id it is kept
+    by - the one it has already if it is there. That id is a negative number
+    given out here: Kick's ids, the other ids in the same column, are not."""
+    found = conn.execute(
+        "SELECT broadcaster_user_id FROM streamers WHERE platform = ? AND platform_user_id = ?",
+        (platform, platform_user_id),
+    ).fetchone()
+    if found is not None:
+        return found[0]
+    (key,) = conn.execute("SELECT min(coalesce(min(broadcaster_user_id), 0), 0) - 1 FROM streamers").fetchone()
+    conn.execute(
+        "INSERT INTO streamers (broadcaster_user_id, slug, platform, platform_user_id) VALUES (?, ?, ?, ?)",
+        (key, slug, platform, platform_user_id),
+    )
+    conn.commit()
+    return key
 
 
 def replace_channel_keywords(
@@ -429,18 +463,23 @@ def get_chat_identities(
     return identities
 
 
-def get_streamers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list[sqlite3.Row]:
+    """The watchlist, the channel added first first - or with `platform` the
+    channels of that one."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning, always_record"
-        " FROM streamers ORDER BY added_at"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning, always_record,"
+        " platform, platform_user_id"
+        " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
+        (platform, platform),
     ).fetchall()
 
 
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled, own_tuning, always_record FROM streamers WHERE slug = ?",
+        "SELECT broadcaster_user_id, tracking_enabled, own_tuning, always_record, platform, platform_user_id"
+        " FROM streamers WHERE slug = ?",
         (slug,),
     ).fetchone()
 

@@ -112,6 +112,20 @@ class TestSubscriptionReconciliation:
         assert service.api.subscribed == [first, last]
         assert any("failed to re-subscribe chat for broken" in r.getMessage() for r in caplog.records)
 
+    async def test_channels_of_other_platforms_are_none_of_kicks_business(self, service, caplog):
+        kick_channel = service.watch("kick_channel", subscribed=False)
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "twitch", "123", "twitch_channel@twitch")
+        finally:
+            conn.close()
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await service.main._ensure_chat_subscriptions()
+
+        assert subscribe_requests(service.api) == [kick_channel]
+        assert service.main._subscriptions.watched == 1
+
 
 class TestLifespan:
     async def test_startup_restores_switches_heals_subscriptions_and_starts_recording(self, service, monkeypatch):

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import db, detector, recorder, tuning
-from kick_clip_hunter.kick_stream import StreamUrlError
+from kick_clip_hunter.platforms import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
 from tests.support.webhook import chat_payload
 

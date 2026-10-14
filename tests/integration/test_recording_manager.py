@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from kick_clip_hunter import recording_manager, stream_recording
-from kick_clip_hunter.kick_stream import StreamUrlError
+from kick_clip_hunter.platforms import StreamUrlError
 from kick_clip_hunter.recorder import PRE_ROLL_SECONDS, ChannelRecorder, RunState
 from tests.support.waiting import async_wait_until
 

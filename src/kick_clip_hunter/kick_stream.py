@@ -14,26 +14,14 @@ ad stitched into the live playlist covered up.
 """
 
 import time
-from dataclasses import dataclass
 
 from patchright.sync_api import sync_playwright
 
 from .kick_session import BROWSER_PROFILE_DIR
+from .platforms import StreamUrlError, StreamUrls
 
 POLL_INTERVAL_SECONDS = 0.5
 MAX_WAIT_SECONDS = 15
-
-
-class StreamUrlError(RuntimeError):
-    pass
-
-
-@dataclass
-class StreamUrls:
-    live: str
-    # Master playlist of the recording of the current broadcast, or None if
-    # the channel doesn't keep one (or the lookup failed).
-    vod: str | None = None
 
 
 def _vod_url(page, channel_slug: str) -> str | None:
