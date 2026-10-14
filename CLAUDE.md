@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-kick-clip-hunter watches a list of Kick.com streamers and detects potentially viral/funny
-moments from chat activity (message-rate spikes, emote/keyword frequency). Detected
+kick-clip-hunter watches a list of Kick.com and Twitch streamers and detects potentially
+viral/funny moments from chat activity (message-rate spikes, emote/keyword frequency). Detected
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
 whole stream can also be recorded on request, with its chat. See
@@ -33,7 +33,16 @@ set from the dashboard's Settings page (see `tuning.py` below).
   one Playwright/patchright bundle for their own internal use lacks HTTPS support and
   can't fetch anything
 - `.env` (gitignored): `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET` from a Kick app at
-  https://kick.com/settings/developer
+  https://kick.com/settings/developer - and, optionally, `TWITCH_CLIENT_ID`,
+  `TWITCH_CLIENT_SECRET` of a Twitch application (https://dev.twitch.tv/console, client
+  type Confidential - the redirect URL its form asks for is never used). Without them no
+  Twitch channel can be watched: adding one says what is missing, and a Twitch channel
+  already on the watchlist is trouble on the Health page
+- One-time sign-in of the Twitch account chat is read as (only with Twitch set up):
+  `PYTHONPATH=src python scripts/twitch_login.py` - shows a code to confirm on
+  twitch.tv/activate (Twitch's device flow) and keeps the tokens in
+  `data/twitch_token.json`, where the running service picks them up. See
+  `twitch_auth.py` below for why an account is needed at all
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
@@ -53,11 +62,16 @@ set from the dashboard's Settings page (see `tuning.py` below).
   A quick `cloudflared tunnel --url http://localhost:8000` also works as a fallback, but
   its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
-  - `subscribe.py <slug>` — add a channel to the watchlist (fetches and stores its 7TV emotes -
-    the keywords the detector listens for and the pictures the dashboard draws - and subscribes to `chat.message.sent` on Kick's side unless a subscription is
-    already there - so re-running it is safe and repairs a dropped subscription)
-  - `refresh_emotes.py <slug>` — re-fetch and re-classify an already-watched channel's 7TV
-    emotes (keywords and pictures) without talking to Kick's subscription API at all
+  - `subscribe.py <channel>` — add a channel to the watchlist: a Kick channel's name, a link
+    to a Kick or Twitch channel, or `name@twitch` (`platforms.parse`). Fetches and stores its
+    emotes - the keywords the detector listens for and the pictures the dashboard draws -
+    and for a Kick channel subscribes to `chat.message.sent` on Kick's side unless a
+    subscription is already there - so re-running it is safe and repairs a dropped
+    subscription. A Twitch channel's chat is subscribed by the running service
+  - `refresh_emotes.py <channel>` — re-fetch and re-classify an already-watched channel's
+    emotes (keywords and pictures: 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's)
+    without talking to Kick's subscription API at all
+  - `twitch_login.py` — one-time sign-in of the Twitch account chat is read as (see above)
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
   - `create_clip.py <slug>` — manually publish an official Kick clip for a channel's
@@ -172,16 +186,20 @@ written in English, regardless of what language the conversation with the user i
 ## Architecture
 
 ```
-Watchlist (streamers)
-    -> Kick app access token (client credentials, NOT user OAuth - lets the app
+Watchlist (streamers, each on its platform - see platforms.py)
+    -> Kick: app access token (client credentials, NOT user OAuth - lets the app
        subscribe to any channel's chat without that streamer's consent)
-    -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
+       -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
+    -> Twitch: an account signed in for the service (user:read:chat) -> EventSub
+       WebSocket the service holds open, every Twitch channel's chat subscribed on it
+    -> each message as a ChatMessage -> _take_chats (stored a batch at a time)
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
        chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
-       the stream's own HLS segments into a rolling buffer) -> a detected moment cuts a
-       clip from that buffer, path stored back on the moment
+       the stream's own HLS segments into a rolling buffer - found by a browser on Kick,
+       by streamlink on Twitch) -> a detected moment cuts a clip from that buffer, path
+       stored back on the moment
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
@@ -189,8 +207,28 @@ Watchlist (streamers)
 ```
 
 Module map (`src/kick_clip_hunter/`):
+- `platforms.py` — the platforms (Kick, Twitch) and how a channel's name says which one it
+  is on. Pure. A Kick channel is known by its slug, as it always was; a channel anywhere
+  else by its name there and the platform's, `login@twitch` - so the same name on two
+  platforms is two channels, and everything kept by name (chat, moments, recorders,
+  folders, the chat delay) stays apart without a migration. In the database a channel is
+  kept by `streamers.broadcaster_user_id`: a Kick channel's is its Kick user id, any other
+  channel's a negative number given out when it is added (`db.add_platform_streamer`),
+  which no Kick id can be; its id on its own platform is in `streamers.platform_user_id`
+  and its platform in `streamers.platform`. `parse` is what someone typed (a link, a name)
+  as a platform and a name; `LiveStatus`, `StreamUrls`, `StreamUrlError` are the shapes in
+  which a platform's answers come back
+- `streams.py` — what is asked of a channel's platform, sent to the one its name says:
+  whether it is live and since when (`live_status` - Kick's API, or Helix), where its
+  stream is (`stream_urls` - `kick_stream.py`, or `twitch_stream.py`)
+- `chat_message.py` — one chat message as the service takes it in, whichever platform it
+  came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
+  `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id), where those
+  stand, the sender's identity, whether they run the channel. `kick_chat.py` makes one of
+  Kick's webhook payload, `twitch_chat.chat_message` of a Twitch event
 - `kick_client.py` — app access token + channel lookup + event subscription
-- `seventv_client.py` — fetches a channel's 7TV emote set (public API): each emote's name
+- `seventv_client.py` — fetches a channel's 7TV emote set (public API), by its id on its
+  own platform (7TV knows Kick and Twitch channels): each emote's name
   in that channel, its id and the shape of its picture. Stored twice over, for two uses:
   `channel_keywords` is what the detector listens for (lowercased, filtered, weighted) and
   only changes when asked (`subscribe.py`, `refresh_emotes.py`); `channel_emotes` is what
@@ -199,8 +237,44 @@ Module map (`src/kick_clip_hunter/`):
   7TV's global emotes (the ones every channel has; a channel's own emote of the same name
   wins over them)
 - `webhook_security.py` — verifies Kick's RSA-signed webhook payloads
+- `twitch_client.py` — Twitch's API (Helix) with an app access token (client
+  credentials, like Kick's): a channel by its name, whether it is live, its recordings;
+  and an EventSub subscription, made with the signed-in account's token. `app_token`
+  raises `NotSetUp` while `.env` has no Twitch application
+- `twitch_auth.py` — the Twitch account chat is read as. Twitch lets an application read
+  any channel's chat over EventSub only on behalf of an account that reads it (scope
+  `user:read:chat`; up to 100 channels at once, the streamers are asked nothing).
+  `twitch_login.py` signs it in with the device flow; `TokenKeeper` gives the running
+  service a token that does not run out for a while yet, renews one about to (each
+  renewal hands out a new refresh token, which replaces the old - a refresh token works
+  once and lapses after 30 days unused), and says why there is none when there is none
+- `twitch_chat.py` — Twitch's chat over an EventSub WebSocket the service holds open
+  (`ChatReader`, started by the lifespan while Twitch is set up): nothing has to reach the
+  service from outside. Every connection is greeted with a session, and every Twitch
+  channel on the watchlist is subscribed to it (the first within ten seconds, or Twitch
+  closes it as unused); a channel added later is subscribed on the same session within
+  `CHANNELS_SECONDS`. A connection silent past its keepalive is given up and the next
+  subscribes everything again (chat sent meanwhile is gone - Twitch keeps none); a
+  request to move is followed, keeping the subscriptions; a token Twitch turns down is
+  renewed once; a refused or ended subscription is kept with why, and asked for again
+  after `REFUSED_SECONDS`. A message of another channel's chat shown during a shared
+  chat session is left out. What it saw is kept for the Health page. Chat is handed on
+  a batch at a time (`BATCH_SECONDS`)
+- `twitch_stream.py` — where a live Twitch stream is: streamlink is asked for the master
+  playlist and nothing else (Twitch's API has no playback; streamlink asks Twitch's
+  playback service the way the site's player does, over plain HTTP - no browser). Only
+  H.264, which Twitch serves as MPEG-TS. Also the stream's VOD, where the channel keeps
+  past broadcasts: the recording Helix lists with the live stream's id, its playlist
+  from streamlink. Importing streamlink renames the standard log levels in small letters
+  for the whole process; this module names them back
+- `twitch_emotes.py` — a Twitch channel's emotes beyond Twitch's own: 7TV's, BetterTTV's
+  and FrankerFaceZ's together (7TV's wins a name, then BetterTTV's). A BetterTTV or
+  FrankerFaceZ emote is kept with its service before its id (`bttv.<id>`, `ffz.<id>`),
+  which tells `dashboard_view.typed_emote_image` where its picture is
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
-  `ALTER TABLE`s in `get_connection()`, not a migration framework
+  `ALTER TABLE`s in `get_connection()`, not a migration framework. Chat is stored a batch
+  at a time (`insert_chat_messages`, `set_chat_identities`: one commit each, however many
+  rows - a commit is about a tenth of a second on this host's spinning disk)
 - `detector.py` — the heuristic engine; its module docstring is the source of truth for
   how detection works, don't duplicate that explanation here. Its constants are the
   recommended values; what can differ per channel is passed in as `detector.Settings`
@@ -239,7 +313,12 @@ Module map (`src/kick_clip_hunter/`):
   channels' state alone
 - `timeutil.py` — UTC-to-local-time display helper
 - `main.py` — FastAPI app: webhook receiver + the dashboard's routes + wires moment
-  detection to clip extraction. A stream recording is started and stopped through `POST
+  detection to clip extraction. Every chat message, from either platform, goes through
+  `_take_chats`: dropped while watching or the channel's tracking is off (unless its
+  stream is being recorded whole), stored with its sender's identity, then counted by the
+  detector one by one (`_detect`), which may open a moment session. Kick's webhook hands
+  it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`) a
+  batch. A stream recording is started and stopped through `POST
   /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
@@ -314,7 +393,8 @@ Module map (`src/kick_clip_hunter/`):
   that Kick gets through stays the last webhook, which the page shows beside it. A machine
   without Tailscale is not trouble: the service may be reached another way.
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
-  sends with every chat message (`sender.identity`). Kept once per chatter per channel
+  sends with every chat message (`sender.identity`), as does Twitch (`color`, `badges`,
+  put in Kick's form by `from_twitch`). Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
   and writes only when that changes, so what the dashboard shows is the latest known
   state, and chatters not seen since this was added keep the colour worked out from their
@@ -543,7 +623,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (about 2800 tests, a few minutes); `python
+- `python -m pytest` runs everything (about 3100 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -557,7 +637,10 @@ run what, the manual live checklist). What matters when changing code:
   server is running from the same checkout - but don't *edit* production files in place for
   experiments while it is (a restart would pick them up); use a copy.
 - A behaviour change comes with a test that would fail without it; a bug gets a failing test
-  first. Fake at the boundary (`tests/support/`: `FakeKickApi`, `FakeHlsServer`,
+  first. Fake at the boundary (`tests/support/`: `FakeKickApi`, `FakeTwitchApi` (Helix,
+  Twitch's OAuth, BetterTTV, FrankerFaceZ - the `twitch_api` fixture, which also sets the
+  service up for Twitch), `FakeEventSub` (Twitch's chat WebSocket, the `eventsub`
+  fixture), `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an initialization segment),
   `WebhookSigner`, `ChatSim`, the `service` fixture) rather than patching the service's own
   functions, and never `sleep` - pass the clock in or use `wait_until`.
 - Detector tests are written against `detector.py`'s constants, not their current values, so
@@ -614,6 +697,19 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   channel with VODs turned off gets the clip from the live segments, and context only as
   far as the ad.
 
+**Twitch (`twitch_stream.py`)** - the same recorder and buffer, no browser. Twitch's API
+has no playback either, so where a live stream is comes from streamlink, asked for the
+master playlist only. Twitch's playlists are of the same make as Kick's (both are IVS):
+2s MPEG-TS segments with their program date-time; an ad replaces the broadcast for its
+length and is marked three ways - a stream source of class `twitch-stream-source` other
+than "live", a date range of class `twitch-stitched-ad` spanning its segments, "Amazon"
+in their titles - any of which the recorder takes for one. Upright (portrait) variants of
+a dual-format stream are never picked while there is another. The VOD of the stream that
+is on is fragmented MP4 - 10s fragments that play only after the playlist's
+initialization segment (`EXT-X-MAP`), on the same program clock - which the recorder
+keeps as `.m4s` in a group named for its initialization segment (kept beside them as
+`<group>.init`, and written first when a clip is joined from them).
+
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`
   (body `{"duration": 180}`, cuts a 180s source buffer *server-side* — not a client-side
@@ -627,6 +723,14 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - Not wired into the automatic pipeline; it's a standalone manual tool.
 
 ## Operational quirks
+
+- A Twitch channel is `login@twitch` everywhere the service names it (folders, file
+  names, logs, the dashboard), and kept in the database under a negative id. A Twitch
+  login can be renamed: the channel's Twitch id stays the same, but its name here does
+  not follow - such a channel is found live by nobody until it is added again.
+- Twitch's chat is read as an account; a sign-in that lapsed (password changed, access
+  taken back, 30 days without a renewal) stops Twitch's chat until `twitch_login.py` is
+  run again, which the Health page says.
 
 - A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
   and as much again for the minutes its file takes to make (the footage is copied once,

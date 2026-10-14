@@ -11,9 +11,10 @@ signals are tracked this way over a rolling window per channel:
   false positives. It no longer fires a moment by itself: it only contributes
   (as a small score booster, MESSAGE_RATE_SCORE_WEIGHT) when a laugh/emote
   signal already fired in the same window.
-- emotes: a spike in distinct senders using a native Kick emote (not a raw
-  emote-position count - one person stacking several emotes in a message,
-  or repeating one across several messages, still only counts as one)
+- emotes: a spike in distinct senders using one of the platform's own
+  emotes - Kick's, Twitch's (not a raw emote-position count - one person
+  stacking several emotes in a message, or repeating one across several
+  messages, still only counts as one)
 - laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
   of a funny moment as chat gets, so it needs a lower multiplier. Not all
   laughs are equal either: the exaggerated "xDDDD" form counts for more
@@ -186,8 +187,9 @@ EMOTE_MENTION_UNIQUE_SENDER_MULTIPLIER = 4.0
 EMOTE_MENTION_LAUGH_WEIGHT = 3.5
 EMOTE_MENTION_OTHER_WEIGHT = 1.0
 
-# Same idea for native Kick emotes (the [emote:id:name] tokens Kick embeds
-# in message content): a genuinely laugh-related emote (emojiLol,
+# Same idea for a platform's native emotes (the [emote:id:name] tokens Kick
+# embeds in message content, and Twitch's put in the same form): a
+# genuinely laugh-related emote (emojiLol, LUL,
 # collectibleswideomelaugh, KEKW, ...) counts for more than an unrelated one
 # (asmonSmash, resttD, ...) that just happens to be popular. Dance/music
 # emotes (beeBobble, catJAM, ...) are a third category, excluded entirely -
@@ -264,12 +266,15 @@ def _emote_name_weight(emote_name: str, settings: Settings) -> float:
 
 
 # Kick embeds native emotes as "[emote:12345:emojiLol]" tokens directly in
-# the message content.
-NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:\d+:([^\]]+)\]")
+# the message content. Another platform's own emotes are put in the same
+# form when its chat is taken in (chat_message.py), with the platform before
+# their id: "[emote:twitch.25:Kappa]".
+NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:[0-9A-Za-z_.]+:([^\]]+)\]")
 
 
 def classify_native_emotes(content: str, settings: Settings | None = None) -> float:
-    """Returns the highest emote weight among any native Kick emotes in content, or 0.0 if none."""
+    """Returns the highest emote weight among any of a platform's native
+    emotes in content, or 0.0 if none."""
     names = NATIVE_EMOTE_TOKEN_PATTERN.findall(content)
     if not names:
         return 0.0

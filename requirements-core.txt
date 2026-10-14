@@ -7,3 +7,5 @@ python-dotenv
 cryptography
 jinja2
 patchright
+# Finds where a live Twitch stream is (twitch_stream.py).
+streamlink

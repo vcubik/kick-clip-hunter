@@ -62,6 +62,39 @@ def make_ts_segments(directory: Path, count: int, seconds_each: float = 1.0, siz
     return segments
 
 
+def make_fmp4_segments(
+    directory: Path, count: int, seconds_each: float = 1.0, size: str = "160x120"
+) -> tuple[bytes, list[Path]]:
+    """The same test pattern as make_ts_segments, cut into fragmented MP4
+    the way Twitch serves its VODs: an initialization segment, and `count`
+    fragments of `seconds_each` seconds that play only after it."""
+    directory.mkdir(parents=True, exist_ok=True)
+    fps = 10
+    total = count * seconds_each
+    keyframe_interval = str(int(fps * seconds_each))
+    # fmt: off
+    subprocess.run(
+        [
+            FFMPEG, "-y", "-v", "error",
+            "-f", "lavfi", "-i", f"testsrc=size={size}:rate={fps}:duration={total}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={total}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-g", keyframe_interval, "-keyint_min", keyframe_interval, "-sc_threshold", "0",
+            "-c:a", "aac", "-b:a", "32k",
+            "-f", "hls", "-hls_time", str(seconds_each), "-hls_list_size", "0",
+            "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", "%03d.m4s",
+            "playlist.m3u8",
+        ],
+        check=True,
+        # Every file is written beside the playlist, wherever ffmpeg's
+        # version puts the initialization segment.
+        cwd=directory,
+    )
+    # fmt: on
+    return (directory / "init.mp4").read_bytes(), sorted(directory.glob("*.m4s"))[:count]
+
+
 def make_video(path: Path, seconds: float, keyframe_every: float = 2.0, size: str = "160x120") -> Path:
     """An MP4 of the test pattern with a tone, `seconds` long, with a frame
     a cut can begin on every `keyframe_every` seconds from its first - as

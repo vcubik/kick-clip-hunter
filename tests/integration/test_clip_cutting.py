@@ -18,7 +18,7 @@ import pytest
 from kick_clip_hunter import recorder
 from kick_clip_hunter.recorder import ChannelRecorder, RecorderError
 from tests.support.hls import Segment
-from tests.support.media import FFMPEG, decodes_cleanly, probe
+from tests.support.media import FFMPEG, decodes_cleanly, make_fmp4_segments, probe
 from tests.support.waiting import wait_until
 
 pytestmark = pytest.mark.ffmpeg
@@ -760,3 +760,92 @@ class TestTrimming:
 
     def test_a_file_that_cannot_be_asked_where_its_frames_are_is_cut_where_it_was_told(self, tmp_path):
         assert recorder._keyframe_before(tmp_path / "not_there.mp4", 6.0) == 6.0
+
+
+@pytest.fixture(scope="module")
+def fragments(tmp_path_factory) -> tuple[bytes, list[Path]]:
+    """The test pattern as a fragmented-MP4 VOD: its initialization segment
+    and eight five-second fragments."""
+    return make_fmp4_segments(tmp_path_factory.mktemp("vod"), count=8, seconds_each=5.0)
+
+
+class TestAdsOnTwitch:
+    """Twitch marks a stitched ad its own way, and its VOD is fragmented
+    MP4 - ten-second fragments that play only after an initialization
+    segment - where Kick's is MPEG-TS. A clip through an ad is cut from it
+    all the same."""
+
+    AD = range(15, 25)
+
+    @pytest.fixture
+    def start(self) -> datetime:
+        return datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=60)
+
+    @pytest.fixture
+    def live(self, hls, ts_segments, start):
+        timeline = [Segment(path.read_bytes(), duration=1.0) for path in ts_segments]
+        for index in self.AD:
+            timeline[index] = Segment(
+                ts_segments[index - self.AD.start].read_bytes(), duration=1.0, title="Amazon|123456"
+            )
+        ad_start = (start + timedelta(seconds=self.AD.start)).isoformat().replace("+00:00", "Z")
+        timeline[self.AD.start].discontinuity = True
+        timeline[self.AD.start].tags = (
+            f'#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="{ad_start}",'
+            f"DURATION={len(self.AD)}.0",
+        )
+        timeline[self.AD.stop].discontinuity = True
+        return hls(timeline, published=len(timeline), window=len(timeline), stream_start=start)
+
+    @pytest.fixture
+    def vod(self, hls, fragments, start):
+        init, pieces = fragments
+        timeline = [Segment(piece.read_bytes(), duration=5.0, title="") for piece in pieces]
+        return hls(timeline, published=len(timeline), window=len(timeline), stream_start=start, init=init)
+
+    @pytest.fixture(autouse=True)
+    def fast(self, monkeypatch):
+        monkeypatch.setattr(recorder, "INITIAL_SEGMENTS", 40)
+        monkeypatch.setattr(recorder, "VOD_POLL_SECONDS", 0.01)
+
+    def recorded(self, recording, live, vod=None) -> ChannelRecorder:
+        rec = recording.of(live, channel="some_channel@twitch", vod=vod)
+        rec.tick()
+        wait_until(lambda: len(rec._stored_segments()) == 40, "the whole stream being recorded")
+        return rec
+
+    def chat(self, start, seconds: float) -> datetime:
+        return start + timedelta(seconds=seconds + DELAY)
+
+    def test_the_ad_is_known_by_twitchs_marks(self, recording, live):
+        rec = self.recorded(recording, live)
+
+        ads = [segment for segment in rec._stored_segments() if segment.is_ad]
+
+        assert len(ads) == len(self.AD)
+
+    def test_a_clip_through_an_ad_is_cut_from_the_fragments_of_the_vod(self, recording, live, vod, start):
+        rec = self.recorded(recording, live, vod)
+
+        clip = cut(rec, self.chat(start, 12), self.chat(start, 28), "moment_5.mp4", 0, 0)
+
+        # The VOD fragments covering 12s..28s: 10-15, 15-20, 20-25, 25-30.
+        assert probe(clip)["duration"] == pytest.approx(20, abs=TOLERANCE)
+        assert probe(clip)["streams"] == ["audio", "video"]
+        assert decodes_cleanly(clip)
+        assert vod.segment_requests() == [2, 3, 4, 5]
+        # The initialization segment is fetched once, and kept beside them.
+        assert vod.requests.count("/segment/init.mp4") == 1
+        assert [path.name for path in rec._base_dir.glob("*.init")] == ["vod-init.init"]
+
+    def test_the_initialization_segment_goes_with_the_last_fragment_of_its_group(
+        self, recording, live, vod, start, monkeypatch
+    ):
+        rec = self.recorded(recording, live, vod)
+        cut(rec, self.chat(start, 12), self.chat(start, 28), "moment_5.mp4", 0, 0)
+        monkeypatch.setattr(recorder, "BUFFER_RETENTION_SECONDS", 0)
+
+        rec._prune()
+
+        assert list(rec._base_dir.glob("*.m4s")) == []
+        assert list(rec._base_dir.glob("*.init")) == []

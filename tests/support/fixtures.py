@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,12 +20,14 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, recorder
-from kick_clip_hunter.kick_stream import StreamUrls
+from kick_clip_hunter.platforms import StreamUrls
 from kick_clip_hunter.recorder import ChannelRecorder
+from tests.support.eventsub import FakeEventSub
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
 from tests.support.tailscale import FakeTailscale
+from tests.support.twitch_api import FakeTwitchApi
 from tests.support.waiting import async_wait_until
 from tests.support.webhook import WebhookSigner, chat_payload
 
@@ -65,7 +67,7 @@ class Recording:
             self.url_requests.append(slug)
             return StreamUrls(live=server.master_url, vod=vod.master_url if vod else None)
 
-        self._monkeypatch.setattr(recorder, "get_stream_urls", stream_urls)
+        self._monkeypatch.setattr(recorder, "stream_urls", stream_urls)
         channel_recorder = ChannelRecorder(channel)
         self._recorders.append(channel_recorder)
         return channel_recorder
@@ -104,6 +106,43 @@ def kick_api(signer: WebhookSigner, monkeypatch: pytest.MonkeyPatch) -> FakeKick
 
     monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
     return api
+
+
+TWITCH_CLIENT_ID = "twitch-client-id"
+TWITCH_CLIENT_SECRET = "twitch-client-secret"
+
+
+@pytest.fixture
+def twitch_api(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTwitchApi:
+    """A fake Twitch for every `httpx.AsyncClient` the service creates -
+    and what 7TV knows of Twitch channels; everything else still goes to
+    the fake Kick. With it the service is set up for Twitch: without it, it
+    is not (see conftest.py)."""
+    api = FakeTwitchApi()
+    monkeypatch.setenv("TWITCH_CLIENT_ID", TWITCH_CLIENT_ID)
+    monkeypatch.setenv("TWITCH_CLIENT_SECRET", TWITCH_CLIENT_SECRET)
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return api.handle(request) if api.owns(request) else kick_api._handle(request)
+
+    transport = httpx.MockTransport(route)
+    kick_routed = httpx.AsyncClient
+
+    class RoutedAsyncClient(kick_routed):  # type: ignore[valid-type, misc]
+        def __init__(self, *args, **kwargs) -> None:
+            kwargs.setdefault("transport", transport)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
+    return api
+
+
+@pytest.fixture
+async def eventsub() -> AsyncIterator[FakeEventSub]:
+    """A fake EventSub WebSocket server on loopback (see FakeEventSub)."""
+    server = await FakeEventSub().start()
+    yield server
+    await server.close()
 
 
 @pytest.fixture

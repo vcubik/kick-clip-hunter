@@ -328,7 +328,7 @@ class TestAddingAChannel:
         async def unreachable(slug):
             raise OSError("network is unreachable")
 
-        monkeypatch.setattr(service.main, "add_channel_to_watchlist", unreachable)
+        monkeypatch.setattr(service.main, "add_to_watchlist", unreachable)
 
         with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
             response = await service.client.post("/channels?slug=new_channel")
@@ -344,6 +344,46 @@ class TestAddingAChannel:
         await service.chat("new_channel", "alice", "KEKW")
 
         assert detector._entries["new_channel"][0][6] == detector.EMOTE_MENTION_LAUGH_WEIGHT
+
+    async def test_a_link_to_a_twitch_channel_adds_that_channel(self, service, twitch_api):
+        twitch_api.add_channel("new_channel", "123", seventv_emotes=["KEKW"])
+
+        response = await service.client.post("/channels", params={"slug": "https://www.twitch.tv/new_channel"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "slug": "new_channel@twitch",
+            "broadcaster_user_id": -1,
+            "emote_count": 1,
+            "laugh_emote_count": 1,
+        }
+        (streamer,) = service.rows("SELECT slug, platform, platform_user_id, tracking_enabled FROM streamers")
+        assert tuple(streamer) == ("new_channel@twitch", "twitch", "123", 1)
+        # Its chat is not Kick's to deliver.
+        assert service.api.subscribed == []
+
+    async def test_a_twitch_channel_twitch_does_not_know_is_a_404(self, service, twitch_api):
+        response = await service.client.post("/channels", params={"slug": "no_such_channel@twitch"})
+
+        assert response.status_code == 404
+        assert service.rows("SELECT * FROM streamers") == []
+
+    async def test_without_twitch_set_up_a_twitch_channel_is_refused_saying_what_is_missing(self, service):
+        response = await service.client.post("/channels", params={"slug": "twitch.tv/new_channel"})
+
+        assert response.status_code == 503
+        assert "TWITCH_CLIENT_ID" in response.json()["detail"]
+        assert service.rows("SELECT * FROM streamers") == []
+
+    async def test_the_channels_page_says_which_platform_a_channel_is_on(self, service, twitch_api):
+        twitch_api.add_channel("new_channel", "123")
+        await service.client.post("/channels", params={"slug": "new_channel@twitch"})
+        service.watch("kick_channel", 555)
+
+        page = (await service.client.get("/dashboard/channels")).text
+
+        assert 'title="Twitch user id 123">new_channel@twitch<' in page
+        assert 'title="Kick user id 555">kick_channel<' in page
 
 
 class TestChannelTracking:

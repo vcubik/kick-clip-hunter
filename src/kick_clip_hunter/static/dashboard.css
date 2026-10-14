@@ -521,7 +521,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .watchlist th:nth-last-child(-n+3), .watchlist td:nth-last-child(-n+3) { width: 1%; white-space: nowrap; }
 .watchlist th:last-child, .watchlist td:last-child { padding-right: 0; text-align: right; }
 .add-channel { margin-top: var(--space-16); }
-.add-channel .ch-input { width: 220px; }
+.add-channel .ch-input { width: 300px; max-width: 100%; }
 
 .settings { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--space-8) var(--space-12); }
 

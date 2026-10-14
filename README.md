@@ -2,14 +2,17 @@
 
 [![tests](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml/badge.svg)](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml)
 
-Watches a list of [Kick](https://kick.com) streamers, notices when chat reacts to something, and
-cuts a clip of that moment from a rolling recording of the stream - then puts it on a small
-dashboard to be reviewed and rated.
+Watches a list of [Kick](https://kick.com) and [Twitch](https://www.twitch.tv) streamers, notices
+when chat reacts to something, and cuts a clip of that moment from a rolling recording of the
+stream - then puts it on a small dashboard to be reviewed and rated.
 
 ```
-Kick chat ──── signed webhooks ──> detector ─────────────────> moment ─┐
-               (official API)      per-channel rolling baseline        ├─> clip + context ──> dashboard
-Kick stream ── HLS segments ─────> recorder ──> 10-minute buffer ──────┘   (ffmpeg)           review, rate, tag
+Kick chat ────── signed webhooks ──┐
+                 (official API)    ├─> detector ─────────────────> moment ─┐
+Twitch chat ──── EventSub ─────────┘   per-channel rolling baseline        ├─> clip + context ──> dashboard
+                 WebSocket                                                  │   (ffmpeg)           review, rate, tag
+Kick / Twitch ── HLS segments ───────> recorder ──> 10-minute buffer ──────┘
+stream
 ```
 
 ## What it does
@@ -20,9 +23,13 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
   things that look like a reaction but aren't (one account spamming, a poll, a raid, everyone
   dancing to a song) are filtered out. [`detector.py`](src/kick_clip_hunter/detector.py) explains
   the rules.
+- **Watches Kick and Twitch alike.** A channel of either is added by its name or a link to it,
+  and from then on goes through the same detector, recorder and dashboard: Twitch's chat with its
+  own emotes and those of 7TV, BetterTTV and FrankerFaceZ, Kick's with its own and 7TV's.
 - **Records what it watches.** Every live channel on the watchlist is recorded into a rolling
   ten-minute buffer by downloading the stream's own HLS segments, which keeps working through ad
-  breaks and other mid-stream discontinuities.
+  breaks and other mid-stream discontinuities. A clip whose footage an ad covered is cut from the
+  stream's own VOD instead, where the channel keeps one.
 - **Cuts the clip.** When a moment fires, a clip of about 35 seconds is cut around it - longer if
   new people keep joining the reaction - into one video file that also holds the 30 seconds before
   it and the 60 seconds after, as context.
@@ -59,8 +66,9 @@ Kick stream ── HLS segments ─────> recorder ──> 10-minute buff
 - **Says when something it depends on is gone.** Chat stops arriving the same way whether a
   stream is over, Kick has dropped its chat subscriptions or the tunnel is down. The Health page
   tells them apart: when the last webhook arrived, what the last check of the subscriptions found
-  and when Kick was found to have dropped some, what each recorder is doing, how much room the disk
-  has, where the tunnel stands. Every page says beside its name when one of them needs a look.
+  and when Kick was found to have dropped some, how Twitch's chat connection stands and as which
+  account it reads, what each recorder is doing, how much room the disk has, where the tunnel
+  stands. Every page says beside its name when one of them needs a look.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -95,6 +103,16 @@ run on Windows; the test suite also runs on Linux.
    ```
    PYTHONPATH=src python scripts/kick_login.py
    ```
+6. Optional, for Twitch channels: register an application at
+   [dev.twitch.tv/console](https://dev.twitch.tv/console) (client type Confidential; the OAuth
+   redirect URL the form asks for is not used - `http://localhost` will do) and put its
+   `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` in `.env`. Twitch's chat is read on behalf of an
+   account - any will do, one kept for this is best - which signs in once with a code shown by:
+   ```
+   PYTHONPATH=src python scripts/twitch_login.py
+   ```
+   Nothing has to reach the service from outside for Twitch: its chat comes over a connection the
+   service opens itself.
 
 ## Usage
 
@@ -105,17 +123,19 @@ PYTHONPATH=src python -m uvicorn kick_clip_hunter.main:app --host 0.0.0.0 --port
 ```
 
 Open the dashboard at `http://localhost:8000/dashboard`. Channels can be added on its Channels
-page, or from the command line:
+page, or from the command line - by a Kick channel's name, a link to a Kick or Twitch channel, or a
+Twitch channel's name followed by `@twitch`:
 
 ```
-PYTHONPATH=src python scripts/subscribe.py <channel_slug>
+PYTHONPATH=src python scripts/subscribe.py <channel>
 ```
 
 Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 
 | Script | What it does |
 |---|---|
-| `refresh_emotes.py <slug>` | Re-fetch a watched channel's 7TV emotes: what the detector listens for and the pictures chat is drawn with. |
+| `refresh_emotes.py <channel>` | Re-fetch a watched channel's emotes - 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's: what the detector listens for and the pictures chat is drawn with. |
+| `twitch_login.py` | Sign in the Twitch account the service reads chat as - once, and again if the Health page says the sign-in has lapsed. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. The Settings page does the same with the values in its form. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |
@@ -131,16 +151,17 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-About 2800 tests cover the pipeline from a signed webhook to a clip on the dashboard. They need
-no Kick credentials, no network and none of the ML models, and CI runs them on Windows and Linux on
-every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
+About 3100 tests cover the pipeline from a signed webhook, or a Twitch chat message, to a clip on
+the dashboard. They need no Kick or Twitch credentials, no network and none of the ML models, and
+CI runs them on Windows and Linux on every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
 
 ## How it is put together
 
 | Module (`src/kick_clip_hunter/`) | Role |
 |---|---|
-| `main.py` | FastAPI app: webhook receiver, moment sessions, dashboard and its controls. |
+| `main.py` | FastAPI app: chat taken in from either platform, moment sessions, dashboard and its controls. |
+| `platforms.py`, `streams.py`, `chat_message.py` | Which platform a channel is on and how its name says so; what is asked of a channel's platform (is it live, where is its stream); one chat message as the service takes it in, whichever platform it came from. |
 | `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip and over a whole recording, their markup, stylesheet and script. |
 | `chat_stats.py` | A channel's stored chat in figures, for the Analyze page: one pass over a period's messages, and the figures, chart columns and table rows made of it. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
@@ -148,7 +169,8 @@ what, and the short manual checklist for the parts that only exist against the r
 | `recorder.py`, `recording_manager.py` | Per-channel HLS recording into the rolling buffer; clip and context cutting; which channels are recorded right now, and why. |
 | `stream_recording.py` | A stream kept whole: what is written while it is recorded, how that becomes one video file, and how a second of the file is tied back to when it was on air - which is what places chat against it. |
 | `recording_moments.py` | Moments looked for in a recorded stream afterwards: which chat to replay, where in the recording's file a replayed moment's clip lies, and which of them are moments already. |
-| `kick_client.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, 7TV's emote API, webhook signature verification. |
+| `kick_client.py`, `kick_chat.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, its webhook's chat message, 7TV's emote API, webhook signature verification. |
+| `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, and its chat rendered as a transparent video (ProRes 4444) to lay over it. |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
@@ -166,6 +188,11 @@ Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
 - Kick's public API covers chat events but has no stream playback or clip endpoints. Recording
   therefore uses the stream URL the site's own player requests, captured through an automated
   browser session - unofficial behaviour that can stop working whenever the site changes.
+- Twitch's API has no stream playback either: where a stream is comes from streamlink, which asks
+  Twitch's playback service the way the site's own player does. When Twitch changes that,
+  recording Twitch streams waits for a streamlink release that follows.
+- Twitch lets an application read chat only on behalf of an account, which can read up to a hundred
+  channels at once.
 - The laugh patterns are tuned for the chat conventions of the channels this was built on (Czech
   and Slovak); the emote-based signals are language-independent, and which emotes count as
   laughing can be added to per channel.

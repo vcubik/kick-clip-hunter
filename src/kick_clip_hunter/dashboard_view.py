@@ -34,15 +34,31 @@ BEST_RATING_MIN = 4
 # stylesheet).
 NICK_COLOURS = 6
 
-# Kick puts its native emotes inline in a message as "[emote:12345:name]"
+# Kick puts its native emotes inline in a message as "[emote:12345:name]",
+# and another platform's own emotes are put in the same form when its chat
+# is taken in, with the platform before the id: "[emote:twitch.25:Kappa]"
 # (the same token detector.NATIVE_EMOTE_TOKEN_PATTERN matches, with the id
-# kept), and serves the picture for an id from here.
-_EMOTE_TOKEN = re.compile(r"\[emote:(\d+):([^\]]+)\]")
+# kept). Each platform serves the picture for an id from its own address.
+_EMOTE_TOKEN = re.compile(r"\[emote:([0-9A-Za-z_.]+):([^\]]+)\]")
 KICK_EMOTE_IMAGE = "https://files.kick.com/emotes/{id}/fullsize"
+TWITCH_EMOTE_IMAGE = "https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/2.0"
+# Whose a native emote is and where its picture is, by what stands before
+# its id - nothing for Kick's, whose ids stand alone.
+NATIVE_EMOTE_IMAGES = {"": ("Kick", KICK_EMOTE_IMAGE), "twitch": ("Twitch", TWITCH_EMOTE_IMAGE)}
 # 7TV emotes are typed as plain words; which emote a word is depends on the
 # channel (see chat_parts). Twice the smallest size, so the picture stays
 # sharp on a dense screen.
 SEVENTV_EMOTE_IMAGE = "https://cdn.7tv.app/emote/{id}/2x.webp"
+# So are BetterTTV's and FrankerFaceZ's, a Twitch channel's besides 7TV's
+# (see twitch_emotes.py), kept with their service before their id. Whose an
+# emote typed as a word is and where its picture is, by that.
+BTTV_EMOTE_IMAGE = "https://cdn.betterttv.net/emote/{id}/2x"
+FFZ_EMOTE_IMAGE = "https://cdn.frankerfacez.com/emote/{id}/2"
+TYPED_EMOTE_IMAGES = {
+    "": ("7TV", SEVENTV_EMOTE_IMAGE),
+    "bttv": ("BTTV", BTTV_EMOTE_IMAGE),
+    "ffz": ("FFZ", FFZ_EMOTE_IMAGE),
+}
 # An emote is as tall as a line of chat (the stylesheet's .ch-emote) and as
 # wide as its own shape makes it, within reason.
 EMOTE_HEIGHT = 20
@@ -280,23 +296,32 @@ def _emote_width(width: int, height: int) -> int:
     return max(1, min(EMOTE_MAX_WIDTH, round(EMOTE_HEIGHT * width / height)))
 
 
+def typed_emote_image(emote_id: str) -> str | None:
+    """Where the picture of an emote typed as a word is, by its id as it is
+    kept (see TYPED_EMOTE_IMAGES) - None for a service there is no address
+    for."""
+    service, _, bare = emote_id.rpartition(".")
+    known = TYPED_EMOTE_IMAGES.get(service)
+    return known[1].format(id=bare) if known and bare else None
+
+
 def _text_parts(text: str, emotes: Mapping[str, tuple[str, int, int]]) -> list[dict[str, Any]]:
     """A stretch of typed text with the channel's 7TV emotes picked out of
-    it. As in the 7TV extension, an emote is a whole word spelled exactly
-    like its name: "KEKW" is one, "kekw" and "KEKW!" are not."""
+    it - and on Twitch its BetterTTV and FrankerFaceZ ones. As in the 7TV
+    extension, an emote is a whole word spelled exactly like its name:
+    "KEKW" is one, "kekw" and "KEKW!" are not."""
     parts: list[dict[str, Any]] = []
     plain = ""
     for piece in _WHITESPACE.split(text):
-        if piece not in emotes:
+        image = typed_emote_image(emotes[piece][0]) if piece in emotes else None
+        if image is None:
             plain += piece
             continue
         if plain:
             parts.append({"text": plain})
             plain = ""
-        emote_id, width, height = emotes[piece]
-        parts.append(
-            {"emote": piece, "image": SEVENTV_EMOTE_IMAGE.format(id=emote_id), "width": _emote_width(width, height)}
-        )
+        _, width, height = emotes[piece]
+        parts.append({"emote": piece, "image": image, "width": _emote_width(width, height)})
     if plain:
         parts.append({"text": plain})
     return parts
@@ -306,21 +331,42 @@ def chat_parts(content: str, emotes: Mapping[str, tuple[str, int, int]] | None =
     """A chat message as plain text and emotes, in order. Each emote comes
     with its name, the address of its picture and how wide to draw it.
 
-    Native Kick emotes are in the message itself. 7TV emotes are ordinary
-    words that mean a picture only in a channel that has an emote of that
-    name, so `emotes` is that channel's own set - (emote id, width, height)
-    by name, see db.get_channel_emotes. Without it they stay words."""
+    A platform's own emotes are in the message itself. 7TV emotes are
+    ordinary words that mean a picture only in a channel that has an emote
+    of that name, so `emotes` is that channel's own set - (emote id, width,
+    height) by name, see db.get_channel_emotes. Without it they stay
+    words."""
     emotes = emotes or {}
     parts: list[dict[str, Any]] = []
     position = 0
     for token in _EMOTE_TOKEN.finditer(content):
         parts.extend(_text_parts(content[position : token.start()], emotes))
+        image = native_emote_image(token.group(1))
+        # A platform there is no picture for: its emote's name, as text.
         parts.append(
-            {"emote": token.group(2), "image": KICK_EMOTE_IMAGE.format(id=token.group(1)), "width": EMOTE_HEIGHT}
+            {"emote": token.group(2), "image": image, "width": EMOTE_HEIGHT} if image else {"text": token.group(2)}
         )
         position = token.end()
     parts.extend(_text_parts(content[position:], emotes))
     return parts
+
+
+def native_emote_image(token_id: str) -> str | None:
+    """Where the picture of one of a platform's own emotes is, by the id
+    its token carries (see _EMOTE_TOKEN) - None for a platform there is no
+    address for."""
+    platform, _, emote_id = token_id.rpartition(".")
+    known = NATIVE_EMOTE_IMAGES.get(platform)
+    return known[1].format(id=emote_id) if known and emote_id else None
+
+
+def emote_source(picture: str) -> str:
+    """Whose emote the picture at this address is: a platform's own - Kick's,
+    Twitch's - or a channel's on 7TV, BetterTTV or FrankerFaceZ."""
+    for source, template in (*NATIVE_EMOTE_IMAGES.values(), *TYPED_EMOTE_IMAGES.values()):
+        if picture.startswith(template.split("{", 1)[0]):
+            return source
+    return "7TV"
 
 
 # -- the queue --------------------------------------------------------------

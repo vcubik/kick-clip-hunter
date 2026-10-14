@@ -127,9 +127,23 @@ class TestIsLaughing:
     def test_the_typed_laugh_in_any_form(self, content):
         assert detector.is_laughing(content)
 
-    @pytest.mark.parametrize("content", ["[emote:37226:KEKW]", "no way [emote:1:emojiLol]", "[emote:2:pepeLaugh] ok"])
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "[emote:37226:KEKW]",
+            "no way [emote:1:emojiLol]",
+            "[emote:2:pepeLaugh] ok",
+            "[emote:twitch.425618:LUL]",
+            "[emote:twitch.emotesv2_abc123:pepeLaugh] ok",
+        ],
+    )
     def test_a_native_laugh_emote(self, content):
         assert detector.is_laughing(content)
+
+    def test_a_twitch_emote_is_weighed_like_a_kick_one(self):
+        assert detector.classify_native_emotes("[emote:twitch.425618:LUL]") == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_native_emotes("[emote:twitch.25:Kappa]") == detector.EMOTE_OTHER_WEIGHT
+        assert detector.classify_native_emotes("[emote:twitch.1:catJAM]") == 0.0
 
     def test_one_of_the_channels_laugh_emotes_named_in_the_text(self):
         assert detector.is_laughing("KEKW", ["kekw"])

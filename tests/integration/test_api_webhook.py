@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import db, detector
+from kick_clip_hunter.chat_message import ChatMessage
 from tests.support.webhook import WebhookSigner, chat_payload
 
 pytestmark = pytest.mark.anyio
@@ -207,13 +208,14 @@ class TestChatIdentities:
     def writes(self, service, monkeypatch) -> list[str]:
         """Names an identity was written for, in order."""
         written = []
-        real = service.main.set_chat_identity
+        real = service.main.set_chat_identities
 
-        def counting(conn, broadcaster_user_id, username, colour, badges):
-            written.append(username)
-            real(conn, broadcaster_user_id, username, colour, badges)
+        def counting(conn, identities):
+            identities = list(identities)
+            written.extend(username for _, username, _, _ in identities)
+            real(conn, identities)
 
-        monkeypatch.setattr(service.main, "set_chat_identity", counting)
+        monkeypatch.setattr(service.main, "set_chat_identities", counting)
         return written
 
     async def test_a_chatters_colour_and_badges_are_kept(self, service):
@@ -397,3 +399,109 @@ class TestStoredTimes:
 
         assert [(row["sender_username"], row["content"]) for row in chat] == [("alice", "first"), ("bob", "second")]
         assert earlier == []
+
+
+def batch_message(channel: str, user_id: int, sender: str, content: str, number: int, **fields) -> ChatMessage:
+    return ChatMessage(
+        broadcaster_user_id=user_id,
+        channel=channel,
+        message_id=f"batch-{channel}-{number}",
+        sender=sender,
+        content=content,
+        **fields,
+    )
+
+
+class TestChatInBatches:
+    """A platform that delivers chat in bulk hands it over a batch at a
+    time: stored in one go, then each message counted as if it had come
+    alone."""
+
+    async def test_a_batch_is_stored_in_one_go(self, service, monkeypatch):
+        user_id = service.watch(CHANNEL)
+        stores = []
+        real = service.main.insert_chat_messages
+
+        def counting(conn, rows):
+            rows = list(rows)
+            stores.append(len(rows))
+            return real(conn, rows)
+
+        monkeypatch.setattr(service.main, "insert_chat_messages", counting)
+        batch = [batch_message(CHANNEL, user_id, f"viewer{n}", f"message {n}", n) for n in range(5)]
+
+        statuses = await service.main._take_chats(batch)
+
+        assert statuses == ["received"] * 5
+        assert stores == [5]
+        assert [entry[1] for entry in detector._entries[CHANNEL]] == [f"viewer{n}" for n in range(5)]
+
+    async def test_a_message_twice_in_one_batch_is_counted_once(self, service):
+        user_id = service.watch(CHANNEL)
+        message = batch_message(CHANNEL, user_id, "alice", "xDDD", 1)
+
+        statuses = await service.main._take_chats([message, message])
+
+        assert statuses == ["received", "duplicate"]
+        assert len(detector._entries[CHANNEL]) == 1
+
+    async def test_each_message_of_a_batch_is_judged_by_its_own_channel(self, service):
+        tracked = service.watch("tracked_channel")
+        paused = service.watch("paused_channel")
+        await service.client.post("/channels/paused_channel/tracking?enabled=0")
+
+        statuses = await service.main._take_chats(
+            [
+                batch_message("tracked_channel", tracked, "alice", "one", 1),
+                batch_message("paused_channel", paused, "bob", "two", 2),
+                batch_message("tracked_channel", tracked, "carol", "three", 3),
+            ]
+        )
+
+        assert statuses == ["received", "channel tracking disabled", "received"]
+        assert service.chat_log() == [("tracked_channel", "alice", "one"), ("tracked_channel", "carol", "three")]
+
+    async def test_a_message_is_stored_as_arrived_when_it_did(self, service):
+        user_id = service.watch(CHANNEL)
+        arrived = datetime(2026, 10, 14, 12, 0, 0, 250000, tzinfo=timezone.utc)
+
+        await service.main._take_chats([batch_message(CHANNEL, user_id, "alice", "hi", 1, received_at=arrived)])
+
+        (row,) = service.rows("SELECT received_at FROM chat_messages")
+        assert row["received_at"] == arrived.isoformat()
+
+    async def test_who_wrote_a_batch_is_kept_in_one_go_with_their_latest_identity(self, service, monkeypatch):
+        user_id = service.watch(CHANNEL)
+        writes = []
+        real = service.main.set_chat_identities
+
+        def counting(conn, identities):
+            identities = list(identities)
+            writes.append(sorted(name for _, name, _, _ in identities))
+            real(conn, identities)
+
+        monkeypatch.setattr(service.main, "set_chat_identities", counting)
+        green, red = ("#00ff00", "[]"), ("#ff0000", "[]")
+
+        await service.main._take_chats(
+            [
+                batch_message(CHANNEL, user_id, "alice", "one", 1, identity=green),
+                batch_message(CHANNEL, user_id, "bob", "two", 2, identity=green),
+                batch_message(CHANNEL, user_id, "alice", "three", 3, identity=red),
+            ]
+        )
+
+        assert writes == [["alice", "bob"]]
+        (row,) = service.rows("SELECT colour FROM chat_identities WHERE username = 'alice'")
+        assert row["colour"] == "#ff0000"
+
+    async def test_a_crowd_laughing_in_one_batch_makes_a_moment(self, service):
+        user_id = service.watch(CHANNEL)
+        service.warm_up(CHANNEL)
+
+        await service.main._take_chats(
+            [batch_message(CHANNEL, user_id, f"fan{n}", "xDDD", n) for n in range(detector.MIN_ABSOLUTE_UNIQUE + 5)]
+        )
+        await service.settle()
+
+        assert [moment["reason"] for moment in service.moments()] == ["laugh"]

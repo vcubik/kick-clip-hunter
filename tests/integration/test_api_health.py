@@ -19,8 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import db, health, recorder, recording_manager, stream_recording, tunnel
+from kick_clip_hunter import db, health, recorder, recording_manager, stream_recording, tunnel, twitch_chat
+from kick_clip_hunter.config import load_settings
 from kick_clip_hunter.dashboard_view import when_words
+from kick_clip_hunter.twitch_auth import AccountToken, TokenKeeper, save
 from tests.support.data import add_chat, add_streamer
 from tests.support.html import Element, parse
 from tests.support.tailscale import ADDRESS
@@ -95,7 +97,9 @@ class TestThePage:
         assert said(page, "recorders") == "No channels are on the watchlist."
         # Nothing to list of channels there are none of.
         assert part(page, "webhooks").find("table") == [] and part(page, "recorders").find("table") == []
-        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS)
+        # Twitch's chat is no part of a service that has nothing to do with Twitch.
+        assert page.find("div", data_health_part="twitch") == []
+        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name != "twitch")
 
     async def test_every_part_is_marked_for_the_script_that_keeps_it_current(self, service):
         page = await page_at(service)
@@ -647,3 +651,71 @@ class TestTunnel:
             assert service.main._funnel[1].state == tunnel.UP
             # ...and so every page can say when something is wrong with it.
             assert flag(await page_at(service, "/dashboard")) == ""
+
+
+def signed_in_tokens() -> TokenKeeper:
+    """The tokens of an account signed in for the service to read chat as."""
+    save(AccountToken("access", "refresh", ago(hours=-4), "777", "chat_reader"))
+    return TokenKeeper("id", "secret")
+
+
+def a_reader(service) -> twitch_chat.ChatReader:
+    """The service's reader of Twitch's chat, not running."""
+    return twitch_chat.ChatReader(service.main._twitch_channels, service.main._take_chats, signed_in_tokens(), "id")
+
+
+class TestTwitchChat:
+    """Twitch's chat, where the service has any: what the reader of it
+    found, on the page and counted in the bar."""
+
+    def watch_on_twitch(self, login: str = "some_channel", twitch_id: str = "101") -> None:
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "twitch", twitch_id, f"{login}@twitch")
+        finally:
+            conn.close()
+
+    async def test_a_twitch_channel_watched_without_twitch_set_up_is_trouble(self, service):
+        self.watch_on_twitch()
+
+        page = await page_at(service)
+
+        assert in_trouble(page, "twitch")
+        assert "not set up for Twitch" in said(page, "twitch")
+        assert page.one("h1").text == "Twitch chat needs a look."
+
+    async def test_it_is_counted_in_the_bar_of_every_page(self, service):
+        self.watch_on_twitch()
+
+        response = await service.client.get("/dashboard/channels")
+
+        assert "1 problem" in response.text
+
+    async def test_set_up_the_reader_says_whose_chat_comes_in(self, service, twitch_api, monkeypatch):
+        monkeypatch.setattr(service.main, "settings", load_settings())
+        self.watch_on_twitch()
+        reader = a_reader(service)
+        reader.subscribed["101"] = twitch_chat.Channel(-1, "some_channel@twitch", "101")
+        reader.connected_since = ago(minutes=5)
+        monkeypatch.setattr(service.main, "_twitch_reader", reader)
+
+        page = await page_at(service)
+
+        assert said(page, "twitch") == "The chat of the Twitch channel comes in, read as chat_reader."
+        assert more(page, "twitch") == ["Connected 5 minutes ago."]
+        assert not in_trouble(page, "twitch")
+
+    async def test_a_refused_channel_is_listed_with_why(self, service, twitch_api, monkeypatch):
+        monkeypatch.setattr(service.main, "settings", load_settings())
+        self.watch_on_twitch()
+        reader = a_reader(service)
+        reader._wanted()
+        reader.refused["101"] = "403 subscription refused"
+        monkeypatch.setattr(service.main, "_twitch_reader", reader)
+
+        page = await page_at(service)
+
+        (row,) = part(page, "twitch").one("tbody").find("tr")
+        assert row.one("th").text == "some_channel@twitch"
+        assert row.one("td").text == "403 subscription refused"
+        assert in_trouble(page, "twitch")

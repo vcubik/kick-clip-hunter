@@ -37,6 +37,7 @@ import pytest
 # Shared fixtures live in tests/support/fixtures.py; importing them here is
 # what registers them for every test directory (the `x as x` form marks each
 # one as a deliberate re-export rather than an unused import).
+from tests.support.fixtures import eventsub as eventsub
 from tests.support.fixtures import hls as hls
 from tests.support.fixtures import kick_api as kick_api
 from tests.support.fixtures import recording as recording
@@ -44,6 +45,7 @@ from tests.support.fixtures import service as service
 from tests.support.fixtures import signer as signer
 from tests.support.fixtures import tailscale as tailscale
 from tests.support.fixtures import ts_segments as ts_segments
+from tests.support.fixtures import twitch_api as twitch_api
 from tests.support.media import require_ffmpeg
 from tests.support.tailscale import FakeTailscale
 
@@ -62,6 +64,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # variables that already exist.
     os.environ["KICK_CLIENT_ID"] = "test-client-id"
     os.environ["KICK_CLIENT_SECRET"] = "test-client-secret"
+    # Not set up for Twitch unless a test says so (the `twitch_api` fixture):
+    # empty, they are there for python-dotenv not to fill them in either.
+    os.environ["TWITCH_CLIENT_ID"] = ""
+    os.environ["TWITCH_CLIENT_SECRET"] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the
     # trust store is pointed at an empty directory. Every httpx client the
@@ -159,11 +165,12 @@ def isolated_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _reset_module_state() -> None:
-    from kick_clip_hunter import detector, kick_client, recording_manager, webhook_security
+    from kick_clip_hunter import detector, kick_client, recording_manager, twitch_client, webhook_security
 
     detector._entries.clear()
     detector._last_moment_at.clear()
     kick_client._token_cache.clear()
+    twitch_client._token_cache.clear()
     webhook_security._public_key_cache = None
     for recorder in recording_manager._recorders.values():
         recorder.stop()
@@ -203,6 +210,7 @@ def _reset_module_state() -> None:
         main._served_port = None
         main._tunnel_look = None
         main._disk_use = None
+        main._twitch_reader = None
 
 
 @pytest.fixture(autouse=True)
@@ -282,9 +290,11 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch):
 def no_browser(monkeypatch: pytest.MonkeyPatch):
     """The real stream-URL capture and clip publishing drive a visible
     browser against kick.com, and rendering a chat video drives one without
-    a window. Tests replace the functions that need it; this makes
-    forgetting to do so a failure rather than a browser starting."""
-    from kick_clip_hunter import chat_video, clip_creator, kick_stream
+    a window. Finding a Twitch stream asks streamlink, which may start one
+    for Twitch's integrity check. Tests replace the functions that need it;
+    this makes forgetting to do so a failure rather than a browser
+    starting."""
+    from kick_clip_hunter import chat_video, clip_creator, kick_stream, twitch_stream
 
     launches: list[str] = []
 
@@ -292,9 +302,14 @@ def no_browser(monkeypatch: pytest.MonkeyPatch):
         launches.append("sync_playwright")
         raise RuntimeError("test tried to launch a browser")
 
+    def refuse_streamlink(*args, **kwargs):
+        launches.append("streamlink")
+        raise RuntimeError("test tried to ask streamlink for a Twitch stream")
+
     monkeypatch.setattr(kick_stream, "sync_playwright", refuse)
     monkeypatch.setattr(clip_creator, "sync_playwright", refuse)
     monkeypatch.setattr(chat_video, "sync_playwright", refuse)
+    monkeypatch.setattr(twitch_stream, "Streamlink", refuse_streamlink)
     yield launches
     if launches:
         pytest.fail("a browser launch was attempted")
