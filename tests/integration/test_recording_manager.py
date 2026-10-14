@@ -110,6 +110,24 @@ class TestWhichChannelsGetRecorded:
         assert recorders["offline_one"].ticks == 0
         assert len(kick_api.calls("GET", "/channels")) >= 2
 
+    async def test_a_live_twitch_channel_is_ticked_and_an_offline_one_is_not(self, twitch_api, recorders):
+        twitch_api.add_channel("live_one", "1", is_live=True)
+        twitch_api.add_channel("offline_one", "2", is_live=False)
+        recorders["live_one@twitch"] = StandInRecorder()
+        recorders["offline_one@twitch"] = StandInRecorder()
+
+        await run_loop_until(
+            lambda: recorders["live_one@twitch"].ticks >= 2 and len(twitch_api.calls("GET", "/helix/streams")) >= 4,
+            "two ticks of the live channel",
+            slugs=["live_one@twitch", "offline_one@twitch"],
+        )
+
+        assert recorders["offline_one@twitch"].ticks == 0
+        assert {query["user_login"] for query in twitch_api.calls("GET", "/helix/streams")} == {
+            "live_one",
+            "offline_one",
+        }
+
     async def test_a_recorder_is_stopped_when_its_channel_goes_offline(self, kick_api, recorders):
         channel = kick_api.add_channel("was_live", 3, is_live=True)
         recorders["was_live"] = StandInRecorder()

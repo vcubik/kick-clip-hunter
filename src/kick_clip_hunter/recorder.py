@@ -52,6 +52,14 @@ window, that group is then the one the clip is cut from. If the channel keeps
 no VOD, or it can't be fetched, the clip is cut from the live segments as
 before - ad included.
 
+Twitch's playlists are of the same make (both come from Amazon's IVS) and
+mark their ads the same way, with their own names for it: a stream source of
+class `twitch-stream-source`, and besides that date ranges of class
+`twitch-stitched-ad` spanning the ad's segments, which carry "Amazon" in
+their titles. A segment any of these call an ad is one. Twitch also lists
+the segments it is about to publish (EXT-X-TWITCH-PREFETCH), which are
+left for when they are published.
+
 The buffer is only ever a few minutes deep. A stream that is to be kept
 whole (see stream_recording.py) is not kept here: while one is, every
 segment of the broadcast is also handed on, as it is saved, to whatever the
@@ -119,11 +127,24 @@ SEGMENT_TIMEOUT_SECONDS = 20
 # A fresh run starts this many segments back from the live edge rather than
 # downloading the playlist's whole window.
 INITIAL_SEGMENTS = 3
-# The date-range class announcing where the segments that follow come from,
-# and the source name that means the broadcast itself rather than an ad.
+# The date-range classes announcing where the segments that follow come from
+# (Kick's, Twitch's), each with the attribute that says it, and the source
+# name that means the broadcast itself rather than an ad.
 STREAM_SOURCE_CLASS = "live-video-net-stream-source"
 STREAM_SOURCE_ATTRIBUTE = "X-NET-LIVE-VIDEO-STREAM-SOURCE"
+STREAM_SOURCE_ATTRIBUTES = {
+    STREAM_SOURCE_CLASS: STREAM_SOURCE_ATTRIBUTE,
+    "twitch-stream-source": "X-TV-TWITCH-STREAM-SOURCE",
+}
 LIVE_STREAM_SOURCE = "live"
+# Twitch's date ranges spanning a stitched-in ad - by their class, or for
+# want of one by their id - and what its segments' titles carry.
+STITCHED_AD_CLASS = "twitch-stitched-ad"
+STITCHED_AD_ID_PREFIX = "stitched-ad-"
+AD_TITLE_MARK = "Amazon"
+# A variant of a stream shot upright as well (IVS-GROUPS); never the one
+# recorded while there is another.
+PORTRAIT_GROUP = "portrait"
 # Group-name suffix of ad segments, and the group of segments taken from the
 # stream's VOD to stand in for them.
 AD_GROUP_SUFFIX = "-ad"
@@ -247,20 +268,44 @@ def _attributes(tag_line: str) -> dict[str, str]:
 
 
 def _pick_variant(master_text: str, master_url: str) -> str:
-    """The highest-bandwidth variant playlist URL in a master playlist."""
-    best: tuple[int, str] | None = None
-    bandwidth = 0
+    """The highest-bandwidth variant playlist URL in a master playlist - of
+    the picture the stream is usually watched in, where it also comes
+    upright (a portrait variant)."""
+    variants: list[tuple[bool, int, str]] = []
+    bandwidth, upright = 0, False
     for line in master_text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-STREAM-INF:"):
-            bandwidth = int(_attributes(line).get("BANDWIDTH", "0") or 0)
+            attributes = _attributes(line)
+            bandwidth = int(attributes.get("BANDWIDTH", "0") or 0)
+            upright = attributes.get("IVS-GROUPS", "").lower() == PORTRAIT_GROUP
         elif line and not line.startswith("#"):
-            if best is None or bandwidth > best[0]:
-                best = (bandwidth, urljoin(master_url, line))
-            bandwidth = 0
-    if best is None:
+            variants.append((upright, bandwidth, urljoin(master_url, line)))
+            bandwidth, upright = 0, False
+    if not variants:
         raise RecorderError("master playlist lists no variants")
-    return best[1]
+    # The first of the best, where several are as good.
+    return min(variants, key=lambda variant: (variant[0], -variant[1]))[2]
+
+
+def _program_time(text: str) -> datetime:
+    moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _stitched_ad(attributes: dict[str, str]) -> tuple[datetime, datetime] | None:
+    """When a date range that spans a stitched-in ad runs, if it is one and
+    says how long."""
+    if attributes.get("CLASS") != STITCHED_AD_CLASS and not attributes.get("ID", "").startswith(STITCHED_AD_ID_PREFIX):
+        return None
+    try:
+        start = _program_time(attributes["START-DATE"])
+        if "END-DATE" in attributes:
+            return start, _program_time(attributes["END-DATE"])
+        length = attributes.get("DURATION") or attributes.get("PLANNED-DURATION")
+        return (start, start + timedelta(seconds=float(length))) if length else None
+    except (KeyError, ValueError):
+        return None
 
 
 def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
@@ -272,14 +317,13 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
     program_time: datetime | None = None
     discontinuity = False
     stream_source = LIVE_STREAM_SOURCE
+    stitched_ads: list[tuple[datetime, datetime]] = []
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
             sequence = int(line.split(":", 1)[1])
         elif line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
-            program_time = datetime.fromisoformat(line.split(":", 1)[1].replace("Z", "+00:00"))
-            if program_time.tzinfo is None:
-                program_time = program_time.replace(tzinfo=timezone.utc)
+            program_time = _program_time(line.split(":", 1)[1])
         elif line.startswith("#EXTINF:"):
             raw_duration, _, title = line.split(":", 1)[1].partition(",")
             duration = float(raw_duration)
@@ -288,15 +332,19 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
         elif line.startswith("#EXT-X-DATERANGE:"):
             attributes = _attributes(line)
             classes.add(attributes.get("CLASS", ""))
-            if attributes.get("CLASS") == STREAM_SOURCE_CLASS:
-                stream_source = attributes.get(STREAM_SOURCE_ATTRIBUTE, LIVE_STREAM_SOURCE)
+            source_attribute = STREAM_SOURCE_ATTRIBUTES.get(attributes.get("CLASS", ""))
+            if source_attribute is not None:
+                stream_source = attributes.get(source_attribute, LIVE_STREAM_SOURCE)
+            span = _stitched_ad(attributes)
+            if span is not None:
+                stitched_ads.append(span)
         elif line == "#EXT-X-ENDLIST":
             ended = True
         elif line and not line.startswith("#"):
             segments.append(
                 _PlaylistSegment(
                     sequence, urljoin(playlist_url, line), duration, title.strip(), program_time, discontinuity,
-                    ad=stream_source != LIVE_STREAM_SOURCE,
+                    ad=stream_source != LIVE_STREAM_SOURCE or AD_TITLE_MARK in title,
                 )
             )
             sequence += 1
@@ -304,6 +352,13 @@ def _parse_playlist(text: str, playlist_url: str) -> _Playlist:
             # forward so a segment without its own still gets a start time.
             program_time = program_time + timedelta(seconds=duration) if program_time else None
             discontinuity = False
+    # An ad's date range may stand anywhere in the playlist, not only before
+    # the segments it spans.
+    for segment in segments:
+        if segment.started_at is not None and any(
+            start <= segment.started_at < end for start, end in stitched_ads
+        ):
+            segment.ad = True
     return _Playlist(segments, ended, classes - {""})
 
 

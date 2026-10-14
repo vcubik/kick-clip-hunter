@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from kick_clip_hunter import kick_stream, streams, twitch_client
-from kick_clip_hunter.platforms import LiveStatus, StreamUrlError, StreamUrls
+from kick_clip_hunter.platforms import LiveStatus, StreamUrls
 
 pytestmark = pytest.mark.anyio
 
@@ -73,9 +73,3 @@ class TestTwitchLiveStatus:
     async def test_without_a_twitch_application_nothing_can_be_asked(self, kick_api):
         with pytest.raises(twitch_client.NotSetUp):
             await streams.live_status("some_channel@twitch")
-
-
-class TestUnknownWays:
-    def test_the_stream_of_a_channel_of_a_platform_without_a_way_to_find_it_is_not_found(self):
-        with pytest.raises(StreamUrlError):
-            streams.stream_urls("some_channel@twitch")
