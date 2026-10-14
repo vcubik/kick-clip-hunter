@@ -58,8 +58,8 @@ PREFILL_LINES = 40
 # The address the browser is given for the page. It never leaves the
 # machine - every request to it is answered here (see answer()).
 ORIGIN = "http://chat-video.invalid"
-# Where emote pictures are: 7TV's and Kick's own.
-IMAGE_HOSTS = frozenset({"cdn.7tv.app", "files.kick.com"})
+# Where emote pictures are: 7TV's, Kick's own and Twitch's own.
+IMAGE_HOSTS = frozenset({"cdn.7tv.app", "files.kick.com", "static-cdn.jtvnw.net"})
 # How long the page may wait for its pictures before the rendering starts
 # without the ones still missing (their names are drawn instead).
 PICTURES_TIMEOUT_SECONDS = 20

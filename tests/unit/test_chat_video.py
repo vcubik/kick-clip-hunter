@@ -213,7 +213,12 @@ class TestWhatTheBrowserMayLoad:
         assert chat_video.answer(f"{chat_video.ORIGIN}/static/../{outside}", "other") == ("missing", None)
 
     @pytest.mark.parametrize(
-        "url", ["https://cdn.7tv.app/emote/ID1/2x.webp", "https://files.kick.com/emotes/37226/fullsize"]
+        "url",
+        [
+            "https://cdn.7tv.app/emote/ID1/2x.webp",
+            "https://files.kick.com/emotes/37226/fullsize",
+            "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0",
+        ],
     )
     def test_emote_pictures_from_where_they_are_kept(self, url):
         assert chat_video.answer(url, "image") == ("fetch", None)

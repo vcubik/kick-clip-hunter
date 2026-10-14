@@ -33,11 +33,11 @@ from urllib.parse import urlencode
 
 from . import chat_identity
 from .dashboard_view import (
-    KICK_EMOTE_IMAGE,
     chat_parts,
     clock_words,
     date_words,
     day_words,
+    emote_source,
     nick_colour,
     number_words,
     sentence_case,
@@ -798,10 +798,6 @@ def _emote(kept: Collected, picture: str) -> dict[str, Any]:
     return {"emote": name, "image": picture, "width": width}
 
 
-def _kick_prefix() -> str:
-    return KICK_EMOTE_IMAGE.split("{", 1)[0]
-
-
 def top_chatters(kept: Collected, limit: int, link: Callable[[str], str] | None = None) -> list[dict[str, Any]]:
     """Who wrote most, the most active first: how many messages, what part
     of all of them, and the emote each used most."""
@@ -835,11 +831,11 @@ def _most_emotes(kept: Collected, uses: Counter[str], limit: int) -> list[tuple[
 
 def top_emotes(kept: Collected, limit: int) -> list[dict[str, Any]]:
     """The emotes used most: how often, by how many people, and whose it
-    is - Kick's own or the channel's on 7TV."""
+    is - the platform's own or the channel's on 7TV."""
     return [
         {
             **_emote(kept, picture),
-            "source": "Kick" if picture.startswith(_kick_prefix()) else "7TV",
+            "source": emote_source(picture),
             "uses": whole_words(uses),
             "people": whole_words(len(kept.emote_people[picture])),
         }

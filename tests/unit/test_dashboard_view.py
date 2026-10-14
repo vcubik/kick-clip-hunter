@@ -260,9 +260,33 @@ class TestChat:
             view.KICK_EMOTE_IMAGE.format(id=2),
         ]
 
-    def test_only_a_number_can_be_an_emotes_id(self):
+    def test_an_emotes_id_holds_nothing_that_could_lead_elsewhere(self):
         # The id ends up in an address the page loads a picture from.
         assert view.chat_parts("[emote:../../x:KEKW]") == [{"text": "[emote:../../x:KEKW]"}]
+        assert view.chat_parts("[emote:a/b:KEKW]") == [{"text": "[emote:a/b:KEKW]"}]
+
+    def test_a_twitch_emote_has_its_picture_from_twitch(self):
+        assert view.chat_parts("[emote:twitch.emotesv2_abc123:LUL]") == [
+            {
+                "emote": "LUL",
+                "image": "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_abc123/default/dark/2.0",
+                "width": view.EMOTE_HEIGHT,
+            }
+        ]
+
+    def test_an_emote_of_a_platform_without_pictures_is_its_name(self):
+        assert view.chat_parts("ha [emote:elsewhere.12:KEKW]") == [{"text": "ha "}, {"text": "KEKW"}]
+
+    @pytest.mark.parametrize(
+        ("picture", "source"),
+        [
+            ("https://files.kick.com/emotes/37226/fullsize", "Kick"),
+            ("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0", "Twitch"),
+            ("https://cdn.7tv.app/emote/ID1/2x.webp", "7TV"),
+        ],
+    )
+    def test_whose_emote_a_picture_is(self, picture, source):
+        assert view.emote_source(picture) == source
 
     def test_something_that_only_looks_like_an_emote_stays_text(self):
         assert view.chat_parts("[emote:KEKW] [emote:12:]") == [{"text": "[emote:KEKW] [emote:12:]"}]
