@@ -2510,6 +2510,87 @@ def _recording_trim_dialog(conn, row, parts: list[stream_recording.Part], video_
     }
 
 
+# -- the chat of a whole recording ---------------------------------------------
+#
+# Beside a recording's Download is Download chat: its chat as a video as long
+# as the recording, on the colour the Trim dialog starts out with, to put next
+# to the picture in an editor. It is made the first time it is asked for -
+# chat is laid out once (see chat_video.py), so an hour of stream takes a few
+# minutes - and kept next to the recording's file, which it is removed with.
+# Not see-through: that would take gigabytes an hour (see
+# clip_trim.CHAT_VIDEO_MAX_SECONDS), where on a colour it is tens of megabytes.
+
+# Where making it stands, by recording, while it is made or after it failed.
+# Once it is there, the file says so.
+_recording_chat_files: dict[int, dict] = {}
+
+# What the chat video of a recording is taken to need of the disk, a second
+# of the recording - a busy chat on a colour comes to about 20 kB, measured.
+RECORDING_CHAT_FILE_BYTES_PER_SECOND = 100_000
+
+
+def _recording_chat_file_paths(file: Path) -> tuple[Path, Path]:
+    """Where the chat video of a recording's file is kept, and where it is
+    written while it is made - so that one cut short is never taken for
+    it."""
+    chat = file.with_name(chat_video.video_name(file.name))
+    return chat, chat.with_name(f"{chat.stem}.part{chat.suffix}")
+
+
+def _recording_chat_file(conn, row, parts: list[stream_recording.Part], file: Path | None) -> dict:
+    """What Download chat on the Recordings page is told of a recording
+    (see _recording_chat_file.html)."""
+    recording_id = row["id"]
+    known = _recording_chat_files.get(recording_id, {})
+    state = known.get("state", dashboard_view.CHAT_FILE_NONE)
+    download_url = None
+    if state != dashboard_view.CHAT_FILE_MAKING and file is not None:
+        download_url = _stream_url(_recording_chat_file_paths(file)[0])
+        if download_url:
+            state = dashboard_view.CHAT_FILE_READY
+    return {
+        "url": f"/recordings/{recording_id}/chat_video",
+        "page_url": f"/dashboard/recordings/{recording_id}/chat_video",
+        "state": state,
+        "busy": state == dashboard_view.CHAT_FILE_MAKING,
+        "download_url": download_url,
+        "chat": bool(parts) and _recording_has_chat(conn, row, parts),
+        "words": dashboard_view.chat_file_words(state, known.get("done")),
+    }
+
+
+async def _recording_chat_file_background(
+    recording_id: int, channel: str, lines: list[dict], duration: float, chat: Path, partial: Path
+) -> None:
+    # Off the event loop, and as a tracked task, like the chat of a cut
+    # (see _trim_chat_background): minutes for a long recording.
+    what = f"stream recording {recording_id}"
+    try:
+        partial.unlink(missing_ok=True)
+        progress = _making(_recording_chat_files, recording_id, dashboard_view.CHAT_FILE_MAKING)
+        frames = await asyncio.to_thread(
+            chat_video.render,
+            chat_video.lines_from(lines, 0.0),
+            duration,
+            partial,
+            clip_trim.DEFAULT_CHAT_BACKGROUND,
+            progress,
+        )
+        partial.replace(chat)
+    except _GivenUp:
+        partial.unlink(missing_ok=True)
+        _recording_chat_files.pop(recording_id, None)
+        logger.info("[%s] making the chat video of %s given up: shutting down", channel, what)
+        return
+    except Exception:
+        logger.exception("[%s] making the chat video of the whole of %s failed", channel, what)
+        partial.unlink(missing_ok=True)
+        _recording_chat_files[recording_id] = {"state": dashboard_view.CHAT_FILE_FAILED}
+        return
+    _recording_chat_files.pop(recording_id, None)
+    logger.info("[%s] chat video of the whole of %s saved: %s (%d frames)", channel, what, chat.name, frames)
+
+
 # -- moments found in a recording after the fact ------------------------------
 #
 # The chat stored with a recording can be replayed through the detector once
@@ -2798,6 +2879,7 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
         "chat": _recording_chat(conn, row, parts, 0.0) if standing == "playable" else None,
         "chat_delay_words": dashboard_view.chat_delay_words(delay),
         "finding": _recording_finding(conn, row, parts, today) if video_url else None,
+        "chat_file": _recording_chat_file(conn, row, parts, file) if video_url else None,
     }
 
 
@@ -3883,6 +3965,10 @@ async def delete_recording(recording_id: int):
             raise HTTPException(
                 status_code=409, detail="A stretch of this recording is being cut out. Try again once that is done."
             )
+        if _recording_chat_files.get(recording_id, {}).get("state") == dashboard_view.CHAT_FILE_MAKING:
+            raise HTTPException(
+                status_code=409, detail="The chat video of this recording is being made. Try again once that is done."
+            )
         if _recording_finds.get(recording_id, {}).get("state") in dashboard_view.FIND_BUSY:
             raise HTTPException(
                 status_code=409,
@@ -3892,7 +3978,7 @@ async def delete_recording(recording_id: int):
         try:
             if file is not None:
                 # What was cut out of it goes with it.
-                for cut in _recording_cut_files(file):
+                for cut in (*_recording_cut_files(file), *_recording_chat_file_paths(file)):
                     cut.unlink(missing_ok=True)
                 file.unlink(missing_ok=True)
             folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
@@ -3909,6 +3995,7 @@ async def delete_recording(recording_id: int):
     _recording_trims.pop(recording_id, None)
     _recording_counts.pop(recording_id, None)
     _recording_finds.pop(recording_id, None)
+    _recording_chat_files.pop(recording_id, None)
     logger.info("[%s] stream recording %d deleted", row["channel_slug"], recording_id)
     return {"deleted": recording_id}
 
@@ -4038,6 +4125,84 @@ async def trim_recording_chat(recording_id: int, request: Request):
         background, where,
     )
     return {"recording_id": recording_id, **_recording_trim(row)}
+
+
+def _chat_file_answer(recording_id: int) -> dict:
+    """Where the chat video of a whole recording stands, as its requests
+    answer."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        return {"recording_id": recording_id, **_recording_chat_file(conn, row, parts, _stream_file(row))}
+    finally:
+        conn.close()
+
+
+@app.post("/recordings/{recording_id}/chat_video")
+async def make_recording_chat_video(recording_id: int):
+    """Starts making the chat of a whole recording as a video of its own,
+    on a colour, unless it is there or being made already (see
+    _recording_chat_file). Lines are placed as beside the recording: by its
+    parts, with the channel's chat delay."""
+    conn = get_connection()
+    try:
+        row, parts, file = _recording_with_file(conn, recording_id, "make chat for")
+        chat, partial = _recording_chat_file_paths(file)
+        making = _recording_chat_files.get(recording_id, {}).get("state") == dashboard_view.CHAT_FILE_MAKING
+        if making or chat.exists():
+            return {"recording_id": recording_id, **_recording_chat_file(conn, row, parts, file)}
+        whole = stream_recording.length(parts)
+        lines = _recording_chat_lines(conn, row, parts, 0.0, whole, RECORDING_CHAT_VIDEO_LIMIT + 1)
+    finally:
+        conn.close()
+    if not lines:
+        raise HTTPException(status_code=409, detail="No chat was stored for this recording.")
+    if len(lines) > RECORDING_CHAT_VIDEO_LIMIT:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This recording has more chat than one chat video can hold ({RECORDING_CHAT_VIDEO_LIMIT:,} lines). "
+                "Cut a stretch of it out with Trim and take its chat with it."
+            ),
+        )
+    takes = whole * RECORDING_CHAT_FILE_BYTES_PER_SECOND
+    if recording_manager.room_left() - takes < recording_manager.MIN_FREE_BYTES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The disk is too full to make the chat video: "
+                f"it takes up to {dashboard_view.size_words(round(takes))}."
+            ),
+        )
+    _recording_chat_files[recording_id] = {"state": dashboard_view.CHAT_FILE_MAKING, "done": 0.0}
+    _track_task(_recording_chat_file_background(recording_id, row["channel_slug"], lines, whole, chat, partial))
+    return _chat_file_answer(recording_id)
+
+
+@app.get("/recordings/{recording_id}/chat_video")
+async def recording_chat_video_state(recording_id: int):
+    """Where the chat video of a whole recording stands."""
+    return _chat_file_answer(recording_id)
+
+
+@app.get("/dashboard/recordings/{recording_id}/chat_video", response_class=HTMLResponse)
+async def dashboard_recording_chat_video(request: Request, recording_id: int):
+    """Download chat as the Recordings page shows it - what the page fetches
+    after asking for the video, and every couple of seconds while it is
+    made."""
+    conn = get_connection()
+    try:
+        row = get_stream_recording(conn, recording_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown recording {recording_id}")
+        parts = stream_recording.decoded(row["parts"])
+        context = {"chat_file": _recording_chat_file(conn, row, parts, _stream_file(row))}
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_recording_chat_file.html", context)
 
 
 def _find_standing(recording_id: int) -> dict:

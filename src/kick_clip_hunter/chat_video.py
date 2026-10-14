@@ -468,11 +468,15 @@ def encode(frames: Iterable[bytes], output: Path, background: str | None = None,
             "-qscale:v", str(QUALITY), "-alpha_bits", "8",
         )
     else:
-        behind = f"color=c={_colour(background)}:s={WIDTH}x{HEIGHT}:r={fps}"
+        # The colour is painted over a copy of the frames themselves, not
+        # taken from a source of its own: that one never ends, and an ffmpeg
+        # given no frames at all (encoding given up before the first) would
+        # then wait for one forever.
+        behind = f"[0:v]split[text][copy];[copy]drawbox=c={_colour(background)}:t=fill[behind]"
         codec = (
             # Laid over the colour in full colour, before the picture is
             # given the H.264 colour resolution: a name's colour stays clean.
-            "-filter_complex", f"{behind}[behind];[behind][0:v]overlay=format=rgb:shortest=1[chat]",
+            "-filter_complex", f"{behind};[behind][text]overlay=format=rgb:shortest=1[chat]",
             "-map", "[chat]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", str(COLOUR_QUALITY), "-pix_fmt", "yuv420p",
         )

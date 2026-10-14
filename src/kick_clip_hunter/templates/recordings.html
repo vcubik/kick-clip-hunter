@@ -69,6 +69,9 @@
       {% if recording.summary %}<p class="moment-summary">{{ recording.summary }}</p>{% endif %}
       <div class="ch-line rec-file">
         <a class="ch-btn ch-btn-compact" href="{{ recording.video_url }}" download>Download</a>
+        {% with chat_file = recording.chat_file %}
+        {% include "_recording_chat_file.html" %}
+        {% endwith %}
         {#- Opens the Trim dialog at the foot of the article, which only the
             script can: shown once the script is there. -#}
         <button type="button" class="ch-btn ch-btn-compact" hidden data-trim-open>Trim</button>
