@@ -91,7 +91,13 @@ class TestThePage:
         page = await page_at(service)
 
         assert page.one("h1").text == "Webhooks, subscriptions, the recorders, the disk and the tunnel all look fine."
-        assert [title.text for title in page.find("h2")] == ["Webhooks", "Subscriptions", "Recorders", "Disk", "Tunnel"]
+        assert [title.text for title in page.one("main").find("h2")] == [
+            "Webhooks",
+            "Subscriptions",
+            "Recorders",
+            "Disk",
+            "Tunnel",
+        ]
         assert said(page, "webhooks").startswith("No webhook has arrived since the service started")
         assert said(page, "subscriptions") == "Not checked yet."
         assert said(page, "recorders") == "No channels are on the watchlist."
