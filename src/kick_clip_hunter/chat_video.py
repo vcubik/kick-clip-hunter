@@ -121,10 +121,18 @@ AUDIO_BITRATE = "192k"
 # The address the browser is given for the page. It never leaves the
 # machine - every request to it is answered here (see answer()).
 ORIGIN = "http://chat-video.invalid"
-# Where emote pictures are: Kick's own, Twitch's own, 7TV's, BetterTTV's and
-# FrankerFaceZ's.
+# Where emote pictures are: Kick's own, Twitch's own, YouTube's (its emoji
+# among them), 7TV's, BetterTTV's and FrankerFaceZ's.
 IMAGE_HOSTS = frozenset(
-    {"cdn.7tv.app", "files.kick.com", "static-cdn.jtvnw.net", "cdn.betterttv.net", "cdn.frankerfacez.com"}
+    {
+        "cdn.7tv.app",
+        "files.kick.com",
+        "static-cdn.jtvnw.net",
+        "yt3.ggpht.com",
+        "fonts.gstatic.com",
+        "cdn.betterttv.net",
+        "cdn.frankerfacez.com",
+    }
 )
 # How long the page may wait for its pictures before the column is drawn
 # without the ones still missing (their names are drawn instead).

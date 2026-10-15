@@ -225,6 +225,8 @@ class TestWhatTheBrowserMayLoad:
             "https://cdn.7tv.app/emote/ID1/2x.webp",
             "https://files.kick.com/emotes/37226/fullsize",
             "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0",
+            "https://yt3.ggpht.com/KOxdr_z3A5h-1Gb7k=w48-h48-c-k-nd",
+            "https://fonts.gstatic.com/s/e/notoemoji/latest/1f602/72.png",
             "https://cdn.betterttv.net/emote/5f1b0186cf6d2144653d2970/2x",
             "https://cdn.frankerfacez.com/emote/139407/2",
         ],

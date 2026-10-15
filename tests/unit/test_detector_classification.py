@@ -145,6 +145,19 @@ class TestIsLaughing:
         assert detector.classify_native_emotes("[emote:twitch.25:Kappa]") == detector.EMOTE_OTHER_WEIGHT
         assert detector.classify_native_emotes("[emote:twitch.1:catJAM]") == 0.0
 
+    @pytest.mark.parametrize(
+        ("content", "weight"),
+        [
+            ("[emote:emoji.1f602:face_with_tears_of_joy]", detector.EMOTE_LAUGH_WEIGHT),
+            ("[emote:emoji.1f923:rolling_on_the_floor_laughing]", detector.EMOTE_LAUGH_WEIGHT),
+            ("[emote:emoji.2764_fe0f:red_heart]", detector.EMOTE_OTHER_WEIGHT),
+            ("[emote:youtube.KOxdr_z3A5h-1Gb7k:face-purple-laughing]", detector.EMOTE_LAUGH_WEIGHT),
+            ("[emote:youtube.tRnrCQtE-KlTM9YL:face-purple-sweating]", detector.EMOTE_OTHER_WEIGHT),
+        ],
+    )
+    def test_a_youtube_emoji_is_weighed_by_its_name_like_any_platforms_emote(self, content, weight):
+        assert detector.classify_native_emotes(content) == weight
+
     def test_one_of_the_channels_laugh_emotes_named_in_the_text(self):
         assert detector.is_laughing("KEKW", ["kekw"])
         assert detector.is_laughing("on spadl OMEGALUL", ["kekw", "omegalul"])
