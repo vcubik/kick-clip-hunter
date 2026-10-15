@@ -121,14 +121,16 @@
   --width-counter: 75%;   /* the stream-time counter only */
 
   /* Everything on the review page except the picture: the top bar and what
-     sits above and below the clip. The clip is sized so that all of it fits
-     one screen without scrolling. */
-  --stage-rest: 512px;
+     sits above and below the clip. The clip is sized so that it, its controls
+     and the chat trace under it fit one screen; the rating and tags below
+     that may take a scroll (they are driven from the keyboard anyway). */
+  --stage-rest: 412px;
   /* The same for the Trim dialog: all of it but its picture. */
   --trim-rest: 480px;
-  /* And for a recording, which has less around its picture: the trace of
-     its chat, a few lines of words and the head of what was found in it. */
-  --recording-rest: 530px;
+  /* And for a recording: what is under its picture - the trace of its
+     chat, a few lines of words and what was found in it - may take a
+     scroll, so that the picture is not kept small. */
+  --recording-rest: 430px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
