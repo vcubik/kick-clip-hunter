@@ -3,21 +3,17 @@ whether it is live (see youtube_client.py)."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import httpx
 import pytest
 
 from kick_clip_hunter import youtube_client
-from kick_clip_hunter.youtube_client import Channel, LiveVideo
-from tests.support.youtube import channel_id_of
+from kick_clip_hunter.youtube_client import Channel, ChatPage, LiveChat, LiveVideo
+from tests.support.youtube import PAGE_CLIENT_VERSION, VISITOR, channel_id_of, message
 
 pytestmark = pytest.mark.anyio
-
-
-@pytest.fixture(autouse=True)
-def client_version_as_shipped(monkeypatch):
-    monkeypatch.setattr(youtube_client, "_client_version", youtube_client.CLIENT_VERSION)
 
 
 class TestFindingAChannel:
@@ -182,6 +178,109 @@ class TestWhetherAChannelIsLive:
         async with youtube_client.new_client() as client:
             assert await youtube_client.live_video("some_channel", client) is None
             assert not client.is_closed
+
+
+class TestReadingAChat:
+    async def test_a_chat_is_read_in_the_view_with_every_message_in_it(self, youtube):
+        youtube.chat("livevideo01")
+
+        chat = await youtube_client.open_chat("livevideo01")
+
+        assert chat.continuation == "livevideo01|live|0"
+        assert youtube.calls("GET", "/live_chat") == [{"v": "livevideo01", "is_popout": "1"}]
+
+    async def test_it_is_asked_about_as_its_page_says_to_ask(self, youtube):
+        youtube.chat("livevideo01")
+
+        chat = await youtube_client.open_chat("livevideo01")
+        await youtube_client.look_at_chat(chat)
+
+        assert chat.context["client"]["visitorData"] == VISITOR
+        (_, _, asked_as), *_ = youtube.chat("livevideo01").looks
+        assert asked_as["client"]["visitorData"] == VISITOR
+
+    async def test_the_version_its_page_is_on_is_gone_by_from_then_on(self, youtube):
+        youtube.chat("livevideo01")
+
+        await youtube_client.open_chat("livevideo01")
+
+        assert youtube_client.client_context()["client"]["clientVersion"] == PAGE_CLIENT_VERSION
+
+    async def test_the_first_look_brings_what_was_written_before_and_where_to_look_next(self, youtube):
+        youtube.chat("livevideo01").history = [message("m-1", "alice", "earlier")]
+
+        page = await youtube_client.look_at_chat(await youtube_client.open_chat("livevideo01"))
+
+        assert [action["addChatItemAction"]["clientId"] for action in page.actions] == ["m-1"]
+        assert page.continuation == "livevideo01|live|1"
+
+    async def test_each_look_after_brings_what_came_since(self, youtube):
+        chat = youtube.chat("livevideo01")
+        chat.say(message("m-2", "bob", "now"))
+        opened = await youtube_client.open_chat("livevideo01")
+
+        page = await youtube_client.look_at_chat(opened.at("livevideo01|live|1"))
+        nothing = await youtube_client.look_at_chat(opened.at("livevideo01|live|2"))
+
+        assert [action["addChatItemAction"]["clientId"] for action in page.actions] == ["m-2"]
+        assert nothing == ChatPage([], "livevideo01|live|3")
+
+    async def test_a_chat_that_is_over_says_nowhere_to_look_next(self, youtube):
+        youtube.chat("livevideo01").ended = True
+
+        page = await youtube_client.look_at_chat(await youtube_client.open_chat("livevideo01"))
+
+        assert page.continuation is None
+
+    async def test_an_answer_without_a_live_chat_in_it_is_a_chat_that_is_over(self):
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"responseContext": {}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            page = await youtube_client.look_at_chat(LiveChat("v", "c", {}), client)
+
+        assert page == ChatPage([], None)
+
+    async def test_a_chat_that_is_turned_off_says_so(self, youtube):
+        youtube.chat("livevideo01").unavailable = "Chat is disabled for this live stream."
+
+        with pytest.raises(youtube_client.ChatUnavailable, match="Chat is disabled"):
+            await youtube_client.open_chat("livevideo01")
+
+    @pytest.mark.parametrize(
+        ("page", "said"),
+        [
+            ("<html>nothing here</html>", "no chat on it"),
+            (
+                '<script>window["ytInitialData"] = {"contents": {"liveChatRenderer": {}}};</script>',
+                "does not say where",
+            ),
+        ],
+    )
+    async def test_a_page_without_what_is_read_of_it_is_not_guessed_at(self, page, said):
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=page)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            with pytest.raises(youtube_client.YouTubeChanged, match=said):
+                await youtube_client.open_chat("livevideo01", client)
+
+    async def test_without_a_choice_of_views_the_chat_is_read_where_the_page_says(self):
+        data = {
+            "contents": {
+                "liveChatRenderer": {
+                    "continuations": [{"timedContinuationData": {"continuation": "the-only-one", "timeoutMs": 5000}}]
+                }
+            }
+        }
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=f'<script>window["ytInitialData"] = {json.dumps(data)};</script>')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            chat = await youtube_client.open_chat("livevideo01", client)
+
+        assert chat == LiveChat("livevideo01", "the-only-one", youtube_client.client_context())
 
 
 class TestAskingYouTube:

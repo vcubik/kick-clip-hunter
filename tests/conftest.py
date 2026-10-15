@@ -166,12 +166,20 @@ def isolated_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _reset_module_state() -> None:
-    from kick_clip_hunter import detector, kick_client, recording_manager, twitch_client, webhook_security
+    from kick_clip_hunter import (
+        detector,
+        kick_client,
+        recording_manager,
+        twitch_client,
+        webhook_security,
+        youtube_client,
+    )
 
     detector._entries.clear()
     detector._last_moment_at.clear()
     kick_client._token_cache.clear()
     twitch_client._token_cache.clear()
+    youtube_client._client_version = youtube_client.CLIENT_VERSION
     webhook_security._public_key_cache = None
     for recorder in recording_manager._recorders.values():
         recorder.stop()
@@ -214,6 +222,7 @@ def _reset_module_state() -> None:
         main._tunnel_look = None
         main._disk_use = None
         main._twitch_reader = None
+        main._youtube_reader = None
 
 
 @pytest.fixture(autouse=True)

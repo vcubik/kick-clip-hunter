@@ -16,10 +16,19 @@ and its own page (`browse`) says its id, its title and its handle. Whether
 it is live is where its /live address leads: to the video it is streaming
 (or has scheduled), or to its channel page while there is none - and that
 video's player (`player`) says whether it is live, and since when.
+
+A live stream's chat is read the way the site's own chat window reads it:
+its page (/live_chat) says how to ask for it - who to say is asking, and
+where the view of the chat with every message in it begins (YouTube shows
+"Top chat", its own pick of them, unless told otherwise) - and each look at
+the chat (`live_chat/get_live_chat`) brings what happened in it since the
+one before, and where to look next. A look that says nowhere is the chat's
+end.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -56,6 +65,17 @@ HANDLE_MAX_LENGTH = 100
 # A version as the site writes it.
 _CLIENT_VERSION = re.compile(r"\d+\.\d{8}\.\d+\.\d+")
 
+LIVE_CHAT_PAGE = f"{YOUTUBE_SITE}/live_chat"
+# What the view of a chat with every message in it is called (as the page
+# names it in English, which it is asked for): not "Top chat".
+ALL_MESSAGES = "Live chat"
+# Where a page's settings and its first data are, as its scripts set them.
+_PAGE_SETTINGS = re.compile(r"ytcfg\.set\(\s*(?=\{)")
+_PAGE_DATA = re.compile(r"""(?:window\[["']ytInitialData["']\]|var\s+ytInitialData)\s*=\s*""")
+# The kinds of "where to look next" a live chat gives: one that is to be
+# asked when told to or after a while, one after a while, one from the start.
+_LIVE_CONTINUATIONS = ("invalidationContinuationData", "timedContinuationData", "reloadContinuationData")
+
 _client_version = CLIENT_VERSION
 
 
@@ -67,6 +87,11 @@ class YouTubeChanged(RuntimeError):
 class Refused(RuntimeError):
     """YouTube would not answer a visitor that is not signed in - as it does
     when it takes the visitor for a robot."""
+
+
+class ChatUnavailable(RuntimeError):
+    """A live stream's chat cannot be read - turned off, or for its
+    channel's members only - as its page says."""
 
 
 def remember_client_version(version: object) -> None:
@@ -261,3 +286,110 @@ async def live_video(login: str, client: httpx.AsyncClient | None = None) -> Liv
         return None
     broadcast = _field(player, "microformat", "playerMicroformatRenderer", "liveBroadcastDetails")
     return LiveVideo(video_id, _moment(_field(broadcast, "startTimestamp")))
+
+
+@dataclass(frozen=True)
+class LiveChat:
+    """Where a live stream's chat is to be looked at next."""
+
+    video_id: str
+    continuation: str
+    # Who is asking, as the chat's page said to say it.
+    context: dict[str, Any]
+
+    def at(self, continuation: str) -> LiveChat:
+        return LiveChat(self.video_id, continuation, self.context)
+
+
+@dataclass(frozen=True)
+class ChatPage:
+    """What one look at a chat brought: what happened in it since the look
+    before (InnerTube's "actions", oldest first), and where to look next -
+    None once the chat is over."""
+
+    actions: list[dict[str, Any]]
+    continuation: str | None
+
+
+def _json_after(pattern: re.Pattern[str], page: str) -> list[Any]:
+    """Every JSON value a page's scripts set where the pattern matches."""
+    values = []
+    decoder = json.JSONDecoder()
+    for found in pattern.finditer(page):
+        try:
+            values.append(decoder.raw_decode(page, found.end())[0])
+        except ValueError:
+            continue
+    return values
+
+
+def _words(text: object) -> str:
+    """What a piece of YouTube's text says: its "simpleText", or its "runs"
+    one after another."""
+    if not isinstance(text, dict):
+        return ""
+    if isinstance(text.get("simpleText"), str):
+        return text["simpleText"]
+    runs = text.get("runs")
+    if not isinstance(runs, list):
+        return ""
+    return "".join(run["text"] for run in runs if isinstance(run, dict) and isinstance(run.get("text"), str))
+
+
+def _next(continuations: object) -> str | None:
+    """Where a live chat says to look next, if it says."""
+    for entry in continuations if isinstance(continuations, list) else []:
+        for kind in _LIVE_CONTINUATIONS:
+            continuation = _field(entry, kind, "continuation")
+            if isinstance(continuation, str) and continuation:
+                return continuation
+    return None
+
+
+def _all_messages(renderer: dict[str, Any]) -> str | None:
+    """Where the view of a chat with every message in it begins: the view
+    of that name, or else the last one the page offers."""
+    views = _field(renderer, "header", "liveChatHeaderRenderer", "viewSelector", "sortFilterSubMenuRenderer")
+    items = [item for item in _field(views, "subMenuItems") or [] if isinstance(item, dict)]
+    for item in sorted(items, key=lambda item: item.get("title") != ALL_MESSAGES):
+        continuation = _field(item, "continuation", "reloadContinuationData", "continuation")
+        if isinstance(continuation, str) and continuation:
+            return continuation
+    return None
+
+
+async def open_chat(video_id: str, client: httpx.AsyncClient | None = None) -> LiveChat:
+    """Where the chat of a live video is read from, with every message in
+    it. Raises ChatUnavailable for one whose page says it cannot be read."""
+    async with _using(client) as asking:
+        response = await asking.get(LIVE_CHAT_PAGE, params={"v": video_id, "is_popout": "1"})
+        response.raise_for_status()
+    page = response.text
+    settings = next((value for value in _json_after(_PAGE_SETTINGS, page) if "INNERTUBE_CONTEXT" in value), {})
+    remember_client_version(settings.get("INNERTUBE_CLIENT_VERSION"))
+    context = settings.get("INNERTUBE_CONTEXT")
+    data = next(iter(_json_after(_PAGE_DATA, page)), None)
+    renderer = _field(data, "contents", "liveChatRenderer")
+    if not isinstance(renderer, dict):
+        said = _words(_field(data, "contents", "messageRenderer", "text"))
+        if said:
+            raise ChatUnavailable(said)
+        raise YouTubeChanged(f"the chat page of the video {video_id} has no chat on it")
+    continuation = _all_messages(renderer) or _next(renderer.get("continuations"))
+    if continuation is None:
+        raise YouTubeChanged(f"the chat page of the video {video_id} does not say where its chat is")
+    return LiveChat(video_id, continuation, context if isinstance(context, dict) else client_context())
+
+
+async def look_at_chat(chat: LiveChat, client: httpx.AsyncClient | None = None) -> ChatPage:
+    """What has happened in a chat since it was last looked at, and where to
+    look next."""
+    answer = await ask("live_chat/get_live_chat", {"continuation": chat.continuation}, client, chat.context)
+    live = _field(answer, "continuationContents", "liveChatContinuation")
+    if not isinstance(live, dict):
+        return ChatPage([], None)
+    actions = live.get("actions")
+    return ChatPage(
+        [action for action in actions if isinstance(action, dict)] if isinstance(actions, list) else [],
+        _next(live.get("continuations")),
+    )

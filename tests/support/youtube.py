@@ -3,9 +3,14 @@
 `FakeYouTube` answers what the service asks of YouTube's own web API
 (InnerTube, www.youtube.com/youtubei/v1): where an address on youtube.com
 leads, what a channel's page says of it, what a video's player says of it -
-in the shapes YouTube answers in, cut down to what is read of them. Like the
-other fakes it plugs in as an `httpx` transport (the `youtube` fixture), so
-the real client code runs unmodified.
+and a live video's chat: its page, and each look at it - in the shapes
+YouTube answers in, cut down to what is read of them. Like the other fakes
+it plugs in as an `httpx` transport (the `youtube` fixture), so the real
+client code runs unmodified.
+
+A chat (`FakeLiveChat`) is what was written in it before anyone looked, and
+what each look after that brings, in turn. The functions at the end build
+its messages as YouTube sends them.
 """
 
 from __future__ import annotations
@@ -19,6 +24,10 @@ import httpx
 
 HOSTS = frozenset({"www.youtube.com"})
 API = "/youtubei/v1/"
+# The version of the web client the fake's chat pages say they are on, and
+# who they say to ask as.
+PAGE_CLIENT_VERSION = "2.20271231.01.00"
+VISITOR = "fake-visitor"
 
 
 def channel_id_of(handle: str) -> str:
@@ -75,6 +84,12 @@ class FakeYouTube:
     # What the player says of a video instead of its details, by video id -
     # e.g. YouTube asking the visitor to sign in.
     player_refusals: dict[str, dict] = field(default_factory=dict)
+    # The chats of live videos, by video id.
+    chats: dict[str, FakeLiveChat] = field(default_factory=dict)
+
+    def chat(self, video_id: str = "livevideo01") -> FakeLiveChat:
+        """The chat of a video, made the first time it is asked for."""
+        return self.chats.setdefault(video_id, FakeLiveChat(video_id))
 
     def add_channel(self, handle: str | None, channel_id: str | None = None, **kwargs) -> FakeYouTubeChannel:
         channel = FakeYouTubeChannel(
@@ -100,6 +115,8 @@ class FakeYouTube:
         for fragment, status in self.failures.items():
             if fragment in str(request.url):
                 return httpx.Response(status, json={"error": {"code": status, "message": "forced failure"}})
+        if request.method == "GET" and path == "/live_chat":
+            return self._chat_page(request.url.params.get("v", ""))
         if request.method == "POST" and path.startswith(API):
             if not isinstance(body, dict) or not isinstance(body.get("context", {}).get("client"), dict):
                 return httpx.Response(400, json={"error": {"code": 400, "message": "no client in the context"}})
@@ -110,6 +127,8 @@ class FakeYouTube:
                 return self._browse(body["browseId"])
             if endpoint == "player":
                 return self._player(body["videoId"])
+            if endpoint == "live_chat/get_live_chat":
+                return self._look(body)
         return httpx.Response(404, text=f"fake YouTube has no route for {request.method} {request.url}")
 
     # -- what is asked ---------------------------------------------------------
@@ -184,6 +203,218 @@ class FakeYouTube:
             },
         )
 
+    def _chat_page(self, video_id: str) -> httpx.Response:
+        """The page of a live video's chat: what its scripts set - who to ask
+        as, and the chat's first data."""
+        chat = self.chats.get(video_id)
+        settings = {
+            "INNERTUBE_API_KEY": "fake-key",
+            "INNERTUBE_CLIENT_VERSION": PAGE_CLIENT_VERSION,
+            "INNERTUBE_CONTEXT": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": PAGE_CLIENT_VERSION,
+                    "hl": "en",
+                    "visitorData": VISITOR,
+                }
+            },
+        }
+        if chat is None or chat.unavailable is not None:
+            said = chat.unavailable if chat is not None else "Chat is disabled for this live stream."
+            data: dict = {"contents": {"messageRenderer": {"text": {"runs": [{"text": said}]}}}}
+        else:
+            chat.pages_served += 1
+            views = [
+                {"title": "Top chat", "selected": True, "continuation": _reload(f"{video_id}|top|0")},
+                {"title": "Live chat", "selected": False, "continuation": _reload(f"{video_id}|live|0")},
+            ]
+            data = {
+                "contents": {
+                    "liveChatRenderer": {
+                        "continuations": [
+                            {"invalidationContinuationData": {"continuation": f"{video_id}|top|1", "timeoutMs": 10000}}
+                        ],
+                        "actions": list(chat.history),
+                        "header": {
+                            "liveChatHeaderRenderer": {
+                                "viewSelector": {"sortFilterSubMenuRenderer": {"subMenuItems": views}}
+                            }
+                        },
+                    }
+                }
+            }
+        page = (
+            "<!DOCTYPE html><html><head>"
+            "<script>ytcfg.set('EMERGENCY_BASE_URL', '/error_204');</script>"
+            f"<script>ytcfg.set({json.dumps(settings)}); window.ytcfg.set('X', 1);</script>"
+            f'<script>window["ytInitialData"] = {json.dumps(data)};</script>'
+            "</head><body></body></html>"
+        )
+        return httpx.Response(200, text=page, headers={"content-type": "text/html; charset=utf-8"})
+
+    def _look(self, body: dict) -> httpx.Response:
+        """One look at a chat: from the start (the first look brings what was
+        written before), or what came since the look before."""
+        video_id, _, rest = str(body.get("continuation", "")).partition("|")
+        view, _, number = rest.partition("|")
+        chat = self.chats.get(video_id)
+        if chat is None or not number.isdigit():
+            return httpx.Response(400, json={"error": {"code": 400, "status": "INVALID_ARGUMENT"}})
+        chat.looks.append((view, int(number), body["context"]))
+        if chat.failing:
+            return httpx.Response(chat.failing.pop(0), json={"error": {"code": 503, "message": "forced failure"}})
+        actions = list(chat.history) if number == "0" else (chat.pages.pop(0) if chat.pages else [])
+        live: dict = {"actions": actions}
+        if not (chat.ended and not chat.pages):
+            live["continuations"] = [
+                {
+                    "invalidationContinuationData": {
+                        "continuation": f"{video_id}|{view}|{int(number) + 1}",
+                        "timeoutMs": 10000,
+                    }
+                }
+            ]
+        return httpx.Response(200, json={"responseContext": {}, "continuationContents": {"liveChatContinuation": live}})
+
+
+@dataclass
+class FakeLiveChat:
+    video_id: str
+    # What was written before anyone looked: the first look brings it.
+    history: list[dict] = field(default_factory=list)
+    # What each look after that brings, in turn - nothing once they are all
+    # handed out.
+    pages: list[list[dict]] = field(default_factory=list)
+    # Over (the stream has ended) once what is left of `pages` is handed out.
+    ended: bool = False
+    # What the chat's page says instead of a chat - turned off, members only.
+    unavailable: str | None = None
+    # Statuses the next looks are answered with, one each, before they are
+    # answered again.
+    failing: list[int] = field(default_factory=list)
+    # Every look at it: the view asked for ("live" or "top"), its number and
+    # who said they were asking.
+    looks: list[tuple[str, int, dict]] = field(default_factory=list)
+    # How often its page was fetched.
+    pages_served: int = 0
+
+    def say(self, *actions: dict) -> None:
+        """What the next look brings that has nothing yet."""
+        self.pages.append(list(actions))
+
 
 def _endpoint(endpoint: dict) -> httpx.Response:
     return httpx.Response(200, json={"responseContext": {}, "endpoint": endpoint})
+
+
+def _reload(continuation: str) -> dict:
+    return {"reloadContinuationData": {"continuation": continuation}}
+
+
+# -- what is written in a chat, as YouTube sends it --------------------------
+
+
+def text(words: str) -> dict:
+    return {"text": words}
+
+
+def emoji(character: str, shortcut: str, codepoints: str) -> dict:
+    """One of the emoji everyone has, as YouTube draws it."""
+    return {
+        "emoji": {
+            "emojiId": character,
+            "shortcuts": [f":{shortcut}:"],
+            "searchTerms": shortcut.split("_"),
+            "image": {"thumbnails": [{"url": f"https://fonts.gstatic.com/s/e/notoemoji/15.1/{codepoints}/72.png"}]},
+        }
+    }
+
+
+def custom_emoji(shortcut: str, picture: str, channel_id: str = "UCkszU2WH9gy1mb0dV-11UJg") -> dict:
+    """An emoji a channel (or YouTube) made, kept on YouTube's picture host."""
+    return {
+        "emoji": {
+            "emojiId": f"{channel_id}/{picture[:20]}",
+            "shortcuts": [f":{shortcut}:"],
+            "searchTerms": [shortcut],
+            "image": {
+                "thumbnails": [
+                    {"url": f"https://yt3.ggpht.com/{picture}=w24-h24-c-k-nd", "width": 24, "height": 24},
+                    {"url": f"https://yt3.ggpht.com/{picture}=w48-h48-c-k-nd", "width": 48, "height": 48},
+                ]
+            },
+            "isCustomEmoji": True,
+        }
+    }
+
+
+def badge(icon: str, tooltip: str) -> dict:
+    return {"liveChatAuthorBadgeRenderer": {"icon": {"iconType": icon}, "tooltip": tooltip}}
+
+
+def member_badge(tooltip: str = "Member (6 months)") -> dict:
+    return {
+        "liveChatAuthorBadgeRenderer": {
+            "customThumbnail": {"thumbnails": [{"url": "https://yt3.ggpht.com/member-badge=s16-c-k"}]},
+            "tooltip": tooltip,
+        }
+    }
+
+
+OWNER = badge("OWNER", "Owner")
+MODERATOR = badge("MODERATOR", "Moderator")
+VERIFIED = badge("VERIFIED", "Verified")
+
+# When the messages built here say they were sent, unless told otherwise.
+SENT_USEC = 1_772_395_200_000_000
+
+
+def message(
+    message_id: str,
+    author: str,
+    *runs: dict | str,
+    badges: tuple[dict, ...] = (),
+    sent_usec: int = SENT_USEC,
+    kind: str = "liveChatTextMessageRenderer",
+    **extra: object,
+) -> dict:
+    """An action of a chat that adds a message someone wrote; a run that is
+    a plain string is text."""
+    renderer: dict = {
+        "message": {"runs": [text(run) if isinstance(run, str) else run for run in runs]},
+        "authorName": {"simpleText": f"@{author}"},
+        "authorExternalChannelId": channel_id_of(author),
+        "id": message_id,
+        "timestampUsec": str(sent_usec),
+        **extra,
+    }
+    if badges:
+        renderer["authorBadges"] = list(badges)
+    return {"clickTrackingParams": "x", "addChatItemAction": {"item": {kind: renderer}, "clientId": message_id}}
+
+
+def super_chat(message_id: str, author: str, *runs: dict | str, amount: str = "$5.00") -> dict:
+    action = message(
+        message_id, author, *runs, kind="liveChatPaidMessageRenderer", purchaseAmountText={"simpleText": amount}
+    )
+    if not runs:
+        del action["addChatItemAction"]["item"]["liveChatPaidMessageRenderer"]["message"]
+    return action
+
+
+def welcome() -> dict:
+    """What a chat says of itself to whoever opens it."""
+    return {
+        "addChatItemAction": {
+            "item": {
+                "liveChatViewerEngagementMessageRenderer": {
+                    "id": "welcome",
+                    "message": {"runs": [text("Welcome to live chat!")]},
+                }
+            }
+        }
+    }
+
+
+def removed(message_id: str) -> dict:
+    return {"removeChatItemAction": {"targetItemId": message_id}}

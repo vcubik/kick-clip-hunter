@@ -44,7 +44,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from . import chat_identity, twitch_client
-from .chat_message import ChatMessage
+from .chat_message import ChatMessage, typed
 from .twitch_auth import AccountToken, SignInNeeded, TokenKeeper
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -78,9 +78,6 @@ EMOTE_PREFIX = "twitch."
 # detector.NATIVE_EMOTE_TOKEN_PATTERN): a name ends the token at "]".
 _EMOTE_ID = re.compile(r"[0-9A-Za-z_]{1,64}")
 _EMOTE_NAME = re.compile(r"[^\]\s]{1,64}")
-# Text a viewer typed that would read as a token - kept, but so that it does not.
-_TYPED_TOKEN = "[emote:"
-_HARMLESS_TOKEN = "[emote​:"
 
 
 @dataclass(frozen=True)
@@ -111,7 +108,7 @@ def _content(fragments: Iterable[Any]) -> tuple[str, list[dict[str, Any]]]:
             piece = f"[emote:{EMOTE_PREFIX}{emote_id}:{text}]"
             positions.setdefault(emote_id, []).append({"s": length, "e": length + len(piece) - 1})
         else:
-            piece = text.replace(_TYPED_TOKEN, _HARMLESS_TOKEN)
+            piece = typed(text)
         parts.append(piece)
         length += len(piece)
     emotes = [{"emote_id": f"{EMOTE_PREFIX}{emote_id}", "positions": where} for emote_id, where in positions.items()]

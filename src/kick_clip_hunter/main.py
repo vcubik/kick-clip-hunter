@@ -48,6 +48,7 @@ from . import (
     twitch_chat,
     twitch_client,
     win_console,
+    youtube_chat,
 )
 from .chat_message import ChatMessage
 from .config import load_settings
@@ -553,6 +554,32 @@ def _start_reading_twitch_chat() -> twitch_chat.ChatReader | None:
     return _twitch_reader
 
 
+# What reads the chat of the YouTube channels on the watchlist while they
+# are live (see youtube_chat.py); None until the service has started it.
+_youtube_reader: youtube_chat.ChatReader | None = None
+
+
+def _youtube_channels() -> list[youtube_chat.Channel]:
+    """The YouTube channels whose chat is read: every one on the watchlist,
+    while it is live. What is done with it is decided message by message,
+    as for Kick's (see _take_chats)."""
+    conn = get_connection()
+    try:
+        return [
+            youtube_chat.Channel(row["broadcaster_user_id"], row["slug"])
+            for row in get_streamers(conn, platforms.YOUTUBE)
+        ]
+    finally:
+        conn.close()
+
+
+def _start_reading_youtube_chat() -> youtube_chat.ChatReader:
+    """The reader of YouTube's chat. YouTube needs nothing set up."""
+    global _youtube_reader
+    _youtube_reader = youtube_chat.ChatReader(_youtube_channels, _take_chats)
+    return _youtube_reader
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _started_at
@@ -580,6 +607,7 @@ async def lifespan(app: FastAPI):
     reader = _start_reading_twitch_chat()
     if reader is not None:
         tasks.append(asyncio.create_task(reader.run_forever()))
+    tasks.append(asyncio.create_task(_start_reading_youtube_chat().run_forever()))
     try:
         yield
     finally:
