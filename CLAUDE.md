@@ -422,9 +422,15 @@ Module map (`src/kick_clip_hunter/`):
   or before the start that was set (a couple of seconds earlier at most on a real stream)
   and the dialog says by how much. With "chat" ticked the stretch's chat goes with it
   (`chat_video.py`), where the dialog's select says (`chat_where`, the script remembers the
-  last choice): drawn into the cut's picture at the bottom on the right or the left - the
-  cut is then made together with it, its picture encoded anew, so it begins exactly where
-  it was set (state `burning`, with how far it has got) - or as a video of its own
+  last choice): drawn into the cut's picture (`video`) - where its box over the dialog's
+  picture was dragged to and as large as it was made by a corner, its width setting how large
+  the text is and its height how much of the column shows (`chat_box`, its left, top, width
+  and height as shares of the picture, `ChatBox`; the script keeps the last one; without
+  one, the bottom right) - the cut is then made together with it, its picture encoded anew,
+  so it begins exactly where it was set (state `burning`, with how far it has got). The
+  dialog shows the chat in that box as it will be drawn: the lines beside the player are
+  moved into it, dressed as in the video and scaled to the box. Or chat goes as a video of
+  its own
   (`apart`), lined up with where the video really begins. The dialog's slider moves the
   lines up to 10s either way against the picture, for that one video, on top of the
   channel's chat delay - and shows them beside the picture as they will be. Chat is
@@ -477,9 +483,14 @@ Module map (`src/kick_clip_hunter/`):
   ffmpeg for one of three files: a see-through video of its own (ProRes 4444,
   `..._trim_chat.mov`, large by nature - 3-5 MB per second of a busy chat), one on a colour
   (H.264 in the same `.mov`, a fraction of that), or the cut itself with chat drawn into its
-  picture (`burn`: the column scaled to two thirds of the picture's shorter side, at the
-  bottom on the chosen side, overlaid while the stretch is re-encoded from the very frame
-  set - with `-t` on the output, or the last chat frame would keep the picture going).
+  picture (`burn`, placed by `placement`: in the dialog's box, the text no smaller or larger
+  than `SCALE_LEAST` and `SCALE_MOST` of the page's and at least `COLUMN_LEAST` of the column
+  shown, within the picture - or, with no box, two thirds of the picture's shorter side tall
+  at the bottom right - overlaid while the stretch is re-encoded from the very frame set, with
+  `-t` on the output, or the last chat frame would keep the picture going). Frames are of any
+  height (`Shape`), and for chat drawn larger than the page has it the browser draws at twice
+  the density (`device_scale_factor`), so the text is made smaller rather than larger and
+  stays sharp.
   The picture is encoded with the first of `HARDWARE_ENCODERS` that works on the machine
   (AMF on this host's RX 480: 1080p60 at roughly 1.5-2x as fast as it plays), else x264
   (`video_encoder`, found out once and kept; the test suite pins x264), at a little over

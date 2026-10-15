@@ -31,10 +31,11 @@ The frames go to ffmpeg as raw pictures, for one of three files:
 - a video of its own on a colour, to put next to the picture: H.264,
   which keeps only what changes from one frame to the next - a fraction of
   the size;
-- the cut itself with its chat drawn into a corner of the picture (see
-  burn). The picture is encoded anew for that, on the graphics card where
-  ffmpeg can use one (see video_encoder): that is the slow part, at the
-  pace the card - or the processor - encodes the stream's picture.
+- the cut itself with its chat drawn into its picture, where the Trim
+  dialog put it and as large (see burn, placement). The picture is
+  encoded anew for that, on the graphics card where ffmpeg can use one
+  (see video_encoder): that is the slow part, at the pace the card - or
+  the processor - encodes the stream's picture.
 
 The browser only ever opens this project's own page: it is given the page,
 the stylesheet, the script and the badge pictures from memory and from
@@ -96,11 +97,16 @@ BOTTOM_PIXELS = 10
 # under what it can draw in one go, and a hundred lines of chat or more.
 PAGE_PIXELS = 4096
 
-# Chat drawn into a cut's picture: a column of the shape of the video of
-# its own, as tall as two thirds of the picture's shorter side - so in a
-# picture 1080 lines high, exactly that video - at the bottom, this far in
-# from the side (at that size).
-SIDES = ("right", "left")
+# Chat drawn into a cut's picture goes where the Trim dialog put it (see
+# clip_trim.ChatBox), and as large: its text drawn this many times as large
+# as the page has it, at most and at least, and at least this many pixels
+# of the page's column shown. Where nothing was said, it is a column of the
+# shape of the video of its own, as tall as two thirds of the picture's
+# shorter side - so in a picture 1080 lines high, exactly that video - at
+# the bottom on the right, this far in from the side (at that size).
+SCALE_LEAST = 0.4
+SCALE_MOST = 2.0
+COLUMN_LEAST = 96
 MARGIN_PIXELS = 24
 # The picture of a burned cut is encoded at about the bitrate the stream
 # was sent at - a little over, to make up for its being encoded a second
@@ -196,6 +202,37 @@ def answer(url: str, resource_type: str) -> tuple[str, Path | None]:
 # -- the column ---------------------------------------------------------------
 
 
+class Shape(NamedTuple):
+    """The frames of a column of chat: how tall a stretch of the column
+    they show, in pixels of the page (it is always WIDTH of them wide), and
+    how many of their pixels go to one of the page, across and down - more
+    than one for chat drawn larger than the page has it, so that its text
+    stays sharp. The column (see drawn_column) is laid out in their pixels."""
+
+    height: int = HEIGHT
+    density: int = 1
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """How wide and how tall a frame is, in its own pixels."""
+        return WIDTH * self.density, self.height * self.density
+
+    @property
+    def fade(self) -> int:
+        """Over how many of its rows the oldest lines fade out at the top:
+        FADE_PIXELS, or a quarter of a short column."""
+        return min(FADE_PIXELS, self.height // 4) * self.density
+
+    @property
+    def bottom(self) -> int:
+        """How many of its rows are the room under the newest line."""
+        return BOTTOM_PIXELS * self.density
+
+
+# The frames of a chat video of its own.
+OWN_SHAPE = Shape()
+
+
 class Emote(NamedTuple):
     """An animated emote in the column, left out of its pictures for every
     frame to have it drawn in moving (see drawn_column): where it is, in
@@ -225,12 +262,14 @@ class Column(NamedTuple):
 
 
 @contextmanager
-def drawn_column(html: str) -> Iterator[Column]:
+def drawn_column(html: str, density: int = 1) -> Iterator[Column]:
     """The page's chat laid out by a browser without a window, which stays
     open for as long as the `with` block runs: the column's pictures are
     taken as the frames come to need them. The emotes that are animated are
     left out of those pictures and handed over apart, to be drawn in
-    moving."""
+    moving. With a `density` of more than one, the browser draws that many
+    pixels for one of the page, across and down, and the column is in
+    those."""
     fetched: dict[str, bytes] = {}
 
     def serve(route) -> None:
@@ -259,7 +298,10 @@ def drawn_column(html: str) -> Iterator[Column]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            page = browser.new_page(viewport={"width": WIDTH, "height": PAGE_PIXELS})
+            # A picture is PAGE_PIXELS of the column's pixels tall, whatever
+            # the density.
+            screen = PAGE_PIXELS // density
+            page = browser.new_page(viewport={"width": WIDTH, "height": screen}, device_scale_factor=density)
             page.route("**/*", serve)
             # Not "load": that waits for every picture, and how long those
             # may take is the page's own ready() to decide.
@@ -269,21 +311,21 @@ def drawn_column(html: str) -> Iterator[Column]:
             page.evaluate(
                 "limit => chatVideo.ready(limit)", PICTURES_TIMEOUT_SECONDS * 1000, isolated_context=False
             )
-            emotes = _set_aside(page, fetched)
-            laid_out = page.evaluate("page => chatVideo.layOut(page)", PAGE_PIXELS, isolated_context=False)
+            emotes = _set_aside(page, fetched, density)
+            laid_out = page.evaluate("page => chatVideo.layOut(page)", screen, isolated_context=False)
             pages = int(laid_out["pages"])
 
             def picture(index: int) -> bytes | None:
                 if not 0 <= index < pages:
                     return None
-                page.evaluate("y => window.scrollTo(0, y)", index * PAGE_PIXELS, isolated_context=False)
+                page.evaluate("y => window.scrollTo(0, y)", index * screen, isolated_context=False)
                 return page.screenshot(type="png", omit_background=True)
 
             lines = laid_out["lines"]
             yield Column(
                 [line[0] for line in lines],
-                [line[1] for line in lines],
-                [line[2] for line in lines],
+                [line[1] * density for line in lines],
+                [line[2] * density for line in lines],
                 picture,
                 emotes,
             )
@@ -291,16 +333,25 @@ def drawn_column(html: str) -> Iterator[Column]:
             browser.close()
 
 
-def _set_aside(page, fetched: Mapping[str, bytes]) -> list[Emote]:
+def _set_aside(page, fetched: Mapping[str, bytes], density: int = 1) -> list[Emote]:
     """Has the browser leave the emotes whose pictures are animated out of
     the column's pictures - of the pictures it was given, by their
-    addresses - and says where each of those emotes is."""
+    addresses - and says where each of those emotes is, in the column's
+    pixels."""
     animated = {url: picture for url, picture in fetched.items() if is_animated(picture)}
     boxes = page.evaluate("urls => chatVideo.setAside(urls)", list(animated), isolated_context=False)
-    return [Emote(top, left, width, height, animated[url]) for top, left, width, height, url in boxes]
+    return [_emote(box, density, animated[box[4]]) for box in boxes]
 
 
-def frame_top(column: Column, time: float) -> int | None:
+def _emote(box: Sequence[Any], density: int, picture: bytes) -> Emote:
+    """An emote where the page says it is - its top, left, right and
+    bottom, in pixels of the page - in whole pixels of a column of that
+    `density`, as the browser draws a picture."""
+    top, left, right, bottom = (round(float(edge) * density) for edge in box[:4])
+    return Emote(top, left, right - left, bottom - top, picture)
+
+
+def frame_top(column: Column, time: float, shape: Shape = OWN_SHAPE) -> int | None:
     """Where in the column the top of the frame `time` seconds into the
     video is - above the column's own while the lines so far do not fill a
     frame - or None before the first line has arrived. The newest line is
@@ -308,7 +359,7 @@ def frame_top(column: Column, time: float) -> int | None:
     arrived = bisect.bisect_right(column.arrivals, time)
     if not arrived:
         return None
-    return round(column.bottoms[arrived - 1]) + BOTTOM_PIXELS - HEIGHT
+    return round(column.bottoms[arrived - 1]) + shape.bottom - shape.size[1]
 
 
 class _Pages:
@@ -326,16 +377,17 @@ class _Pages:
             self._kept[index] = None if png is None else np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
         return self._kept[index]
 
-    def window(self, top: int) -> np.ndarray:
+    def window(self, top: int, shape: Shape) -> np.ndarray:
         """The column from `top` down to the bottom of its newest line, as
-        a frame whose top is there (see frame_top): HEIGHT rows of WIDTH
+        a frame of that shape whose top is there (see frame_top): rows of
         pixels of red, green, blue and how much of it is seen - nothing in
         the room under that line, where the lines still to come are."""
-        rows = HEIGHT - BOTTOM_PIXELS
+        width, height = shape.size
+        rows = height - shape.bottom
         first = max(top, 0) // PAGE_PIXELS
         for index in [index for index in self._kept if index < first]:
             del self._kept[index]
-        frame = np.zeros((HEIGHT, WIDTH, 4), np.uint8)
+        frame = np.zeros((height, width, 4), np.uint8)
         for index in range(first, max(top + rows - 1, 0) // PAGE_PIXELS + 1):
             page = self._page(index)
             if page is None:
@@ -343,36 +395,38 @@ class _Pages:
             start = index * PAGE_PIXELS
             upper, lower = max(top, start), min(top + rows, start + len(page))
             if lower > upper:
-                frame[upper - top : lower - top] = page[upper - start : lower - start, :WIDTH]
+                frame[upper - top : lower - top] = page[upper - start : lower - start, :width]
         return frame
 
 
-# How much of each pixel row at the top of a frame is kept, out of 255.
-_FADE = np.array([[round(255 * row / FADE_PIXELS)] for row in range(FADE_PIXELS)], np.uint16)
-
-
-def frames(column: Column, times: Sequence[float]) -> Iterator[bytes]:
-    """The frames showing the column's chat at `times`, as raw pictures
-    WIDTH x HEIGHT of red, green, blue and how much of it is seen - nothing
+def frames(column: Column, times: Sequence[float], shape: Shape = OWN_SHAPE) -> Iterator[bytes]:
+    """The frames showing the column's chat at `times`, as raw pictures of
+    that shape - of red, green, blue and how much of it is seen, nothing
     where there is no chat. A frame that would be the same as the one
     before it is that one."""
     pages = _Pages(column.picture)
-    moving = _Moving(column.emotes)
-    blank = bytes(WIDTH * HEIGHT * 4)
+    moving = _Moving(column.emotes, shape)
+    width, height = shape.size
+    blank = bytes(width * height * 4)
+    # How much of each pixel row at the top of a frame is kept, out of 255.
+    fade = np.array([[round(255 * row / shape.fade)] for row in range(shape.fade)], np.uint16)
     shown: tuple[int, tuple[tuple[int, int], ...]] | None = None
     picture = blank
     for second in times:
-        top = frame_top(column, second)
+        top = frame_top(column, second, shape)
         now = None if top is None else (top, moving.shown(top, second))
         if now != shown:
             shown = now
-            picture = blank if now is None else _frame(pages.window(now[0]), moving, *now)
+            picture = blank if now is None else _frame(pages.window(now[0], shape), moving, fade, *now)
         yield picture
 
 
-def _frame(frame: np.ndarray, moving: _Moving, top: int, shown: Iterable[tuple[int, int]]) -> bytes:
+def _frame(
+    frame: np.ndarray, moving: _Moving, fade: np.ndarray, top: int, shown: Iterable[tuple[int, int]]
+) -> bytes:
     moving.draw(frame, top, shown)
-    frame[:FADE_PIXELS, :, 3] = frame[:FADE_PIXELS, :, 3] * _FADE // 255
+    rows = len(fade)
+    frame[:rows, :, 3] = frame[:rows, :, 3] * fade // 255
     return frame.tobytes()
 
 
@@ -444,7 +498,8 @@ class _Moving:
     An emote's picture is taken apart into its frames the first time a
     frame shows it."""
 
-    def __init__(self, emotes: Sequence[Emote]) -> None:
+    def __init__(self, emotes: Sequence[Emote], shape: Shape = OWN_SHAPE) -> None:
+        self._shape = shape
         self._emotes = sorted(emotes, key=lambda emote: emote.top)
         self._tops = [emote.top for emote in self._emotes]
         self._tallest = max((emote.height for emote in self._emotes), default=0)
@@ -461,7 +516,7 @@ class _Moving:
         being at `top` in the column: each as where it is in their order,
         with the frame of its animation it is on."""
         first = bisect.bisect_left(self._tops, top - self._tallest + 1)
-        last = bisect.bisect_left(self._tops, top + HEIGHT - BOTTOM_PIXELS)
+        last = bisect.bisect_left(self._tops, top + self._shape.size[1] - self._shape.bottom)
         return tuple(
             (index, self._animation(emote).index(second))
             for index, emote in enumerate(self._emotes[first:last], start=first)
@@ -472,16 +527,17 @@ class _Moving:
         """Draws the ones a frame shows (see shown) into it."""
         for index, at in shown:
             emote = self._emotes[index]
-            _lay_over(frame, self._animation(emote).frames[at], emote.top - top, emote.left)
+            picture = self._animation(emote).frames[at]
+            _lay_over(frame, picture, emote.top - top, emote.left, len(frame) - self._shape.bottom)
 
 
-def _lay_over(frame: np.ndarray, picture: np.ndarray, top: int, left: int) -> None:
+def _lay_over(frame: np.ndarray, picture: np.ndarray, top: int, left: int, rows: int) -> None:
     """Draws a picture over a frame, its top left corner `top` and `left`
-    pixels into it - as much of it as is above the room under the newest
-    line, where the lines still to come are."""
+    pixels into it - as much of it as is in the frame's first `rows`, above
+    the room under the newest line, where the lines still to come are."""
     height, width = picture.shape[:2]
-    upper, lower = max(top, 0), min(top + height, HEIGHT - BOTTOM_PIXELS)
-    first, last = max(left, 0), min(left + width, WIDTH)
+    upper, lower = max(top, 0), min(top + height, rows)
+    first, last = max(left, 0), min(left + width, frame.shape[1])
     if lower <= upper or last <= first:
         return
     over = picture[upper - top : lower - top, first - left : last - left].astype(np.float32) / 255
@@ -507,9 +563,10 @@ def _told(pictures: Iterable[bytes], count: int, progress: Callable[[float], Non
 # -- the encoding --------------------------------------------------------------
 
 
-def _raw_frames(fps: int = FPS) -> tuple[str, ...]:
+def _raw_frames(fps: int = FPS, shape: Shape = OWN_SHAPE) -> tuple[str, ...]:
     """ffmpeg's input, as frames() hands them on: from its standard input."""
-    return ("-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{WIDTH}x{HEIGHT}", "-framerate", str(fps), "-i", "-")
+    width, height = shape.size
+    return ("-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{width}x{height}", "-framerate", str(fps), "-i", "-")
 
 
 def _encode(arguments: Sequence[str], frames: Iterable[bytes], output: Path) -> int:
@@ -725,13 +782,44 @@ def _even(value: float) -> int:
     return max(2, 2 * round(value / 2))
 
 
-def placement(width: int, height: int, side: str) -> tuple[int, int, int, int]:
-    """Where chat goes in a picture `width` x `height`, on `side`: the size
-    of its column, and where the column's top left corner is."""
-    scale = min(width, height) / 1080
-    across, down, margin = _even(WIDTH * scale), _even(HEIGHT * scale), _even(MARGIN_PIXELS * scale)
-    left = width - across - margin if side == "right" else margin
-    return across, down, max(left, 0), max(height - down - margin, 0)
+class Placed(NamedTuple):
+    """Chat drawn into a picture: where its column's top left corner is in
+    the picture, how wide and how tall it is there, and the frames it is
+    made from (see Shape), which are made that size."""
+
+    left: int
+    top: int
+    across: int
+    down: int
+    shape: Shape
+
+
+def placement(width: int, height: int, box: Sequence[float] | None = None) -> Placed:
+    """Where chat goes in a picture `width` x `height`, and how large: in
+    `box` - its left, top, width and height as shares of the picture's (see
+    clip_trim.ChatBox), the width setting how large its text is and the
+    height how much of the column shows, within what SCALE_LEAST,
+    SCALE_MOST and COLUMN_LEAST allow and the picture holds - or, with no
+    box, at the bottom on the right."""
+    if box is None:
+        scale = min(width, height) / 1080
+        across, down, margin = _even(WIDTH * scale), _even(HEIGHT * scale), _even(MARGIN_PIXELS * scale)
+        left, top = max(width - across - margin, 0), max(height - down - margin, 0)
+        return Placed(left, top, across, down, Shape(HEIGHT, _density(scale)))
+    left_share, top_share, width_share, height_share = box
+    scale = min(max(width_share * width / WIDTH, SCALE_LEAST), SCALE_MOST, width / WIDTH)
+    column = min(max(round(height_share * height / scale), COLUMN_LEAST), math.floor(height / scale))
+    across = min(_even(WIDTH * scale), width - width % 2)
+    down = min(_even(column * scale), height - height % 2)
+    left = min(max(round(left_share * width), 0), width - across)
+    top = min(max(round(top_share * height), 0), height - down)
+    return Placed(left, top, across, down, Shape(column, _density(scale)))
+
+
+def _density(scale: float) -> int:
+    """How many pixels for one of the page chat drawn `scale` times as large
+    as the page has it is made with: enough never to be made larger."""
+    return 1 if scale <= 1 else 2
 
 
 def bitrate(picture: Footage) -> int:
@@ -746,17 +834,17 @@ def burn(
     start: float,
     duration: float,
     output: Path,
-    side: str,
+    box: Sequence[float] | None = None,
     background: str | None = None,
     progress: Callable[[float], None] | None = None,
 ) -> str:
     """Cuts `duration` seconds of `source` out from its second `start`,
     with the chat of `lines` (counted from there, see lines_from) drawn
-    into its picture on `side`, into `output`, and returns the encoder the
-    picture was encoded with. Unlike a cut that is copied, it begins on the
-    very frame at `start`. `progress` is as for render."""
+    into its picture in `box` (see placement), into `output`, and returns
+    the encoder the picture was encoded with. Unlike a cut that is copied,
+    it begins on the very frame at `start`. `progress` is as for render."""
     picture = footage(source)
-    across, down, left, top = placement(picture.width, picture.height, side)
+    placed = placement(picture.width, picture.height, box)
     encoder, options = video_encoder()
     rate = bitrate(picture)
     # fmt: off
@@ -764,8 +852,8 @@ def burn(
         # Asked to start at its second `start`, ffmpeg decodes from the frame
         # a cut could begin on before it and leaves out what comes before.
         "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
-        *_raw_frames(),
-        "-filter_complex", _graph(across, down, left, top, background), "-map", "[picture]", "-map", "0:a?",
+        *_raw_frames(FPS, placed.shape),
+        "-filter_complex", _graph(placed, background), "-map", "[picture]", "-map", "0:a?",
         # Laid over the footage, chat would keep its last picture going on
         # for as long as there are frames of chat after the footage's last.
         "-t", f"{duration:.3f}",
@@ -777,19 +865,20 @@ def burn(
     # fmt: on
     html = page_html(lines_for_clip(lines, duration))
     times = frame_times(duration)
-    with _one_at_a_time, drawn_column(html) as column:
-        _encode(arguments, _told(frames(column, times), len(times), progress), output)
+    with _one_at_a_time, drawn_column(html, placed.shape.density) as column:
+        _encode(arguments, _told(frames(column, times, placed.shape), len(times), progress), output)
     return encoder
 
 
-def _graph(across: int, down: int, left: int, top: int, background: str | None) -> str:
+def _graph(placed: Placed, background: str | None) -> str:
     """ffmpeg's filters for chat drawn into a picture: the frames of chat
     made the size of its column there, the colour behind it if there is
     one, and the one laid over the other. Where the frames of chat run out,
     the last of them stays."""
+    left, top, across, down, shape = placed
     steps = []
     chat, base = "[1:v]", "[0:v]"
-    if (across, down) != (WIDTH, HEIGHT):
+    if (across, down) != shape.size:
         steps.append(f"{chat}scale={across}:{down}:flags=area[chat]")
         chat = "[chat]"
     if background:
