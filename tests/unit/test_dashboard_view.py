@@ -680,6 +680,55 @@ class TestACutInWords:
         assert view.trim_words(state, stretch=(5025, 5071)) == view.trim_words(state)
 
 
+class TestATranscriptInWords:
+    """What the page says beside a clip of what is said in its footage."""
+
+    @pytest.mark.parametrize("state", [view.TRANSCRIPT_NONE, view.TRANSCRIPT_MAKING, view.TRANSCRIPT_FAILED])
+    def test_every_state_without_lines_to_show_is_said_in_a_sentence(self, state):
+        words = view.transcript_words(state)
+
+        assert words[0].isupper() and words.endswith(".")
+
+    def test_one_that_is_there_is_its_lines_and_needs_no_words(self):
+        assert view.transcript_words(view.TRANSCRIPT_READY) == ""
+
+    def test_one_with_no_lines_in_it_says_why_there_are_none(self):
+        assert view.transcript_words(view.TRANSCRIPT_READY, said=False) == (
+            "Nothing is said in the footage, or nothing the speech model could make out."
+        )
+
+    def test_one_being_made_says_how_far_it_has_got(self):
+        assert view.transcript_words(view.TRANSCRIPT_MAKING, done=0.427) == "Transcribing: 42 %."
+        # Before the first of it is heard, the model may still be loading.
+        assert "speech model has to be loaded" in view.transcript_words(view.TRANSCRIPT_MAKING)
+
+    @pytest.mark.parametrize("state", [view.TRANSCRIPT_NONE, view.TRANSCRIPT_FAILED])
+    def test_nothing_else_says_how_far_it_has_got(self, state):
+        assert view.transcript_words(state, done=0.5) == view.transcript_words(state)
+
+
+class TestClipTimeInWords:
+    """A time of a line of the transcript, written as the Trim dialog writes
+    a clip time: to the tenth of a second, with a sign outside the clip."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "words"),
+        [(0, "0:00.0"), (3.24, "0:03.2"), (12.56, "0:12.6"), (75, "1:15.0"), (40, "0:40.0")],
+    )
+    def test_a_time_in_the_clip_is_how_far_into_it(self, seconds, words):
+        assert view.clip_time_words(seconds, 90.0) == words
+
+    def test_one_before_the_clip_is_how_long_before_it_with_a_minus_sign(self):
+        assert view.clip_time_words(-12.5, 40.0) == f"{view.MINUS}0:12.5"
+        assert view.MINUS == "\N{MINUS SIGN}"
+
+    def test_one_after_the_clip_is_how_long_after_its_end(self):
+        assert view.clip_time_words(43.5, 40.0) == "+0:03.5"
+
+    def test_without_the_clips_length_nothing_is_taken_to_be_after_it(self):
+        assert view.clip_time_words(95.0, None) == "1:35.0"
+
+
 class TestSettingsInWords:
     def test_nothing_is_said_while_every_channel_goes_by_the_settings_for_all(self):
         assert view.own_settings_words([]) is None

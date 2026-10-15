@@ -3,11 +3,14 @@
     Where the stretch starts and ends is set on a strip, with a handle at
     either end, or typed; its chat can go with it - drawn into its picture,
     or as a video of its own to lay over it - moved against the picture if
-    it does not sit right, with its animated emotes moving. The script opens
+    it does not sit right, with its animated emotes moving. Drawn into the
+    picture, it goes where its box over the picture is put, and is as large
+    as that box. The script opens
     this and draws the strip in it: a moment's from the one on the page, a
     recording's - which is hours, so the strip shows a window of it around
     the stretch - from what the service draws for that window. -#}
 <dialog class="ch-dialog trim" aria-labelledby="trim-title-{{ trim.id }}" data-trim="{{ trim.url }}" data-lead="{{ trim.lead }}" data-last="{{ trim.last }}" data-min="{{ trim.min_seconds }}"
+  {%- if trim.chat %} data-chat-column='{{ trim.chat_column | tojson }}'{% endif %}
   {%- if trim.window %} data-window="{{ trim.window.seconds }}" data-around="{{ trim.window.around }}" data-strip-url="{{ trim.window.strip_url }}"{% endif %}>
   <div class="ch-dialog-head">
     <h2 class="title" id="trim-title-{{ trim.id }}">Trim</h2>
@@ -19,7 +22,18 @@
     <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-trim-close>Close</button>
   </div>
   <div class="trim-view">
-    <div class="player"><video preload="none" playsinline data-trim-clip data-src="{{ trim.video_url }}"></video></div>
+    <div class="player"><video preload="none" playsinline data-trim-clip data-src="{{ trim.video_url }}"></video>
+      {%- if trim.chat %}
+      {#- Chat drawn into the picture: this box over it is where it goes,
+          dragged there, and how large it is, set by dragging a corner - its
+          width says how large the text is, its height how much of the
+          column shows. The script moves the chat beside the player into
+          it, drawn as it will be. -#}
+      <div class="trim-overlay" role="group" aria-label="Chat in the picture: drag it to where it goes, or a corner to resize it" hidden data-trim-overlay>
+        {%- for corner in ("nw", "ne", "sw", "se") %}<span class="trim-corner is-{{ corner }}" data-trim-corner="{{ corner }}"></span>{% endfor -%}
+      </div>
+      {%- endif %}
+    </div>
     {% if trim.chat %}
     <div class="trim-chat" role="group" aria-label="Chat as its video will show it" hidden data-trim-chat-pane>
       {#- A recording's chat is fetched a stretch at a time, as beside the
@@ -66,8 +80,7 @@
         background, to put beside it. The script keeps what was chosen
         last. -#}
     <select class="ch-select trim-where" aria-label="Where the chat goes" disabled data-trim-where>
-      <option value="{{ trim.chat_places.right }}">in the video, on the right</option>
-      <option value="{{ trim.chat_places.left }}">in the video, on the left</option>
+      <option value="{{ trim.chat_places.video }}">in the video</option>
       <option value="{{ trim.chat_places.apart }}">as a video of its own</option>
     </select>
     <label class="trim-shift" title="Where a message is placed against the picture is a guess. This moves all of them, for this video only. Double-click to put it back.">
@@ -86,7 +99,7 @@
   </div>
   {% endif %}
   <p class="trim-note">Cut without re-encoding, so the video begins on the last frame a cut can begin on before the start you set: up to a couple of seconds earlier.
-    {%- if trim.chat %} With chat in it, its picture is encoded anew instead: it begins where you set it, and takes a while for a long stretch. Chat is lined up with where the video really begins{% if trim.window %}; as a see-through video of its own it can go with a stretch of up to {{ trim.window.chat_most }}{% endif %}.{% endif %}
+    {%- if trim.chat %} With chat in it, its picture is encoded anew instead: it begins where you set it, and takes a while for a long stretch. Drag the chat over the picture to where it goes, and a corner of it to resize it: its width sets how large the text is, its height how many messages show. Chat is lined up with where the video really begins{% if trim.window %}; as a see-through video of its own it can go with a stretch of up to {{ trim.window.chat_most }}{% endif %}.{% endif %}
     {%- if trim.window %} A recording keeps one cut at a time: the next one takes its place, so download each as it is made.{% endif %}</p>
   <div class="trim-foot">
     <div class="trim-said">
@@ -97,6 +110,9 @@
     </div>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
+    {#- A moment's transcript as subtitles timed to the video that is ready,
+        where it has one with something said while the video runs. -#}
+    <a class="ch-btn ch-btn-compact" download hidden title="What is said in the video, as subtitles (.srt) that start with it: the moment's transcript, as it was put right beside the clip" data-trim-subtitles>Download subtitles</a>
     {%- if trim.chat %}
     {#- For a video that was taken without its chat: the chat of the stretch
         it holds - not of the one set above, if that has been moved since -

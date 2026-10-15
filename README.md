@@ -47,6 +47,10 @@ stream
   corner (the stretch is then encoded anew, on the graphics card where there is one), or as a video
   of its own - transparent to lay over it, or on a colour to put beside it. A stretch of a recorded
   stream is cut out the same way, half an hour with its chat in it as readily as a clip.
+- **Writes down what is said, as subtitles.** A clip's transcript is made on request, on the
+  machine: what is said in it and in the footage around it, line by line with its times, beside the
+  clip to be put right while it plays. It is downloaded as subtitles (.srt) that line up with the
+  trimmed video - or with the whole file - in any editor.
 - **Records a whole stream when asked.** A channel's stream can be recorded whole from the
   Channels page - tracked for clips or not, started ahead of the stream or in the middle of it -
   until it is stopped or the stream is over. It ends up as one video file, and the Recordings page
@@ -177,7 +181,8 @@ what, and the short manual checklist for the parts that only exist against the r
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
-| `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps. |
+| `subtitles.py` | A clip's transcript as subtitles: lines a subtitle long made of the words the speech model heard, put right on the review page, written out as SubRip timed to the video they go with. |
+| `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps - and the speech model a transcript is made with. |
 
 [CLAUDE.md](CLAUDE.md) holds the detailed development notes: design decisions, what had to be
 worked out about Kick's behaviour and why, and the operational quirks found along the way.

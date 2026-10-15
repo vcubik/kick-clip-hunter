@@ -623,7 +623,13 @@ class TestOpenMoment:
         # Seconds from the clip's first frame; the first line came before it.
         assert [line.attrs["data-at"] for line in lines] == ["-15", "17", "21.8"]
         assert ["is-moment" in line.classes for line in lines] == [False, True, True]
-        assert article.one("div", class_="chat-head").text == "Chat replayed with the clip"
+        # Beside a clip, chat is the first of two tabs, and the one shown.
+        sides = article.one("div", role="tablist").find("button", role="tab")
+        assert [(side.text, side.attrs["aria-selected"]) for side in sides] == [
+            ("Chat", "true"),
+            ("Transcript", "false"),
+        ]
+        assert "hidden" not in article.one("div", data_side_pane="chat").attrs
 
     async def test_without_a_clip_the_chat_is_simply_there_to_read(self, service):
         add_moment("channel_a", detected_at=T0)
@@ -1900,19 +1906,40 @@ class TestTrimming:
         assert colour.attrs["value"] == clip_trim.DEFAULT_CHAT_BACKGROUND and "disabled" in colour.attrs
         assert "checked" not in dialog.one("input", data_trim_background=True).attrs
 
-    async def test_chat_can_go_into_the_video_on_either_side_or_be_a_video_of_its_own(self, service, footage):
+    async def test_chat_can_go_into_the_video_or_be_a_video_of_its_own(self, service, footage):
         self.clip_with_chat(footage)
 
         dialog = await self.dialog(service)
 
         where = dialog.one("select", data_trim_where=True)
         assert [(option.attrs["value"], option.text) for option in where.find("option")] == [
-            ("right", "in the video, on the right"),
-            ("left", "in the video, on the left"),
+            ("video", "in the video"),
             ("apart", "as a video of its own"),
         ]
         # Nowhere to choose until chat is wanted.
         assert "disabled" in where.attrs
+
+    async def test_in_the_video_it_goes_where_its_box_over_the_picture_is_put(self, service, footage):
+        self.clip_with_chat(footage)
+
+        dialog = await self.dialog(service)
+
+        overlay = dialog.one("div", class_="player").one("div", data_trim_overlay=True)
+        # Shown by the script, once chat is to go into the video.
+        assert "hidden" in overlay.attrs
+        assert [corner.attrs["data-trim-corner"] for corner in overlay.find("span")] == ["nw", "ne", "sw", "se"]
+        # What the script keeps the box to, as the service keeps chat drawn
+        # into a picture to.
+        assert json.loads(dialog.attrs["data-chat-column"]) == {
+            "width": chat_video.WIDTH,
+            "height": chat_video.HEIGHT,
+            "margin": chat_video.MARGIN_PIXELS,
+            "scale_least": chat_video.SCALE_LEAST,
+            "scale_most": chat_video.SCALE_MOST,
+            "least": chat_video.COLUMN_LEAST,
+            "fade": chat_video.FADE_PIXELS,
+            "bottom": chat_video.BOTTOM_PIXELS,
+        }
 
     async def test_there_is_no_choice_whether_animated_emotes_move(self, service, footage):
         # They always do (see tests/integration/test_chat_video.py).
@@ -1966,6 +1993,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "subtitles_url": None,
             "cut": None,
             "chat_later": False,
         }
@@ -2172,7 +2200,7 @@ class TestTrimming:
 
         # A second before the clip is second 3 of the file: a copied cut
         # would begin at second 2.
-        response = await self.ask(service, moment_id, start=-1, end=3, chat=True, chat_where="right")
+        response = await self.ask(service, moment_id, start=-1, end=3, chat=True, chat_where="video")
 
         assert response.json()["state"] == "burning"
         await service.settle()
@@ -2188,13 +2216,26 @@ class TestTrimming:
         assert (await service.client.get(state["video_url"])).status_code == 200
         assert service.moments()[0]["downloaded_at"] is not None
 
+    async def test_chat_drawn_in_goes_where_its_box_was_put(self, service, browser, tmp_path):
+        # Wide enough a picture for chat all over it to be larger than the
+        # page's column, where it would be smaller without the box.
+        moment_id = self.clip_with_chat(make_video(tmp_path / "wide.mp4", 12, keyframe_every=2.0, size="640x360"))
+        box = {"left": 0.0, "top": 0.0, "width": 1.0, "height": 1.0}
+
+        await self.ask(service, moment_id, start=-1, end=3, chat=True, chat_where="video", chat_box=box)
+        await service.settle()
+
+        assert (await self.state(service, moment_id))["state"] == "ready"
+        # So drawn twice as fine.
+        assert browser.densities == [2]
+
     async def test_a_cut_taken_without_chat_can_have_it_drawn_in_later(self, service, footage, browser):
         moment_id = self.clip_with_chat(footage)
         await self.ask(service, moment_id, start=-1, end=3)
         await service.settle()
         copied = probe(self.VIDEO)["duration"]
 
-        response = await self.ask_chat(service, moment_id, chat_where="left")
+        response = await self.ask_chat(service, moment_id, chat_where="video")
 
         assert response.status_code == 200 and response.json()["state"] == "burning"
         await service.settle()
@@ -2213,7 +2254,7 @@ class TestTrimming:
         browser.failure = RuntimeError("the browser would not start")
 
         with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
-            await self.ask_chat(service, moment_id, chat_where="right")
+            await self.ask_chat(service, moment_id, chat_where="video")
             await service.settle()
 
         state = await self.state(service, moment_id)
@@ -2406,6 +2447,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_FAILED),
             "video_url": None,
             "chat_url": None,
+            "subtitles_url": None,
             "cut": None,
             "chat_later": False,
         }
@@ -2434,6 +2476,7 @@ class TestTrimming:
             {"chat_shift": "later"},
             {"chat_background": "navy"},
             {"chat_background": "#000; background: url(//example.com)"},
+            {"chat_box": {"left": 0.8, "top": 0.1, "width": 0.4, "height": 0.4}},
         ],
         ids=[
             "too-short",
@@ -2447,6 +2490,7 @@ class TestTrimming:
             "words",
             "colour-name",
             "more-than-a-colour",
+            "box-past-the-picture",
         ],
     )
     async def test_a_stretch_that_cannot_be_cut_is_refused(self, service, footage, asked):

@@ -6,10 +6,11 @@
 // player from the strip under it, replays chat in step with the clip, runs
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
 // the dialog a stretch of footage is cut out for an editor in - a moment's or
-// a recording's - saves the Settings page's form, starts and stops the
-// recording of a whole stream, replays a recording's chat beside it, puts
-// what chat did over all of it under it, looks for moments in it, and keeps
-// the Health page saying what holds now.
+// a recording's - has a moment's transcript made, follows it as the clip
+// plays and saves what is put right in it, saves the Settings page's form,
+// starts and stops the recording of a whole stream, replays a recording's
+// chat beside it, puts what chat did over all of it under it, looks for
+// moments in it, and keeps the Health page saying what holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -340,7 +341,8 @@
     one("[data-chat-foot]", article).textContent = box.querySelector("[data-at]") ? `In step with the clip, at ${words}` : "";
   }
 
-  // Brings the transport, the playhead and the chat in line with the player.
+  // Brings the transport, the playhead, the chat and the transcript in line
+  // with the player.
   function paint(video) {
     const article = video.closest(".moment");
     if (!article) return;
@@ -349,6 +351,7 @@
     const words = timeWords(time, span);
     const length = span ? span.clip : Number.isFinite(video.duration) ? video.duration : 0;
     const playing = !video.paused && !video.ended;
+    followTranscript(article, time);
 
     one("[data-now]", article).textContent = words;
     one("[data-length]", article).textContent = clock(length);
@@ -545,6 +548,10 @@
   // Where chat goes is kept from one cut to the next, and from one visit to
   // the next where the browser lets the page remember it.
   const TRIM_WHERE_KEY = "clip-hunter-chat-where";
+  // So is where in the picture chat drawn into it goes, and how large.
+  const TRIM_BOX_KEY = "clip-hunter-chat-box";
+  // What a picture is taken to be until its video says.
+  const TRIM_PICTURE = { width: 1920, height: 1080 };
   // Past its end by less than this, the player ran there; by more, it was put there.
   const TRIM_RAN_PAST_SECONDS = 1;
   // An end of the stretch closer than this share of the window's length to
@@ -558,6 +565,7 @@
   let trimNotATime = "";
   let trimWatch = null;
   let trimDrag = null; // the handle that is held: "from" or "to"
+  let trimHold = null; // the box of chat over the picture, while it is dragged
   let trimGrab = 0; // how far from the handle's time it was taken hold of
   let trimWas = 0; // where the dialog's player was when last looked at
 
@@ -581,7 +589,7 @@
       end,
       lead,
       windowed,
-      clip: windowed ? last : Number(dialog.dataset.clip),
+      clip: windowed ? last : Number(dialog.dataset.clipSeconds),
       first: windowed ? 0 : Math.max(-lead, start),
       last: windowed ? last : Math.min(last, end),
     };
@@ -871,7 +879,7 @@
       const trace = strip.closest("[data-trace]");
       dialog.dataset.start = trace.dataset.start;
       dialog.dataset.end = trace.dataset.end;
-      dialog.dataset.clip = trace.dataset.clipSeconds;
+      dialog.dataset.clipSeconds = trace.dataset.clipSeconds;
       const copies = (parts) => parts.map((part) => part.cloneNode(true));
       const drawn = all(":scope > *", strip).filter((part) => !part.matches("[data-hover], [data-playhead], [data-flag], .ch-note"));
       one("[data-trim-drawing]", dialog).replaceChildren(...copies(drawn));
@@ -884,6 +892,10 @@
       try {
         const kept = localStorage.getItem(TRIM_WHERE_KEY);
         if (Array.from(where.options).some((option) => option.value === kept)) where.value = kept;
+        if (dialog.dataset.box === undefined) {
+          const box = JSON.parse(localStorage.getItem(TRIM_BOX_KEY) || "null");
+          if (isTrimBox(box)) dialog.dataset.box = JSON.stringify(box);
+        }
       } catch {
         // no storage here: the first choices stand
       }
@@ -898,6 +910,7 @@
     }
     trimWas = Number(dialog.dataset.from);
     video.currentTime = trimWas + (Number(dialog.dataset.lead) || 0);
+    placeTrimChat(dialog);
     if (windowed) fitTrimWindow(dialog, { anew: true });
     else paintTrim(dialog);
     askTrim(dialog);
@@ -906,6 +919,8 @@
   function leaveTrim(dialog) {
     trimClip(dialog).pause();
     clearTimeout(trimWatch);
+    // The cut it made has subtitles of its own beside the clip.
+    if (dialog.closest(".moment") && one("[data-transcript] [data-transcript-lines]")) refreshTranscript();
   }
 
   // Whether the chat goes with the video: its lines are then shown beside
@@ -918,7 +933,145 @@
       one(option, dialog).disabled = !box.checked;
     }
     paintTrimBackground(dialog);
+    placeTrimChat(dialog);
     paintTrim(dialog);
+  }
+
+  // -- chat drawn into the picture: a box over it, dragged to where chat
+  // goes and by a corner to how large it is. Its width says how large the
+  // text is, its height how much of the column shows - in shares of the
+  // picture, kept to what the service keeps chat drawn into a picture to
+  // (chat_video.placement), whose numbers the dialog carries.
+
+  function trimColumn(dialog) {
+    return JSON.parse(dialog.dataset.chatColumn);
+  }
+
+  function trimPicture(dialog) {
+    const video = trimClip(dialog);
+    return video.videoWidth ? { width: video.videoWidth, height: video.videoHeight } : TRIM_PICTURE;
+  }
+
+  function isTrimBox(box) {
+    return Boolean(box) && ["left", "top", "width", "height"].every((side) => Number.isFinite(box[side]));
+  }
+
+  // Where chat goes when nothing else was said: as the service puts it.
+  function firstTrimBox(dialog) {
+    const column = trimColumn(dialog);
+    const picture = trimPicture(dialog);
+    const scale = Math.min(picture.width, picture.height) / 1080;
+    const [across, down, margin] = [column.width, column.height, column.margin].map((pixels) => pixels * scale);
+    return {
+      left: (picture.width - across - margin) / picture.width,
+      top: (picture.height - down - margin) / picture.height,
+      width: across / picture.width,
+      height: down / picture.height,
+    };
+  }
+
+  // A box as chat can be drawn: its text no smaller or larger than it may
+  // be, a few lines of it at least, within the picture. `anchor` is the
+  // corner that stays where it is while another is dragged.
+  function fitTrimBox(dialog, box, anchor = null) {
+    const column = trimColumn(dialog);
+    const picture = trimPicture(dialog);
+    const share = column.width / picture.width;
+    const width = clamp(box.width, column.scale_least * share, Math.min(column.scale_most * share, 1));
+    const scale = (width * picture.width) / column.width;
+    const height = clamp(box.height, Math.min((column.least * scale) / picture.height, 1), 1);
+    let { left, top } = box;
+    if (anchor) {
+      left = anchor.west ? anchor.x : anchor.x - width;
+      top = anchor.north ? anchor.y : anchor.y - height;
+    }
+    return { left: clamp(left, 0, 1 - width), top: clamp(top, 0, 1 - height), width, height };
+  }
+
+  function trimBox(dialog) {
+    const kept = dialog.dataset.box && JSON.parse(dialog.dataset.box);
+    return fitTrimBox(dialog, isTrimBox(kept) ? kept : firstTrimBox(dialog));
+  }
+
+  // Where the picture is drawn in the player, which keeps its shape.
+  function trimShown(dialog) {
+    const frame = trimClip(dialog).getBoundingClientRect();
+    const picture = trimPicture(dialog);
+    const fit = Math.min(frame.width / picture.width, frame.height / picture.height);
+    const width = picture.width * fit;
+    const height = picture.height * fit;
+    return { x: (frame.width - width) / 2, y: (frame.height - height) / 2, width, height };
+  }
+
+  // Shows chat over the picture where it is drawn into it - the chat beside
+  // the player moved into the box, as large as it will be - or beside the
+  // player again for a video of its own.
+  function placeTrimChat(dialog) {
+    const overlay = one("[data-trim-overlay]", dialog);
+    if (!overlay) return;
+    const pane = one("[data-trim-chat-pane]", dialog);
+    const inside = one("[data-trim-chat]", dialog).checked && one("[data-trim-where]", dialog).value === "video";
+    overlay.hidden = !inside;
+    if (!inside) {
+      if (pane.parentElement === overlay) one(".trim-view", dialog).append(pane);
+      for (const property of ["--chat-scale", "--chat-fade", "height"]) pane.style.removeProperty(property);
+      return;
+    }
+    if (pane.parentElement !== overlay) overlay.prepend(pane);
+    const box = trimBox(dialog);
+    const shown = trimShown(dialog);
+    const column = trimColumn(dialog);
+    Object.assign(overlay.style, {
+      left: `${shown.x + box.left * shown.width}px`,
+      top: `${shown.y + box.top * shown.height}px`,
+      width: `${box.width * shown.width}px`,
+      height: `${box.height * shown.height}px`,
+    });
+    // The column as the page chat is laid out on has it, made as large as
+    // the box: its pixels to one of the box's.
+    const scale = (box.width * shown.width) / column.width;
+    const height = (box.height * shown.height) / scale;
+    pane.style.setProperty("--chat-scale", String(scale));
+    pane.style.setProperty("--chat-fade", `${Math.min(column.fade, Math.floor(height / 4))}px`);
+    pane.style.height = `${height}px`;
+  }
+
+  function holdTrimBox(overlay, event) {
+    const dialog = trimOf(overlay);
+    const corner = event.target.closest("[data-trim-corner]")?.dataset.trimCorner ?? null;
+    overlay.setPointerCapture(event.pointerId);
+    trimHold = { dialog, corner, x: event.clientX, y: event.clientY, box: trimBox(dialog), shown: trimShown(dialog) };
+  }
+
+  function dragTrimBox(event) {
+    const { dialog, corner, box, shown } = trimHold;
+    const dx = (event.clientX - trimHold.x) / shown.width;
+    const dy = (event.clientY - trimHold.y) / shown.height;
+    let moved;
+    if (!corner) {
+      moved = fitTrimBox(dialog, { ...box, left: box.left + dx, top: box.top + dy });
+    } else {
+      // The corner held follows the pointer; the one across from it stays.
+      const west = corner.includes("w");
+      const north = corner.includes("n");
+      const anchor = {
+        x: west ? box.left + box.width : box.left,
+        y: north ? box.top + box.height : box.top,
+        west: !west,
+        north: !north,
+      };
+      const x = clamp((west ? box.left : box.left + box.width) + dx, 0, 1);
+      const y = clamp((north ? box.top : box.top + box.height) + dy, 0, 1);
+      moved = fitTrimBox(dialog, { ...box, width: Math.abs(anchor.x - x), height: Math.abs(anchor.y - y) }, anchor);
+    }
+    dialog.dataset.box = JSON.stringify(moved);
+    placeTrimChat(dialog);
+    paintTrim(dialog);
+  }
+
+  function letGoOfTrimBox() {
+    keepTrimChoice(TRIM_BOX_KEY, trimHold.dialog.dataset.box ?? "");
+    trimHold = null;
   }
 
   function keepTrimChoice(key, value) {
@@ -961,7 +1114,12 @@
       const span = trimSpan(dialog);
       cut.textContent = `The video holds ${trimWords(trim.cut.from, span)} to ${trimWords(trim.cut.to, span)} (${(trim.cut.to - trim.cut.from).toFixed(1)} s).`;
     }
-    for (const [part, url] of [["[data-trim-video]", trim.video_url], ["[data-trim-chat-video]", trim.chat_url]]) {
+    const files = [
+      ["[data-trim-video]", trim.video_url],
+      ["[data-trim-chat-video]", trim.chat_url],
+      ["[data-trim-subtitles]", trim.subtitles_url],
+    ];
+    for (const [part, url] of files) {
       const link = one(part, dialog);
       link.hidden = !url;
       if (url) link.href = url;
@@ -1009,6 +1167,7 @@
       chat_where: chat ? one("[data-trim-where]", dialog).value : null,
       chat_shift: shift ? Number(shift.value) : 0,
       chat_background: chat ? trimBackground(dialog) : null,
+      chat_box: chat && one("[data-trim-where]", dialog).value === "video" ? trimBox(dialog) : null,
     });
     if (!dialog.isConnected) return; // another moment was opened meanwhile
     if (!response || !response.ok) {
@@ -1034,6 +1193,7 @@
       chat_where: one("[data-trim-where]", dialog).value,
       chat_shift: Number(shift.value),
       chat_background: trimBackground(dialog),
+      chat_box: one("[data-trim-where]", dialog).value === "video" ? trimBox(dialog) : null,
     });
     if (!dialog.isConnected) return;
     if (!response || !response.ok) {
@@ -1054,11 +1214,163 @@
     if (row) row.hidden = false;
   }
 
+  // ---- What is said in the clip -----------------------------------------
+  //
+  // Beside a clip, on a tab next to its chat, is its transcript: what is
+  // said in its footage, line by line with its times. The service writes it
+  // down when asked, which takes it a while, so the tab is fetched again
+  // every couple of seconds until it is there. A line's time plays the clip
+  // from there, the line being said is marked as the clip plays, and what
+  // is put right in a line is saved as the line is left. The subtitles made
+  // of it are downloaded from the tab - and from the Trim dialog, beside
+  // the cut they are timed to.
+
+  const TRANSCRIPT_POLL_MS = 2000;
+  let transcriptWatch = null;
+  // The tab shown beside a clip, kept from one moment to the next.
+  let side = "chat";
+
+  // A line is one row until more is in it - which can only be measured
+  // while it is on screen.
+  function growLines(root) {
+    for (const field of all("[data-transcript-line]", root)) {
+      if (!field.closest("[hidden]")) grow(field);
+    }
+  }
+
+  function showSide(article, which) {
+    const tabs = all("[data-side]", article);
+    if (!tabs.length) return;
+    side = which;
+    for (const tab of tabs) tab.setAttribute("aria-selected", String(tab.dataset.side === which));
+    for (const pane of all("[data-side-pane]", article)) pane.hidden = pane.dataset.sidePane !== which;
+    growLines(article);
+    // Chat that arrived while it was out of sight is at the bottom.
+    const box = one("[data-chat]", article);
+    if (which === "chat" && box) box.scrollTop = box.scrollHeight;
+  }
+
+  function chooseSide(tab) {
+    const article = tab.closest(".moment");
+    showSide(article, tab.dataset.side);
+    const video = one("[data-clip]", article);
+    if (video) paint(video);
+  }
+
+  // Marks the line of the transcript being said at a clip time and keeps it
+  // in sight - unless a line is being put right, which stays where it is.
+  function followTranscript(article, time) {
+    const list = one("[data-transcript-lines]", article);
+    if (!list) return;
+    let now = null;
+    for (const line of list.children) {
+      const said = Number(line.dataset.from) <= time && time < Number(line.dataset.to);
+      line.classList.toggle("is-now", said);
+      if (said) now = line;
+    }
+    if (!now || list.closest("[hidden]") || list.contains(document.activeElement)) return;
+    if (now.offsetTop < list.scrollTop || now.offsetTop + now.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = now.offsetTop - list.clientHeight / 3;
+    }
+  }
+
+  function playLine(button) {
+    const video = clipOf(button);
+    if (video) goTo(video, Number(button.closest("[data-from]").dataset.from), { play: true });
+  }
+
+  // The tab as the service has it now, in place of the one on the page.
+  async function refreshTranscript() {
+    const current = one("[data-transcript]");
+    if (!current) return;
+    let markup = null;
+    try {
+      const response = await fetch(current.dataset.page);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // what is on the page stays, and is asked about again
+    }
+    const fresh = markup && one("[data-transcript]", new DOMParser().parseFromString(markup, "text/html"));
+    const now = one("[data-transcript]");
+    // Another moment may be open by the time the answer is here; and a
+    // line that is being put right is not taken away from under the cursor.
+    if (!fresh || !now || now.dataset.page !== fresh.dataset.page || now.contains(document.activeElement)) return;
+    now.replaceWith(fresh);
+    growLines(fresh);
+    const video = clipOf(fresh);
+    if (video) paint(video);
+    watchTranscript();
+  }
+
+  function watchTranscript() {
+    const busy = Boolean(one("[data-transcript][data-busy]"));
+    if (busy && transcriptWatch === null) {
+      transcriptWatch = setInterval(refreshTranscript, TRANSCRIPT_POLL_MS);
+    } else if (!busy && transcriptWatch !== null) {
+      clearInterval(transcriptWatch);
+      transcriptWatch = null;
+    }
+  }
+
+  async function transcribe(button) {
+    const pane = button.closest("[data-transcript]");
+    button.disabled = true;
+    const response = await post(pane.dataset.transcript);
+    if (!pane.isConnected) return; // another moment was opened meanwhile
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not start the transcript. Try again.") : "Could not reach the service.");
+      return;
+    }
+    await refreshTranscript();
+  }
+
+  // Saves what a line of the transcript says, if that was changed since it
+  // was last saved: when the line is left, and before the page goes.
+  async function correctLine(field) {
+    if (!field?.matches?.("[data-transcript-line]") || field.value === field.defaultValue) return;
+    const pane = field.closest("[data-transcript]");
+    const text = field.value;
+    const response = await post(`${pane.dataset.transcript}/${field.dataset.transcriptLine}`, { text });
+    if (!field.isConnected) return;
+    if (!response || !response.ok) {
+      say(field, response ? await problem(response, "Could not save the line. Try again.") : "Could not reach the service. The line was not saved.");
+      return;
+    }
+    const saved = (await response.json()).text;
+    field.defaultValue = saved;
+    // As the service tidied it - unless it is being typed into again.
+    if (document.activeElement !== field && field.value === text) {
+      field.value = saved;
+      grow(field);
+    }
+    say(field, "Line saved.");
+  }
+
+  // Enter goes on to the next line (Shift+Enter starts a second row of this
+  // one, for a subtitle of two rows) and Escape leaves the line; leaving a
+  // line is what saves it.
+  function transcriptKey(field, event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      field.blur();
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      const next = field.closest("li").nextElementSibling;
+      const following = next && one("[data-transcript-line]", next);
+      if (following) following.focus();
+      else field.blur();
+    }
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
     for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file]")) button.hidden = false;
     markFound();
+    const article = one(".moment");
+    if (article) showSide(article, side);
+    watchTranscript();
     const video = one("[data-clip]");
     if (!video) return;
     video.defaultPlaybackRate = speed;
@@ -1861,7 +2173,10 @@
     ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
     ["[data-trim-go]", exportTrim],
     ["[data-trim-chat-later]", trimChatLater],
-    ["[data-trim-video], [data-trim-chat-video]", markTaken],
+    ["[data-trim-video], [data-trim-chat-video], [data-trim-subtitles], [data-transcript-cut]", markTaken],
+    ["[data-side]", chooseSide],
+    ["[data-transcribe]", transcribe],
+    ["[data-transcript-go]", playLine],
     ["[data-switch] button", flip],
     ["[data-setting] button", chooseSetting],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
@@ -2026,6 +2341,10 @@
       }
       return;
     }
+    if (target.matches("[data-transcript-line]")) {
+      transcriptKey(target, event);
+      return;
+    }
     if (target.matches("[data-strip]") && stripKey(target, event)) return;
     if (target.matches("[data-rec-strip]") && recordingKey(target, event)) return;
     if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
@@ -2042,7 +2361,7 @@
 
   document.addEventListener("input", (event) => {
     const target = event.target;
-    if (target.matches("[data-note]")) {
+    if (target.matches("[data-note], [data-transcript-line]")) {
       grow(target);
       say(target, "");
     } else if (target.matches("[data-volume]")) {
@@ -2068,9 +2387,14 @@
     const target = event.target;
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
+    else if (target.matches("[data-transcript-line]")) correctLine(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
-    else if (target.matches("[data-trim-where]")) keepTrimChoice(TRIM_WHERE_KEY, target.value);
+    else if (target.matches("[data-trim-where]")) {
+      keepTrimChoice(TRIM_WHERE_KEY, target.value);
+      placeTrimChat(trimOf(target));
+      paintTrim(trimOf(target));
+    }
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
@@ -2093,6 +2417,29 @@
   };
   onMedia("[data-clip]", paint);
   onMedia("[data-trim-clip]", trimTick);
+  // The box of chat over the picture follows the picture's shape and size.
+  document.addEventListener(
+    "loadedmetadata",
+    (event) => event.target.matches?.("[data-trim-clip]") && placeTrimChat(trimOf(event.target)),
+    true,
+  );
+  window.addEventListener("resize", () => {
+    for (const dialog of all("[data-trim]")) if (dialog.open) placeTrimChat(dialog);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    const overlay = event.target.closest?.("[data-trim-overlay]");
+    if (!overlay || event.button !== 0) return;
+    event.preventDefault();
+    holdTrimBox(overlay, event);
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (trimHold) dragTrimBox(event);
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    document.addEventListener(type, () => {
+      if (trimHold) letGoOfTrimBox();
+    });
+  }
   onMedia("[data-recording-clip]", paintRecording);
   document.addEventListener("close", (event) => event.target.matches?.("[data-trim]") && leaveTrim(event.target), true);
 
@@ -2105,6 +2452,7 @@
   window.addEventListener("pagehide", () => {
     saveNote();
     saveTitle();
+    correctLine(document.activeElement);
   });
 
   dress();

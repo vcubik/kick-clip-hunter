@@ -34,9 +34,8 @@
 
     // Leaves the emotes whose pictures are at these addresses - the
     // animated ones - out of the pictures taken of the column, still taking
-    // up their room, and says where each of them is: its top, its left, its
-    // width and its height, in whole pixels as the browser draws it, and
-    // its picture's address.
+    // up their room, and says where each of them is: its top, left, right
+    // and bottom, in pixels of the page, and its picture's address.
     setAside(addresses) {
       const animated = new Set(addresses);
       return Array.from(document.querySelectorAll("img.ch-emote"))
@@ -44,11 +43,9 @@
         .map((image) => {
           image.style.visibility = "hidden";
           const box = image.getBoundingClientRect();
-          const top = Math.round(box.top + window.scrollY);
-          const left = Math.round(box.left);
-          return [top, left, Math.round(box.right) - left, Math.round(box.bottom + window.scrollY) - top, image.src];
+          return [box.top + window.scrollY, box.left, box.right, box.bottom + window.scrollY, image.src];
         })
-        .filter(([, , width, height]) => width > 0 && height > 0);
+        .filter(([top, left, right, bottom]) => right > left && bottom > top);
     },
   };
 })();
