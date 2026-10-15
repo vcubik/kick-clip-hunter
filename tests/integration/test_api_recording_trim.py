@@ -108,6 +108,7 @@ class TestTheVideo:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "subtitles_url": None,
             "cut": None,
             "chat_later": False,
         }

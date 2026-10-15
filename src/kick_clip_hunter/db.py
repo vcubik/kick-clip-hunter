@@ -312,6 +312,13 @@ def get_connection() -> sqlite3.Connection:
     if "downloaded_at" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN downloaded_at TEXT")
 
+    # What is said in a moment's footage, line by line with its times, as
+    # the reviewer corrected it (see subtitles.py) - JSON, made only when it
+    # is asked for on the review page. Not the `transcript` above, which is
+    # the clip's speech in one line, for a classifier. NULL until made.
+    if "subtitles" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN subtitles TEXT")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -568,7 +575,7 @@ _MOMENT_COLUMNS = """
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
     context_before, context_after, downloaded_at,
-    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type
+    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles
 """
 
 
@@ -1230,6 +1237,11 @@ def update_moment_clip_duration(conn: sqlite3.Connection, moment_id: int, clip_d
 
 def update_moment_transcript(conn: sqlite3.Connection, moment_id: int, transcript: str) -> None:
     conn.execute("UPDATE moments SET transcript = ? WHERE id = ?", (transcript, moment_id))
+    conn.commit()
+
+
+def update_moment_subtitles(conn: sqlite3.Connection, moment_id: int, subtitles: str) -> None:
+    conn.execute("UPDATE moments SET subtitles = ? WHERE id = ?", (subtitles, moment_id))
     conn.commit()
 
 

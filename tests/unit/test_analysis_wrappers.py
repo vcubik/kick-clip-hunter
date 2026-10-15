@@ -23,6 +23,7 @@ import pytest
 
 from kick_clip_hunter import audio_events, frame_encoder, sound_events, transcriber
 from kick_clip_hunter.ml_loading import HEAVY_IMPORT_LOCK
+from kick_clip_hunter.subtitles import Word
 from tests.support.media import FFMPEG
 
 CLIP = Path("data/clips/some_channel/moment_1.mp4")
@@ -319,6 +320,87 @@ class TestTranscript:
         ((path, options),) = transcribe.calls
         assert path == str(CLIP)
         assert options == {"language": "cs", "vad_filter": True, "beam_size": 1}
+
+
+def segment(end: float, *words: tuple[float, float, str]) -> SimpleNamespace:
+    """A stretch the model heard as one, with its words: (start, end, word)."""
+    return SimpleNamespace(
+        end=end,
+        text="".join(word for _start, _end, word in words),
+        words=[SimpleNamespace(start=start, end=end, word=word, probability=0.9) for start, end, word in words],
+    )
+
+
+class TestTranscriptWords:
+    """What is said in a moment's footage word by word, for the transcript
+    the review page makes of it (tests/unit/test_subtitles.py has the lines
+    that are made of the words)."""
+
+    @pytest.fixture
+    def hear(self, monkeypatch):
+        calls = []
+
+        def run(*segments, duration: float = 10.0, progress=None):
+            class Model:
+                def transcribe(self, path, **options):
+                    calls.append((path, options))
+                    return iter(segments), SimpleNamespace(duration=duration)
+
+            monkeypatch.setattr(transcriber, "_get_model", Model)
+            return transcriber.transcribe_words(CLIP, progress)
+
+        run.calls = calls
+        return run
+
+    def test_each_stretch_the_model_heard_is_its_words_with_their_times(self, hear):
+        heard = hear(
+            segment(1.2, (0.4, 0.7, "Tak"), (0.7, 1.2, " co?")),
+            segment(3.0, (2.1, 3.0, " Jedeme.")),
+        )
+
+        assert heard == [
+            [Word(0.4, 0.7, "Tak"), Word(0.7, 1.2, " co?")],
+            [Word(2.1, 3.0, " Jedeme.")],
+        ]
+
+    def test_the_footage_is_heard_as_czech_word_by_word_with_silence_left_out(self, hear):
+        hear(segment(1.0, (0.0, 1.0, " ahoj")))
+
+        ((path, options),) = hear.calls
+        assert path == str(CLIP)
+        # The model's own beam size: this transcript is read and put right
+        # by a person, so it is worth the model's wider search.
+        assert options == {"language": "cs", "vad_filter": True, "word_timestamps": True}
+
+    def test_whispers_stock_subtitle_credits_are_left_out(self, hear):
+        heard = hear(segment(1.0, (0.0, 1.0, " tak")), segment(9.0, (5.0, 9.0, " Titulky vytvořil JohnyX.")))
+
+        assert heard == [[Word(0.0, 1.0, " tak")]]
+
+    def test_a_stretch_heard_without_words_has_none(self, hear):
+        empty = SimpleNamespace(end=2.0, text="", words=None)
+
+        assert hear(empty) == [[]]
+
+    def test_how_much_of_the_footage_has_been_heard_is_told_as_it_goes(self, hear):
+        told = []
+
+        hear(
+            segment(2.5, (0.0, 2.5, " tak")),
+            segment(5.0, (3.0, 5.0, " co")),
+            segment(10.4, (6.0, 10.4, " dál")),
+            progress=told.append,
+        )
+
+        # The last stretch can end a moment after the file's sound does.
+        assert told == [0.25, 0.5, 1.0]
+
+    def test_a_file_of_no_length_tells_nothing(self, hear):
+        told = []
+
+        hear(segment(1.0, (0.0, 1.0, " tak")), duration=0.0, progress=told.append)
+
+        assert told == []
 
 
 class TestAudioEvents:

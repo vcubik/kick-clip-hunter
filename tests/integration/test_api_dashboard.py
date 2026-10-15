@@ -623,7 +623,13 @@ class TestOpenMoment:
         # Seconds from the clip's first frame; the first line came before it.
         assert [line.attrs["data-at"] for line in lines] == ["-15", "17", "21.8"]
         assert ["is-moment" in line.classes for line in lines] == [False, True, True]
-        assert article.one("div", class_="chat-head").text == "Chat replayed with the clip"
+        # Beside a clip, chat is the first of two tabs, and the one shown.
+        sides = article.one("div", role="tablist").find("button", role="tab")
+        assert [(side.text, side.attrs["aria-selected"]) for side in sides] == [
+            ("Chat", "true"),
+            ("Transcript", "false"),
+        ]
+        assert "hidden" not in article.one("div", data_side_pane="chat").attrs
 
     async def test_without_a_clip_the_chat_is_simply_there_to_read(self, service):
         add_moment("channel_a", detected_at=T0)
@@ -1959,6 +1965,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_CUTTING),
             "video_url": None,
             "chat_url": None,
+            "subtitles_url": None,
             "cut": None,
             "chat_later": False,
         }
@@ -2399,6 +2406,7 @@ class TestTrimming:
             "words": view.trim_words(view.TRIM_FAILED),
             "video_url": None,
             "chat_url": None,
+            "subtitles_url": None,
             "cut": None,
             "chat_later": False,
         }

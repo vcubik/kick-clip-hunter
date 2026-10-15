@@ -172,7 +172,9 @@ a { color: inherit; }
 /* Tabs: where you are - `sunk` with a `lit` edge along the bottom. */
 .ch-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--space-2); }
 .ch-tab { display: flex; align-items: center; justify-content: center; gap: var(--space-4); height: var(--h-tab); padding: 2px var(--space-8) 0; border-bottom: 2px solid transparent; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; font-weight: 500; font-stretch: var(--width-compact); white-space: nowrap; text-decoration: none; }
-.ch-tab[aria-current="true"] { background-color: var(--sunk); border-bottom-color: var(--lit); font-weight: 700; }
+.ch-tab[aria-current="true"], .ch-tab[aria-selected="true"] { background-color: var(--sunk); border-bottom-color: var(--lit); font-weight: 700; }
+/* A tab that shows a pane of the page rather than going to another one. */
+button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transparent; }
 .ch-tab:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 
 /* Tag: what you set. One per group; the chosen one is lit. */
@@ -418,6 +420,27 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .chat-delay { margin-top: var(--space-8); font-variant-numeric: tabular-nums; }
 .chat-delay-slider { display: flex; align-items: center; gap: var(--space-8); }
 .chat-delay-slider .ch-shift { flex: 1 1 0; min-width: 0; width: auto; }
+
+/* Beside a clip: its chat, or what is said in it - a tab each. */
+.side-tabs { padding: var(--space-12) var(--space-12) var(--space-8); }
+.side-pane { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+
+/* The transcript: a line a row, its time in front of it - a button that
+   plays the clip from there - and what is said in a field to put it right
+   in. The line being said is where you are: `sunk`, with a `lit` edge. */
+.transcript { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+.transcript-hint { padding: 0 var(--space-12) var(--space-8); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.transcript-lines { position: relative; flex: 1 1 0; min-height: 0; margin: 0; padding: 0 var(--space-12) var(--space-8) var(--space-2); overflow-y: auto; list-style: none; }
+.transcript-line { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-2) var(--space-4) var(--space-2) 6px; border-left: 2px solid transparent; }
+.transcript-line.is-now { background: var(--sunk); border-left-color: var(--lit); }
+.transcript-time { flex: none; width: 60px; height: var(--h-compact); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-control); background: none; color: var(--text-2); font-size: 12px; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; text-align: left; }
+.transcript-time:hover { background-image: linear-gradient(var(--veil), var(--veil)); color: var(--text); }
+.transcript-text { flex: 1 1 0; min-width: 0; height: var(--h-compact); padding: 3px var(--space-8); line-height: 20px; resize: none; overflow: hidden; }
+.transcript-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-12); padding: 0 var(--space-12) var(--space-12); }
+.transcript-empty .status-line { margin-top: 0; }
+.transcript-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.transcript-downloads { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-8); }
+.transcript-foot .status-line { color: var(--text); }
 
 /* ---- Trim: a stretch of the footage, cut out for an editor --------- */
 

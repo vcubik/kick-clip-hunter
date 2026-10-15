@@ -151,7 +151,8 @@ top labels above the confidence floor)?
 
 **8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`,
 `unit/test_dashboard_view.py`, `unit/test_chat_trace.py`, `unit/test_clip_trim.py`,
-`unit/test_chat_video.py`, `integration/test_chat_video.py`
+`unit/test_chat_video.py`, `integration/test_chat_video.py`, `integration/test_api_transcript.py`,
+`unit/test_subtitles.py`
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
 the right one open, with its chat and its clip, started where the clip begins in its file? Is chat put on the clip's own time axis
@@ -172,7 +173,14 @@ their animation the video is at, every copy of one alike, moving with their line
 into the cut's picture on the side asked for, from the very frame that was set, with how far it has
 got said and given up at a shutdown; does a new cut replace the one before, and is each state said
 in words? Does the dialog have a field for either end of the cut to be typed into, and a choice of
-where its chat goes?
+where its chat goes? Is a moment's transcript made of all of its file when it is asked for and only
+then, on clip time, with how far it has got said meanwhile, given up at a shutdown, said in words
+when it fails and kept once it is there? Are the words the speech model heard made into lines a
+subtitle long - a sentence, a pause, a line that would not fit or be read in time, broken after a
+comma where one is far enough into it? Is a corrected line tidied, kept with its times, and left out
+of the subtitles when it is emptied? Are the subtitles (.srt) timed to the video they go with - the
+moment's file, or the cut made with Trim from where it really begins, with a line it cuts too little
+of left out - and written so that an editor on Windows reads their Czech?
 
 **9. Settings** - `unit/test_tuning.py`, `integration/test_api_settings.py`, `unit/test_replay_chat.py`
 Is every field of what the service works from settable by exactly one setting, and is what the code
@@ -366,7 +374,8 @@ fake:
 | `static/dashboard.js` - the Trim dialog: its handles, its player, the chat beside it, reading a time that was typed, the window it shows of a recording | As for the rest of the script (below): what the dialog asks the server for is tested, what happens in the browser is checked by hand (steps 9 and 11 below). |
 | `static/dashboard.js` - the trace under a recording: fetching it, the playhead, scrubbing | The same: the trace the service draws is tested, the script that puts it on the page is checked by hand (step 11 below). |
 | `static/dashboard.js` - the moments found in a recording: asking for them, following a replay or the cutting of clips, the marks on the trace, playing from a row | The same: every request and the section the service renders are tested, the script is checked by hand (step 11 below). |
-| Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. |
+| Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. That the speech model still hands over words with their times, and what a real transcript looks like as subtitles in an editor, is step 15 below. |
+| `static/dashboard.js` - the transcript beside a clip: its tab, asking for it and following it while it is made, marking the line being said, a line's time playing the clip, saving what is put right in a line | As for the rest of the script: the tab the service renders and every request it makes are tested, the script is checked by hand (step 15 below). |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | Twitch's actual API, chat connection and playlists: Helix, the device flow of `scripts/twitch_login.py`, the EventSub WebSocket, streamlink finding a stream and its VOD | `FakeTwitchApi`, `FakeEventSub` and `FakeHlsServer` encode what Twitch documents and what was observed (a live playlist's tags, a VOD in fragmented MP4); streamlink itself is never run - a test that would reach it fails. Step 14 below is what notices a change. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
@@ -523,6 +532,19 @@ Run this on a live channel after changing any of the above, or the code right ne
    channel's folder under `data/recordings/` holds `.m4s` fragments and a `.init` file beside its
    `.ts` segments, and nowhere in the clip is the ad. Restart the service: the reader connects
    again on its own, and the Health page shows how long ago.
+15. **Transcribe a clip.** Open a moment whose clip has someone talking in it and choose the
+   Transcript tab beside the clip: it offers to transcribe it. Press Transcribe: the tab says it is
+   transcribing - the first time, while the model loads, for a while - then counts up and shows
+   the lines, each with its time, the one being said marked as the clip plays and kept in sight.
+   The log says `transcript of moment N saved (M lines)`. Pressing a line's time plays the clip
+   from there; the lines read like subtitles, none longer than a row and none on screen too long.
+   Put a word right and press Enter: the next line gets the cursor, the tab says `Line saved.`,
+   and the correction is still there after a reload; Shift+Enter makes a line of two rows, and a
+   line emptied is left out. "Whole footage" downloads `moment_N.srt`; put next to the moment's
+   file in an editor (DaVinci Resolve, Premiere, CapCut), its subtitles start with it and their
+   Czech letters come out right. Trim a stretch and Export: "Download subtitles" appears beside
+   the video, and `moment_N_trim.srt` lines up with that video from its first frame - closed, the
+   dialog leaves "The cut from Trim" in the tab as well. The next moment opened shows the same tab.
 
 ## Checking a detector change against a real stream
 

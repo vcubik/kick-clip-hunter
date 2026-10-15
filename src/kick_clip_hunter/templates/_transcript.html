@@ -1,0 +1,44 @@
+{#- What is said in a moment's footage, line by line with its times: its
+    transcript, made when it is asked for, corrected here and taken into an
+    editor as subtitles (see subtitles.py). Beside the clip, where its chat
+    is, and also served on its own (/dashboard/moments/<id>/subtitles),
+    which the script fetches after asking for one and every couple of
+    seconds while it is being made. Times are clip time: a line's time plays
+    the clip from there, and the line that is being said is marked as the
+    clip plays. -#}
+<div class="transcript" data-transcript="{{ transcript.url }}" data-page="{{ transcript.page }}"{% if transcript.busy %} data-busy{% endif %} data-status-scope>
+  {% if transcript.lines %}
+  <p class="transcript-hint">A time plays the clip from there. What you put right is kept as you leave the line; a line left empty is left out of the subtitles.</p>
+  <ol class="transcript-lines" data-transcript-lines>
+    {% for line in transcript.lines %}
+    <li class="transcript-line" data-from="{{ line.start }}" data-to="{{ line.end }}">
+      <button type="button" class="transcript-time" title="Play from here" data-transcript-go>{{ line.time }}</button>
+      <textarea class="ch-input transcript-text" rows="1" lang="{{ transcript.language }}" aria-label="Line at {{ line.time }}" data-transcript-line="{{ loop.index0 }}">{{ line.text }}</textarea>
+    </li>
+    {% endfor %}
+  </ol>
+  <div class="transcript-foot">
+    {#- Each file of subtitles is timed to one video: the moment's whole
+        file, or the cut the Trim dialog made of it - put beside that one in
+        an editor, the two start together. -#}
+    {% if transcript.file_url %}
+    <p>Subtitles (.srt), each timed to the video it goes with:</p>
+    <p class="transcript-downloads">
+      <a class="ch-btn ch-btn-compact" href="{{ transcript.file_url }}" download title="Timed to {{ transcript.file_name }}, the clip with the footage around it" data-transcript-download>Whole footage</a>
+      {% if transcript.cut_url %}
+      <a class="ch-btn ch-btn-compact" href="{{ transcript.cut_url }}" download title="Timed to {{ transcript.cut_name }}, the cut made with Trim" data-transcript-download data-transcript-cut>The cut from Trim</a>
+      {% endif %}
+    </p>
+    {% endif %}
+    <p class="status-line" role="status" data-status></p>
+  </div>
+  {% else %}
+  <div class="transcript-empty">
+    <p class="transcript-words">{{ transcript.words }}</p>
+    {% if transcript.can_make %}
+    <button type="button" class="ch-btn ch-btn-primary" data-transcribe>Transcribe</button>
+    {% endif %}
+    <p class="status-line" role="status" data-status></p>
+  </div>
+  {% endif %}
+</div>
