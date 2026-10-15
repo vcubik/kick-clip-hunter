@@ -561,12 +561,21 @@
   // A window this many times as long as the stretch would be given anew is
   // set anew: the stretch was made a good deal shorter.
   const TRIM_WINDOW_TOO_WIDE = 2;
+  // An end of the stretch is taken hold of within this many pixels of it,
+  // either side - a handle alone is narrow to hit.
+  const TRIM_REACH_PIXELS = 10;
+  // The stretch pressed between its ends moves once the pointer has moved
+  // this many pixels; let go of before that, it was a press that goes there.
+  const TRIM_STIR_PIXELS = 4;
   // What the dialog said of a time it could not read, while it says it.
   let trimNotATime = "";
   let trimWatch = null;
-  let trimDrag = null; // the handle that is held: "from" or "to"
+  // What is held on the strip: an end of the stretch ("from", "to"), the
+  // whole stretch ("both"), or nothing - the strip, pressed to go there.
+  let trimDrag = null;
   let trimHold = null; // the box of chat over the picture, while it is dragged
-  let trimGrab = 0; // how far from the handle's time it was taken hold of
+  let trimGrab = 0; // how far from the time it moves it was taken hold of
+  let trimPress = null; // where the stretch was pressed, until it moves
   let trimWas = 0; // where the dialog's player was when last looked at
 
   const trimOf = (control) => control.closest("[data-trim]");
@@ -654,6 +663,36 @@
     paintTrim(dialog);
     // While a handle is held the strip stays as it is under it.
     if (trimDrag === null) fitTrimWindow(dialog);
+  }
+
+  // Moves the whole stretch, as long as it is, to start at `from` - within
+  // the footage - with the player on its start.
+  function moveTrimStretch(dialog, time) {
+    const span = trimSpan(dialog);
+    const { from, to } = trimAt(dialog);
+    const length = to - from;
+    const start = clamp(time, span.first, Math.max(span.last - length, span.first));
+    dialog.dataset.from = start.toFixed(2);
+    dialog.dataset.to = (start + length).toFixed(2);
+    const video = trimClip(dialog);
+    video.pause();
+    video.currentTime = start + span.lead;
+    paintTrim(dialog);
+  }
+
+  // What pressing the strip at `event` takes hold of: a handle, or an end
+  // of the stretch close to it, the stretch between its ends, or nothing.
+  function trimHeld(strip, event) {
+    const handle = event.target.closest("[data-trim-handle]");
+    if (handle) return handle.dataset.trimHandle;
+    const box = strip.getBoundingClientRect();
+    const span = trimSpan(trimOf(strip));
+    const x = (time) => box.left + ((time - span.start) / (span.end - span.start)) * box.width;
+    const { from, to } = trimAt(trimOf(strip));
+    const toFrom = Math.abs(event.clientX - x(from));
+    const toTo = Math.abs(event.clientX - x(to));
+    if (Math.min(toFrom, toTo) <= TRIM_REACH_PIXELS) return toFrom < toTo ? "from" : "to";
+    return event.clientX > x(from) && event.clientX < x(to) ? "both" : null;
   }
 
   // An end of the stretch as it was typed into its field. What is not a
@@ -777,6 +816,7 @@
     const shown = () => trimTime(dialog) - Number(one("[data-trim-shift]", dialog).value);
     if (span.windowed) followChat(pane, shown);
     else reveal(one("[data-trim-lines]", pane), shown());
+    hideCutLines(pane);
   }
 
   // Played, the stretch stops at its end.
@@ -1014,7 +1054,8 @@
     overlay.hidden = !inside;
     if (!inside) {
       if (pane.parentElement === overlay) one(".trim-view", dialog).append(pane);
-      for (const property of ["--chat-scale", "--chat-fade", "height"]) pane.style.removeProperty(property);
+      for (const property of ["--chat-scale", "height"]) pane.style.removeProperty(property);
+      hideCutLines(pane);
       return;
     }
     if (pane.parentElement !== overlay) overlay.prepend(pane);
@@ -1032,8 +1073,27 @@
     const scale = (box.width * shown.width) / column.width;
     const height = (box.height * shown.height) / scale;
     pane.style.setProperty("--chat-scale", String(scale));
-    pane.style.setProperty("--chat-fade", `${Math.min(column.fade, Math.floor(height / 4))}px`);
     pane.style.height = `${height}px`;
+    hideCutLines(pane);
+  }
+
+  // In the box over the picture, the oldest line shown is whole or not
+  // there, as the video will have it: a line the box's top would cut is
+  // hidden - unless it is the newest, taller than the box by itself. Beside
+  // the player every line shows, as chat always does there.
+  function hideCutLines(pane) {
+    const box = one(".chat-lines", pane);
+    if (!box) return;
+    const inside = Boolean(pane.closest("[data-trim-overlay]"));
+    const edge = box.getBoundingClientRect().top;
+    let newest = true;
+    let cut = false;
+    for (const line of Array.from(box.children).reverse()) {
+      if (line.hidden) continue;
+      if (inside && !cut && !newest) cut = line.getBoundingClientRect().top < edge - 0.5;
+      newest = false;
+      line.style.visibility = cut ? "hidden" : "";
+    }
   }
 
   function holdTrimBox(overlay, event) {
@@ -2267,26 +2327,49 @@
     });
   }
 
-  // In the Trim dialog: pressing a handle takes hold of it, pressing the
-  // strip anywhere else goes there, and dragging does either along it.
+  // In the Trim dialog: pressing an end of the stretch takes hold of it,
+  // pressing between them takes hold of the whole stretch, which keeps its
+  // length wherever it is dragged, and pressing the strip anywhere else
+  // goes there; dragging does any of them along it.
   document.addEventListener("pointerdown", (event) => {
     const strip = event.target.closest("[data-trim-strip]");
     if (!strip || event.button !== 0) return;
+    // Else the browser may start selecting text, or drag what was selected,
+    // and take the pointer away halfway.
+    event.preventDefault();
     const dialog = trimOf(strip);
-    const handle = event.target.closest("[data-trim-handle]");
     const time = trimPoint(strip, event);
     strip.setPointerCapture(event.pointerId);
-    trimDrag = handle ? handle.dataset.trimHandle : null;
-    // A handle is as wide as a finger, and is held wherever it was pressed.
-    if (trimDrag) trimGrab = time - trimAt(dialog)[trimDrag];
+    trimDrag = trimHeld(strip, event);
+    // Without the press's own focus, a field being typed into is left -
+    // which sets the end typed into it - and a handle held has the arrows.
+    const handle = trimDrag === "from" || trimDrag === "to" ? one(`[data-trim-handle="${trimDrag}"]`, strip) : null;
+    if (handle) handle.focus({ preventScroll: true });
+    else if (dialog.contains(document.activeElement)) document.activeElement.blur();
+    // Whatever is held is held where it was pressed, not by its edge.
+    trimPress = null;
+    if (trimDrag === "both") {
+      trimGrab = time - trimAt(dialog).from;
+      trimPress = { x: event.clientX, time };
+      strip.classList.add("is-holding");
+    } else if (trimDrag) trimGrab = time - trimAt(dialog)[trimDrag];
     else seekTrim(dialog, time);
   });
 
   document.addEventListener("pointermove", (event) => {
     const strip = event.target.closest("[data-trim-strip]");
-    if (!strip || !strip.hasPointerCapture(event.pointerId)) return;
+    if (!strip) return;
+    if (!strip.hasPointerCapture(event.pointerId)) {
+      // What a press would take hold of shows as the pointer passes over.
+      const held = trimHeld(strip, event);
+      strip.dataset.trimOver = held === "both" ? "stretch" : held ? "end" : "";
+      return;
+    }
     const time = trimPoint(strip, event);
-    if (trimDrag) moveTrim(trimOf(strip), trimDrag, time - trimGrab);
+    if (trimPress && Math.abs(event.clientX - trimPress.x) < TRIM_STIR_PIXELS) return;
+    trimPress = null;
+    if (trimDrag === "both") moveTrimStretch(trimOf(strip), time - trimGrab);
+    else if (trimDrag) moveTrim(trimOf(strip), trimDrag, time - trimGrab);
     else seekTrim(trimOf(strip), time);
   });
 
@@ -2294,6 +2377,13 @@
     document.addEventListener(type, () => {
       const held = trimDrag;
       trimDrag = null;
+      for (const strip of all("[data-trim-strip].is-holding")) strip.classList.remove("is-holding");
+      // The stretch pressed and let go of without moving: the press goes there.
+      if (held === "both" && trimPress && type === "pointerup") {
+        const dialog = one("[data-trim][open]");
+        if (dialog) seekTrim(dialog, trimPress.time);
+      }
+      trimPress = null;
       // A handle let go of at an end of a recording's window: the window
       // moves to where there is room to drag it further.
       const dialog = held && one("[data-trim][open]");

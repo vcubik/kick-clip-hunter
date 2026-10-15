@@ -167,7 +167,7 @@ restart; does shutdown wait for work in flight and stop recorders before exiting
 for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
 its chat video hold the stretch's chat counted from where the video really begins, moved by what was
 asked for; is each frame of it the column of chat as it stood then - the newest line at the bottom
-from the frame it arrives in, none of the lines still to come, the oldest fading out at the top -
+from the frame it arrives in, none of the lines still to come, the oldest whole at the top or not there at all -
 see-through, or on the colour asked for; do animated emotes show the frame of
 their animation the video is at, every copy of one alike, moving with their line; is chat drawn
 into the cut's picture in the box asked for - its text as large as the box is wide within the limits,
@@ -440,7 +440,7 @@ Run this on a live channel after changing any of the above, or the code right ne
    over the video in an editor (or with ffmpeg's `overlay` filter) from its first frame, the chat
    video is as long as the video, has nothing behind the text, and its lines appear when they did
    beside the picture in the dialog, each there at once at the bottom, the ones before moving up
-   for it, the oldest fading out at the top, with emotes and badges drawn - animated emotes moving
+   for it, the oldest whole at the top until it would be cut and then gone, with emotes and badges drawn - animated emotes moving
    as they do beside the picture, in their places, with every copy of an emote alike. With "on
    a background" ticked it is the colour behind the text and a small H.264 file. Then choose "in the
    video": the chat beside the player moves into a box over the picture, at the bottom right,

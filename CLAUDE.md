@@ -538,8 +538,8 @@ Module map (`src/kick_clip_hunter/`):
   (`PAGE_PIXELS`) at a time without the background, as the frames come to need them
   (`drawn_column`); each frame is then put together in numpy from those pictures
   (`frame_top`, `frames`): the lines that had arrived, the newest at the bottom from the
-  frame it arrives in (the column jumps up to make room, as chat does), the oldest fading
-  out at the top - identical frames are the same bytes. That makes half an hour of a busy
+  frame it arrives in (the column jumps up to make room, as chat does), the oldest whole
+  at the top until the frame's edge would cut it, and then gone (`cut_rows`) - identical frames are the same bytes. That makes half an hour of a busy
   chat a minute or two of work instead of twice its length. Animated emotes, which would
   stand still on whichever frame was drawn, are made to move: the browser
   is handed the emote pictures by the route that serves it (`route.fetch`), and those of
