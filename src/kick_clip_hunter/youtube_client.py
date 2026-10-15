@@ -351,7 +351,8 @@ def _all_messages(renderer: dict[str, Any]) -> str | None:
     of that name, or else the last one the page offers."""
     views = _field(renderer, "header", "liveChatHeaderRenderer", "viewSelector", "sortFilterSubMenuRenderer")
     items = [item for item in _field(views, "subMenuItems") or [] if isinstance(item, dict)]
-    for item in sorted(items, key=lambda item: item.get("title") != ALL_MESSAGES):
+    # The view of that name first, then the others from the last.
+    for item in sorted(reversed(items), key=lambda item: item.get("title") != ALL_MESSAGES):
         continuation = _field(item, "continuation", "reloadContinuationData", "continuation")
         if isinstance(continuation, str) and continuation:
             return continuation

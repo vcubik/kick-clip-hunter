@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from kick_clip_hunter import youtube_client
+from kick_clip_hunter import watchlist, youtube_client
 from kick_clip_hunter.youtube_client import Channel, ChatPage, LiveChat, LiveVideo
 from tests.support.youtube import PAGE_CLIENT_VERSION, VISITOR, channel_id_of, message
 
@@ -151,6 +151,11 @@ class TestWhetherAChannelIsLive:
 
         assert await youtube_client.live_video("some_channel") == LiveVideo("livevideo01", None)
 
+    async def test_a_start_youtube_writes_so_it_cannot_be_read_is_not_known(self, youtube):
+        youtube.add_channel("some_channel").go_live("livevideo01", started_at="yesterday-ish")
+
+        assert await youtube_client.live_video("some_channel") == LiveVideo("livevideo01", None)
+
     async def test_a_handle_youtube_no_longer_has_is_said_to(self, youtube):
         with pytest.raises(ValueError, match="YouTube has nothing"):
             await youtube_client.live_video("gone_channel")
@@ -265,6 +270,58 @@ class TestReadingAChat:
             with pytest.raises(youtube_client.YouTubeChanged, match=said):
                 await youtube_client.open_chat("livevideo01", client)
 
+    async def test_views_it_cannot_tell_by_name_are_taken_for_the_last_being_every_message(self):
+        views = [
+            {"title": "Nejlepší chat", "continuation": {"reloadContinuationData": {"continuation": "top"}}},
+            {"title": "Živý chat", "continuation": {"reloadContinuationData": {"continuation": "all"}}},
+        ]
+        data = {
+            "contents": {
+                "liveChatRenderer": {
+                    "continuations": [{"invalidationContinuationData": {"continuation": "top-1"}}],
+                    "header": {
+                        "liveChatHeaderRenderer": {
+                            "viewSelector": {"sortFilterSubMenuRenderer": {"subMenuItems": views}}
+                        }
+                    },
+                }
+            }
+        }
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=f'<script>window["ytInitialData"] = {json.dumps(data)};</script>')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            chat = await youtube_client.open_chat("livevideo01", client)
+
+        assert chat.continuation == "all"
+
+    async def test_settings_a_page_script_breaks_off_are_passed_over(self):
+        page = (
+            '<script>ytcfg.set({"INNERTUBE_CONTEXT": </script>'
+            '<script>ytcfg.set({"INNERTUBE_CONTEXT": {"client": {"clientName": "WEB", "visitorData": "v"}}});'
+            '</script><script>window["ytInitialData"] = {"contents": {"liveChatRenderer": {"continuations": '
+            '[{"reloadContinuationData": {"continuation": "c"}}]}}};</script>'
+        )
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=page)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            chat = await youtube_client.open_chat("livevideo01", client)
+
+        assert (chat.continuation, chat.context["client"]["visitorData"]) == ("c", "v")
+
+    async def test_what_a_page_without_a_chat_says_instead_is_read_however_it_is_written(self):
+        data = {"contents": {"messageRenderer": {"text": {"simpleText": "Live chat replay is not available."}}}}
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=f"<script>var ytInitialData = {json.dumps(data)};</script>")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            with pytest.raises(youtube_client.ChatUnavailable, match="replay is not available"):
+                await youtube_client.open_chat("livevideo01", client)
+
     async def test_without_a_choice_of_views_the_chat_is_read_where_the_page_says(self):
         data = {
             "contents": {
@@ -281,6 +338,12 @@ class TestReadingAChat:
             chat = await youtube_client.open_chat("livevideo01", client)
 
         assert chat == LiveChat("livevideo01", "the-only-one", youtube_client.client_context())
+
+
+class TestEmotes:
+    async def test_a_youtube_channel_has_no_emote_set_anywhere_to_fetch(self, youtube):
+        assert await watchlist.channel_emotes("youtube", "UCAAAAAAAAAAAAAAAAAAAAAA") == []
+        assert youtube.requests == []
 
 
 class TestAskingYouTube:

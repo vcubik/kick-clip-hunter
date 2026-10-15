@@ -53,6 +53,18 @@ class TestAMessage:
     def test_a_channels_name_on_youtube_is_its_handle(self):
         assert CHANNEL.login == "some_channel"
 
+    def test_a_message_that_does_not_say_when_it_was_sent_has_no_such_time(self):
+        action = message("m-1", "alice", "hi")
+        del action["addChatItemAction"]["item"]["liveChatTextMessageRenderer"]["timestampUsec"]
+
+        assert taken(action).created_at == ""
+
+    def test_a_part_of_a_message_it_cannot_read_is_left_out(self):
+        action = message("m-1", "alice", "still ", "here")
+        action["addChatItemAction"]["item"]["liveChatTextMessageRenderer"]["message"]["runs"].insert(1, "odd")
+
+        assert taken(action).content == "still here"
+
 
 class TestEmoji:
     def test_an_emoji_everyone_has_stands_as_a_token_by_its_code_points_and_name(self):

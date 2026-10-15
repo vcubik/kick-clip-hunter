@@ -245,6 +245,16 @@ class TestWhatYouTubeDoes:
         assert rig.reader.failing == {}
         assert rig.reader.last_heard_at is not None
 
+    async def test_an_answer_it_cannot_read_is_said_for_what_it_is(self, youtube, quick):
+        live(youtube)
+        youtube.player_refusals["livevideo01"] = {"status": "ERROR", "reason": "Video unavailable"}
+
+        async with running(Rig([FIRST])) as rig:
+            await async_wait_until(lambda: rig.reader.failing, "the failure to be said")
+
+        why, _ = rig.reader.failing["first@youtube"]
+        assert why == "YouTubeChanged: YouTube said nothing of the video livevideo01 (ERROR)"
+
 
 class TestTheWatchlist:
     async def test_a_channel_added_later_is_taken_up(self, youtube, quick):
