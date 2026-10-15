@@ -360,6 +360,23 @@ class TestWatchlistCommands:
         with pytest.raises(SystemExit, match="not on the watchlist"):
             asyncio.run(refresh_emotes.main("some_channel@twitch"))
 
+    def test_subscribe_adds_a_youtube_channel_by_its_link(self, youtube, capsys):
+        youtube.add_channel("New.Channel")
+
+        asyncio.run(subscribe.main("https://www.youtube.com/@New.Channel"))
+
+        output = capsys.readouterr().out
+        assert "Added 'new.channel@youtube' to the watchlist." in output
+        # No emote service knows YouTube channels: there is nothing to say of it.
+        assert "emote" not in output
+
+    def test_a_youtube_channel_has_no_emotes_to_refresh(self, youtube):
+        youtube.add_channel("some_channel")
+        asyncio.run(subscribe.main("some_channel@youtube"))
+
+        with pytest.raises(SystemExit, match="YouTube channels have no emote set"):
+            asyncio.run(refresh_emotes.main("some_channel@youtube"))
+
 
 class TestCheckScript:
     """scripts/check.py promises to run "what CI runs"."""

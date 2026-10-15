@@ -133,7 +133,7 @@ from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
 from .timeutil import to_local_datetime
-from .watchlist import add_to_watchlist, refresh_emote_pictures
+from .watchlist import EMOTE_SOURCES, add_to_watchlist, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -507,9 +507,11 @@ async def _refresh_emote_pictures() -> None:
 
     conn = get_connection()
     try:
+        # A channel of a platform no emote service knows has no set to fetch.
         watch = [
             (row["broadcaster_user_id"], row["slug"], row["platform"], row["platform_user_id"])
             for row in get_streamers(conn)
+            if row["platform"] in EMOTE_SOURCES
         ]
     finally:
         conn.close()
@@ -4016,7 +4018,8 @@ async def shutdown():
 @app.post("/channels")
 async def add_channel(slug: str):
     """Puts a channel on the watchlist: `slug` is what was typed - a Kick
-    channel's name, a link to a channel's page, `login@twitch`."""
+    channel's name, a link to a channel's page, `login@twitch`,
+    `handle@youtube`."""
     slug = slug.strip()
     if not slug:
         raise HTTPException(status_code=400, detail="slug must not be empty")

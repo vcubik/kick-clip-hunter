@@ -348,6 +348,19 @@ class TestEmotePictures:
         assert set(self.pictures(kick_channel)) == {"KEKW"}
         assert set(self.pictures(twitch_channel)) == {"OMEGALUL"}
 
+    async def test_a_youtube_channel_has_no_set_to_fetch(self, service, youtube, caplog):
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "youtube", "UCAAAAAAAAAAAAAAAAAAAAAA", "youtube_channel@youtube")
+        finally:
+            conn.close()
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await service.main._refresh_emote_pictures()
+
+        assert not [path for _, path, _ in service.api.requests if "/users/" in path]
+        assert not any("youtube_channel" in record.getMessage() for record in caplog.records)
+
     async def test_it_happens_on_startup_without_holding_it_up(self, service, monkeypatch):
         async def no_recording(*_args):
             await asyncio.Event().wait()

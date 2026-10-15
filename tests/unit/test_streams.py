@@ -73,3 +73,24 @@ class TestTwitchLiveStatus:
     async def test_without_a_twitch_application_nothing_can_be_asked(self, kick_api):
         with pytest.raises(twitch_client.NotSetUp):
             await streams.live_status("some_channel@twitch")
+
+
+class TestYouTubeLiveStatus:
+    async def test_a_youtube_channel_streaming_is_live_since_youtube_says(self, youtube):
+        youtube.add_channel("Some.Channel").go_live(started_at="2026-03-01T20:00:00+00:00")
+
+        assert await streams.live_status("some.channel@youtube") == LiveStatus(
+            live=True, started_at=datetime(2026, 3, 1, 20, 0, tzinfo=timezone.utc)
+        )
+
+    async def test_a_youtube_channel_streaming_nothing_is_not_live(self, youtube):
+        youtube.add_channel("some.channel").schedule()
+
+        assert await streams.live_status("some.channel@youtube") == LiveStatus(live=False)
+
+    async def test_youtube_is_asked_by_the_channels_handle(self, youtube):
+        youtube.add_channel("some.channel")
+
+        await streams.live_status("some.channel@youtube")
+
+        assert youtube.calls("POST", "resolve_url")[0]["url"] == "https://www.youtube.com/@some.channel/live"

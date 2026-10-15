@@ -46,6 +46,7 @@ from tests.support.fixtures import signer as signer
 from tests.support.fixtures import tailscale as tailscale
 from tests.support.fixtures import ts_segments as ts_segments
 from tests.support.fixtures import twitch_api as twitch_api
+from tests.support.fixtures import youtube as youtube
 from tests.support.media import require_ffmpeg
 from tests.support.tailscale import FakeTailscale
 

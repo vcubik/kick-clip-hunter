@@ -4,13 +4,15 @@ locally - in that order, so a failure part-way leaves nothing half-done.
 
 A Twitch channel is looked up on Twitch and recorded with its emotes; its
 chat is subscribed by the connection that reads it (twitch_chat.py), not
-here.
+here. A YouTube channel is looked up on YouTube and recorded; it has no
+emote set of its own anywhere - its chat's emoji come with every message -
+and its chat is read by the service while it is live (youtube_chat.py).
 
 Shared by scripts/subscribe.py (CLI) and the dashboard's "add channel" form
 in main.py, so the two stay in lockstep instead of drifting apart.
 """
 
-from . import platforms, twitch_client, twitch_emotes
+from . import platforms, twitch_client, twitch_emotes, youtube_client
 from .config import load_settings
 from .db import (
     GLOBAL_EMOTES_OWNER,
@@ -41,13 +43,18 @@ def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
 
 
 # Which sets a channel's emotes beyond its platform's own come from, in words.
+# A platform that is not here has none: 7TV, BetterTTV and FrankerFaceZ know
+# no YouTube channels.
 EMOTE_SOURCES = {platforms.KICK: "7TV", platforms.TWITCH: "7TV, BetterTTV and FrankerFaceZ"}
 
 
 async def channel_emotes(platform: str, user_id: int | str) -> list[Emote]:
     """A channel's emotes beyond its platform's own, by its id there: its
     7TV set - and on Twitch its BetterTTV and FrankerFaceZ ones too (see
-    twitch_emotes.py)."""
+    twitch_emotes.py). Nothing for a platform whose channels have none (see
+    EMOTE_SOURCES)."""
+    if platform not in EMOTE_SOURCES:
+        return []
     if platform == platforms.TWITCH:
         return await twitch_emotes.get_channel_emotes_on_twitch(str(user_id))
     return await get_channel_emotes(user_id, platform)
@@ -136,10 +143,29 @@ async def add_twitch_channel(login: str) -> dict:
     }
 
 
+async def add_youtube_channel(where: str) -> dict:
+    """Puts a YouTube channel on the watchlist, under its handle with
+    YouTube's (see platforms.py). `where` is its handle, or a link to its
+    page or one of its videos. Raises ValueError if YouTube has no channel
+    there."""
+    channel = await youtube_client.find_channel(where)
+    slug = platforms.channel_name(platforms.YOUTUBE, channel.login)
+    conn = get_connection()
+    try:
+        broadcaster_id = add_platform_streamer(conn, platforms.YOUTUBE, channel.channel_id, slug)
+    finally:
+        conn.close()
+
+    return {"slug": slug, "broadcaster_user_id": broadcaster_id, "emote_count": 0, "laugh_emote_count": 0}
+
+
 async def add_to_watchlist(text: str) -> dict:
     """Puts on the watchlist the channel someone typed: a link to its page,
-    `login@twitch`, or a Kick channel's name (see platforms.parse)."""
+    `login@twitch`, `handle@youtube`, or a Kick channel's name (see
+    platforms.parse)."""
     platform, name = platforms.parse(text)
     if platform == platforms.TWITCH:
         return await add_twitch_channel(name)
+    if platform == platforms.YOUTUBE:
+        return await add_youtube_channel(name)
     return await add_channel_to_watchlist(name)

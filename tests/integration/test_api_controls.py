@@ -375,15 +375,58 @@ class TestAddingAChannel:
         assert "TWITCH_CLIENT_ID" in response.json()["detail"]
         assert service.rows("SELECT * FROM streamers") == []
 
-    async def test_the_channels_page_says_which_platform_a_channel_is_on(self, service, twitch_api):
+    async def test_the_channels_page_says_which_platform_a_channel_is_on(self, service, twitch_api, youtube):
         twitch_api.add_channel("new_channel", "123")
         await service.client.post("/channels", params={"slug": "new_channel@twitch"})
+        channel_id = youtube.add_channel("New.Channel").channel_id
+        await service.client.post("/channels", params={"slug": "youtube.com/@New.Channel"})
         service.watch("kick_channel", 555)
 
         page = (await service.client.get("/dashboard/channels")).text
 
         assert 'title="Twitch user id 123">new_channel@twitch<' in page
+        assert f'title="YouTube user id {channel_id}">new.channel@youtube<' in page
         assert 'title="Kick user id 555">kick_channel<' in page
+
+    async def test_a_link_to_a_youtube_channel_adds_that_channel_by_its_handle(self, service, youtube):
+        channel_id = youtube.add_channel("New.Channel").channel_id
+
+        response = await service.client.post("/channels", params={"slug": "https://www.youtube.com/@New.Channel"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "slug": "new.channel@youtube",
+            "broadcaster_user_id": -1,
+            "emote_count": 0,
+            "laugh_emote_count": 0,
+        }
+        (streamer,) = service.rows("SELECT slug, platform, platform_user_id, tracking_enabled FROM streamers")
+        assert tuple(streamer) == ("new.channel@youtube", "youtube", channel_id, 1)
+        # Its chat is not Kick's to deliver, and no emote service knows it.
+        assert service.api.subscribed == []
+        assert not [path for _, path, _ in service.api.requests if "7tv.io" in path]
+
+    async def test_a_link_to_a_live_stream_adds_the_channel_streaming_it(self, service, youtube):
+        youtube.add_channel("new_channel").go_live("livevideo01")
+
+        response = await service.client.post("/channels", params={"slug": "https://youtu.be/livevideo01"})
+
+        assert response.json()["slug"] == "new_channel@youtube"
+
+    async def test_adding_a_youtube_channel_twice_keeps_one(self, service, youtube):
+        youtube.add_channel("new_channel")
+
+        await service.client.post("/channels", params={"slug": "new_channel@youtube"})
+        again = await service.client.post("/channels", params={"slug": "youtube.com/@New_Channel/live"})
+
+        assert again.json()["broadcaster_user_id"] == -1
+        assert len(service.rows("SELECT * FROM streamers")) == 1
+
+    async def test_a_youtube_channel_youtube_does_not_know_is_a_404(self, service, youtube):
+        response = await service.client.post("/channels", params={"slug": "no_such_channel@youtube"})
+
+        assert response.status_code == 404
+        assert service.rows("SELECT * FROM streamers") == []
 
 
 class TestChannelTracking:

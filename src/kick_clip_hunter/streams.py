@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import kick_client, kick_stream, platforms, twitch_client, twitch_stream
+from . import kick_client, kick_stream, platforms, twitch_client, twitch_stream, youtube_client
 from .config import load_settings
 from .platforms import LiveStatus, StreamUrlError, StreamUrls
 
@@ -24,6 +24,8 @@ async def live_status(channel: str) -> LiveStatus:
         return await _kick_live_status(login)
     if platform == platforms.TWITCH:
         return await _twitch_live_status(login)
+    if platform == platforms.YOUTUBE:
+        return await _youtube_live_status(login)
     raise ValueError(f"there is no way to tell whether {channel!r} is live")
 
 
@@ -43,6 +45,13 @@ async def _twitch_live_status(login: str) -> LiveStatus:
     if stream is None:
         return LiveStatus(live=False)
     return LiveStatus(live=True, started_at=_moment(stream.get("started_at")))
+
+
+async def _youtube_live_status(login: str) -> LiveStatus:
+    video = await youtube_client.live_video(login)
+    if video is None:
+        return LiveStatus(live=False)
+    return LiveStatus(live=True, started_at=video.started_at)
 
 
 def stream_urls(channel: str) -> StreamUrls:

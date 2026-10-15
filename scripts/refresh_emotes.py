@@ -6,7 +6,9 @@ at all.
 Usage: python scripts/refresh_emotes.py <channel>
 
 <channel> is a Kick channel's name, or a Twitch channel on the watchlist: a
-link to it, or its name followed by @twitch.
+link to it, or its name followed by @twitch. A YouTube channel has no emote
+set to refresh: no emote service knows YouTube channels, and the emoji of
+its chat come with every message.
 """
 
 import argparse
@@ -41,6 +43,8 @@ def _watched_elsewhere(platform: str, name: str) -> tuple[str, int, str]:
 
 async def main(channel: str) -> None:
     platform, name = platforms.parse(channel)
+    if platform not in EMOTE_SOURCES:
+        raise SystemExit(f"{platforms.TITLES[platform]} channels have no emote set to refresh.")
     if platform == platforms.KICK:
         settings = load_settings()
         token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
