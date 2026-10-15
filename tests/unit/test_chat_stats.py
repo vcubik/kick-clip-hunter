@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import chat_stats, detector
+from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.chat_stats import Period
 from kick_clip_hunter.dashboard_view import KICK_EMOTE_IMAGE, SEVENTV_EMOTE_IMAGE
 
@@ -508,6 +509,14 @@ class TestWhoAddressesAChatter:
 class TestWhoIsWho:
     COUNTS = (("Marmot", 40), ("alice", 30), ("Alicia", 30), ("bob", 5))
 
+    def test_a_subscriber_wears_the_channels_own_badge(self):
+        badges = '[{"type":"subscriber","text":"Subscriber","count":2}]'
+        pictures = [Picture(1, 0, "https://files.kick.com/own")]
+
+        (badge,) = chat_stats.chatter_name("alice", {"alice": (None, badges)}, pictures)["badges"]
+
+        assert badge["image"] == "https://files.kick.com/own"
+
     def test_a_name_is_drawn_like_a_line_of_chat_draws_it(self):
         badges = '[{"type":"moderator","text":"Moderator"}]'
 
@@ -516,7 +525,7 @@ class TestWhoIsWho:
 
         assert known["nick"] == "alice"
         assert known["own_colour"] is not None
-        assert known["badges"] == [{"icon": "moderator", "words": "Moderator"}]
+        assert known["badges"] == [{"icon": "moderator", "image": None, "words": "Moderator"}]
         assert (unknown["own_colour"], unknown["badges"]) == (None, [])
         assert unknown["colour"] == known["colour"]
 

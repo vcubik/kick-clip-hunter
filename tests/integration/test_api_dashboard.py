@@ -32,6 +32,7 @@ from kick_clip_hunter import (
     tuning,
 )
 from kick_clip_hunter import dashboard_view as view
+from kick_clip_hunter.channel_badges import Picture
 from tests.support.browser import FakeBrowser
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes
 from tests.support.html import Element, parse
@@ -742,6 +743,31 @@ class TestOpenMoment:
         # Someone not seen since identities were kept looks as before.
         assert "style" not in bob.attrs and bob.find("img") == []
         assert bob.classes == {f"ch-nick-{view.nick_colour('bob')}"}
+
+    async def test_a_subscriber_wears_the_channels_own_badge_for_their_months(self, service):
+        own = "https://files.kick.com/channel_subscriber_badges/{}/conversion/original-fullsize.png"
+        conn = db.get_connection()
+        try:
+            db.replace_channel_badges(conn, 1, [Picture(1, 1, own.format(1)), Picture(1, 6, own.format(6))])
+            # Another channel's badges are none of this one's business.
+            db.replace_channel_badges(conn, 2, [Picture(1, 0, own.format(99))])
+        finally:
+            conn.close()
+        store_identity(
+            1,
+            "alice",
+            None,
+            [{"type": "moderator", "text": "Moderator"}, {"type": "subscriber", "text": "Subscriber", "count": 7}],
+        )
+        add_moment("channel_a", detected_at=T0)
+        add_chat("channel_a", "alice", "hello", T0 - timedelta(seconds=2))
+
+        name = open_moment(await review(service)).one("p", class_="ch-chat").one("b")
+
+        assert [(badge.attrs["alt"], badge.attrs["src"].split("?")[0]) for badge in name.find("img")] == [
+            ("Moderator", "/static/badges/moderator.svg"),
+            ("Subscriber, 7 months", own.format(6)),
+        ]
 
     async def test_who_someone_is_in_another_channel_does_not_show_here(self, service):
         store_identity(2, "alice", "#9ad8ff", [{"type": "moderator", "text": "Moderator"}])

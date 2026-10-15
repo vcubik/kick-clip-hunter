@@ -9,6 +9,9 @@ they are kept once per chatter (db.chat_identities) and only written when
 they change - the dashboard looks them up by name when it draws chat. What
 is shown is therefore the latest known state, also beside an older moment.
 
+A subscriber badge is drawn as the channel's own picture for it where the
+channel has one (see channel_badges.py), the placeholder otherwise.
+
 Pure: what a platform sent comes in, what is stored or drawn comes out.
 Everything a chatter controls is checked here before it is stored, because
 the colour ends up in a style attribute and a badge's type in a file name.
@@ -18,15 +21,17 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from . import channel_badges
 from .dashboard_view import count_words
 
 # A stored identity: the name's colour as "#rrggbb" (None if Kick sent none
 # that can be used) and the badges as JSON - a list of {"type", "text"} with
 # a "count" where the badge has one (months subscribed, subscriptions
-# gifted), in the order Kick lists them.
+# gifted) and a "tier" where a subscription is of a tier above the first
+# (Twitch's), in the order Kick lists them.
 Identity = tuple[str | None, str]
 NO_BADGES = "[]"
 
@@ -34,6 +39,7 @@ _COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 _BADGE_TYPE = re.compile(r"[a-z0-9_]{1,32}")
 MAX_BADGES = 8
 MAX_BADGE_TEXT = 40
+MAX_TIER = 9
 
 # The badge types there is a picture for (static/badges/<type>.svg). Any
 # other type is drawn as OTHER_BADGE and still named in its tooltip.
@@ -61,6 +67,9 @@ def _badge(entry: Any) -> dict[str, Any] | None:
     count = entry.get("count")
     if isinstance(count, int) and not isinstance(count, bool) and count > 0:
         badge["count"] = count
+    tier = entry.get("tier")
+    if isinstance(tier, int) and not isinstance(tier, bool) and 1 < tier <= MAX_TIER:
+        badge["tier"] = tier
     return badge
 
 
@@ -93,11 +102,16 @@ def _twitch_badge(entry: Any) -> dict[str, Any] | None:
     set_id = entry["set_id"]
     count_field = _TWITCH_BADGE_COUNTS.get(set_id)
     count = entry.get(count_field) if count_field else None
+    version = entry.get("id")
+    tier = None
+    if set_id == "subscriber" and isinstance(version, str) and version.isdigit():
+        tier = channel_badges.twitch_tier(version)[0]
     return _badge(
         {
             "type": TWITCH_BADGE_TYPES.get(set_id, set_id.replace("-", "_")),
             "text": set_id.replace("-", " ").capitalize(),
             "count": int(count) if isinstance(count, str) and count.isdigit() else None,
+            "tier": tier,
         }
     )
 
@@ -214,15 +228,23 @@ def badge_words(badge: Mapping[str, Any]) -> str:
     if not count:
         return name
     if badge["type"] == "subscriber":
-        return f"{name}, {count_words(count, 'month')}"
+        tier = f", tier {badge['tier']}" if badge.get("tier") else ""
+        return f"{name}{tier}, {count_words(count, 'month')}"
     if badge["type"] == "sub_gifter":
         return f"{name}, {count} gifted"
     return f"{name}, {count}"
 
 
-def badge_parts(badges: str) -> list[dict[str, str]]:
-    """Stored badges as they are drawn: which picture, and its words."""
-    return [
-        {"icon": badge["type"] if badge["type"] in BADGE_ICONS else OTHER_BADGE, "words": badge_words(badge)}
-        for badge in json.loads(badges or NO_BADGES)
-    ]
+def badge_parts(badges: str, pictures: Iterable[channel_badges.Picture] = ()) -> list[dict[str, str | None]]:
+    """Stored badges as they are drawn: which placeholder picture, the
+    channel's own picture where it has one (`pictures`, its subscriber
+    badges), and the badge's words."""
+    pictures = tuple(pictures)
+    parts: list[dict[str, str | None]] = []
+    for badge in json.loads(badges or NO_BADGES):
+        own = None
+        if badge["type"] == "subscriber" and pictures:
+            own = channel_badges.pick(pictures, badge.get("tier", 1), badge.get("count"))
+        icon = badge["type"] if badge["type"] in BADGE_ICONS else OTHER_BADGE
+        parts.append({"icon": icon, "image": own, "words": badge_words(badge)})
+    return parts

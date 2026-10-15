@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from kick_clip_hunter import dashboard_view, db, detector, twitch_emotes, watchlist
+from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.seventv_client import Emote
 from tests.support.kick_api import seventv_emote_id
 from tests.support.twitch_api import bttv_emote_id, ffz_emote_id
@@ -96,6 +97,21 @@ class TestAllOfAChannelsEmotes:
         }
         assert set(keywords) == {"kekw", "omegalul", "lulw"}
         assert set(keywords.values()) == {detector.EMOTE_MENTION_LAUGH_WEIGHT}
+
+    async def test_its_subscriber_badges_are_stored_too_tiers_and_all(self, twitch_api):
+        badge = "https://static-cdn.jtvnw.net/badges/v1/{}/3"
+        twitch_api.add_channel(
+            "some_channel", "101", subscriber_badges={"0": badge.format("a"), "2000": badge.format("b")}
+        )
+
+        result = await watchlist.add_twitch_channel("some_channel")
+
+        conn = db.get_connection()
+        try:
+            badges = db.get_channel_badges(conn, result["broadcaster_user_id"])
+        finally:
+            conn.close()
+        assert badges == [Picture(1, 0, badge.format("a")), Picture(2, 0, badge.format("b"))]
 
     async def test_startup_refreshes_all_three(self, twitch_api):
         twitch_api.add_channel("some_channel", "101", bttv_emotes=["OMEGALUL"])

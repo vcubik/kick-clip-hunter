@@ -2,7 +2,8 @@
 
 `FakeKickApi` answers the same endpoints, with the same response shapes, as
 Kick's public API (token, channel lookup, event subscriptions, webhook public
-key) and 7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
+key), the channel lookup of kick.com's own API (for subscriber badges) and
+7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
 real client code runs unmodified - request building, auth headers, status
 handling and JSON parsing are all exercised; only the network is replaced.
 """
@@ -39,6 +40,9 @@ class FakeChannel:
     # (width, height) of an emote's smallest picture by name; 32x32 otherwise.
     # None = 7TV lists no picture files for it.
     seventv_sizes: dict[str, tuple[int, int] | None] = field(default_factory=dict)
+    # The channel's own subscriber badges: the picture's address by the
+    # months it is shown from, as kick.com lists them.
+    subscriber_badges: dict[int, str] = field(default_factory=dict)
 
     def seventv_emote(self, name: str) -> dict:
         """One entry of the channel's emote set, in the shape 7TV sends."""
@@ -161,6 +165,14 @@ class FakeKickApi:
                 self.subscribed.append(body["broadcaster_user_id"])  # type: ignore[index]
                 return httpx.Response(200, json={"data": [{"name": "chat.message.sent", "version": 1}]})
 
+        if request.url.host == "kick.com" and path.startswith("/api/v2/channels/"):
+            # Any spelling of a channel's slug finds it, as on kick.com.
+            wanted = path.rsplit("/", 1)[1].lower()
+            channel = next((c for slug, c in self.channels.items() if slug.lower() == wanted), None)
+            if channel is None:
+                return httpx.Response(404, json={"message": "Channel not found"})
+            return httpx.Response(200, json=self._site_channel_json(channel))
+
         if request.url.host == "7tv.io" and path == "/v3/emote-sets/global":
             emotes = [self.seventv_global.seventv_emote(n) for n in self.seventv_global.seventv_emotes or []]
             return httpx.Response(200, json={"id": "GLOBAL", "name": "Global Emotes", "emotes": emotes})
@@ -177,6 +189,24 @@ class FakeKickApi:
             )
 
         return httpx.Response(404, json={"message": f"fake API has no route for {request.method} {url}"})
+
+    @staticmethod
+    def _site_channel_json(channel: FakeChannel) -> dict:
+        badges = [
+            {
+                "id": 1000 + months,
+                "channel_id": channel.broadcaster_user_id + 1,
+                "months": months,
+                "badge_image": {"srcset": "", "src": image},
+            }
+            for months, image in channel.subscriber_badges.items()
+        ]
+        return {
+            "id": channel.broadcaster_user_id + 1,
+            "user_id": channel.broadcaster_user_id,
+            "slug": channel.slug,
+            "subscriber_badges": badges,
+        }
 
     @staticmethod
     def _channel_json(channel: FakeChannel) -> dict:

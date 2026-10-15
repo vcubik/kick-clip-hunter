@@ -11,6 +11,7 @@ from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import channel_badges
 from .platforms import KICK
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "kick_clip_hunter.db"
@@ -124,6 +125,16 @@ CREATE TABLE IF NOT EXISTS chat_identities (
     colour TEXT,
     badges TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (broadcaster_user_id, username)
+);
+
+-- A channel's own subscriber badges (see channel_badges.py): the picture
+-- for subscribers of a tier from so many months on.
+CREATE TABLE IF NOT EXISTS channel_badges (
+    broadcaster_user_id INTEGER NOT NULL,
+    tier INTEGER NOT NULL,
+    months INTEGER NOT NULL,
+    image TEXT NOT NULL,
+    PRIMARY KEY (broadcaster_user_id, tier, months)
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -428,6 +439,27 @@ def get_chat_emotes(conn: sqlite3.Connection, broadcaster_user_id: int) -> dict[
         **get_channel_emotes(conn, GLOBAL_EMOTES_OWNER),
         **get_channel_emotes(conn, broadcaster_user_id),
     }
+
+
+def replace_channel_badges(
+    conn: sqlite3.Connection, broadcaster_user_id: int, pictures: Iterable[channel_badges.Picture]
+) -> None:
+    """Stores a channel's subscriber badges in place of whatever was stored
+    for it before."""
+    conn.execute("DELETE FROM channel_badges WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.executemany(
+        "INSERT INTO channel_badges (broadcaster_user_id, tier, months, image) VALUES (?, ?, ?, ?)",
+        [(broadcaster_user_id, picture.tier, picture.months, picture.image) for picture in pictures],
+    )
+    conn.commit()
+
+
+def get_channel_badges(conn: sqlite3.Connection, broadcaster_user_id: int) -> list[channel_badges.Picture]:
+    rows = conn.execute(
+        "SELECT tier, months, image FROM channel_badges WHERE broadcaster_user_id = ? ORDER BY tier, months",
+        (broadcaster_user_id,),
+    ).fetchall()
+    return [channel_badges.Picture(row[0], row[1], row[2]) for row in rows]
 
 
 def set_chat_identity(

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import chat_identity
+from . import channel_badges, chat_identity
 from .dashboard_view import (
     IMPORT_REASON,
     chat_parts,
@@ -430,10 +430,11 @@ def chat_replay(
     window: tuple[datetime, datetime] | None,
     emotes: Mapping[str, tuple[str, int, int]] | None = None,
     identities: Mapping[str, chat_identity.Identity] | None = None,
+    badges: Iterable[channel_badges.Picture] = (),
 ) -> list[dict[str, Any]]:
     """The chat lines to show beside a clip, each with the clip time it
     belongs to and whether it was sent during the moment (see chat_lines)."""
-    return chat_lines(messages, timeline.at, emotes, identities, window)
+    return chat_lines(messages, timeline.at, emotes, identities, window, badges)
 
 
 def chat_lines(
@@ -442,26 +443,29 @@ def chat_lines(
     emotes: Mapping[str, tuple[str, int, int]] | None = None,
     identities: Mapping[str, chat_identity.Identity] | None = None,
     window: tuple[datetime, datetime] | None = None,
+    badges: Iterable[channel_badges.Picture] = (),
 ) -> list[dict[str, Any]]:
     """Chat lines to show beside a video, each with the second of it the
     line belongs to: what `second_of` makes of when the message arrived.
     `emotes` are the channel's 7TV emotes, drawn as pictures (see
     dashboard_view.chat_parts). `identities` are what is known of the
     chatters by name: the colour their name has on Kick and their badges
-    (see chat_identity). Someone unknown, or without a colour, keeps the
-    colour worked out from the name. A line sent during `window`, a
-    moment's, is marked as such."""
+    (see chat_identity), a subscriber's drawn as the channel's own picture
+    from `badges` (see channel_badges). Someone unknown, or without a
+    colour, keeps the colour worked out from the name. A line sent during
+    `window`, a moment's, is marked as such."""
     identities = identities or {}
+    badges = tuple(badges)
     lines = []
     for message in messages:
         nick = message["sender_username"] or ""
-        own_colour, badges = identities.get(nick, (None, chat_identity.NO_BADGES))
+        own_colour, own_badges = identities.get(nick, (None, chat_identity.NO_BADGES))
         lines.append(
             {
                 "nick": nick,
                 "colour": nick_colour(nick),
                 "own_colour": chat_identity.readable(own_colour) if own_colour else None,
-                "badges": chat_identity.badge_parts(badges),
+                "badges": chat_identity.badge_parts(own_badges, badges),
                 "parts": chat_parts(message["content"] or "", emotes),
                 "at": number_words(second_of(_arrived(message)), 1),
                 "in_moment": _during(message, window),

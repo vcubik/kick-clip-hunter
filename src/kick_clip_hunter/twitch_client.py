@@ -100,6 +100,12 @@ async def get_archives(user_id: str, client_id: str, token: str) -> list[dict]:
     return await _get("videos", {"user_id": user_id, "type": "archive", "first": 5}, client_id, token)
 
 
+async def get_chat_badges(user_id: str, client_id: str, token: str) -> list[dict]:
+    """The badge sets a channel has of its own - its subscriber badges, its
+    custom bits badges - each with its versions' pictures."""
+    return await _get("chat/badges", {"broadcaster_id": user_id}, client_id, token)
+
+
 async def subscribe_chat(broadcaster_user_id: str, user_id: str, session_id: str, client_id: str, user_token: str):
     """Subscribes the chat of a channel to an EventSub WebSocket session,
     read as the account `user_id`, whose token it is."""

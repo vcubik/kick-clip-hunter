@@ -1,6 +1,9 @@
 """Add a channel to the watchlist: fetches its 7TV emotes, makes
 sure its chat.message.sent events are subscribed, and records the streamer
 locally - in that order, so a failure part-way leaves nothing half-done.
+Its subscriber badges are fetched too, but a channel is added without them
+if they can't be: they are only pictures, and are fetched again on every
+start.
 
 A Twitch channel is looked up on Twitch and recorded with its emotes; its
 chat is subscribed by the connection that reads it (twitch_chat.py), not
@@ -12,13 +15,16 @@ Shared by scripts/subscribe.py (CLI) and the dashboard's "add channel" form
 in main.py, so the two stay in lockstep instead of drifting apart.
 """
 
-from . import platforms, twitch_client, twitch_emotes, youtube_client
+import logging
+
+from . import channel_badges, platforms, twitch_client, twitch_emotes, youtube_client
 from .config import load_settings
 from .db import (
     GLOBAL_EMOTES_OWNER,
     add_platform_streamer,
     add_streamer,
     get_connection,
+    replace_channel_badges,
     replace_channel_emotes,
     replace_channel_keywords,
 )
@@ -27,9 +33,12 @@ from .kick_client import (
     get_app_access_token,
     get_channel_by_slug,
     get_event_subscriptions,
+    get_site_channel,
     subscribe_chat_messages,
 )
 from .seventv_client import Emote, emote_pictures, get_channel_emotes, get_global_emotes
+
+logger = logging.getLogger(__name__)
 
 
 def store_channel_emotes(conn, broadcaster_id: int, emotes: list[Emote]) -> int:
@@ -82,6 +91,40 @@ async def refresh_emote_pictures(
     return len(pictures)
 
 
+async def channel_badge_pictures(platform: str, name: str, user_id: int | str) -> list[channel_badges.Picture]:
+    """A channel's own subscriber badges (see channel_badges.py), by its
+    name and its id on its own platform."""
+    if platform == platforms.TWITCH:
+        settings = load_settings()
+        token = await twitch_client.app_token(settings)
+        sets = await twitch_client.get_chat_badges(str(user_id), settings.twitch_client_id, token)
+        return channel_badges.from_twitch(sets)
+    return channel_badges.from_kick(await get_site_channel(name))
+
+
+async def refresh_badge_pictures(broadcaster_id: int, slug: str, platform_user_id: str | None = None) -> int:
+    """Fetches a watched channel's subscriber badges again and stores them.
+    A channel is asked about by its name and its id on its own platform (a
+    Kick channel's is the id it is kept by). Returns how many there are."""
+    platform, name = platforms.split(slug)
+    pictures = await channel_badge_pictures(platform, name, platform_user_id or broadcaster_id)
+    conn = get_connection()
+    try:
+        replace_channel_badges(conn, broadcaster_id, pictures)
+    finally:
+        conn.close()
+    return len(pictures)
+
+
+async def _store_badges_if_any(broadcaster_id: int, slug: str, platform_user_id: str | None = None) -> None:
+    """Fetches and stores the subscriber badges of a channel just added -
+    or says why it couldn't and leaves it without them."""
+    try:
+        await refresh_badge_pictures(broadcaster_id, slug, platform_user_id)
+    except Exception as error:
+        logger.warning("could not fetch the subscriber badges of %s: %r", slug, error)
+
+
 async def add_channel_to_watchlist(slug: str) -> dict:
     """Raises ValueError (via get_channel_by_slug) if no such Kick channel exists."""
     settings = load_settings()
@@ -108,6 +151,7 @@ async def add_channel_to_watchlist(slug: str) -> dict:
         laugh_count = store_channel_emotes(conn, broadcaster_id, emotes)
     finally:
         conn.close()
+    await _store_badges_if_any(broadcaster_id, slug)
 
     return {
         "slug": slug,
@@ -134,6 +178,7 @@ async def add_twitch_channel(login: str) -> dict:
         laugh_count = store_channel_emotes(conn, broadcaster_id, emotes)
     finally:
         conn.close()
+    await _store_badges_if_any(broadcaster_id, slug, user["id"])
 
     return {
         "slug": slug,
