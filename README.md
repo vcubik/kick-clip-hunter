@@ -2,17 +2,19 @@
 
 [![tests](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml/badge.svg)](https://github.com/vcubik/kick-clip-hunter/actions/workflows/tests.yml)
 
-Watches a list of [Kick](https://kick.com) and [Twitch](https://www.twitch.tv) streamers, notices
-when chat reacts to something, and cuts a clip of that moment from a rolling recording of the
-stream - then puts it on a small dashboard to be reviewed and rated.
+Watches a list of [Kick](https://kick.com), [Twitch](https://www.twitch.tv) and
+[YouTube](https://www.youtube.com) streamers, notices when chat reacts to something, and cuts a
+clip of that moment from a rolling recording of the stream - then puts it on a small dashboard to
+be reviewed and rated.
 
 ```
 Kick chat ────── signed webhooks ──┐
-                 (official API)    ├─> detector ─────────────────> moment ─┐
-Twitch chat ──── EventSub ─────────┘   per-channel rolling baseline        ├─> clip + context ──> dashboard
-                 WebSocket                                                  │   (ffmpeg)           review, rate, tag
-Kick / Twitch ── HLS segments ───────> recorder ──> 10-minute buffer ──────┘
-stream
+                 (official API)    │
+Twitch chat ──── EventSub ─────────┼─> detector ─────────────────> moment ─┐
+                 WebSocket         │   per-channel rolling baseline        ├─> clip + context ──> dashboard
+YouTube chat ─── read while live ──┘                                       │   (ffmpeg)           review, rate, tag
+Kick, Twitch, ── HLS segments ───────> recorder ──> 10-minute buffer ──────┘
+YouTube stream
 ```
 
 ## What it does
@@ -23,9 +25,10 @@ stream
   things that look like a reaction but aren't (one account spamming, a poll, a raid, everyone
   dancing to a song) are filtered out. [`detector.py`](src/kick_clip_hunter/detector.py) explains
   the rules.
-- **Watches Kick and Twitch alike.** A channel of either is added by its name or a link to it,
-  and from then on goes through the same detector, recorder and dashboard: Twitch's chat with its
-  own emotes and those of 7TV, BetterTTV and FrankerFaceZ, Kick's with its own and 7TV's.
+- **Watches Kick, Twitch and YouTube alike.** A channel of any of them is added by its name or a
+  link to it, and from then on goes through the same detector, recorder and dashboard: Twitch's
+  chat with its own emotes and those of 7TV, BetterTTV and FrankerFaceZ, Kick's with its own and
+  7TV's, YouTube's with its emoji - read while the channel is live.
 - **Records what it watches.** Every live channel on the watchlist is recorded into a rolling
   ten-minute buffer by downloading the stream's own HLS segments, which keeps working through ad
   breaks and other mid-stream discontinuities. A clip whose footage an ad covered is cut from the
@@ -73,8 +76,8 @@ stream
   stream is over, Kick has dropped its chat subscriptions or the tunnel is down. The Health page
   tells them apart: when the last webhook arrived, what the last check of the subscriptions found
   and when Kick was found to have dropped some, how Twitch's chat connection stands and as which
-  account it reads, what each recorder is doing, how much room the disk has, where the tunnel
-  stands. Every page says beside its name when one of them needs a look.
+  account it reads, whose YouTube chat comes in, what each recorder is doing, how much room the
+  disk has, where the tunnel stands. Every page says beside its name when one of them needs a look.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -120,6 +123,9 @@ run on Windows; the test suite also runs on Linux.
    Nothing has to reach the service from outside for Twitch: its chat comes over a connection the
    service opens itself.
 
+YouTube needs nothing set up: its channels are looked up, and their chat read, the way the site's
+own pages do it, as a visitor who is not signed in.
+
 ## Usage
 
 Run the server:
@@ -129,8 +135,9 @@ PYTHONPATH=src python -m uvicorn kick_clip_hunter.main:app --host 0.0.0.0 --port
 ```
 
 Open the dashboard at `http://localhost:8000/dashboard`. Channels can be added on its Channels
-page, or from the command line - by a Kick channel's name, a link to a Kick or Twitch channel, or a
-Twitch channel's name followed by `@twitch`:
+page, or from the command line - by a Kick channel's name, a link to a Kick, Twitch or YouTube
+channel (or to a YouTube video of one), or a Twitch channel's name followed by `@twitch` or a
+YouTube channel's handle followed by `@youtube`:
 
 ```
 PYTHONPATH=src python scripts/subscribe.py <channel>
@@ -140,7 +147,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 
 | Script | What it does |
 |---|---|
-| `refresh_emotes.py <channel>` | Re-fetch a watched channel's emotes - 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's: what the detector listens for and the pictures chat is drawn with. |
+| `refresh_emotes.py <channel>` | Re-fetch a watched channel's emotes - 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's: what the detector listens for and the pictures chat is drawn with. (A YouTube channel has none: its emoji come with every message.) |
 | `twitch_login.py` | Sign in the Twitch account the service reads chat as - once, and again if the Health page says the sign-in has lapsed. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. The Settings page does the same with the values in its form. |
@@ -157,9 +164,9 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-About 3100 tests cover the pipeline from a signed webhook, or a Twitch chat message, to a clip on
-the dashboard. They need no Kick or Twitch credentials, no network and none of the ML models, and
-CI runs them on Windows and Linux on every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
+About 3600 tests cover the pipeline from a signed webhook, or a Twitch or YouTube chat message,
+to a clip on the dashboard. They need no Kick or Twitch credentials, no network and none of the ML
+models, and CI runs them on Windows and Linux on every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
 
 ## How it is put together
@@ -177,6 +184,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `recording_moments.py` | Moments looked for in a recorded stream afterwards: which chat to replay, where in the recording's file a replayed moment's clip lies, and which of them are moments already. |
 | `kick_client.py`, `kick_chat.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, its webhook's chat message, 7TV's emote API, webhook signature verification. |
 | `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
+| `youtube_client.py`, `youtube_chat.py`, `youtube_stream.py`, `streamlink_support.py` | YouTube: the site's own API - who a channel is, whether it is live, its chat; the chat of a live channel, looked at every few seconds; where a live stream is (through streamlink, imported once for Twitch and YouTube). |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
@@ -200,6 +208,11 @@ Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
   recording Twitch streams waits for a streamlink release that follows.
 - Twitch lets an application read chat only on behalf of an account, which can read up to a hundred
   channels at once.
+- YouTube is asked the way its own pages ask, through an API it does not publish: no key and no
+  daily quota, but it can change without notice, and YouTube may take a machine that asks a lot for
+  a robot. Its chat is looked at every few seconds, so a message arrives a second or few after it
+  was written, and what is written while the service cannot look is not read. Where a stream is
+  comes from streamlink, as for Twitch.
 - The laugh patterns are tuned for the chat conventions of the channels this was built on (Czech
   and Slovak); the emote-based signals are language-independent, and which emotes count as
   laughing can be added to per channel.

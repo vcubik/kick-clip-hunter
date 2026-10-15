@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-kick-clip-hunter watches a list of Kick.com and Twitch streamers and detects potentially
+kick-clip-hunter watches a list of Kick.com, Twitch and YouTube streamers and detects potentially
 viral/funny moments from chat activity (message-rate spikes, emote/keyword frequency). Detected
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
@@ -43,6 +43,9 @@ set from the dashboard's Settings page (see `tuning.py` below).
   twitch.tv/activate (Twitch's device flow) and keeps the tokens in
   `data/twitch_token.json`, where the running service picks them up. See
   `twitch_auth.py` below for why an account is needed at all
+- YouTube needs nothing set up: a channel is looked up, and its chat read while it is
+  live, through YouTube's own web API (InnerTube), as a visitor who is not signed in -
+  see `youtube_client.py` below for why not the official API
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
@@ -63,11 +66,14 @@ set from the dashboard's Settings page (see `tuning.py` below).
   its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
   - `subscribe.py <channel>` — add a channel to the watchlist: a Kick channel's name, a link
-    to a Kick or Twitch channel, or `name@twitch` (`platforms.parse`). Fetches and stores its
+    to a Kick, Twitch or YouTube channel (or to a YouTube video of one), `name@twitch`, or
+    `handle@youtube` (`platforms.parse`). Fetches and stores its
     emotes - the keywords the detector listens for and the pictures the dashboard draws -
     and for a Kick channel subscribes to `chat.message.sent` on Kick's side unless a
     subscription is already there - so re-running it is safe and repairs a dropped
-    subscription. A Twitch channel's chat is subscribed by the running service
+    subscription. A Twitch channel's chat is subscribed by the running service, and a
+    YouTube channel's read by it while the channel is live; a YouTube channel has no emote
+    set anywhere (7TV, BetterTTV and FrankerFaceZ know none)
   - `refresh_emotes.py <channel>` — re-fetch and re-classify an already-watched channel's
     emotes (keywords and pictures: 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's)
     without talking to Kick's subscription API at all
@@ -202,13 +208,15 @@ Watchlist (streamers, each on its platform - see platforms.py)
        -> Kick webhook subscription (chat.message.sent) -> FastAPI webhook receiver
     -> Twitch: an account signed in for the service (user:read:chat) -> EventSub
        WebSocket the service holds open, every Twitch channel's chat subscribed on it
+    -> YouTube: the site's own web API (InnerTube), no account -> the chat of the stream
+       a YouTube channel is streaming, looked at every few seconds while it is live
     -> each message as a ChatMessage -> _take_chats (stored a batch at a time)
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
        chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer - found by a browser on Kick,
-       by streamlink on Twitch) -> a detected moment cuts a clip from that buffer, path
+       by streamlink on Twitch and YouTube) -> a detected moment cuts a clip from that buffer, path
        stored back on the moment
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
@@ -217,25 +225,32 @@ Watchlist (streamers, each on its platform - see platforms.py)
 ```
 
 Module map (`src/kick_clip_hunter/`):
-- `platforms.py` — the platforms (Kick, Twitch) and how a channel's name says which one it
-  is on. Pure. A Kick channel is known by its slug, as it always was; a channel anywhere
-  else by its name there and the platform's, `login@twitch` - so the same name on two
+- `platforms.py` — the platforms (Kick, Twitch, YouTube) and how a channel's name says
+  which one it is on. Pure. A Kick channel is known by its slug, as it always was; a
+  channel anywhere else by its name there and the platform's, `login@twitch`,
+  `handle@youtube` (the handle in small letters, without its "@") - so the same name on two
   platforms is two channels, and everything kept by name (chat, moments, recorders,
   folders, the chat delay) stays apart without a migration. In the database a channel is
   kept by `streamers.broadcaster_user_id`: a Kick channel's is its Kick user id, any other
   channel's a negative number given out when it is added (`db.add_platform_streamer`),
   which no Kick id can be; its id on its own platform is in `streamers.platform_user_id`
   and its platform in `streamers.platform`. `parse` is what someone typed (a link, a name)
-  as a platform and a name; `LiveStatus`, `StreamUrls`, `StreamUrlError` are the shapes in
-  which a platform's answers come back
+  as a platform and a name - for a link to YouTube that names no handle (a channel's id, an
+  older kind of address, a video), the link itself, for YouTube to say whose it is;
+  `LiveStatus`, `StreamUrls` (with `expires_at` for addresses that run out),
+  `StreamUrlError` are the shapes in which a platform's answers come back
 - `streams.py` — what is asked of a channel's platform, sent to the one its name says:
-  whether it is live and since when (`live_status` - Kick's API, or Helix), where its
-  stream is (`stream_urls` - `kick_stream.py`, or `twitch_stream.py`)
+  whether it is live and since when (`live_status` - Kick's API, Helix, or YouTube's own),
+  where its stream is (`stream_urls` - `kick_stream.py`, `twitch_stream.py` or
+  `youtube_stream.py`)
 - `chat_message.py` — one chat message as the service takes it in, whichever platform it
   came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
-  `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id), where those
-  stand, the sender's identity, whether they run the channel. `kick_chat.py` makes one of
-  Kick's webhook payload, `twitch_chat.chat_message` of a Twitch event
+  `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id, YouTube's emoji
+  with `youtube.` or `emoji.`), where those stand, the sender's identity, whether they
+  run the channel. `kick_chat.py` makes one of Kick's webhook payload,
+  `twitch_chat.chat_message` of a Twitch event, `youtube_chat.chat_message` of a YouTube
+  chat item; what a chatter typed that would read as a token is kept so that it does not
+  (`typed`)
 - `kick_client.py` — app access token + channel lookup + event subscription
 - `seventv_client.py` — fetches a channel's 7TV emote set (public API), by its id on its
   own platform (7TV knows Kick and Twitch channels): each emote's name
@@ -281,6 +296,43 @@ Module map (`src/kick_clip_hunter/`):
   and FrankerFaceZ's together (7TV's wins a name, then BetterTTV's). A BetterTTV or
   FrankerFaceZ emote is kept with its service before its id (`bttv.<id>`, `ffz.<id>`),
   which tells `dashboard_view.typed_emote_image` where its picture is
+- `youtube_client.py` — YouTube, asked the way its own web pages ask (InnerTube,
+  `youtube.com/youtubei/v1`, as the web client, not signed in, the cookie question
+  declined). The official Data API was set aside: its daily quota (10,000 units, a look at
+  a chat 5 of them) would not see one busy chat through a day, and it has no playback at
+  all. InnerTube takes no key, but is not published and changes without notice - an
+  answer without what is read of it raises `YouTubeChanged` rather than being guessed at,
+  and a player asking the visitor to sign in (YouTube's robot check) `Refused`. A channel
+  is found from any address that leads to it (`navigation/resolve_url`, a video's
+  `player` for a link to a video), its page (`browse`) says its id, title and handle
+  (`find_channel`); whether it is live is where its /live address leads, and that video's
+  `player` (`live_video`; one only scheduled is not live). Its chat: the chat's page
+  (`/live_chat?v=`) says who to ask as and where the view with every message begins - not
+  "Top chat", YouTube's pick (`open_chat`) - and each `live_chat/get_live_chat` brings
+  what was written since the look before and where to look next, nowhere once it is over
+  (`look_at_chat`). The web client's version a page says it is on is gone by from then on
+- `youtube_chat.py` — YouTube's chat, read while a channel is live (`ChatReader`, started
+  by the lifespan): a task per YouTube channel on the watchlist looks every `LOOK_SECONDS`
+  whether it is live, reads its chat until the chat is over, and looks again. A chat is
+  looked at again `POLL_SECONDS` after a look - the shortest after one that brought
+  messages, longer and longer after ones that brought none - and the messages of a look
+  are handed on as one batch. The first look at a chat (what was written before the reader
+  came) is left out, and so is what is written while it cannot look (a chat opened again
+  after failed looks, `RETRY_SECONDS`). A chat turned off is said and tried again after
+  `UNAVAILABLE_SECONDS`. YouTube's emoji stand in the text as tokens - a channel's own
+  (and YouTube's) as `[emote:youtube.<picture>:<name>]` by their picture on
+  yt3.ggpht.com, the ones everyone has as `[emote:emoji.<code points>:<name>]` drawn from
+  Google's Noto set - so the detector weighs them by name like any platform's emotes
+  ("face_with_tears_of_joy" is laughing); the sender's "@" is dropped; a Super Chat with
+  words is a message, what the chat says of members and gifts is not. What it saw is kept
+  for the Health page
+- `youtube_stream.py` — where a live YouTube stream is: `youtube_client.live_video` says
+  which video, streamlink the master playlist of its stream (nothing else is asked of it).
+  YouTube's addresses run out after six hours and say when (`expires_at`)
+- `streamlink_support.py` — streamlink, imported once for `twitch_stream.py` and
+  `youtube_stream.py`: the service starts without it (only those streams then fail, saying
+  what to install), and the standard log levels it renames in small letters for the whole
+  process are named back
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
   `ALTER TABLE`s in `get_connection()`, not a migration framework. Chat is stored a batch
   at a time (`insert_chat_messages`, `set_chat_identities`: one commit each, however many
@@ -327,8 +379,8 @@ Module map (`src/kick_clip_hunter/`):
   `_take_chats`: dropped while watching or the channel's tracking is off (unless its
   stream is being recorded whole), stored with its sender's identity, then counted by the
   detector one by one (`_detect`), which may open a moment session. Kick's webhook hands
-  it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`) a
-  batch. A stream recording is started and stopped through `POST
+  it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`) and
+  YouTube's (`_youtube_reader`, see `youtube_chat.py`) a batch. A stream recording is started and stopped through `POST
   /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
@@ -404,7 +456,9 @@ Module map (`src/kick_clip_hunter/`):
   without Tailscale is not trouble: the service may be reached another way.
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
   sends with every chat message (`sender.identity`), as does Twitch (`color`, `badges`,
-  put in Kick's form by `from_twitch`). Kept once per chatter per channel
+  put in Kick's form by `from_twitch`) and YouTube (`authorBadges` - owner, moderator,
+  verified, member and for how long - by `from_youtube`; YouTube gives names no colour).
+  Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
   and writes only when that changes, so what the dashboard shows is the latest known
   state, and chatters not seen since this was added keep the colour worked out from their
@@ -570,7 +624,10 @@ Module map (`src/kick_clip_hunter/`):
   group of segments, the one the clip is best cut from, so context beyond a break in the
   stream is left out. The analysis steps are given the clip without its context
   (`clip_alone`), cut out of the file for as long as they run. `trim_clip` cuts any
-  stretch of a file out as a file of its own (see `clip_trim.py`).
+  stretch of a file out as a file of its own (see `clip_trim.py`). A stream whose
+  addresses run out (YouTube's, `StreamUrls.expires_at`) has them asked for anew
+  `RENEW_BEFORE_SECONDS` before, and the run goes on at the new address without starting
+  over - same numbering, same group unless the variant changed.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips
@@ -698,7 +755,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (about 3100 tests, a few minutes); `python
+- `python -m pytest` runs everything (about 3600 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -716,7 +773,10 @@ run what, the manual live checklist). What matters when changing code:
   first. Fake at the boundary (`tests/support/`: `FakeKickApi`, `FakeTwitchApi` (Helix,
   Twitch's OAuth, BetterTTV, FrankerFaceZ - the `twitch_api` fixture, which also sets the
   service up for Twitch), `FakeEventSub` (Twitch's chat WebSocket, the `eventsub`
-  fixture), `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an initialization segment),
+  fixture), `FakeYouTube` (InnerTube: a channel's addresses, its page, a video's player, a
+  live chat's page and every look at it - the `youtube` fixture; the other platforms'
+  fakes answer through the fake Kick's transport, so a test can have several),
+  `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an initialization segment),
   `WebhookSigner`, `ChatSim`, the `service` fixture) rather than patching the service's own
   functions, and never `sleep` - pass the clock in or use `wait_until`.
 - Detector tests are written against `detector.py`'s constants, not their current values, so
@@ -786,6 +846,18 @@ initialization segment (`EXT-X-MAP`), on the same program clock - which the reco
 keeps as `.m4s` in a group named for its initialization segment (kept beside them as
 `<group>.init`, and written first when a clip is joined from them).
 
+**YouTube (`youtube_stream.py`)** - the same recorder and buffer, no browser. YouTube's
+API has no playback either: which video a channel is streaming comes from InnerTube
+(`youtube_client.live_video`), and that video's master playlist from streamlink, which
+asks YouTube's player API itself (as its Android client). The playlists are plainer than
+IVS's: 5s MPEG-TS segments, H.264 and AAC up to 1080p, one program date-time at the top
+for the first segment listed (carried forward), titles empty; the live edge is a few
+seconds behind the clock. No ads are marked in them - YouTube's ads are played by the
+viewer's player - and there is no VOD. Their addresses (master, variants, segments) carry
+`/expire/<epoch>/`, six hours after they were handed out, and are bound to the machine's
+IP; the recorder renews them ten minutes before (see `recorder.py`). Unverified on a
+real stream: how a stream with its own server-side ads, if YouTube serves any, looks.
+
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`
   (body `{"duration": 180}`, cuts a 180s source buffer *server-side* — not a client-side
@@ -807,6 +879,16 @@ keeps as `.m4s` in a group named for its initialization segment (kept beside the
 - Twitch's chat is read as an account; a sign-in that lapsed (password changed, access
   taken back, 30 days without a renewal) stops Twitch's chat until `twitch_login.py` is
   run again, which the Health page says.
+- A YouTube channel is `handle@youtube` (its handle in small letters; a channel without
+  a usable handle is called by its id) and is asked about by its handle - so, as on
+  Twitch, a renamed handle is not followed until the channel is added again. Its id
+  (`UC...`) is kept as its `platform_user_id`.
+- YouTube's chat is not pushed: each live YouTube channel costs a request every one to
+  five seconds while it is live, and one every half minute while it is not. Everything
+  YouTube is asked goes through InnerTube, which YouTube can change at any time - the
+  Health page's YouTube part, and `YouTubeChanged`/`Refused` in the log, are where that
+  shows. A machine YouTube takes for a robot gets `LOGIN_REQUIRED` from the player
+  ("Sign in to confirm you're not a bot") and HTTP 429s.
 
 - A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
   and as much again for the minutes its file takes to make (the footage is copied once,
