@@ -125,7 +125,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
   line's time plays the clip from there - and downloaded as subtitles (.srt) timed to the
   moment's file, or beside the cut in the Trim dialog. `GET /dashboard/channels` has the
-  watchlist, the per-clip analysis switches and shutdown. Beside each channel are its
+  watchlist and the per-clip analysis switches; shutting the service down is the button
+  at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else, and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
   how much has been recorded so far - and its "Always record" switch, with which a

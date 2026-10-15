@@ -1750,18 +1750,26 @@ class TestShuttingDown:
             assert page.find("div", class_="ch-banner-halt") == []
             assert page.find("button", disabled=True) == []
 
-        button = (await channels(service)).one("button", data_shutdown_open=True)
-        assert button.text == "Shut down"
+    async def test_every_page_has_the_button_in_its_bar(self, service):
+        for page in (await review(service), await channels(service)):
+            button = page.one("header", class_="bar").one("button", data_shutdown_open=True)
+            assert button.text == "Shut down"
+
+    async def test_the_channels_page_no_longer_has_a_section_for_it(self, service):
+        page = await channels(service)
+
+        assert page.find("section", data_shutdown=True) == []
+        assert len(page.find(data_shutdown_open=True)) == 1
 
     async def test_asking_to_shut_down_takes_a_second_step(self, service):
-        section = (await channels(service)).one("section", data_shutdown=True)
+        dialog = (await review(service)).one("dialog", data_shutdown=True)
 
-        confirm = section.one("div", data_shutdown_confirm=True)
-        assert "hidden" in confirm.attrs
+        assert "open" not in dialog.attrs
         assert (
             "Stops watching, ends any stream recording and shuts down once the clips and recordings in progress "
-            "are saved." in confirm.text
+            "are saved." in dialog.text
         )
+        confirm = dialog.one("div", data_shutdown_confirm=True)
         assert [button.text for button in confirm.find("button")] == ["Shut down", "Cancel"]
 
     async def test_every_page_says_how_much_work_is_still_running(self, service, monkeypatch):
@@ -1776,12 +1784,11 @@ class TestShuttingDown:
     async def test_the_controls_that_no_longer_apply_are_disabled(self, service, monkeypatch):
         monkeypatch.setattr(service.main, "_shutdown_requested", True)
 
-        page = await channels(service)
-
-        watching = page.one("span", aria_label="Watching")
-        assert all("disabled" in half.attrs for half in watching.find("button"))
-        button = page.one("button", data_shutdown_open=True)
-        assert "disabled" in button.attrs and button.text == "Shutting down"
+        for page in (await review(service), await channels(service)):
+            watching = page.one("span", aria_label="Watching")
+            assert all("disabled" in half.attrs for half in watching.find("button"))
+            button = page.one("button", data_shutdown_open=True)
+            assert "disabled" in button.attrs and button.text == "Shutting down"
 
 
 @pytest.fixture(scope="module")

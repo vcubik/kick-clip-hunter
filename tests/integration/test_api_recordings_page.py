@@ -1120,5 +1120,5 @@ class TestTheTrimDialogOfARecording:
 
         page = await recordings(service)
 
-        assert page.find("dialog") == [] and page.find("button", **{"data-trim-open": True}) == []
+        assert page.one("main").find("dialog") == [] and page.find("button", **{"data-trim-open": True}) == []
         assert page.find("figure") == []

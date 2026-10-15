@@ -1421,14 +1421,17 @@
     }
   }
 
-  // Shutting down is asked for twice: the button, then the same word again
-  // next to a sentence that says what it will do.
+  // Shutting down is asked for twice: the button in the bar, then the same
+  // word again in a dialog, next to a sentence that says what it will do.
   function askToShutDown(asking) {
-    const section = one("[data-shutdown]");
-    one("[data-shutdown-ask]", section).hidden = asking;
-    one("[data-shutdown-confirm]", section).hidden = !asking;
+    const dialog = one("[data-shutdown]");
+    if (!asking) {
+      dialog.close();
+      return;
+    }
+    dialog.showModal();
     // Cancel takes the focus, so a stray Enter or Space backs out.
-    one(asking ? "[data-shutdown-cancel]" : "[data-shutdown-open]", section).focus();
+    one("[data-shutdown-cancel]", dialog).focus();
   }
 
   async function shutDown(button) {
@@ -1442,6 +1445,9 @@
     }
     const pending = (await response.json()).pending_work_count;
     one("[data-shutdown-confirm]", section).hidden = true;
+    const opener = one("[data-shutdown-open]");
+    opener.disabled = true;
+    opener.textContent = "Shutting down";
     say(
       section,
       pending
@@ -2316,6 +2322,8 @@
       trimKey(dialog, event);
       return;
     }
+    // The shutdown dialog's keys are the browser's own (Escape closes it).
+    if (one("[data-shutdown][open]")) return;
     if (target.matches("[data-title]")) {
       // Enter finishes the name and so does Escape; leaving the field saves it.
       if (event.key === "Escape" || event.key === "Enter") {
