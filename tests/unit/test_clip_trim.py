@@ -187,32 +187,92 @@ class TestAStretchOfAnyFootage:
 
 class TestWhereChatGoes:
     @pytest.mark.parametrize("place", clip_trim.CHAT_PLACES)
-    def test_into_the_picture_on_either_side_or_a_video_of_its_own(self, place):
+    def test_into_the_picture_or_a_video_of_its_own(self, place):
         assert clip_trim.chat_where(place) == place
 
     def test_a_video_of_its_own_unless_it_is_said(self):
         # As it was before chat could be drawn into the picture.
         assert clip_trim.chat_where(None) == clip_trim.CHAT_APART
 
-    @pytest.mark.parametrize("value", ["top", "", "RIGHT", 1, ["right"]])
+    @pytest.mark.parametrize("value", ["right", "left", "", "VIDEO", 1, ["video"]])
     def test_anywhere_else_is_refused(self, value):
-        with pytest.raises(TrimError, match="chat_where must be one of right, left, apart"):
+        # Right and left were where it could go before it could be put anywhere.
+        with pytest.raises(TrimError, match="chat_where must be one of video, apart"):
             clip_trim.chat_where(value)
+
+
+class TestWhereInThePictureChatGoes:
+    def test_shares_of_the_picture_it_is_given(self):
+        box = clip_trim.chat_box({"left": 0.05, "top": 0.5, "width": 0.25, "height": 0.4})
+
+        assert box == clip_trim.ChatBox(0.05, 0.5, 0.25, 0.4)
+
+    def test_whole_numbers_and_the_whole_picture_will_do(self):
+        assert clip_trim.chat_box({"left": 0, "top": 0, "width": 1, "height": 1}) == clip_trim.ChatBox(0, 0, 1, 1)
+
+    def test_one_that_ends_on_the_edge_but_for_what_writing_a_share_out_leaves(self):
+        assert clip_trim.chat_box({"left": 0.7, "top": 0.1, "width": 0.30000000001, "height": 0.9}) is not None
+
+    def test_where_it_goes_when_nothing_is_said(self):
+        assert clip_trim.chat_box(None) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"left": 0.1, "top": 0.1, "width": 0.5},
+            {"left": -0.1, "top": 0.1, "width": 0.5, "height": 0.5},
+            {"left": 0.1, "top": 0.1, "width": 0, "height": 0.5},
+            {"left": 0.6, "top": 0.1, "width": 0.5, "height": 0.5},
+            {"left": 0.1, "top": 0.6, "width": 0.5, "height": 0.5},
+            {"left": "0.1", "top": 0.1, "width": 0.5, "height": 0.5},
+            {"left": True, "top": 0.1, "width": 0.5, "height": 0.5},
+            {"left": float("nan"), "top": 0.1, "width": 0.5, "height": 0.5},
+            [0.1, 0.1, 0.5, 0.5],
+            "bottom right",
+        ],
+        ids=[
+            "no-height",
+            "off-the-left",
+            "no-width",
+            "past-the-right",
+            "past-the-bottom",
+            "text",
+            "yes",
+            "nan",
+            "list",
+            "words",
+        ],
+    )
+    def test_anything_but_a_box_within_the_picture_is_refused(self, value):
+        with pytest.raises(TrimError, match="chat_box must be the left, top, width and height of the chat"):
+            clip_trim.chat_box(value)
 
 
 class TestHowChatIsToBe:
     def test_everything_the_dialog_says_of_it(self):
-        asked = {"chat_shift": -2.5, "chat_background": "#0A2540", "chat_where": "left"}
+        asked = {
+            "chat_shift": -2.5,
+            "chat_background": "#0A2540",
+            "chat_where": "video",
+            "chat_box": {"left": 0.1, "top": 0.2, "width": 0.3, "height": 0.4},
+        }
 
-        assert clip_trim.chat_look(asked) == clip_trim.ChatLook(-2.5, "#0a2540", "left")
+        assert clip_trim.chat_look(asked) == clip_trim.ChatLook(
+            -2.5, "#0a2540", "video", box=clip_trim.ChatBox(0.1, 0.2, 0.3, 0.4)
+        )
 
     def test_as_it_always_was_where_nothing_is_said(self):
-        assert clip_trim.chat_look({}) == clip_trim.ChatLook(0.0, None, clip_trim.CHAT_APART)
+        assert clip_trim.chat_look({}) == clip_trim.ChatLook(0.0, None, clip_trim.CHAT_APART, box=None)
 
     @pytest.mark.parametrize(
         "asked",
-        [{"chat_shift": 99}, {"chat_background": "navy"}, {"chat_where": "top"}],
-        ids=["shift", "background", "where"],
+        [
+            {"chat_shift": 99},
+            {"chat_background": "navy"},
+            {"chat_where": "top"},
+            {"chat_box": {"left": 0.9, "top": 0, "width": 0.5, "height": 0.5}},
+        ],
+        ids=["shift", "background", "where", "box"],
     )
     def test_any_of_it_that_cannot_be_is_refused(self, asked):
         with pytest.raises(TrimError):
@@ -233,9 +293,8 @@ class TestChatGoingWithAStretch:
             "Have it drawn into the video, or put on a background, for a stretch this long"
         )
 
-    @pytest.mark.parametrize("place", [clip_trim.CHAT_RIGHT, clip_trim.CHAT_LEFT])
-    def test_drawn_into_the_picture_it_goes_with_any(self, place):
-        clip_trim.with_chat(3 * 3600, place)
+    def test_drawn_into_the_picture_it_goes_with_any(self):
+        clip_trim.with_chat(3 * 3600, clip_trim.CHAT_VIDEO)
 
     def test_on_a_background_it_goes_with_any(self):
         clip_trim.with_chat(3 * 3600, clip_trim.CHAT_APART, "#18181b")

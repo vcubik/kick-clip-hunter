@@ -37,12 +37,11 @@ CHAT_SHIFT_LIMIT_SECONDS = 10.0
 # from what was stored when the file was cut. A time this far past an end is
 # taken to mean the end.
 SLACK_SECONDS = 1.0
-# Where chat can go: drawn into the cut's picture, at the bottom on the
-# right or on the left, or a video of its own (APART).
-CHAT_RIGHT = "right"
-CHAT_LEFT = "left"
+# Where chat can go: drawn into the cut's picture (VIDEO), where the dialog
+# put it (see ChatBox), or a video of its own (APART).
+CHAT_VIDEO = "video"
 CHAT_APART = "apart"
-CHAT_PLACES = (CHAT_RIGHT, CHAT_LEFT, CHAT_APART)
+CHAT_PLACES = (CHAT_VIDEO, CHAT_APART)
 # The longest stretch chat can go with as a see-through video of its own.
 # Every frame of one is whole, three to five megabytes for every second of
 # a busy chat (see chat_video.py): ten minutes of it are gigabytes. Chat
@@ -220,14 +219,56 @@ def chat_background(value: Any) -> str | None:
     return value.lower()
 
 
+class ChatBox(NamedTuple):
+    """Where in a cut's picture its chat is drawn, as the Trim dialog put it:
+    the left and top of its column and how wide and tall it is, each as a
+    share of the picture's width or height. How large its text is follows
+    from how wide it is (see chat_video.placement)."""
+
+    left: float
+    top: float
+    width: float
+    height: float
+
+
+# How far past the picture's edge a box may reach and still be taken to end
+# there: what is left of it after a share has been written out.
+_EDGE_SLACK = 1e-6
+
+
+def chat_box(value: Any) -> ChatBox | None:
+    """Where chat is drawn into the picture, from what was asked for:
+    {"left", "top", "width", "height"}, shares of the picture - or None,
+    for where it goes when nothing is said."""
+    if value is None:
+        return None
+    wrong = TrimError("chat_box must be the left, top, width and height of the chat as shares of the picture")
+    if not isinstance(value, Mapping):
+        raise wrong
+    shares = [value.get(name) for name in ChatBox._fields]
+    if not all(isinstance(share, int | float) and not isinstance(share, bool) for share in shares):
+        raise wrong
+    left, top, width, height = (float(share) for share in shares)
+    if not all(math.isfinite(share) for share in (left, top, width, height)):
+        raise wrong
+    if left < 0 or top < 0 or width <= 0 or height <= 0:
+        raise wrong
+    if left + width > 1 + _EDGE_SLACK or top + height > 1 + _EDGE_SLACK:
+        raise wrong
+    return ChatBox(left, top, width, height)
+
+
 class ChatLook(NamedTuple):
     """How a cut's chat is to be: how many seconds later than where they
     stand its lines are shown (earlier, if negative), the colour behind
-    them if there is one and where it goes (see CHAT_PLACES)."""
+    them if there is one and where it goes (see CHAT_PLACES) - and, drawn
+    into the picture, where it is there (None: where it goes when nothing
+    is said)."""
 
     shift: float = 0.0
     background: str | None = None
     where: str = CHAT_APART
+    box: ChatBox | None = None
 
 
 def chat_look(asked: Mapping[str, Any]) -> ChatLook:
@@ -237,4 +278,5 @@ def chat_look(asked: Mapping[str, Any]) -> ChatLook:
         chat_shift(asked.get("chat_shift")),
         chat_background(asked.get("chat_background")),
         chat_where(asked.get("chat_where")),
+        chat_box(asked.get("chat_box")),
     )

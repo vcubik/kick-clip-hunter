@@ -266,7 +266,8 @@ class MadeUpColumn:
     given seconds - and animated emotes, each given as the line it is in,
     how far in from the left it is and its picture, which are left out of
     the column's pictures as the browser leaves them out (unless
-    `set_aside` is False). Remembers which pictures of it were asked for."""
+    `set_aside` is False). Its pictures are `width` wide. Remembers which
+    pictures of it were asked for."""
 
     def __init__(
         self,
@@ -274,7 +275,9 @@ class MadeUpColumn:
         line_pixels: int = LINE,
         emotes: Iterable[tuple[int, int, bytes]] = (),
         set_aside: bool = True,
+        width: int = WIDTH,
     ) -> None:
+        self.width = width
         self.tops = [index * line_pixels for index in range(len(arrivals))]
         self.bottoms = [top + line_pixels for top in self.tops]
         self.arrivals = arrivals
@@ -289,11 +292,11 @@ class MadeUpColumn:
         page = chat_video.PAGE_PIXELS
         if not 0 <= index < max(1, math.ceil((self.bottoms[-1] if self.bottoms else 0) / page)):
             return None
-        image = Image.new("RGBA", (WIDTH, page))
+        image = Image.new("RGBA", (self.width, page))
         for top, bottom in zip(self.tops, self.bottoms, strict=True):
             upper, lower = max(top - index * page, 0), min(bottom - index * page, page)
             if lower > upper:
-                image.paste((255, 255, 255, 255), (0, upper, WIDTH, lower))
+                image.paste((255, 255, 255, 255), (0, upper, self.width, lower))
         for emote in self.emotes if self.set_aside else ():
             upper, lower = max(emote.top - index * page, 0), min(emote.top + emote.height - index * page, page)
             if lower > upper:
@@ -432,6 +435,35 @@ class TestComposition:
         times = chat_video.frame_times(2.0)
 
         assert len(list(chat_video.frames(MadeUpColumn([0.5]).column(), times))) == len(times)
+
+
+class TestShapes:
+    """Frames of a column of chat drawn into a picture where the Trim dialog
+    put it: of any height, and drawn twice as fine for chat larger than the
+    page has it."""
+
+    def test_a_shorter_column_shows_the_newest_lines_and_fades_over_less(self):
+        shape = chat_video.Shape(200)
+        made_up = MadeUpColumn([0.1 * step for step in range(20)])
+
+        (frame,) = chat_video.frames(made_up.column(), [5.0], shape)
+
+        rows = np.frombuffer(frame, np.uint8).reshape(200, WIDTH, 4)[:, WIDTH // 2, 3]
+        assert shape.fade == 50
+        assert rows[0] == 0 and rows[25] == pytest.approx(128, abs=2)
+        assert rows[50 : 200 - BOTTOM].min() == 255 and rows[200 - BOTTOM :].max() == 0
+
+    def test_twice_as_fine_it_has_twice_as_many_pixels_every_way(self):
+        shape = chat_video.Shape(HEIGHT, density=2)
+        made_up = MadeUpColumn([0.5], line_pixels=2 * LINE, width=2 * WIDTH)
+
+        (frame,) = chat_video.frames(made_up.column(), [1.0], shape)
+
+        assert shape.size == (2 * WIDTH, 2 * HEIGHT)
+        rows = np.frombuffer(frame, np.uint8).reshape(2 * HEIGHT, 2 * WIDTH, 4)[:, -1, 3]
+        newest = 2 * HEIGHT - 2 * BOTTOM - 2 * LINE
+        assert rows[newest:].tolist() == [255] * 2 * LINE + [0] * 2 * BOTTOM
+        assert rows[:newest].max() == 0
 
 
 class TestAnimatedEmotes:
@@ -599,21 +631,76 @@ class TestProgress:
 # -- chat drawn into a cut ------------------------------------------------------
 
 
-class TestPlacement:
-    def test_in_a_1080p_picture_the_column_is_the_video_of_its_own(self):
-        assert chat_video.placement(1920, 1080, "right") == (WIDTH, HEIGHT, 1920 - WIDTH - 24, 1080 - HEIGHT - 24)
+Placed, Shape = chat_video.Placed, chat_video.Shape
 
-    def test_on_the_left_it_is_as_far_in_from_that_side(self):
-        assert chat_video.placement(1920, 1080, "left") == (WIDTH, HEIGHT, 24, 1080 - HEIGHT - 24)
+
+class TestPlacementWhereNothingIsSaid:
+    def test_in_a_1080p_picture_it_is_the_video_of_its_own_at_the_bottom_right(self):
+        assert chat_video.placement(1920, 1080) == Placed(1920 - WIDTH - 24, 1080 - HEIGHT - 24, WIDTH, HEIGHT, Shape())
 
     def test_it_takes_the_same_share_of_a_smaller_picture(self):
-        assert chat_video.placement(1280, 720, "right") == (320, 480, 1280 - 320 - 16, 720 - 480 - 16)
+        assert chat_video.placement(1280, 720) == Placed(1280 - 320 - 16, 720 - 480 - 16, 320, 480, Shape())
 
     def test_an_upright_picture_is_measured_by_its_width(self):
-        assert chat_video.placement(720, 1280, "right") == (320, 480, 720 - 320 - 16, 1280 - 480 - 16)
+        assert chat_video.placement(720, 1280) == Placed(720 - 320 - 16, 1280 - 480 - 16, 320, 480, Shape())
+
+    def test_in_a_larger_picture_it_is_drawn_twice_as_fine(self):
+        assert chat_video.placement(3840, 2160).shape == Shape(HEIGHT, density=2)
 
     def test_sizes_and_corners_are_even_for_the_picture_s_colour_to_line_up(self):
-        assert all(value % 2 == 0 for value in chat_video.placement(854, 480, "right"))
+        placed = chat_video.placement(854, 480)
+
+        assert all(value % 2 == 0 for value in placed[:4])
+
+
+class TestPlacementInABox:
+    """Where the Trim dialog put chat: its box's width says how large its
+    text is, its height how much of the column shows."""
+
+    def test_it_is_where_the_box_is_and_as_large(self):
+        placed = chat_video.placement(1920, 1080, (0.05, 0.1, 0.25, 0.5))
+
+        # A quarter of 1920 is the page's own width: text as large as there.
+        assert placed == Placed(96, 108, 480, 540, Shape(540))
+
+    def test_a_narrower_box_has_smaller_text_and_more_of_the_column_in_the_same_height(self):
+        placed = chat_video.placement(1920, 1080, (0.05, 0.1, 0.125, 0.5))
+
+        assert placed == Placed(96, 108, 240, 540, Shape(1080))
+
+    def test_chat_larger_than_the_page_has_it_is_drawn_twice_as_fine(self):
+        placed = chat_video.placement(1920, 1080, (0.05, 0.1, 0.375, 0.5))
+
+        assert placed == Placed(96, 108, 720, 540, Shape(360, density=2))
+
+    @pytest.mark.parametrize(
+        ("width", "across"),
+        [(0.05, round(WIDTH * chat_video.SCALE_LEAST)), (0.9, round(WIDTH * chat_video.SCALE_MOST))],
+        ids=["too-small", "too-large"],
+    )
+    def test_its_text_is_never_smaller_or_larger_than_it_may_be(self, width, across):
+        assert chat_video.placement(1920, 1080, (0.0, 0.0, width, 0.5)).across == across
+
+    def test_at_least_a_few_lines_of_it_show(self):
+        placed = chat_video.placement(1920, 1080, (0.0, 0.5, 0.25, 0.02))
+
+        assert placed.shape.height == chat_video.COLUMN_LEAST and placed.down == chat_video.COLUMN_LEAST
+
+    def test_it_is_kept_within_the_picture(self):
+        # Made larger than the box, the text takes it past the right edge.
+        placed = chat_video.placement(1920, 1080, (0.97, 0.9, 0.03, 0.1))
+
+        assert placed.left + placed.across <= 1920 and placed.top + placed.down <= 1080
+
+    def test_it_never_reaches_past_a_small_picture(self):
+        placed = chat_video.placement(320, 180, (0.0, 0.0, 1.0, 1.0))
+
+        assert (placed.across, placed.down) == (320, 180)
+
+    def test_sizes_and_corners_are_even(self):
+        placed = chat_video.placement(1366, 768, (0.31, 0.27, 0.233, 0.411))
+
+        assert all(value % 2 == 0 for value in placed[2:4])
 
 
 class TestBitrate:
@@ -629,15 +716,22 @@ class TestBitrate:
 
 class TestFilters:
     def test_a_1080p_picture_takes_the_frames_as_they_are(self):
-        assert chat_video._graph(WIDTH, HEIGHT, 1416, 336, None) == "[0:v][1:v]overlay=1416:336:format=auto[picture]"
+        graph = chat_video._graph(Placed(1416, 336, WIDTH, HEIGHT, Shape()), None)
+
+        assert graph == "[0:v][1:v]overlay=1416:336:format=auto[picture]"
 
     def test_a_smaller_one_has_them_made_smaller_first(self):
-        graph = chat_video._graph(320, 480, 944, 224, None)
+        graph = chat_video._graph(Placed(944, 224, 320, 480, Shape()), None)
 
         assert graph == "[1:v]scale=320:480:flags=area[chat];[0:v][chat]overlay=944:224:format=auto[picture]"
 
+    def test_frames_drawn_twice_as_fine_are_made_the_size_of_the_box(self):
+        graph = chat_video._graph(Placed(96, 108, 720, 540, Shape(360, density=2)), None)
+
+        assert graph == "[1:v]scale=720:540:flags=area[chat];[0:v][chat]overlay=96:108:format=auto[picture]"
+
     def test_a_background_is_drawn_where_the_chat_goes_before_it_is_laid_over(self):
-        graph = chat_video._graph(WIDTH, HEIGHT, 24, 336, "#0a2540")
+        graph = chat_video._graph(Placed(24, 336, WIDTH, HEIGHT, Shape()), "#0a2540")
 
         assert graph == (
             f"[0:v]drawbox=24:336:{WIDTH}:{HEIGHT}:0x0a2540:t=fill[base];[base][1:v]overlay=24:336:format=auto[picture]"

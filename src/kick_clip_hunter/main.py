@@ -1609,7 +1609,7 @@ async def _burn_background(
             first,
             cut.duration,
             video,
-            look.where,
+            look.box,
             look.background,
             progress,
         )
@@ -1795,10 +1795,19 @@ def _trim_dialog() -> dict:
         "min_seconds": dashboard_view.number_words(clip_trim.MIN_SECONDS),
         "chat_shift_limit": dashboard_view.number_words(clip_trim.CHAT_SHIFT_LIMIT_SECONDS),
         "chat_background": clip_trim.DEFAULT_CHAT_BACKGROUND,
-        "chat_places": {
-            "right": clip_trim.CHAT_RIGHT,
-            "left": clip_trim.CHAT_LEFT,
-            "apart": clip_trim.CHAT_APART,
+        "chat_places": {"video": clip_trim.CHAT_VIDEO, "apart": clip_trim.CHAT_APART},
+        # What the dialog's box of chat over the picture keeps to, as the
+        # chat drawn into the cut does (see chat_video.placement), and where
+        # it starts out.
+        "chat_column": {
+            "width": chat_video.WIDTH,
+            "height": chat_video.HEIGHT,
+            "margin": chat_video.MARGIN_PIXELS,
+            "scale_least": chat_video.SCALE_LEAST,
+            "scale_most": chat_video.SCALE_MOST,
+            "least": chat_video.COLUMN_LEAST,
+            "fade": chat_video.FADE_PIXELS,
+            "bottom": chat_video.BOTTOM_PIXELS,
         },
     }
 
@@ -3464,9 +3473,10 @@ async def _asked_trim(request: Request) -> dict:
 async def trim_moment(moment_id: int, request: Request):
     """Starts cutting a stretch of a moment's footage out as a video of its
     own (see clip_trim.py), and with `chat` its chat (chat_video.py): drawn
-    into its picture at the bottom on the right or on the left if
-    `chat_where` says "right" or "left", otherwise a video of its own to
-    lay over it. `start` and `end` are clip time; `chat_shift` moves chat
+    into its picture if `chat_where` says "video" - in `chat_box`, its
+    left, top, width and height as shares of the picture, or at the bottom
+    on the right without one - otherwise a video of its own to lay over it.
+    `start` and `end` are clip time; `chat_shift` moves chat
     that many seconds later than the channel's chat delay has it,
     `chat_background` ("#rrggbb") puts a colour behind it instead of
     nothing. Its animated emotes move. What was cut

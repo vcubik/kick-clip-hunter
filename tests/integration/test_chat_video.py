@@ -292,7 +292,7 @@ def footage(tmp_path_factory) -> Path:
 
 # Where chat goes in that picture, on the right: its column at a third of
 # the size of the video of its own, near the bottom right corner.
-ACROSS, DOWN, LEFT, TOP = chat_video.placement(640, 360, "right")
+LEFT, TOP, ACROSS, DOWN, _SHAPE = chat_video.placement(640, 360)
 
 
 def difference(burned: np.ndarray, plain: np.ndarray) -> np.ndarray:
@@ -305,7 +305,7 @@ class TestBurning:
         output = tmp_path / "cut.mp4"
 
         # A copied cut from here would begin at second 2, on a keyframe.
-        encoder = chat_video.burn([line(0.5)], footage, 3.3, 4.0, output, "right")
+        encoder = chat_video.burn([line(0.5)], footage, 3.3, 4.0, output)
 
         assert encoder == "libx264"
         assert probe(output) == {"duration": pytest.approx(4.0, abs=0.1), "streams": ["audio", "video"]}
@@ -319,7 +319,7 @@ class TestBurning:
     def test_chat_is_drawn_where_it_goes_once_a_line_has_arrived(self, browser, footage, tmp_path):
         output = tmp_path / "cut.mp4"
 
-        chat_video.burn([line(1.0)], footage, 0.0, 3.0, output, "right")
+        chat_video.burn([line(1.0)], footage, 0.0, 3.0, output)
 
         before = difference(picture(output, 0.5, "rgb24"), picture(footage, 0.5, "rgb24"))
         after = difference(picture(output, 2.5, "rgb24"), picture(footage, 2.5, "rgb24"))
@@ -330,21 +330,37 @@ class TestBurning:
         assert after[chat].max() > 200
         assert after[:, :LEFT].mean() < 8
 
-    def test_on_the_left_it_is_drawn_there(self, browser, footage, tmp_path):
+    def test_in_a_box_it_is_drawn_there(self, browser, footage, tmp_path):
         output = tmp_path / "cut.mp4"
+        box = (0.05, 0.1, 0.25, 0.5)
 
-        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, "left")
+        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, box)
 
-        across, down, left, top = chat_video.placement(640, 360, "left")
+        left, top, across, down, _shape = chat_video.placement(640, 360, box)
+        assert (left, top) == (32, 36)
         after = difference(picture(output, 1.0, "rgb24"), picture(footage, 1.0, "rgb24"))
         assert after[top : top + down, left : left + across].max() > 200
         assert after[:, left + across :].mean() < 8
+        assert browser.densities == [1]
+
+    def test_larger_than_the_page_has_it_it_is_drawn_twice_as_fine(self, browser, footage, tmp_path):
+        output = tmp_path / "cut.mp4"
+
+        # All of the picture: a third larger than the page's column.
+        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, (0.0, 0.0, 1.0, 1.0))
+
+        assert browser.densities == [2]
+        after = difference(picture(output, 1.0, "rgb24"), picture(footage, 1.0, "rgb24"))
+        # Its one line is just above the bottom: its 36 pixels of the page
+        # drawn as 72 and made two thirds as large, 48 of the picture.
+        assert after[300:345].max() > 200
+        assert after[:280].mean() < 8
 
     def test_animated_emotes_move_in_the_picture_too(self, browser, footage, tmp_path):
         browser.emote = RED_THEN_BLUE
         output = tmp_path / "cut.mp4"
 
-        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output, "right")
+        chat_video.burn([line(0.0)], footage, 0.0, 2.0, output)
 
         row, column = TOP + round(EMOTE_ROW * DOWN / HEIGHT), LEFT + round(EMOTE_COLUMN * ACROSS / WIDTH)
         early, late = (picture(output, at, "rgb24")[row, column] for at in (0.25, 0.75))
@@ -353,7 +369,7 @@ class TestBurning:
     def test_a_background_is_drawn_behind_the_chat(self, browser, footage, tmp_path):
         output = tmp_path / "cut.mp4"
 
-        chat_video.burn([line(5.0)], footage, 0.0, 2.0, output, "right", background="#0a2540")
+        chat_video.burn([line(5.0)], footage, 0.0, 2.0, output, background="#0a2540")
 
         # Before any line, the column is the colour all over.
         column = picture(output, 1.0, "rgb24")[TOP + 4 : TOP + DOWN - 4, LEFT + 4 : LEFT + ACROSS - 4]
@@ -368,7 +384,7 @@ class TestBurning:
                 raise InterruptedError("shutting down")
 
         with pytest.raises(InterruptedError):
-            chat_video.burn([line(0.5)], footage, 0.0, 4.0, tmp_path / "cut.mp4", "right", progress=give_up)
+            chat_video.burn([line(0.5)], footage, 0.0, 4.0, tmp_path / "cut.mp4", progress=give_up)
 
         assert said == [0.0, 0.25, 0.5]
         assert list(tmp_path.iterdir()) == []
@@ -377,7 +393,7 @@ class TestBurning:
         video = tmp_path / "cut.mp4"
         video.write_bytes(footage.read_bytes())
 
-        chat_video.burn([line(0.0)], video, 0.0, 3.0, video, "right")
+        chat_video.burn([line(0.0)], video, 0.0, 3.0, video)
 
         assert probe(video)["duration"] == pytest.approx(3.0, abs=0.1)
         assert [path.name for path in tmp_path.iterdir()] == ["cut.mp4"]

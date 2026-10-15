@@ -169,10 +169,13 @@ asked for; is each frame of it the column of chat as it stood then - the newest 
 from the frame it arrives in, none of the lines still to come, the oldest fading out at the top -
 see-through, or on the colour asked for; do animated emotes show the frame of
 their animation the video is at, every copy of one alike, moving with their line; is chat drawn
-into the cut's picture on the side asked for, from the very frame that was set, with how far it has
+into the cut's picture in the box asked for - its text as large as the box is wide within the limits,
+as much of the column as the box is tall, within the picture, twice as fine where it is larger than
+the page has it - from the very frame that was set, with how far it has
 got said and given up at a shutdown; does a new cut replace the one before, and is each state said
 in words? Does the dialog have a field for either end of the cut to be typed into, and a choice of
-where its chat goes?
+where its chat goes, and a box over the picture for chat drawn into it, with what the script
+keeps it to?
 
 **9. Settings** - `unit/test_tuning.py`, `integration/test_api_settings.py`, `unit/test_replay_chat.py`
 Is every field of what the service works from settable by exactly one setting, and is what the code
@@ -429,11 +432,15 @@ Run this on a live channel after changing any of the above, or the code right ne
    beside the picture in the dialog, each there at once at the bottom, the ones before moving up
    for it, the oldest fading out at the top, with emotes and badges drawn - animated emotes moving
    as they do beside the picture, in their places, with every copy of an emote alike. With "on
-   a background" ticked it is the colour behind the text and a small H.264 file. Then choose "in the video, on
-   the right" and Export again: the dialog counts up while the video is made with its chat in it,
-   and offers one file to download, which begins on the very frame that was set and has the chat
-   at the bottom right of the picture, as large as two thirds of its height - on a panel of the
-   colour if one was picked. The log says, the first time, which encoder chat is drawn into
+   a background" ticked it is the colour behind the text and a small H.264 file. Then choose "in the
+   video": the chat beside the player moves into a box over the picture, at the bottom right,
+   dressed as in the video. Drag it to the left edge and a corner of it to make it larger: it
+   keeps within the picture, the text grows with its width and its height shows more or fewer
+   lines; it will not get smaller or larger than it may. Export: the dialog counts up while the
+   video is made with its chat in it, and offers one file to download, which begins on the very
+   frame that was set and has the chat where the box was and as large, the text sharp - on a
+   panel of the colour if one was picked. Reopened (or the page reloaded), the box is where it
+   was left. The log says, the first time, which encoder chat is drawn into
    videos with - `h264_amf` on this host's graphics card - and then `moment N cut with its chat
    in it`. "Make its chat" on a video exported without chat draws it into that video, in its
    place. Closed and opened again, the dialog still has the stretch, the downloads and where chat
@@ -471,10 +478,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    the log says `stream recording N trimmed`. With the chat box ticked the lines beside the
    picture follow it, and its chat is made as for a clip - as a see-through video of its own
    for a stretch of up to ten minutes (a longer one is refused in a sentence that says what
-   can be done instead). Set half an hour and "in the video, on the right": the dialog counts
+   can be done instead). Set half an hour and "in the video": the dialog counts
    up for about half as long as the stretch runs on this host (the log says `cut with its chat
    in it ... encoded with h264_amf`), and the file plays from the frame that was set with chat
-   in the corner throughout, about as large as the recording's own share of it. Shut the
+   where its box was throughout. Shut the
    service down from the Channels page while one is being made: it does not wait for it, and
    the log says it was given up. A second export replaces the first.
    The file is where the page says it is and plays in another player.

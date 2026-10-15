@@ -95,6 +95,23 @@
   --w-gutter: 44px;
   --w-when: 152px;
 
+  /* Chat as a chat video draws it (static/chat_video.css), which the Trim
+     dialog shows over the picture where it will be drawn into it: on a
+     column as wide as the video's, made as large as the box it is in. */
+  --clip-chat-width: 480px;
+  --clip-chat-text: #FFFFFF;
+  --clip-chat-edge: #000000;
+  --clip-chat-size: 21px;
+  --clip-chat-line: 30px;
+  --clip-chat-pad: 3px;     /* above and below a line */
+  --clip-chat-gap: 6px;     /* after a name */
+  --clip-chat-room: 10px;   /* under the newest line */
+  --clip-chat-emote: 28px;
+  --clip-chat-emote-sink: -8px;
+  --clip-chat-badge: 20px;
+  --clip-chat-badge-sink: -4px;
+  --clip-chat-badge-radius: 4px;
+
   /* One family; its width axis carries role. */
   --font-sans: Archivo, "Segoe UI", system-ui, sans-serif;
   --width-brand: 118%;    /* the product name only */
@@ -388,7 +405,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* The clip sits straight on the field: square, a 1px `sunk` edge, black
    behind a picture that is not 16:9. */
-.player { aspect-ratio: 16 / 9; background: var(--video); border: 1px solid var(--sunk); }
+.player { position: relative; aspect-ratio: 16 / 9; background: var(--video); border: 1px solid var(--sunk); }
 .player video { display: block; width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
 .no-clip { padding: var(--space-24) 0; border-top: 1px solid var(--quiet); border-bottom: 1px solid var(--quiet); }
 
@@ -426,6 +443,35 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-view { display: flex; gap: var(--space-12); }
 .trim-view .player { flex: 1 1 0; min-width: 0; max-height: max(200px, calc(100vh - var(--trim-rest))); }
 .trim-chat { display: flex; flex-direction: column; flex: none; width: var(--w-trim-chat); padding-top: var(--space-8); border: 1px solid var(--line); }
+
+/* Chat drawn into the picture: a box over it (placed by the script), which
+   is dragged to where chat goes and by a corner to how large it is. The
+   chat beside the player is moved into it and drawn as the video will have
+   it: the oldest lines fading out at the top, the newest above a little
+   room at the bottom. */
+.trim-overlay { position: absolute; cursor: move; touch-action: none; outline: 1px dashed var(--lit); }
+.trim-overlay .trim-chat {
+  position: absolute; top: 0; left: 0; width: var(--clip-chat-width); padding: 0; border: 0;
+  transform: scale(var(--chat-scale, 1)); transform-origin: 0 0; pointer-events: none;
+  mask-image: linear-gradient(to bottom, transparent, var(--clip-chat-edge) var(--chat-fade, 0));
+}
+.trim-overlay .chat-lines { flex: 1 1 0; max-height: none; overflow: hidden; padding: 0 var(--space-12) var(--clip-chat-room); }
+.trim-overlay .ch-chat {
+  padding: var(--clip-chat-pad) 0; border: 0; font-weight: 600; font-size: var(--clip-chat-size); line-height: var(--clip-chat-line);
+  color: var(--clip-chat-text);
+  text-shadow:
+    1px 0 0 var(--clip-chat-edge), -1px 0 0 var(--clip-chat-edge), 0 1px 0 var(--clip-chat-edge), 0 -1px 0 var(--clip-chat-edge),
+    1px 1px 0 var(--clip-chat-edge), -1px -1px 0 var(--clip-chat-edge), 1px -1px 0 var(--clip-chat-edge), -1px 1px 0 var(--clip-chat-edge),
+    0 2px 0 var(--clip-chat-edge), 1px 2px 0 var(--clip-chat-edge), -1px 2px 0 var(--clip-chat-edge);
+}
+.trim-overlay .ch-chat b { margin-right: var(--clip-chat-gap); font-weight: 800; }
+.trim-overlay .ch-emote { width: auto; height: var(--clip-chat-emote); margin: 0 var(--space-2); vertical-align: var(--clip-chat-emote-sink); }
+.trim-overlay .ch-badge { width: var(--clip-chat-badge); height: var(--clip-chat-badge); margin-right: var(--space-4); vertical-align: var(--clip-chat-badge-sink); border-radius: var(--clip-chat-badge-radius); }
+.trim-corner { position: absolute; width: var(--w-handle); height: var(--w-handle); margin: calc(var(--w-handle) / -2); background: var(--lit); border: 1px solid var(--on-lit); }
+.trim-corner.is-nw { top: 0; left: 0; cursor: nwse-resize; }
+.trim-corner.is-ne { top: 0; right: 0; cursor: nesw-resize; }
+.trim-corner.is-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.trim-corner.is-se { bottom: 0; right: 0; cursor: nwse-resize; }
 .trim-range { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
 .trim-range label { display: inline-flex; align-items: center; gap: var(--space-8); }
 .trim-range b { min-width: 52px; font-weight: 600; color: var(--text); }
