@@ -6,10 +6,11 @@
 // player from the strip under it, replays chat in step with the clip, runs
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
 // the dialog a stretch of footage is cut out for an editor in - a moment's or
-// a recording's - saves the Settings page's form, starts and stops the
-// recording of a whole stream, replays a recording's chat beside it, puts
-// what chat did over all of it under it, looks for moments in it, and keeps
-// the Health page saying what holds now.
+// a recording's - has a moment's transcript made, follows it as the clip
+// plays and saves what is put right in it, saves the Settings page's form,
+// starts and stops the recording of a whole stream, replays a recording's
+// chat beside it, puts what chat did over all of it under it, looks for
+// moments in it, and keeps the Health page saying what holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -340,7 +341,8 @@
     one("[data-chat-foot]", article).textContent = box.querySelector("[data-at]") ? `In step with the clip, at ${words}` : "";
   }
 
-  // Brings the transport, the playhead and the chat in line with the player.
+  // Brings the transport, the playhead, the chat and the transcript in line
+  // with the player.
   function paint(video) {
     const article = video.closest(".moment");
     if (!article) return;
@@ -349,6 +351,7 @@
     const words = timeWords(time, span);
     const length = span ? span.clip : Number.isFinite(video.duration) ? video.duration : 0;
     const playing = !video.paused && !video.ended;
+    followTranscript(article, time);
 
     one("[data-now]", article).textContent = words;
     one("[data-length]", article).textContent = clock(length);
@@ -916,6 +919,8 @@
   function leaveTrim(dialog) {
     trimClip(dialog).pause();
     clearTimeout(trimWatch);
+    // The cut it made has subtitles of its own beside the clip.
+    if (dialog.closest(".moment") && one("[data-transcript] [data-transcript-lines]")) refreshTranscript();
   }
 
   // Whether the chat goes with the video: its lines are then shown beside
@@ -1109,7 +1114,12 @@
       const span = trimSpan(dialog);
       cut.textContent = `The video holds ${trimWords(trim.cut.from, span)} to ${trimWords(trim.cut.to, span)} (${(trim.cut.to - trim.cut.from).toFixed(1)} s).`;
     }
-    for (const [part, url] of [["[data-trim-video]", trim.video_url], ["[data-trim-chat-video]", trim.chat_url]]) {
+    const files = [
+      ["[data-trim-video]", trim.video_url],
+      ["[data-trim-chat-video]", trim.chat_url],
+      ["[data-trim-subtitles]", trim.subtitles_url],
+    ];
+    for (const [part, url] of files) {
       const link = one(part, dialog);
       link.hidden = !url;
       if (url) link.href = url;
@@ -1204,11 +1214,163 @@
     if (row) row.hidden = false;
   }
 
+  // ---- What is said in the clip -----------------------------------------
+  //
+  // Beside a clip, on a tab next to its chat, is its transcript: what is
+  // said in its footage, line by line with its times. The service writes it
+  // down when asked, which takes it a while, so the tab is fetched again
+  // every couple of seconds until it is there. A line's time plays the clip
+  // from there, the line being said is marked as the clip plays, and what
+  // is put right in a line is saved as the line is left. The subtitles made
+  // of it are downloaded from the tab - and from the Trim dialog, beside
+  // the cut they are timed to.
+
+  const TRANSCRIPT_POLL_MS = 2000;
+  let transcriptWatch = null;
+  // The tab shown beside a clip, kept from one moment to the next.
+  let side = "chat";
+
+  // A line is one row until more is in it - which can only be measured
+  // while it is on screen.
+  function growLines(root) {
+    for (const field of all("[data-transcript-line]", root)) {
+      if (!field.closest("[hidden]")) grow(field);
+    }
+  }
+
+  function showSide(article, which) {
+    const tabs = all("[data-side]", article);
+    if (!tabs.length) return;
+    side = which;
+    for (const tab of tabs) tab.setAttribute("aria-selected", String(tab.dataset.side === which));
+    for (const pane of all("[data-side-pane]", article)) pane.hidden = pane.dataset.sidePane !== which;
+    growLines(article);
+    // Chat that arrived while it was out of sight is at the bottom.
+    const box = one("[data-chat]", article);
+    if (which === "chat" && box) box.scrollTop = box.scrollHeight;
+  }
+
+  function chooseSide(tab) {
+    const article = tab.closest(".moment");
+    showSide(article, tab.dataset.side);
+    const video = one("[data-clip]", article);
+    if (video) paint(video);
+  }
+
+  // Marks the line of the transcript being said at a clip time and keeps it
+  // in sight - unless a line is being put right, which stays where it is.
+  function followTranscript(article, time) {
+    const list = one("[data-transcript-lines]", article);
+    if (!list) return;
+    let now = null;
+    for (const line of list.children) {
+      const said = Number(line.dataset.from) <= time && time < Number(line.dataset.to);
+      line.classList.toggle("is-now", said);
+      if (said) now = line;
+    }
+    if (!now || list.closest("[hidden]") || list.contains(document.activeElement)) return;
+    if (now.offsetTop < list.scrollTop || now.offsetTop + now.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = now.offsetTop - list.clientHeight / 3;
+    }
+  }
+
+  function playLine(button) {
+    const video = clipOf(button);
+    if (video) goTo(video, Number(button.closest("[data-from]").dataset.from), { play: true });
+  }
+
+  // The tab as the service has it now, in place of the one on the page.
+  async function refreshTranscript() {
+    const current = one("[data-transcript]");
+    if (!current) return;
+    let markup = null;
+    try {
+      const response = await fetch(current.dataset.page);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // what is on the page stays, and is asked about again
+    }
+    const fresh = markup && one("[data-transcript]", new DOMParser().parseFromString(markup, "text/html"));
+    const now = one("[data-transcript]");
+    // Another moment may be open by the time the answer is here; and a
+    // line that is being put right is not taken away from under the cursor.
+    if (!fresh || !now || now.dataset.page !== fresh.dataset.page || now.contains(document.activeElement)) return;
+    now.replaceWith(fresh);
+    growLines(fresh);
+    const video = clipOf(fresh);
+    if (video) paint(video);
+    watchTranscript();
+  }
+
+  function watchTranscript() {
+    const busy = Boolean(one("[data-transcript][data-busy]"));
+    if (busy && transcriptWatch === null) {
+      transcriptWatch = setInterval(refreshTranscript, TRANSCRIPT_POLL_MS);
+    } else if (!busy && transcriptWatch !== null) {
+      clearInterval(transcriptWatch);
+      transcriptWatch = null;
+    }
+  }
+
+  async function transcribe(button) {
+    const pane = button.closest("[data-transcript]");
+    button.disabled = true;
+    const response = await post(pane.dataset.transcript);
+    if (!pane.isConnected) return; // another moment was opened meanwhile
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not start the transcript. Try again.") : "Could not reach the service.");
+      return;
+    }
+    await refreshTranscript();
+  }
+
+  // Saves what a line of the transcript says, if that was changed since it
+  // was last saved: when the line is left, and before the page goes.
+  async function correctLine(field) {
+    if (!field?.matches?.("[data-transcript-line]") || field.value === field.defaultValue) return;
+    const pane = field.closest("[data-transcript]");
+    const text = field.value;
+    const response = await post(`${pane.dataset.transcript}/${field.dataset.transcriptLine}`, { text });
+    if (!field.isConnected) return;
+    if (!response || !response.ok) {
+      say(field, response ? await problem(response, "Could not save the line. Try again.") : "Could not reach the service. The line was not saved.");
+      return;
+    }
+    const saved = (await response.json()).text;
+    field.defaultValue = saved;
+    // As the service tidied it - unless it is being typed into again.
+    if (document.activeElement !== field && field.value === text) {
+      field.value = saved;
+      grow(field);
+    }
+    say(field, "Line saved.");
+  }
+
+  // Enter goes on to the next line (Shift+Enter starts a second row of this
+  // one, for a subtitle of two rows) and Escape leaves the line; leaving a
+  // line is what saves it.
+  function transcriptKey(field, event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      field.blur();
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      const next = field.closest("li").nextElementSibling;
+      const following = next && one("[data-transcript-line]", next);
+      if (following) following.focus();
+      else field.blur();
+    }
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
     for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file]")) button.hidden = false;
     markFound();
+    const article = one(".moment");
+    if (article) showSide(article, side);
+    watchTranscript();
     const video = one("[data-clip]");
     if (!video) return;
     video.defaultPlaybackRate = speed;
@@ -2005,7 +2167,10 @@
     ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
     ["[data-trim-go]", exportTrim],
     ["[data-trim-chat-later]", trimChatLater],
-    ["[data-trim-video], [data-trim-chat-video]", markTaken],
+    ["[data-trim-video], [data-trim-chat-video], [data-trim-subtitles], [data-transcript-cut]", markTaken],
+    ["[data-side]", chooseSide],
+    ["[data-transcribe]", transcribe],
+    ["[data-transcript-go]", playLine],
     ["[data-switch] button", flip],
     ["[data-setting] button", chooseSetting],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
@@ -2168,6 +2333,10 @@
       }
       return;
     }
+    if (target.matches("[data-transcript-line]")) {
+      transcriptKey(target, event);
+      return;
+    }
     if (target.matches("[data-strip]") && stripKey(target, event)) return;
     if (target.matches("[data-rec-strip]") && recordingKey(target, event)) return;
     if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
@@ -2184,7 +2353,7 @@
 
   document.addEventListener("input", (event) => {
     const target = event.target;
-    if (target.matches("[data-note]")) {
+    if (target.matches("[data-note], [data-transcript-line]")) {
       grow(target);
       say(target, "");
     } else if (target.matches("[data-volume]")) {
@@ -2210,6 +2379,7 @@
     const target = event.target;
     if (target.matches("[data-note]")) saveNote(target);
     else if (target.matches("[data-title]")) saveTitle(target);
+    else if (target.matches("[data-transcript-line]")) correctLine(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
     else if (target.matches("[data-trim-where]")) {
@@ -2274,6 +2444,7 @@
   window.addEventListener("pagehide", () => {
     saveNote();
     saveTitle();
+    correctLine(document.activeElement);
   });
 
   dress();

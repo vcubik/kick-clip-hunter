@@ -5,6 +5,10 @@ signal, so the transcript is stored and shown per moment. Like the other
 per-clip analysis steps it is pure data capture for a future learned
 classifier - nothing here judges or scores a clip.
 
+The same model also hears a moment's footage word by word, with when each
+word was said, when its transcript is asked for on the review page - to be
+corrected there and taken into an editor as subtitles (subtitles.py).
+
 Runs on CPU: the host has no usable GPU accelerator, but transcription is a
 task faster-whisper handles fine without one.
 
@@ -18,10 +22,12 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .ml_loading import HEAVY_IMPORT_LOCK
+from .subtitles import Word
 
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
@@ -81,3 +87,30 @@ def transcribe_clip(clip_path: Path) -> str:
     )
     texts = (segment.text.strip() for segment in segments)
     return " ".join(text for text in texts if text and not _HALLUCINATION_RE.search(text)).strip()
+
+
+def transcribe_words(path: Path, progress: Callable[[float], None] | None = None) -> list[list[Word]]:
+    """Runs synchronously (CPU-bound) - call via asyncio.to_thread.
+
+    What is said in a video, word by word with when each word began and
+    ended, in seconds of the file: the words of each stretch the model heard
+    as one (a segment), in order. Silence and music-only stretches are left
+    out, as is a segment that is one of the model's stock subtitle credits
+    (see _HALLUCINATION_RE). `progress` is told how much of the file has
+    been heard, as a share of it, after every segment.
+
+    Unlike transcribe_clip's, this transcript is read and corrected by a
+    person, so the model searches as widely as it does by default (beam
+    size 5) rather than taking its first guess at every word: a little
+    slower, for fewer words to put right by hand.
+    """
+    model = _get_model()
+    segments, info = model.transcribe(str(path), language=LANGUAGE, vad_filter=True, word_timestamps=True)
+    heard = []
+    for segment in segments:
+        if progress is not None and info.duration:
+            progress(min(segment.end / info.duration, 1.0))
+        if _HALLUCINATION_RE.search(segment.text.strip()):
+            continue
+        heard.append([Word(word.start, word.end, word.word) for word in segment.words or ()])
+    return heard

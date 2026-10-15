@@ -140,35 +140,53 @@
 </div>
 
 {#- Every line carries the clip time it belongs to; the script shows the ones
-    up to where the clip is. Without it, all of them are there to read. -#}
-<aside class="chat" aria-label="Chat">
-  <div class="chat-head"><h2>Chat</h2> <span>{{ "replayed with the clip" if moment.clip_url and moment.chat else "around the moment" }}</span></div>
-  <div class="chat-lines" data-chat>
-    {% for line in moment.chat %}
-    {{ chat_line(line) }}
-    {% else %}
-    <p class="chat-empty">No chat was stored for this moment.</p>
-    {% endfor %}
+    up to where the clip is. Without it, all of them are there to read.
+    Beside a clip there is also what is said in it (_transcript.html), on a
+    tab of its own. -#}
+<aside class="chat" aria-label="{{ 'Chat and transcript' if moment.transcript else 'Chat' }}">
+  {% if moment.transcript %}
+  <div class="ch-tabs side-tabs" role="tablist" aria-label="Beside the clip">
+    <button type="button" class="ch-tab" role="tab" id="side-chat-{{ moment.id }}" aria-controls="side-chat-pane-{{ moment.id }}" aria-selected="true" data-side="chat">Chat</button>
+    <button type="button" class="ch-tab" role="tab" id="side-transcript-{{ moment.id }}" aria-controls="side-transcript-pane-{{ moment.id }}" aria-selected="false" data-side="transcript">Transcript</button>
   </div>
-  <div class="chat-foot">
-    <p data-chat-foot></p>
-    {#- Viewers see the stream a little after it is broadcast, and how long
-        after differs from one channel to the next. -#}
-    {% if moment.chat_delay %}
-    {% set delay = moment.chat_delay %}
-    <p class="chat-delay" role="group" aria-label="Where chat sits against the picture" title="Where each message is placed against the picture, counted from the frame that was being broadcast as it arrived. Viewers see the stream a little late, so earlier puts a message on what its writer was watching. Kept for this channel." data-chat-delay="{{ delay.seconds }}">
-      <span data-chat-delay-words>{% if delay.seconds > 0 %}Chat {{ delay.seconds }} s earlier{% elif delay.seconds < 0 %}Chat {{ -delay.seconds }} s later{% else %}Chat as it arrived{% endif %}</span>
-      {#- Later is to the right, as in the Trim dialog, so the slider runs
-          the other way from the delay; its notch is where chat is as it
-          arrived. -#}
-      <label class="chat-delay-slider">
-        <span>earlier</span>
-        <input type="range" class="ch-shift" min="{{ -delay.most }}" max="{{ -delay.least }}" step="1" value="{{ -delay.seconds }}" style="--rest: {{ delay.rest }}" aria-label="Move chat against the picture" data-chat-delay-slider>
-        <span>later</span>
-      </label>
-    </p>
-    {% endif %}
+  {% else %}
+  <div class="chat-head"><h2>Chat</h2> <span>around the moment</span></div>
+  {% endif %}
+  <div class="side-pane" id="side-chat-pane-{{ moment.id }}"{% if moment.transcript %} role="tabpanel" aria-labelledby="side-chat-{{ moment.id }}"{% endif %} data-side-pane="chat">
+    <div class="chat-lines" data-chat>
+      {% for line in moment.chat %}
+      {{ chat_line(line) }}
+      {% else %}
+      <p class="chat-empty">No chat was stored for this moment.</p>
+      {% endfor %}
+    </div>
+    <div class="chat-foot">
+      <p data-chat-foot></p>
+      {#- Viewers see the stream a little after it is broadcast, and how long
+          after differs from one channel to the next. -#}
+      {% if moment.chat_delay %}
+      {% set delay = moment.chat_delay %}
+      <p class="chat-delay" role="group" aria-label="Where chat sits against the picture" title="Where each message is placed against the picture, counted from the frame that was being broadcast as it arrived. Viewers see the stream a little late, so earlier puts a message on what its writer was watching. Kept for this channel." data-chat-delay="{{ delay.seconds }}">
+        <span data-chat-delay-words>{% if delay.seconds > 0 %}Chat {{ delay.seconds }} s earlier{% elif delay.seconds < 0 %}Chat {{ -delay.seconds }} s later{% else %}Chat as it arrived{% endif %}</span>
+        {#- Later is to the right, as in the Trim dialog, so the slider runs
+            the other way from the delay; its notch is where chat is as it
+            arrived. -#}
+        <label class="chat-delay-slider">
+          <span>earlier</span>
+          <input type="range" class="ch-shift" min="{{ -delay.most }}" max="{{ -delay.least }}" step="1" value="{{ -delay.seconds }}" style="--rest: {{ delay.rest }}" aria-label="Move chat against the picture" data-chat-delay-slider>
+          <span>later</span>
+        </label>
+      </p>
+      {% endif %}
+    </div>
   </div>
+  {% if moment.transcript %}
+  <div class="side-pane" id="side-transcript-pane-{{ moment.id }}" role="tabpanel" aria-labelledby="side-transcript-{{ moment.id }}" hidden data-side-pane="transcript">
+    {% with transcript = moment.transcript %}
+    {% include "_transcript.html" %}
+    {% endwith %}
+  </div>
+  {% endif %}
 </aside>
 
 {#- Cutting a stretch of the footage out for an editor (see _trim.html).

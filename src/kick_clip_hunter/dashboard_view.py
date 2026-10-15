@@ -223,6 +223,50 @@ def trim_words(
     return words
 
 
+# Where the transcript of a moment's footage stands (see subtitles.py), and
+# what the page says beside the clip about each.
+TRANSCRIPT_NONE = "none"
+TRANSCRIPT_MAKING = "making"
+TRANSCRIPT_FAILED = "failed"
+TRANSCRIPT_READY = "ready"
+TRANSCRIPT_WORDS = {
+    TRANSCRIPT_NONE: (
+        "What is said in the clip and the footage around it, written down line by line with its times: "
+        "to correct here, and to take into an editor as subtitles."
+    ),
+    TRANSCRIPT_MAKING: "Transcribing. The first time takes longer: the speech model has to be loaded.",
+    TRANSCRIPT_FAILED: "The transcript could not be made. The server log says why.",
+    TRANSCRIPT_READY: "",
+}
+
+
+def transcript_words(state: str, done: float | None = None, said: bool = True) -> str:
+    """What the page says of a moment's transcript. `done` is how much of
+    the footage has been heard, as a share, while that goes on; `said`,
+    whether a transcript that is there has anything in it."""
+    if state == TRANSCRIPT_MAKING and done is not None:
+        return f"Transcribing: {int(done * 100)} %."
+    if state == TRANSCRIPT_READY and not said:
+        return "Nothing is said in the footage, or nothing the speech model could make out."
+    return TRANSCRIPT_WORDS[state]
+
+
+# What a time before the clip is written with: a real minus sign, as the
+# page's script writes one, not a hyphen.
+MINUS = "\u2212"
+
+
+def clip_time_words(seconds: float, clip_seconds: float | None) -> str:
+    """A clip time to the tenth of a second, as the Trim dialog writes one:
+    "0:12.5" in the clip, "0:03.0" with a MINUS in front of it before the
+    clip, and "+0:10.0" after its end. `clip_seconds` is how long the clip
+    is, None where that is not known."""
+    after = clip_seconds is not None and seconds > clip_seconds
+    sign = MINUS if seconds < 0 else "+" if after else ""
+    tenths = round(abs(seconds - clip_seconds if after else seconds) * 10)
+    return f"{sign}{tenths // 600}:{tenths // 10 % 60:02d}.{tenths % 10}"
+
+
 def rating_words(rating: int | None) -> str:
     return f"rated {rating} of 5" if rating else "not rated yet"
 

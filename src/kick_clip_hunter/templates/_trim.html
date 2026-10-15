@@ -110,6 +110,9 @@
     </div>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-video>Download video</a>
     <a class="ch-btn ch-btn-compact" download hidden data-trim-chat-video>Download chat</a>
+    {#- A moment's transcript as subtitles timed to the video that is ready,
+        where it has one with something said while the video runs. -#}
+    <a class="ch-btn ch-btn-compact" download hidden title="What is said in the video, as subtitles (.srt) that start with it: the moment's transcript, as it was put right beside the clip" data-trim-subtitles>Download subtitles</a>
     {%- if trim.chat %}
     {#- For a video that was taken without its chat: the chat of the stretch
         it holds - not of the one set above, if that has been moved since -

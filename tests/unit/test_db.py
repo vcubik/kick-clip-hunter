@@ -116,7 +116,7 @@ class TestSchema:
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
-            "context_before", "context_after", "downloaded_at",
+            "context_before", "context_after", "downloaded_at", "subtitles",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
@@ -184,7 +184,7 @@ class TestUpgradingOlderDatabases:
             added_since = {
                 "stream_elapsed_seconds", "clip_path", "rating", "notes", "transcript", "audio_events",
                 "frame_embedding", "stream_type", "moment_type", "sound_events", "sound_embedding",
-                "clip_start", "clip_duration", "context_before", "context_after",
+                "clip_start", "clip_duration", "context_before", "context_after", "subtitles",
             }  # fmt: skip
             assert added_since <= set(columns(connection, "moments"))
             row = connection.execute("SELECT channel_slug, reason, score, clip_path, rating FROM moments").fetchone()
@@ -1328,6 +1328,7 @@ class TestMoments:
             "sound_events",
             "stream_type",
             "moment_type",
+            "subtitles",
         ):
             assert row[column] is None
 
@@ -1550,6 +1551,7 @@ class TestMoments:
         [
             (db.update_moment_clip_path, "clip_path", "some_channel/moment_1.mp4"),
             (db.update_moment_transcript, "transcript", "to je konec"),
+            (db.update_moment_subtitles, "subtitles", '[{"start": 0.5, "end": 2.0, "text": "to je konec"}]'),
             (db.update_moment_audio_events, "audio_events", "cs, HAPPY"),
             (db.update_moment_frame_embedding, "frame_embedding", b"\x00\x01\x02"),
             (db.update_moment_sound_events, "sound_events", "Laughter:0.80"),

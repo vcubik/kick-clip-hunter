@@ -120,7 +120,11 @@ set from the dashboard's Settings page (see `tuning.py` below).
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below); a moment something was downloaded from there is marked in the queue, beside its
-  rating (`moments.downloaded_at`). `GET /dashboard/channels` has the
+  rating (`moments.downloaded_at`). Beside the clip, on a tab next to its chat, is its transcript
+  (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
+  pressed, put right there line by line - the line being said is marked as the clip plays, and a
+  line's time plays the clip from there - and downloaded as subtitles (.srt) timed to the
+  moment's file, or beside the cut in the Trim dialog. `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches and shutdown. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else, and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
@@ -443,8 +447,9 @@ Module map (`src/kick_clip_hunter/`):
   says which stretch the video that is ready holds. A cut from before that was kept has to
   be exported again. Making chat is given up when the service shuts down, rather than
   holding the shutdown up for minutes.
-  A moment's two files are downloaded through `GET /moments/{id}/trim/video` and `/chat`,
-  not their address under /clips, since that is what marks the moment as taken. What
+  A moment's files are downloaded through `GET /moments/{id}/trim/video` and `/chat` - and
+  `/subtitles`, its transcript timed to the cut (see `subtitles.py`) - not their address under
+  /clips, since that is what marks the moment as taken. What
   state a cut is in is kept in memory while one is being made and told
   from the files otherwise. Either end of the stretch can also be typed into the dialog
   as a time (the script reads it; the server is only ever given seconds). The Recordings
@@ -494,6 +499,27 @@ Module map (`src/kick_clip_hunter/`):
   else; it never opens kick.com, which is why headless works here. `patchright` runs
   `page.evaluate` in an isolated world by default, where the page's own script is not
   visible - hence `isolated_context=False`
+- `subtitles.py` — a moment's transcript, as subtitles. Pure. Made only when it is asked for
+  ("Transcribe" on the Transcript tab beside the clip: `POST /moments/{id}/subtitles`, a tracked
+  background task that is given up when the service shuts down; the tab is `_transcript.html`,
+  also served on its own at `GET /dashboard/moments/{id}/subtitles`, which the page fetches every
+  couple of seconds while one is made). The speech model hears all of the moment's file - the clip
+  and the footage either side of it, since a cut can be taken from anywhere in there - word by
+  word with its times (`transcriber.transcribe_words`: at the model's own beam size, not the
+  analysis step's first guesses, as a person reads and corrects this one), and `lines` makes lines
+  a subtitle long of the words: to the end of a sentence or to a pause, at most
+  `LINE_MAX_CHARACTERS` and `LINE_MAX_SECONDS`, broken after a comma where one is far enough in,
+  each on screen for at least `LINE_MIN_SECONDS` where the next leaves room. Kept on the moment as
+  JSON, in clip time (`moments.subtitles` - not `moments.transcript`, the analysis step's speech of
+  the clip alone in one line, for a classifier). A line is put right on the tab (`POST
+  /moments/{id}/subtitles/{line}`, as the line is left) and keeps the times it was heard at; an
+  emptied one is left out of the subtitles. `srt` writes SubRip for a video whose first frame is
+  at a given clip time: the moment's whole file (`GET /moments/{id}/subtitles`,
+  `moment_<id>.srt`), or the cut the Trim dialog made of it (`GET /moments/{id}/trim/subtitles`,
+  `moment_<id>_trim.srt`, offered beside its video): from where that really begins, which is
+  read from its cut record - a cut from before records were kept has none - with a line its ends
+  leave less than `CUT_LINE_MIN_SECONDS` of left out. Written as UTF-8 with a byte order mark and
+  Windows line ends, which is how editors on Windows read the Czech letters right
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, `health.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment
@@ -505,13 +531,16 @@ Module map (`src/kick_clip_hunter/`):
   `_recording_trace.html` is the chat trace over a recording or a stretch of it, only ever
   served on its own; `_recording_moments.html` is what looking for moments in a recording
   has come to, on the page and served on its own; `_trim.html` is the Trim dialog, included
-  by the open moment and by the open recording
+  by the open moment and by the open recording; `_transcript.html` is a moment's transcript
+  beside its clip, on the open moment and served on its own
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
   open moment's markup gets replaced; it also runs the Trim dialog, whose strip and chat
   are copied from the page's when it is opened on a moment and fetched for the window it
-  shows of a recording, the Settings form, which it posts as a
+  shows of a recording, a moment's transcript - the tab beside the clip, asking for it and
+  following it while it is made, the line being said, saving what is put right in a line - the
+  Settings form, which it posts as a
   whole and then fetches again, and stream recordings: the buttons, the words that follow
   a recording while there is one, a recording's chat and the trace under it, and the moments
   found in a recording - which it also marks on that trace) and the bundled typeface,
@@ -609,7 +638,9 @@ Module map (`src/kick_clip_hunter/`):
   command, and anything the recording has no footage of
 - `clip_creator.py` — alternative path: publishes an official Kick clip via the site's
   own internal API under a logged-in account (see "Clip creation")
-- `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU)
+- `transcriber.py` — local speech-to-text of a cut clip (faster-whisper, CPU) - and, word by
+  word with when each was said, of a moment's whole file for its transcript (`transcribe_words`,
+  see `subtitles.py`), which is not one of the analysis steps: it is made only when asked for
 - `audio_events.py` — local audio event/emotion tags for a cut clip (SenseVoice via
   funasr, CPU) - language/emotion/non-speech-event tags only, not a second transcript
 - `frame_encoder.py` — local video-frame embeddings for a cut clip (SigLIP2 via
