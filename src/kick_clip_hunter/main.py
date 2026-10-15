@@ -2056,7 +2056,26 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         funnel_looked_at=looked_at,
         port=_served_port,
         twitch=_twitch_facts(sum(1 for row in streamers if row["platform"] == platforms.TWITCH)),
+        youtube=_youtube_facts(sum(1 for row in streamers if row["platform"] == platforms.YOUTUBE)),
         **looked_up,
+    )
+
+
+def _youtube_facts(channels: int) -> health.YouTubeChat | None:
+    """Where reading YouTube's chat stands, for the Health page: None while
+    no YouTube channel is watched."""
+    if not channels:
+        return None
+    reader = _youtube_reader
+    if reader is None:
+        return health.YouTubeChat(channels=channels)
+    reading, unavailable, failing = dict(reader.reading), dict(reader.unavailable), dict(reader.failing)
+    return health.YouTubeChat(
+        channels=channels,
+        reading=tuple(sorted(reading.items())),
+        unavailable=tuple(sorted(unavailable.items())),
+        failing=tuple(sorted((slug, why, since) for slug, (why, since) in failing.items())),
+        last_heard_at=reader.last_heard_at,
     )
 
 

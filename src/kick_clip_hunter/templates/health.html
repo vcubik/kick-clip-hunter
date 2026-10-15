@@ -1,6 +1,6 @@
 {#- Whether what the service depends on is there: webhooks arriving from
-    Kick, Kick's chat subscriptions, Twitch's chat where there is any, the
-    recorders, room on the disk and the tunnel (see health.py). Each part
+    Kick, Kick's chat subscriptions, Twitch's and YouTube's chat where there
+    is any, the recorders, room on the disk and the tunnel (see health.py). Each part
     says where it stands in a
     sentence - in bold when that is trouble - and what there is to know
     beyond it under that. The script fetches the page again every few
@@ -89,6 +89,28 @@
         </thead>
         <tbody>
           {% for row in health.twitch.rows %}
+          <tr><th scope="row">{{ row.slug }}</th><td>{{ row.why }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if health.youtube.shown %}
+  <section aria-labelledby="youtube-title">
+    <h2 class="title" id="youtube-title">YouTube chat</h2>
+    <div data-health-part="youtube">
+      {{ statement(health.youtube) }}
+      {% if health.youtube.rows %}
+      <table class="an-table health-table">
+        <caption class="health-caption">Channels whose chat does not come in</caption>
+        <thead>
+          <tr><th scope="col">Channel</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.youtube.rows %}
           <tr><th scope="row">{{ row.slug }}</th><td>{{ row.why }}</td></tr>
           {% endfor %}
         </tbody>

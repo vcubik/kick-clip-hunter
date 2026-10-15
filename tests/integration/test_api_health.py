@@ -19,7 +19,16 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import db, health, recorder, recording_manager, stream_recording, tunnel, twitch_chat
+from kick_clip_hunter import (
+    db,
+    health,
+    recorder,
+    recording_manager,
+    stream_recording,
+    tunnel,
+    twitch_chat,
+    youtube_chat,
+)
 from kick_clip_hunter.config import load_settings
 from kick_clip_hunter.dashboard_view import when_words
 from kick_clip_hunter.twitch_auth import AccountToken, TokenKeeper, save
@@ -103,9 +112,11 @@ class TestThePage:
         assert said(page, "recorders") == "No channels are on the watchlist."
         # Nothing to list of channels there are none of.
         assert part(page, "webhooks").find("table") == [] and part(page, "recorders").find("table") == []
-        # Twitch's chat is no part of a service that has nothing to do with Twitch.
+        # Twitch's and YouTube's chat are no part of a service that has
+        # nothing to do with them.
         assert page.find("div", data_health_part="twitch") == []
-        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name != "twitch")
+        assert page.find("div", data_health_part="youtube") == []
+        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in ("twitch", "youtube"))
 
     async def test_every_part_is_marked_for_the_script_that_keeps_it_current(self, service):
         page = await page_at(service)
@@ -668,6 +679,73 @@ def signed_in_tokens() -> TokenKeeper:
 def a_reader(service) -> twitch_chat.ChatReader:
     """The service's reader of Twitch's chat, not running."""
     return twitch_chat.ChatReader(service.main._twitch_channels, service.main._take_chats, signed_in_tokens(), "id")
+
+
+class TestYouTubeChat:
+    """YouTube's chat, where the service watches a YouTube channel: what the
+    reader of it found, on the page."""
+
+    def watch_on_youtube(self, handle: str = "some_channel") -> None:
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "youtube", "UCAAAAAAAAAAAAAAAAAAAAAA", f"{handle}@youtube")
+        finally:
+            conn.close()
+
+    def a_reader(self, service, monkeypatch) -> youtube_chat.ChatReader:
+        reader = youtube_chat.ChatReader(service.main._youtube_channels, service.main._take_chats)
+        monkeypatch.setattr(service.main, "_youtube_reader", reader)
+        return reader
+
+    async def test_without_a_youtube_channel_there_is_no_such_part(self, service, monkeypatch):
+        self.a_reader(service, monkeypatch)
+
+        page = await page_at(service)
+
+        assert page.find("div", data_health_part="youtube") == []
+
+    async def test_the_reader_says_whose_chat_comes_in(self, service, monkeypatch):
+        self.watch_on_youtube()
+        reader = self.a_reader(service, monkeypatch)
+        reader.reading["some_channel@youtube"] = ago(minutes=5)
+        reader.last_heard_at = ago(seconds=3)
+
+        page = await page_at(service)
+
+        assert said(page, "youtube") == "The chat of the YouTube channel comes in."
+        assert more(page, "youtube") == ["The last answer from YouTube came 3 seconds ago."]
+        assert not in_trouble(page, "youtube")
+
+    async def test_a_chat_that_cannot_be_read_is_listed_with_why(self, service, monkeypatch):
+        self.watch_on_youtube()
+        reader = self.a_reader(service, monkeypatch)
+        reader.unavailable["some_channel@youtube"] = "Chat is disabled for this live stream."
+
+        page = await page_at(service)
+
+        (row,) = part(page, "youtube").one("tbody").find("tr")
+        assert row.one("th").text == "some_channel@youtube"
+        assert row.one("td").text == "Chat is disabled for this live stream."
+        assert not in_trouble(page, "youtube")
+
+    async def test_youtube_not_answering_for_long_is_trouble_counted_in_the_bar(self, service, monkeypatch):
+        self.watch_on_youtube()
+        reader = self.a_reader(service, monkeypatch)
+        reader.failing["some_channel@youtube"] = ("YouTube answered 429", ago(minutes=10))
+
+        page = await page_at(service)
+        response = await service.client.get("/dashboard/channels")
+
+        assert in_trouble(page, "youtube")
+        assert page.one("h1").text == "YouTube chat needs a look."
+        assert "1 problem" in response.text
+
+    async def test_before_the_reader_has_started_the_channel_is_not_live_yet(self, service):
+        self.watch_on_youtube()
+
+        page = await page_at(service)
+
+        assert said(page, "youtube") == "The YouTube channel is not live, so no YouTube chat comes in."
 
 
 class TestTwitchChat:
