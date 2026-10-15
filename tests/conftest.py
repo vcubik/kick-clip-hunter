@@ -293,11 +293,11 @@ def no_outbound_network(monkeypatch: pytest.MonkeyPatch):
 def no_browser(monkeypatch: pytest.MonkeyPatch):
     """The real stream-URL capture and clip publishing drive a visible
     browser against kick.com, and laying out the chat of a chat video
-    drives one without a window. Finding a Twitch stream asks streamlink,
-    which may start one for Twitch's integrity check. Tests replace the
-    functions that need it; this makes forgetting to do so a failure rather
-    than a browser starting."""
-    from kick_clip_hunter import chat_video, clip_creator, kick_stream, twitch_stream
+    drives one without a window. Finding a Twitch or YouTube stream asks
+    streamlink, which may start one for Twitch's integrity check (and asks
+    the real sites either way). Tests replace the functions that need it;
+    this makes forgetting to do so a failure rather than a browser starting."""
+    from kick_clip_hunter import chat_video, clip_creator, kick_stream, twitch_stream, youtube_stream
 
     launches: list[str] = []
 
@@ -307,12 +307,13 @@ def no_browser(monkeypatch: pytest.MonkeyPatch):
 
     def refuse_streamlink(*args, **kwargs):
         launches.append("streamlink")
-        raise RuntimeError("test tried to ask streamlink for a Twitch stream")
+        raise RuntimeError("test tried to ask streamlink for a stream")
 
     monkeypatch.setattr(kick_stream, "sync_playwright", refuse)
     monkeypatch.setattr(clip_creator, "sync_playwright", refuse)
     monkeypatch.setattr(chat_video, "sync_playwright", refuse)
     monkeypatch.setattr(twitch_stream, "Streamlink", refuse_streamlink)
+    monkeypatch.setattr(youtube_stream, "Streamlink", refuse_streamlink)
     yield launches
     if launches:
         pytest.fail("a browser launch was attempted")

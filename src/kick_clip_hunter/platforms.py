@@ -132,3 +132,7 @@ class StreamUrls:
     # Master playlist of the recording of the current broadcast, or None if
     # the channel doesn't keep one (or the lookup failed).
     vod: str | None = None
+    # When these addresses stop working, where the platform says - the
+    # recorder asks for new ones before then. YouTube's do after six hours;
+    # Kick's and Twitch's work for as long as the stream is on.
+    expires_at: datetime | None = None

@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SEGMENT_SECONDS = 2.0
+# What the master playlist says of the variant a recorder follows.
+BEST_VARIANT = 'BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2"'
 
 
 @dataclass
@@ -49,8 +51,14 @@ class FakeHlsServer:
         program_date_time: bool = True,
         stream_start: datetime | None = None,
         init: bytes | None = None,
+        best_variant: str = BEST_VARIANT,
+        program_date_time_once: bool = False,
     ) -> None:
         self.timeline = timeline
+        self.best_variant = best_variant
+        # Program date-time only for the first segment listed, as YouTube
+        # writes it, rather than for every segment.
+        self.program_date_time_once = program_date_time_once
         # The initialization segment of a stream in fragmented MP4 (served at
         # /segment/init.mp4, its segments as .m4s); None for MPEG-TS.
         self.init = init
@@ -132,12 +140,12 @@ class FakeHlsServer:
         if path == "/master.m3u8":
             # The best variant is deliberately not listed first.
             body = (
-                b"#EXTM3U\n"
-                b'#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,CODECS="avc1.4D401F,mp4a.40.2"\n'
-                b"variant/low.m3u8\n"
-                b'#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2"\n'
-                b"variant/high.m3u8\n"
-            )
+                "#EXTM3U\n"
+                '#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,CODECS="avc1.4D401F,mp4a.40.2"\n'
+                "variant/low.m3u8\n"
+                f"#EXT-X-STREAM-INF:{self.best_variant}\n"
+                "variant/high.m3u8\n"
+            ).encode()
         elif path == "/variant/high.m3u8":
             body = self._variant_playlist().encode()
         elif path == "/variant/low.m3u8":
@@ -174,7 +182,7 @@ class FakeHlsServer:
             if segment.discontinuity:
                 lines.append("#EXT-X-DISCONTINUITY")
             lines.extend(segment.tags)
-            if self.program_date_time:
+            if self.program_date_time and not (self.program_date_time_once and index > first):
                 stamp = self.segment_start(index).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{stamp}")
             lines.append(f"#EXTINF:{segment.duration:.3f},{segment.title}")

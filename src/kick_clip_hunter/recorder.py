@@ -65,6 +65,13 @@ playlist's initialization segment (EXT-X-MAP). Such a segment is kept as
 beside them (`<group>.init`) and goes first when a clip is joined from
 them.
 
+YouTube's playlists mark no ads, but their addresses stop working after a
+few hours, and say when (StreamUrls.expires_at). A run asks for the
+stream's addresses anew a while before then, and goes on following the
+playlist at the new address without starting over: the segments keep their
+numbering, so nothing is missed or fetched twice, and they stay in the same
+group unless the variant that is followed has changed.
+
 The buffer is only ever a few minutes deep. A stream that is to be kept
 whole (see stream_recording.py) is not kept here: while one is, every
 segment of the broadcast is also handed on, as it is saved, to whatever the
@@ -87,6 +94,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from .platforms import StreamUrls
 from .streams import stream_urls
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -121,6 +129,11 @@ PLAYBACK_DELAY_SECONDS = 10
 # How long after a clip window's end to wait before cutting, so the last
 # segment it needs has been published and downloaded.
 CLIP_SETTLE_SECONDS = 10
+# A stream's addresses that stop working (StreamUrls.expires_at) are asked
+# for anew this long before they do - and again this long after an attempt
+# that failed, while they still work.
+RENEW_BEFORE_SECONDS = 600
+RENEW_RETRY_SECONDS = 60
 # If no new segment has been saved in this long, the run is presumed stalled
 # (playlist requests hanging or failing, stream gone) and gets restarted
 # against a freshly fetched URL. Generous relative to segment length so
@@ -300,31 +313,47 @@ class _Run:
     thread: threading.Thread | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     last_progress_at: datetime | None = None
+    # What the master playlist says of the variant followed, and when the
+    # stream's addresses are to be asked for anew, if they run out.
+    variant: str = ""
+    renew_at: datetime | None = None
 
 
 def _attributes(tag_line: str) -> dict[str, str]:
     return {key: value.strip('"') for key, value in _ATTRIBUTE.findall(tag_line.split(":", 1)[1])}
 
 
-def _pick_variant(master_text: str, master_url: str) -> str:
+def _choose_variant(master_text: str, master_url: str) -> tuple[str, str]:
     """The highest-bandwidth variant playlist URL in a master playlist - of
     the picture the stream is usually watched in, where it also comes
-    upright (a portrait variant)."""
-    variants: list[tuple[bool, int, str]] = []
-    bandwidth, upright = 0, False
+    upright (a portrait variant) - and what the master playlist says of it."""
+    variants: list[tuple[bool, int, str, str]] = []
+    bandwidth, upright, said = 0, False, ""
     for line in master_text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-STREAM-INF:"):
             attributes = _attributes(line)
             bandwidth = int(attributes.get("BANDWIDTH", "0") or 0)
             upright = attributes.get("IVS-GROUPS", "").lower() == PORTRAIT_GROUP
+            said = line.split(":", 1)[1]
         elif line and not line.startswith("#"):
-            variants.append((upright, bandwidth, urljoin(master_url, line)))
-            bandwidth, upright = 0, False
+            variants.append((upright, bandwidth, urljoin(master_url, line), said))
+            bandwidth, upright, said = 0, False, ""
     if not variants:
         raise RecorderError("master playlist lists no variants")
     # The first of the best, where several are as good.
-    return min(variants, key=lambda variant: (variant[0], -variant[1]))[2]
+    _, _, url, said = min(variants, key=lambda variant: (variant[0], -variant[1]))
+    return url, said
+
+
+def _pick_variant(master_text: str, master_url: str) -> str:
+    """The variant playlist URL a recorder follows (see _choose_variant)."""
+    return _choose_variant(master_text, master_url)[0]
+
+
+def _renew_at(urls: StreamUrls) -> datetime | None:
+    """When a stream's addresses are to be asked for anew, if they run out."""
+    return urls.expires_at - timedelta(seconds=RENEW_BEFORE_SECONDS) if urls.expires_at else None
 
 
 def _program_time(text: str) -> datetime:
@@ -433,10 +462,13 @@ class ChannelRecorder:
         urls = stream_urls(self.channel_slug)
         response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
         response.raise_for_status()
+        variant_url, variant = _choose_variant(response.text, urls.live)
         run = _Run(
             started_at=datetime.now(timezone.utc),
-            variant_url=_pick_variant(response.text, urls.live),
+            variant_url=variant_url,
             vod_url=urls.vod,
+            variant=variant,
+            renew_at=_renew_at(urls),
         )
         run.thread = threading.Thread(target=self._record, args=(run,), daemon=True)
         self._run = run
@@ -447,6 +479,30 @@ class ChannelRecorder:
             "[%s] recording started -> %s (VOD %s)",
             self.channel_slug, self._base_dir, "found" if urls.vod else "not available",
         )
+
+    def _renew(self, run: _Run) -> bool:
+        """Asks for the stream's addresses anew, before the ones the run
+        follows stop working, and has it follow the new ones from its next
+        look at the playlist. Returns whether the variant followed is another
+        one now - whose segments are then not joined onto the ones before."""
+        try:
+            urls = stream_urls(self.channel_slug)
+            response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            variant_url, variant = _choose_variant(response.text, urls.live)
+        except Exception as error:
+            # Whatever it was, the addresses followed still work for a
+            # while: they are asked for again a little later.
+            run.renew_at = datetime.now(timezone.utc) + timedelta(seconds=RENEW_RETRY_SECONDS)
+            logger.warning(
+                "[%s] the stream's address could not be renewed (%s) - trying again shortly",
+                self.channel_slug, type(error).__name__,
+            )
+            return False
+        changed = variant != run.variant
+        run.variant_url, run.variant, run.renew_at = variant_url, variant, _renew_at(urls)
+        logger.info("[%s] the stream's address was renewed before it ran out", self.channel_slug)
+        return changed
 
     def _stop_run(self) -> None:
         if self._run is None:
@@ -471,6 +527,9 @@ class ChannelRecorder:
         known_classes: set[str] = set()
 
         while not run.stop_event.is_set():
+            if run.renew_at is not None and datetime.now(timezone.utc) >= run.renew_at and self._renew(run):
+                # Segments of another variant can't be joined onto these.
+                group += 1
             try:
                 response = client.get(run.variant_url, timeout=PLAYLIST_TIMEOUT_SECONDS)
                 response.raise_for_status()

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import kick_client, kick_stream, platforms, twitch_client, twitch_stream, youtube_client
+from . import kick_client, kick_stream, platforms, twitch_client, twitch_stream, youtube_client, youtube_stream
 from .config import load_settings
 from .platforms import LiveStatus, StreamUrlError, StreamUrls
 
@@ -63,4 +63,6 @@ def stream_urls(channel: str) -> StreamUrls:
         return kick_stream.get_stream_urls(login)
     if platform == platforms.TWITCH:
         return twitch_stream.get_stream_urls(login)
+    if platform == platforms.YOUTUBE:
+        return youtube_stream.get_stream_urls(login)
     raise StreamUrlError(f"there is no way to find the stream of {channel!r}")

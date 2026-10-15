@@ -15,10 +15,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import recorder
-from kick_clip_hunter.platforms import StreamUrlError
+from kick_clip_hunter.platforms import StreamUrlError, StreamUrls
 from kick_clip_hunter.recorder import RecorderError
 from kick_clip_hunter.stream_recording import StreamWriter
-from tests.support.hls import SEGMENT_SECONDS, Segment, fake_segments
+from tests.support.hls import BEST_VARIANT, SEGMENT_SECONDS, Segment, fake_segments
 from tests.support.waiting import wait_until
 
 
@@ -375,6 +375,138 @@ class TestFailures:
             rec.tick()
 
         assert rec.is_active is False
+
+
+class TestAddressesThatRunOut:
+    """YouTube's stream addresses stop working after a few hours, and say
+    when (StreamUrls.expires_at): a run asks for new ones before then, and
+    goes on at the new address without starting over."""
+
+    @pytest.fixture
+    def answers(self, recording, monkeypatch):
+        """What the recorder is told each time it asks where the stream is,
+        in turn - the last one for every time after - and who asked."""
+        queue: list[object] = []
+        asked: list[str] = []
+
+        def stream_urls(slug: str) -> StreamUrls:
+            asked.append(slug)
+            answer = queue.pop(0) if len(queue) > 1 else queue[0]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        def follow(server, *given: object):
+            queue.extend(given)
+            rec = recording.of(server)
+            monkeypatch.setattr(recorder, "stream_urls", stream_urls)
+            return rec, asked
+
+        return follow
+
+    @staticmethod
+    def running_out(after: float) -> datetime:
+        """When addresses stop working that are to be renewed this many
+        seconds from now."""
+        return datetime.now(timezone.utc) + timedelta(seconds=recorder.RENEW_BEFORE_SECONDS + after)
+
+    def test_the_new_address_is_followed_and_nothing_is_missed_or_fetched_twice(self, hls, answers):
+        timeline = fake_segments(10)
+        first, renewed = hls(timeline, published=3), hls(timeline, published=3)
+        later = datetime.now(timezone.utc) + timedelta(hours=6)
+        rec, asked = answers(
+            first,
+            StreamUrls(first.master_url, expires_at=self.running_out(0.3)),
+            StreamUrls(renewed.master_url, expires_at=later),
+        )
+
+        start(rec)
+        for server in (first, renewed):
+            server.publish(3)
+        wait_until(lambda: len(asked) == 2, "the address to be renewed")
+        for server in (first, renewed):
+            server.publish_all()
+        wait_for_segments(rec, 10)
+
+        assert stored_data(rec) == [segment.data for segment in timeline]
+        assert sorted(first.segment_requests() + renewed.segment_requests()) == list(range(10))
+        assert renewed.segment_requests()
+        # The same stream, the same variant: one stretch of footage.
+        assert set(groups(rec)) == {"0"}
+        assert rec._run.renew_at == later - timedelta(seconds=recorder.RENEW_BEFORE_SECONDS)
+
+    def test_another_variant_at_the_new_address_is_not_joined_onto_the_old_one(self, hls, answers):
+        timeline = fake_segments(10)
+        first = hls(timeline, published=3)
+        renewed = hls(timeline, published=3, best_variant=BEST_VARIANT.replace("1920x1080", "1280x720"))
+        rec, asked = answers(
+            first,
+            StreamUrls(first.master_url, expires_at=self.running_out(0.3)),
+            StreamUrls(renewed.master_url, expires_at=self.running_out(3600)),
+        )
+
+        start(rec)
+        wait_until(lambda: len(asked) == 2, "the address to be renewed")
+        for server in (first, renewed):
+            server.publish(3)
+        wait_for_segments(rec, 6)
+        for server in (first, renewed):
+            server.publish_all()
+        wait_for_segments(rec, 10)
+
+        assert stored_data(rec) == [segment.data for segment in timeline]
+        before = set(first.segment_requests())
+        assert groups(rec) == ["0" if index in before else "1" for index in range(10)]
+        assert renewed.segment_requests()
+
+    def test_a_renewal_that_fails_leaves_the_old_address_followed_and_is_tried_again(
+        self, hls, answers, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(recorder, "RENEW_RETRY_SECONDS", 0.05)
+        timeline = fake_segments(8)
+        server = hls(timeline, published=3)
+        rec, asked = answers(
+            server,
+            StreamUrls(server.master_url, expires_at=self.running_out(0)),
+            StreamUrlError("YouTube did not say"),
+            StreamUrls(server.master_url, expires_at=self.running_out(3600)),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            start(rec)
+            wait_until(lambda: len(asked) >= 3, "the renewal to be tried again")
+            server.publish_all()
+            wait_for_segments(rec, 8)
+
+        assert stored_data(rec) == [segment.data for segment in timeline]
+        assert set(groups(rec)) == {"0"}
+        assert any("could not be renewed (StreamUrlError)" in record.getMessage() for record in caplog.records)
+
+    def test_addresses_that_do_not_run_out_are_never_asked_for_again(self, hls, recording):
+        server = hls(fake_segments(8), published=3)
+        rec = recording.of(server)
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 8)
+
+        assert recording.url_requests == ["some_channel"]
+        assert rec._run.renew_at is None
+
+
+class TestYouTubesPlaylists:
+    def test_a_program_time_only_for_the_first_segment_listed_dates_every_segment(self, hls, recording):
+        timeline = fake_segments(8, title="")
+        server = hls(timeline, published=3, program_date_time_once=True)
+        rec = recording.of(server)
+
+        start(rec)
+        server.publish_all()
+        wait_for_segments(rec, 8)
+
+        stored = rec._stored_segments()
+        assert [segment.started_at for segment in stored] == [server.segment_start(index) for index in range(8)]
+        assert set(groups(rec)) == {"0"}
 
 
 class _Response:
