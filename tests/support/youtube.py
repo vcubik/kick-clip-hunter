@@ -79,8 +79,10 @@ class FakeYouTube:
     channels: list[FakeYouTubeChannel] = field(default_factory=list)
     # Force an HTTP status for every request whose URL contains the key.
     failures: dict[str, int] = field(default_factory=dict)
-    # Every request received, as (method, path, parsed body or query).
+    # Every request received, as (method, path, parsed body or query), and
+    # the cookies each came with.
     requests: list[tuple[str, str, object]] = field(default_factory=list)
+    cookies: list[str] = field(default_factory=list)
     # What the player says of a video instead of its details, by video id -
     # e.g. YouTube asking the visitor to sign in.
     player_refusals: dict[str, dict] = field(default_factory=dict)
@@ -112,6 +114,7 @@ class FakeYouTube:
         else:
             body = dict(request.url.params)
         self.requests.append((request.method, path, body))
+        self.cookies.append(request.headers.get("cookie", ""))
         for fragment, status in self.failures.items():
             if fragment in str(request.url):
                 return httpx.Response(status, json={"error": {"code": status, "message": "forced failure"}})

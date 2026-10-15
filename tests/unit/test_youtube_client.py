@@ -340,6 +340,20 @@ class TestReadingAChat:
         assert chat == LiveChat("livevideo01", "the-only-one", youtube_client.client_context())
 
 
+class TestCookies:
+    async def test_youtubes_question_about_cookies_is_never_answered(self, youtube):
+        youtube.add_channel("some_channel").go_live("livevideo01")
+        youtube.chat("livevideo01")
+
+        await youtube_client.find_channel("some_channel")
+        async with youtube_client.new_client() as client:
+            await youtube_client.live_video("some_channel", client)
+            await youtube_client.look_at_chat(await youtube_client.open_chat("livevideo01", client), client)
+
+        assert len(youtube.cookies) >= 5
+        assert not any("SOCS" in cookie for cookie in youtube.cookies)
+
+
 class TestEmotes:
     async def test_a_youtube_channel_has_no_emote_set_anywhere_to_fetch(self, youtube):
         assert await watchlist.channel_emotes("youtube", "UCAAAAAAAAAAAAAAAAAAAAAA") == []

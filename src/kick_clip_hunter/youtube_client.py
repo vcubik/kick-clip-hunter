@@ -50,10 +50,9 @@ CLIENT_VERSION = "2.20261014.01.00"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 )
-# A visitor from Europe is shown YouTube's question about cookies before any
-# page, unless it has been answered - here, with everything that may be
-# declined declined.
-CONSENT_COOKIES = {"SOCS": "CAI"}
+# YouTube's question about cookies, which a visitor from Europe is sent to
+# before some pages, is never answered: what is asked of the API, and the
+# one page that is fetched (a live chat's), come without it.
 TIMEOUT_SECONDS = 15
 
 # What a channel's id looks like, and what a handle may be to be the name a
@@ -112,7 +111,6 @@ def new_client() -> httpx.AsyncClient:
     open for long keeps the cookies YouTube hands out, as a browser does."""
     return httpx.AsyncClient(
         headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
-        cookies=CONSENT_COOKIES,
         timeout=TIMEOUT_SECONDS,
         follow_redirects=True,
     )

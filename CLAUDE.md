@@ -298,7 +298,7 @@ Module map (`src/kick_clip_hunter/`):
   which tells `dashboard_view.typed_emote_image` where its picture is
 - `youtube_client.py` — YouTube, asked the way its own web pages ask (InnerTube,
   `youtube.com/youtubei/v1`, as the web client, not signed in, the cookie question
-  declined). The official Data API was set aside: its daily quota (10,000 units, a look at
+  never answered). The official Data API was set aside: its daily quota (10,000 units, a look at
   a chat 5 of them) would not see one busy chat through a day, and it has no playback at
   all. InnerTube takes no key, but is not published and changes without notice - an
   answer without what is read of it raises `YouTubeChanged` rather than being guessed at,
