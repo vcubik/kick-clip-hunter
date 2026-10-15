@@ -48,6 +48,7 @@ from . import (
     twitch_chat,
     twitch_client,
     win_console,
+    youtube_chat,
 )
 from .chat_message import ChatMessage
 from .config import load_settings
@@ -134,7 +135,7 @@ from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
 from .timeutil import to_local_datetime
-from .watchlist import add_to_watchlist, refresh_badge_pictures, refresh_emote_pictures
+from .watchlist import EMOTE_SOURCES, add_to_watchlist, refresh_badge_pictures, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -509,9 +510,11 @@ async def _refresh_emote_pictures() -> None:
 
     conn = get_connection()
     try:
+        # A channel of a platform no emote service knows has no set to fetch.
         watch = [
             (row["broadcaster_user_id"], row["slug"], row["platform"], row["platform_user_id"])
             for row in get_streamers(conn)
+            if row["platform"] in EMOTE_SOURCES
         ]
     finally:
         conn.close()
@@ -558,6 +561,32 @@ def _start_reading_twitch_chat() -> twitch_chat.ChatReader | None:
     return _twitch_reader
 
 
+# What reads the chat of the YouTube channels on the watchlist while they
+# are live (see youtube_chat.py); None until the service has started it.
+_youtube_reader: youtube_chat.ChatReader | None = None
+
+
+def _youtube_channels() -> list[youtube_chat.Channel]:
+    """The YouTube channels whose chat is read: every one on the watchlist,
+    while it is live. What is done with it is decided message by message,
+    as for Kick's (see _take_chats)."""
+    conn = get_connection()
+    try:
+        return [
+            youtube_chat.Channel(row["broadcaster_user_id"], row["slug"])
+            for row in get_streamers(conn, platforms.YOUTUBE)
+        ]
+    finally:
+        conn.close()
+
+
+def _start_reading_youtube_chat() -> youtube_chat.ChatReader:
+    """The reader of YouTube's chat. YouTube needs nothing set up."""
+    global _youtube_reader
+    _youtube_reader = youtube_chat.ChatReader(_youtube_channels, _take_chats)
+    return _youtube_reader
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _started_at
@@ -585,6 +614,7 @@ async def lifespan(app: FastAPI):
     reader = _start_reading_twitch_chat()
     if reader is not None:
         tasks.append(asyncio.create_task(reader.run_forever()))
+    tasks.append(asyncio.create_task(_start_reading_youtube_chat().run_forever()))
     try:
         yield
     finally:
@@ -2034,7 +2064,26 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         funnel_looked_at=looked_at,
         port=_served_port,
         twitch=_twitch_facts(sum(1 for row in streamers if row["platform"] == platforms.TWITCH)),
+        youtube=_youtube_facts(sum(1 for row in streamers if row["platform"] == platforms.YOUTUBE)),
         **looked_up,
+    )
+
+
+def _youtube_facts(channels: int) -> health.YouTubeChat | None:
+    """Where reading YouTube's chat stands, for the Health page: None while
+    no YouTube channel is watched."""
+    if not channels:
+        return None
+    reader = _youtube_reader
+    if reader is None:
+        return health.YouTubeChat(channels=channels)
+    reading, unavailable, failing = dict(reader.reading), dict(reader.unavailable), dict(reader.failing)
+    return health.YouTubeChat(
+        channels=channels,
+        reading=tuple(sorted(reading.items())),
+        unavailable=tuple(sorted(unavailable.items())),
+        failing=tuple(sorted((slug, why, since) for slug, (why, since) in failing.items())),
+        last_heard_at=reader.last_heard_at,
     )
 
 
@@ -4030,7 +4079,8 @@ async def shutdown():
 @app.post("/channels")
 async def add_channel(slug: str):
     """Puts a channel on the watchlist: `slug` is what was typed - a Kick
-    channel's name, a link to a channel's page, `login@twitch`."""
+    channel's name, a link to a channel's page, `login@twitch`,
+    `handle@youtube`."""
     slug = slug.strip()
     if not slug:
         raise HTTPException(status_code=400, detail="slug must not be empty")

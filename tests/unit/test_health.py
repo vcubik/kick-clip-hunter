@@ -14,7 +14,7 @@ import pytest
 
 from kick_clip_hunter import health, tunnel
 from kick_clip_hunter.dashboard_view import since_words, when_words
-from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TwitchChat
+from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TwitchChat, YouTubeChat
 
 NOW = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 TODAY = NOW.astimezone().date()
@@ -671,6 +671,7 @@ class TestThePageAsAWhole:
             "webhooks",
             "subscriptions",
             "twitch",
+            "youtube",
             "recorders",
             "disk",
             "tunnel",
@@ -798,6 +799,83 @@ class TestTwitchChat:
         )
         report = health.report(facts(last_webhook_at=ago(2), twitch=wrong), TODAY)
         assert (report["troubles"], report["lead"]) == (1, "Twitch chat needs a look.")
+
+
+class TestYouTubeChat:
+    """Where reading YouTube's chat stands: a part of the page only while a
+    YouTube channel is watched."""
+
+    def part(self, chat: YouTubeChat) -> dict:
+        return health.youtube_part(facts(youtube=chat), TODAY)
+
+    def test_without_a_youtube_channel_there_is_no_such_part(self):
+        report = health.report(facts(last_webhook_at=ago(2), youtube=YouTubeChat(channels=0)), TODAY)
+
+        assert report["youtube"]["shown"] is False
+        assert "YouTube" not in report["lead"]
+
+    def test_a_channel_that_is_not_live_has_no_chat_to_read(self):
+        one = self.part(YouTubeChat(channels=1, last_heard_at=ago(20)))
+        several = self.part(YouTubeChat(channels=3))
+
+        assert (one["shown"], one["trouble"]) == (True, False)
+        assert one["said"] == "The YouTube channel is not live, so no YouTube chat comes in."
+        assert one["more"] == ["The last answer from YouTube came 20 seconds ago."]
+        assert several["said"] == "None of the 3 YouTube channels is live, so no YouTube chat comes in."
+
+    def test_chat_coming_in_says_whose(self):
+        all_of_them = self.part(YouTubeChat(channels=2, reading=(("a@youtube", ago(60)), ("b@youtube", ago(30)))))
+        the_one = self.part(YouTubeChat(channels=1, reading=(("a@youtube", ago(60)),)))
+        some = self.part(YouTubeChat(channels=3, reading=(("a@youtube", ago(60)),)))
+
+        assert all_of_them["said"] == "The chat of all 2 YouTube channels comes in."
+        assert the_one["said"] == "The chat of the YouTube channel comes in."
+        assert some["said"] == "The chat of 1 of the 3 YouTube channels comes in."
+        assert some["more"] == ["The others are not live."]
+        assert not any(part["trouble"] for part in (all_of_them, the_one, some))
+
+    def test_a_chat_that_is_turned_off_is_listed_but_is_no_trouble(self):
+        part = self.part(
+            YouTubeChat(channels=1, unavailable=(("a@youtube", "Chat is disabled for this live stream."),))
+        )
+
+        assert not part["trouble"]
+        assert part["said"] == "No YouTube chat comes in: the chat of the live channels below cannot be read."
+        assert part["rows"] == [{"slug": "a@youtube", "why": "Chat is disabled for this live stream."}]
+        assert "tried again every five minutes" in part["more"][0]
+
+    def test_youtube_not_answering_a_moment_ago_is_no_trouble_yet(self):
+        part = self.part(YouTubeChat(channels=1, failing=(("a@youtube", "YouTube answered 503", ago(10)),)))
+
+        assert not part["trouble"]
+        assert part["said"] == "Asking YouTube about a@youtube again (YouTube answered 503)."
+        assert part["rows"] == []
+
+    def test_youtube_not_answering_for_long_is_trouble(self):
+        since = ago(health.YOUTUBE_LOST_SECONDS + 60)
+        part = self.part(
+            YouTubeChat(
+                channels=2,
+                reading=(("b@youtube", ago(600)),),
+                failing=(("a@youtube", "YouTube answered 429", since),),
+            )
+        )
+
+        assert part["trouble"]
+        assert part["said"] == "YouTube has not answered about a@youtube for 3 minutes: YouTube answered 429."
+        assert part["rows"] == [
+            {"slug": "a@youtube", "why": "No answer from YouTube for 3 minutes: YouTube answered 429"}
+        ]
+
+    def test_it_is_named_in_the_lead_where_it_is_trouble_and_where_all_is_fine(self):
+        fine = YouTubeChat(channels=1, reading=(("a@youtube", ago(5)),))
+        wrong = YouTubeChat(channels=1, failing=(("a@youtube", "ConnectError", ago(health.YOUTUBE_LOST_SECONDS)),))
+
+        assert health.report(facts(last_webhook_at=ago(2), youtube=fine), TODAY)["lead"] == (
+            "Webhooks, subscriptions, YouTube chat, the recorders, the disk and the tunnel all look fine."
+        )
+        report = health.report(facts(last_webhook_at=ago(2), youtube=wrong), TODAY)
+        assert (report["troubles"], report["lead"]) == (1, "YouTube chat needs a look.")
 
 
 class TestWebhooksAreKicks:

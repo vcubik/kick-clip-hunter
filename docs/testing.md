@@ -366,8 +366,8 @@ and on demand:
 
 ## What is not automated - the live checklist
 
-Some things only exist against the real Kick and Twitch, and faking them would only test the
-fake:
+Some things only exist against the real Kick, Twitch and YouTube, and faking them would only
+test the fake:
 
 | Not covered by the suite | Why |
 |---|---|
@@ -381,6 +381,7 @@ fake:
 | `static/dashboard.js` - the transcript beside a clip: its tab, asking for it and following it while it is made, marking the line being said, a line's time playing the clip, saving what is put right in a line | As for the rest of the script: the tab the service renders and every request it makes are tested, the script is checked by hand (step 15 below). |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | Twitch's actual API, chat connection and playlists: Helix, the device flow of `scripts/twitch_login.py`, the EventSub WebSocket, streamlink finding a stream and its VOD | `FakeTwitchApi`, `FakeEventSub` and `FakeHlsServer` encode what Twitch documents and what was observed (a live playlist's tags, a VOD in fragmented MP4); streamlink itself is never run - a test that would reach it fails. Step 14 below is what notices a change. |
+| YouTube's actual web API, chat and playlists: InnerTube's answers, a live chat's page and its looks, streamlink finding a stream | `FakeYouTube` and `FakeHlsServer` encode what was observed of them (October 2026: the shapes of `resolve_url`, `browse`, `player`, the chat page's settings and data, `get_live_chat`'s actions; a live playlist with one program date-time at the top); InnerTube is not published, so a change is only noticed live. streamlink itself is never run. Step 16 below is what notices a change. |
 | `static/dashboard.js` - the keyboard flow, the clip player, opening a moment without a reload | There is no browser in the suite. The pages are tested as the HTML the server renders, and every endpoint the script calls has tests of its own; the script itself is checked by hand (steps 2 and 6 below). |
 | A stream recording of real length | The suite records and saves seconds of synthetic footage. Hours of a real stream - gigabytes on disk, a file made in minutes, a player moving about in it - are step 11 below. |
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. What the Health page makes of Tailscale's answers is tested; that those answers are still what Tailscale prints is step 1 below. |
@@ -552,6 +553,21 @@ Run this on a live channel after changing any of the above, or the code right ne
    Czech letters come out right. Trim a stretch and Export: "Download subtitles" appears beside
    the video, and `moment_N_trim.srt` lines up with that video from its first frame - closed, the
    dialog leaves "The cut from Trim" in the tab as well. The next moment opened shows the same tab.
+16. **Watch a YouTube channel.** Add a live YouTube channel on the Channels page by a link to its
+   page, `youtube.com/@<handle>`, and again by a link to its live stream: it is listed once, as
+   `<handle>@youtube` with its channel id (`UC...`) in the tooltip. Within half a minute the log
+   says `youtube chat: reading the chat of <handle>@youtube` and its chat lines follow - none
+   from before that line - a second or few after they show in the chat on youtube.com (in its
+   "Live chat" view, not "Top chat"); the Health page's YouTube part says its chat comes in.
+   No browser window opens for its recording: the log says `recording started`, VOD not
+   available. A moment of it plays like a Kick one, YouTube's emoji in its chat drawn as
+   pictures - laughing ones counted as laughing - and its chat sits against the picture after
+   the calibration of step 6 (YouTube's player runs further behind the broadcast than Kick's,
+   the more so for a stream of normal latency). Six hours into its stream the log says
+   `the stream's address was renewed before it ran out`, with no `discontinuity` line and no
+   restart around it. When the stream ends the log says `the chat of <handle>@youtube is
+   over`. A channel whose streamer turned chat off is listed on the Health page with what
+   YouTube says of it, and nothing is beside "Health" in the bar.
 
 ## Checking a detector change against a real stream
 

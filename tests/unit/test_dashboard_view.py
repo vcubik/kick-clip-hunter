@@ -274,6 +274,25 @@ class TestChat:
             }
         ]
 
+    def test_a_youtube_emoji_has_its_picture_from_youtube(self):
+        assert view.chat_parts("[emote:youtube.KOxdr_z3A5h-1Gb7k:hand-pink-waving]") == [
+            {
+                "emote": "hand-pink-waving",
+                "image": "https://yt3.ggpht.com/KOxdr_z3A5h-1Gb7k=w48-h48-c-k-nd",
+                "width": view.EMOTE_HEIGHT,
+            }
+        ]
+
+    def test_an_emoji_everyone_has_is_drawn_as_youtube_draws_it(self):
+        assert view.chat_parts("ok [emote:emoji.1f62e_200d_1f4a8:face_exhaling]") == [
+            {"text": "ok "},
+            {
+                "emote": "face_exhaling",
+                "image": "https://fonts.gstatic.com/s/e/notoemoji/latest/1f62e_200d_1f4a8/72.png",
+                "width": view.EMOTE_HEIGHT,
+            },
+        ]
+
     def test_an_emote_of_a_platform_without_pictures_is_its_name(self):
         assert view.chat_parts("ha [emote:elsewhere.12:KEKW]") == [{"text": "ha "}, {"text": "KEKW"}]
 
@@ -282,6 +301,8 @@ class TestChat:
         [
             ("https://files.kick.com/emotes/37226/fullsize", "Kick"),
             ("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0", "Twitch"),
+            ("https://yt3.ggpht.com/KOxdr_z3A5h-1Gb7k=w48-h48-c-k-nd", "YouTube"),
+            ("https://fonts.gstatic.com/s/e/notoemoji/latest/1f602/72.png", "YouTube"),
             ("https://cdn.7tv.app/emote/ID1/2x.webp", "7TV"),
         ],
     )

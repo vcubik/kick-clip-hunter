@@ -12,7 +12,9 @@ page the only trace of the difference was a line in the log.
 Twitch's chat comes another way, over a connection the service keeps open
 (twitch_chat.py), on behalf of an account signed in for it: where that
 stands is a part of its own, there for as long as the service is set up for
-Twitch or watches a Twitch channel.
+Twitch or watches a Twitch channel. YouTube's chat is read while a channel
+is live, by looking at it every few seconds (youtube_chat.py), and has a
+part of its own while a YouTube channel is watched.
 
 So what the service notices as it runs is kept - in memory, by main.py and
 recording_manager.py, and the subscriptions Kick dropped in the database as
@@ -65,6 +67,10 @@ CHECK_LATE_ROUNDS = 2
 # Twitch's chat reader connects again at once when its connection is lost;
 # one that has had none for this long is not getting one.
 TWITCH_LOST_SECONDS = 120
+# YouTube's chat reader asks again within seconds when YouTube does not
+# answer; one that has had no answer about a channel for this long is not
+# getting one.
+YOUTUBE_LOST_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -114,6 +120,22 @@ class TwitchChat:
     needs_sign_in: bool = False
     # The channels whose chat Twitch refused, by name, and why.
     refused: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class YouTubeChat:
+    """Where reading YouTube's chat stands (see youtube_chat.ChatReader)."""
+
+    # How many YouTube channels are on the watchlist.
+    channels: int = 0
+    # The channels whose chat is being read, and since when.
+    reading: tuple[tuple[str, datetime], ...] = ()
+    # The live channels whose chat cannot be read, and why.
+    unavailable: tuple[tuple[str, str], ...] = ()
+    # The channels YouTube could not be asked about: why, and since when.
+    failing: tuple[tuple[str, str, datetime], ...] = ()
+    # When YouTube last answered.
+    last_heard_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +237,8 @@ class Facts:
     # Twitch's chat, while the service is set up for Twitch or watches a
     # Twitch channel; None otherwise.
     twitch: TwitchChat | None = None
+    # YouTube's chat, while a YouTube channel is watched; None otherwise.
+    youtube: YouTubeChat | None = None
 
 
 # -- words ------------------------------------------------------------------
@@ -434,6 +458,52 @@ def twitch_part(facts: Facts, today: date) -> dict[str, Any]:
     return {"shown": True, "trouble": trouble, "said": said, "more": more, "rows": rows}
 
 
+# -- YouTube's chat ------------------------------------------------------------
+
+
+def youtube_part(facts: Facts, today: date) -> dict[str, Any]:
+    """Where reading YouTube's chat stands. Shown only while a YouTube
+    channel is on the watchlist. A chat its streamer turned off is said, but
+    is no trouble; YouTube not answering for long is."""
+    chat = facts.youtube
+    if chat is None or chat.channels == 0:
+        return {"shown": False, "trouble": False, "said": "", "more": [], "rows": []}
+    now = facts.now
+    lost = [(slug, why, since) for slug, why, since in chat.failing if _seconds(now, since) >= YOUTUBE_LOST_SECONDS]
+    rows = [{"slug": slug, "why": why} for slug, why in chat.unavailable]
+    for slug, why, since in lost:
+        rows.append({"slug": slug, "why": f"No answer from YouTube for {span_words(_seconds(now, since))}: {why}"})
+    more: list[str] = []
+    reading = len(chat.reading)
+    if lost:
+        _, why, since = min(lost, key=lambda failing: failing[2])
+        names = list_words([slug for slug, _, _ in lost])
+        said = f"YouTube has not answered about {names} for {span_words(_seconds(now, since))}: {why}."
+        more.append("The service keeps asking. The server log says more.")
+    elif reading:
+        if reading == chat.channels:
+            whose = "the YouTube channel" if reading == 1 else f"all {reading} YouTube channels"
+        else:
+            whose = f"{reading} of the {chat.channels} YouTube channels"
+            if not (chat.unavailable or chat.failing):
+                more.append("The others are not live.")
+        said = f"The chat of {whose} comes in."
+    elif chat.failing:
+        slug, why, _ = chat.failing[0]
+        said = f"Asking YouTube about {slug} again ({why})."
+    elif chat.unavailable:
+        said = "No YouTube chat comes in: the chat of the live channels below cannot be read."
+    elif chat.channels == 1:
+        said = "The YouTube channel is not live, so no YouTube chat comes in."
+    else:
+        said = f"None of the {chat.channels} YouTube channels is live, so no YouTube chat comes in."
+    if chat.unavailable:
+        more.append("YouTube says the chat below cannot be read - it is tried again every five minutes.")
+    if chat.last_heard_at is not None:
+        more.append(f"The last answer from YouTube came {ago_words(chat.last_heard_at, now, today)}.")
+    return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
+
+
 # -- recorders ----------------------------------------------------------------
 
 
@@ -593,6 +663,7 @@ PARTS = (
     ("webhooks", "webhooks", True),
     ("subscriptions", "subscriptions", True),
     ("twitch", "Twitch chat", False),
+    ("youtube", "YouTube chat", False),
     ("recorders", "the recorders", True),
     ("disk", "the disk", False),
     ("tunnel", "the tunnel", False),
@@ -606,6 +677,7 @@ def report(facts: Facts, today: date) -> dict[str, Any]:
         "webhooks": webhooks(facts, today),
         "subscriptions": subscriptions(facts, today),
         "twitch": twitch_part(facts, today),
+        "youtube": youtube_part(facts, today),
         "recorders": recorders(facts, today),
         "disk": disk(facts),
         "tunnel": tunnel_part(facts, today),

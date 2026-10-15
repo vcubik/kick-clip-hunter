@@ -408,6 +408,61 @@ class TestTwitchAdSegments:
         assert flags == [False]
 
 
+YOUTUBE_MASTER_URL = "https://manifest.example/api/manifest/hls_variant/expire/1792091778/id/abc.1/file/index.m3u8"
+
+YOUTUBE_MASTER = """#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-STREAM-INF:BANDWIDTH=290288,CODECS="mp4a.40.5,avc1.42C00B",RESOLUTION=256x144,FRAME-RATE=15,VIDEO-RANGE=SDR,CLOSED-CAPTIONS=NONE
+https://manifest.example/api/manifest/hls_playlist/expire/1792091778/id/abc.1/itag/91/file/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5420722,CODECS="mp4a.40.2,avc1.640028",RESOLUTION=1920x1080,FRAME-RATE=30,VIDEO-RANGE=SDR,CLOSED-CAPTIONS=NONE
+https://manifest.example/api/manifest/hls_playlist/expire/1792091778/id/abc.1/itag/96/file/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2969452,CODECS="mp4a.40.2,avc1.4D401F",RESOLUTION=1280x720,FRAME-RATE=30,VIDEO-RANGE=SDR,CLOSED-CAPTIONS=NONE
+https://manifest.example/api/manifest/hls_playlist/expire/1792091778/id/abc.1/itag/95/file/index.m3u8
+"""
+
+YOUTUBE_VARIANT = """#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:5
+#EXT-X-MEDIA-SEQUENCE:239225
+#EXT-X-DISCONTINUITY-SEQUENCE:51
+#EXT-X-PROGRAM-DATE-TIME:2026-10-15T13:15:44.801+00:00
+#EXTINF:5.0,
+https://segments.example/videoplayback/id/abc.1/itag/96/sq/239225/file/seg.ts
+#EXTINF:5.0,
+https://segments.example/videoplayback/id/abc.1/itag/96/sq/239226/file/seg.ts
+#EXTINF:5.0,
+https://segments.example/videoplayback/id/abc.1/itag/96/sq/239227/file/seg.ts
+"""
+
+
+class TestYouTubePlaylists:
+    """YouTube's live playlists, as streamlink finds them: a program
+    date-time for the first segment listed only, no titles, no ads."""
+
+    def test_the_best_variant_is_picked_with_what_the_master_says_of_it(self):
+        url, said = recorder._choose_variant(YOUTUBE_MASTER, YOUTUBE_MASTER_URL)
+
+        assert url.endswith("/itag/96/file/index.m3u8")
+        assert "RESOLUTION=1920x1080" in said and said.startswith("BANDWIDTH=5420722")
+
+    def test_every_segment_is_dated_from_the_one_program_time(self):
+        parsed = recorder._parse_playlist(YOUTUBE_VARIANT, "https://manifest.example/variant.m3u8")
+
+        start = utc(2026, 10, 15, 13, 15, 44, 801000)
+        assert [segment.started_at for segment in parsed.segments] == [
+            start,
+            start + timedelta(seconds=5),
+            start + timedelta(seconds=10),
+        ]
+        assert [segment.sequence for segment in parsed.segments] == [239225, 239226, 239227]
+
+    def test_nothing_in_them_is_taken_for_an_ad_or_a_break(self):
+        parsed = recorder._parse_playlist(YOUTUBE_VARIANT, "https://manifest.example/variant.m3u8")
+
+        assert not any(segment.ad or segment.discontinuity for segment in parsed.segments)
+        assert {segment.title for segment in parsed.segments} == {""}
+
+
 class TestFragmentedMp4:
     """Twitch's VOD is fragmented MP4: its segments play only after the
     initialization segment the playlist names (EXT-X-MAP)."""

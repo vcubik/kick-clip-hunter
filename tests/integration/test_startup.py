@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, detector, recording_manager, twitch_auth, twitch_chat
+from kick_clip_hunter import db, detector, recording_manager, twitch_auth, twitch_chat, youtube_chat
 from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_streamer
@@ -23,6 +23,8 @@ from tests.support.eventsub import chat_event
 from tests.support.kick_api import seventv_emote_id
 from tests.support.twitch_api import FakeAccount
 from tests.support.waiting import async_wait_until
+from tests.support.youtube import emoji as youtube_emoji
+from tests.support.youtube import message as youtube_message
 
 pytestmark = pytest.mark.anyio
 
@@ -254,6 +256,67 @@ class TestTwitchChat:
             assert service.main._twitch_reader is None
 
 
+class TestYouTubeChat:
+    """The service reads the chat of the YouTube channels on the watchlist
+    while they are live, from its start, and takes it in as it takes Kick's.
+    YouTube needs nothing set up."""
+
+    @pytest.fixture
+    def youtube_service(self, service, youtube, monkeypatch):
+        async def no_recording(*_args):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", no_recording)
+        monkeypatch.setattr(youtube_chat, "POLL_SECONDS", (0.01,))
+        monkeypatch.setattr(youtube_chat, "LOOK_SECONDS", 0.05)
+        return service
+
+    def watch_on_youtube(self, handle: str, channel_id: str) -> int:
+        conn = db.get_connection()
+        try:
+            return db.add_platform_streamer(conn, "youtube", channel_id, f"{handle}@youtube")
+        finally:
+            conn.close()
+
+    async def test_a_youtube_channels_chat_is_stored_and_counted(self, youtube_service, youtube):
+        channel = youtube.add_channel("some_channel")
+        channel.go_live("livevideo01")
+        youtube.chat("livevideo01").say(
+            youtube_message("m-1", "alice", "xDDD ", youtube_emoji("😂", "face_with_tears_of_joy", "1f602"))
+        )
+        key = self.watch_on_youtube("some_channel", channel.channel_id)
+
+        async with youtube_service.main.lifespan(youtube_service.main.app):
+            await async_wait_until(lambda: youtube_service.rows("SELECT * FROM chat_messages"), "the message")
+
+        (row,) = youtube_service.rows("SELECT * FROM chat_messages")
+        stored = (row["message_id"], row["broadcaster_user_id"], row["channel_slug"])
+        assert stored == ("m-1", key, "some_channel@youtube")
+        assert (row["sender_username"], row["content"]) == (
+            "alice",
+            "xDDD [emote:emoji.1f602:face_with_tears_of_joy]",
+        )
+        (entry,) = detector._entries["some_channel@youtube"]
+        assert (entry[1], entry[3]) == ("alice", 1)
+
+    async def test_a_kick_or_twitch_channel_is_none_of_the_readers_business(self, youtube_service, youtube):
+        youtube_service.watch("kick_channel")
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "twitch", "101", "twitch_channel@twitch")
+        finally:
+            conn.close()
+
+        async with youtube_service.main.lifespan(youtube_service.main.app):
+            await async_wait_until(lambda: youtube_service.main._youtube_reader.watched == 0, "the watchlist")
+
+        assert youtube.requests == []
+
+    async def test_the_reader_starts_with_the_service(self, youtube_service):
+        async with youtube_service.main.lifespan(youtube_service.main.app):
+            assert youtube_service.main._youtube_reader is not None
+
+
 class TestEmotePictures:
     """Channels change their 7TV emote sets all the time; a start brings
     the pictures chat is drawn with up to date."""
@@ -348,6 +411,19 @@ class TestEmotePictures:
 
         assert set(self.pictures(kick_channel)) == {"KEKW"}
         assert set(self.pictures(twitch_channel)) == {"OMEGALUL"}
+
+    async def test_a_youtube_channel_has_no_set_to_fetch(self, service, youtube, caplog):
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "youtube", "UCAAAAAAAAAAAAAAAAAAAAAA", "youtube_channel@youtube")
+        finally:
+            conn.close()
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await service.main._refresh_emote_pictures()
+
+        assert not [path for _, path, _ in service.api.requests if "/users/" in path]
+        assert not any("youtube_channel" in record.getMessage() for record in caplog.records)
 
     async def test_it_happens_on_startup_without_holding_it_up(self, service, monkeypatch):
         async def no_recording(*_args):

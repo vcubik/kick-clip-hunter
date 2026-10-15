@@ -10,7 +10,9 @@ counted by the detector, turned into a moment (see main.py's `_take_chat`).
 What the detector and the dashboard read in a message is the same for every
 platform, so a platform's receiver puts it in the form Kick sends it in: its
 own emotes stand in the text as `[emote:<id>:<name>]` (see
-detector.NATIVE_EMOTE_TOKEN_PATTERN), and `emotes` lists where they are.
+detector.NATIVE_EMOTE_TOKEN_PATTERN), and `emotes` lists where they are -
+and what a chatter typed that would read as one is kept so that it does not
+(`typed`).
 
 Pure: what was received comes in, what is stored comes out.
 """
@@ -24,6 +26,17 @@ from datetime import datetime
 from typing import Any
 
 from .chat_identity import Identity
+
+# Text a chatter typed that would read as an emote's token - kept, but with a
+# zero-width space in it, so that it does not.
+TYPED_TOKEN = "[emote:"
+HARMLESS_TOKEN = "[emote\u200b:"
+
+
+def typed(text: str) -> str:
+    """Text a chatter typed, as it is taken in: nothing in it reads as one
+    of a platform's emotes."""
+    return text.replace(TYPED_TOKEN, HARMLESS_TOKEN)
 
 
 @dataclass(frozen=True)

@@ -31,26 +31,9 @@ import logging
 from . import twitch_client
 from .config import load_settings
 from .platforms import StreamUrlError, StreamUrls
-
-try:
-    from streamlink import Streamlink
-    from streamlink.exceptions import StreamlinkError
-except ImportError:  # pragma: no cover - installed wherever the suite runs
-    # A service upgraded without its new requirement still starts, and
-    # records its Kick channels: only a Twitch stream cannot be found.
-    Streamlink = None  # type: ignore[assignment, misc]
-
-    class StreamlinkError(Exception):  # type: ignore[no-redef]
-        """Stands in for streamlink's own, which nothing can raise now."""
-
+from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
-NOT_INSTALLED = "streamlink is not installed: pip install -r requirements-core.txt"
-
-# Importing streamlink renames the standard log levels in small letters, for
-# every logger in the process. The service's log keeps them as they were.
-for _level in (logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG):
-    logging.addLevelName(_level, logging.getLevelName(_level).upper())
 
 CHANNEL_URL = "https://www.twitch.tv/{login}"
 VIDEO_URL = "https://www.twitch.tv/videos/{video_id}"

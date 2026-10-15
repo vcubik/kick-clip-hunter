@@ -3,7 +3,8 @@ in front of it.
 
 Kick sends both with every chat message (`sender.identity`), and so does
 Twitch (`color`, `badges`), whose badges are put in the form Kick's are
-kept in. They belong to the person in that channel, not to the message, so
+kept in - as are YouTube's (`authorBadges`), whose names have no colour of
+their own. They belong to the person in that channel, not to the message, so
 they are kept once per chatter (db.chat_identities) and only written when
 they change - the dashboard looks them up by name when it draws chat. What
 is shown is therefore the latest known state, also beside an older moment.
@@ -123,6 +124,45 @@ def from_twitch(colour: Any, badges: Any) -> Identity:
         colour = None
     kept = [badge for badge in map(_twitch_badge, badges if isinstance(badges, list) else []) if badge]
     return (colour.lower() if colour else None, json.dumps(kept[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
+
+
+# YouTube's badges by the type Kick's same badge has, by the icon YouTube
+# draws them with; a member's badge is a picture of the channel's own.
+YOUTUBE_BADGE_TYPES = {"OWNER": "broadcaster", "MODERATOR": "moderator", "VERIFIED": "verified"}
+YOUTUBE_MEMBER_BADGE = "subscriber"
+# How long a member has been one, as the badge's tooltip says it in English:
+# "Member (2 years, 3 months)", "Member (6 months)".
+_YOUTUBE_YEARS = re.compile(r"(\d+)\s+year")
+_YOUTUBE_MONTHS = re.compile(r"(\d+)\s+month")
+
+
+def _youtube_months(tooltip: str) -> int | None:
+    years, months = _YOUTUBE_YEARS.search(tooltip), _YOUTUBE_MONTHS.search(tooltip)
+    if years is None and months is None:
+        return None
+    return (int(years.group(1)) * 12 if years else 0) + (int(months.group(1)) if months else 0)
+
+
+def _youtube_badge(entry: Any) -> dict[str, Any] | None:
+    badge = entry.get("liveChatAuthorBadgeRenderer") if isinstance(entry, Mapping) else None
+    if not isinstance(badge, Mapping):
+        return None
+    tooltip = badge.get("tooltip") if isinstance(badge.get("tooltip"), str) else ""
+    icon = badge.get("icon")
+    icon_type = icon.get("iconType") if isinstance(icon, Mapping) else None
+    if isinstance(icon_type, str):
+        return _badge({"type": YOUTUBE_BADGE_TYPES.get(icon_type, icon_type.lower()), "text": tooltip})
+    if "customThumbnail" in badge:
+        return _badge({"type": YOUTUBE_MEMBER_BADGE, "text": tooltip, "count": _youtube_months(tooltip)})
+    return None
+
+
+def from_youtube(badges: Any) -> Identity:
+    """A YouTube chatter's identity as it is stored: YouTube gives names no
+    colour of their own, and the badges as a chat message of theirs lists
+    them (`authorBadges`)."""
+    kept = [badge for badge in map(_youtube_badge, badges if isinstance(badges, list) else []) if badge]
+    return (None, json.dumps(kept[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
 
 
 # The badges of those who run a channel: its streamer and its moderators.

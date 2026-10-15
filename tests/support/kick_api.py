@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import httpx
 
@@ -61,6 +62,14 @@ class FakeChannel:
         }
 
 
+class OtherFake(Protocol):
+    """A fake of another service, whose requests go the same way as Kick's."""
+
+    def owns(self, request: httpx.Request) -> bool: ...
+
+    def handle(self, request: httpx.Request) -> httpx.Response: ...
+
+
 @dataclass
 class FakeKickApi:
     channels: dict[str, FakeChannel] = field(default_factory=dict)
@@ -81,6 +90,9 @@ class FakeKickApi:
     # 7TV's global emote set, the one every channel has on top of its own:
     # its seventv_* fields are what the fake 7TV answers with.
     seventv_global: FakeChannel = field(default_factory=lambda: FakeChannel("", 0))
+    # Fakes of other platforms a test has as well (Twitch's, YouTube's): a
+    # request one of them owns is answered by it.
+    others: list[OtherFake] = field(default_factory=list)
 
     def add_channel(self, slug: str, broadcaster_user_id: int, **kwargs) -> FakeChannel:
         channel = FakeChannel(slug=slug, broadcaster_user_id=broadcaster_user_id, **kwargs)
@@ -96,6 +108,9 @@ class FakeKickApi:
         return httpx.MockTransport(self._handle)
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
+        for other in self.others:
+            if other.owns(request):
+                return other.handle(request)
         url = str(request.url)
         path = request.url.path
         if request.method == "POST" and request.content:

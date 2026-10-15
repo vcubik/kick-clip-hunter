@@ -268,8 +268,9 @@ def _emote_name_weight(emote_name: str, settings: Settings) -> float:
 # Kick embeds native emotes as "[emote:12345:emojiLol]" tokens directly in
 # the message content. Another platform's own emotes are put in the same
 # form when its chat is taken in (chat_message.py), with the platform before
-# their id: "[emote:twitch.25:Kappa]".
-NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:[0-9A-Za-z_.]+:([^\]]+)\]")
+# their id: "[emote:twitch.25:Kappa]" - YouTube's emoji as well, by their
+# names: "[emote:emoji.1f602:face_with_tears_of_joy]".
+NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:[0-9A-Za-z_.\-]+:([^\]]+)\]")
 
 
 def classify_native_emotes(content: str, settings: Settings | None = None) -> float:

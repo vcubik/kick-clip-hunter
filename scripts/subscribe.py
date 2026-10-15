@@ -1,12 +1,15 @@
 """CLI to add a channel to the watchlist and record the streamer in the local
 database. A Kick channel's chat.message.sent events are subscribed (unless
 they already are); a Twitch channel's chat is subscribed by the running
-service. Safe to run again for a channel that is already watched.
+service, and a YouTube channel's chat is read by it while the channel is
+live. Safe to run again for a channel that is already watched.
 
 Usage: python scripts/subscribe.py <channel>
 
-<channel> is a Kick channel's name, a link to a Kick or Twitch channel, or a
-Twitch channel's name followed by @twitch.
+<channel> is a Kick channel's name, a link to a Kick, Twitch or YouTube
+channel (or to a YouTube video of the channel), or a Twitch or YouTube
+channel's name followed by @twitch or @youtube - a YouTube channel's name
+being its handle.
 """
 
 import argparse
@@ -24,15 +27,19 @@ async def main(channel: str) -> None:
     result = await add_to_watchlist(channel)
     slug = result["slug"]
     print(f"Found channel {slug!r}: broadcaster_user_id={result['broadcaster_user_id']}")
-    print(
-        f"Fetched {result['emote_count']} {EMOTE_SOURCES[platforms.platform_of(slug)]} emote name(s) for {slug!r} "
-        f"({result['laugh_emote_count']} classified as laugh-related)"
-    )
+    sources = EMOTE_SOURCES.get(platforms.platform_of(slug))
+    if sources:
+        print(
+            f"Fetched {result['emote_count']} {sources} emote name(s) for {slug!r} "
+            f"({result['laugh_emote_count']} classified as laugh-related)"
+        )
     print(f"Added {slug!r} to the watchlist.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("channel", help="Kick channel name, a Kick or Twitch link, or <name>@twitch")
+    parser.add_argument(
+        "channel", help="Kick channel name, a Kick, Twitch or YouTube link, <name>@twitch or <handle>@youtube"
+    )
     args = parser.parse_args()
     asyncio.run(main(args.channel))

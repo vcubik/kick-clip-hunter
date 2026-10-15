@@ -30,6 +30,7 @@ from tests.support.tailscale import FakeTailscale
 from tests.support.twitch_api import FakeTwitchApi
 from tests.support.waiting import async_wait_until
 from tests.support.webhook import WebhookSigner, chat_payload
+from tests.support.youtube import FakeYouTube
 
 
 @pytest.fixture
@@ -121,20 +122,18 @@ def twitch_api(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTw
     api = FakeTwitchApi()
     monkeypatch.setenv("TWITCH_CLIENT_ID", TWITCH_CLIENT_ID)
     monkeypatch.setenv("TWITCH_CLIENT_SECRET", TWITCH_CLIENT_SECRET)
-
-    def route(request: httpx.Request) -> httpx.Response:
-        return api.handle(request) if api.owns(request) else kick_api._handle(request)
-
-    transport = httpx.MockTransport(route)
-    kick_routed = httpx.AsyncClient
-
-    class RoutedAsyncClient(kick_routed):  # type: ignore[valid-type, misc]
-        def __init__(self, *args, **kwargs) -> None:
-            kwargs.setdefault("transport", transport)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", RoutedAsyncClient)
+    kick_api.others.append(api)
     return api
+
+
+@pytest.fixture
+def youtube(kick_api: FakeKickApi) -> FakeYouTube:
+    """A fake YouTube for every `httpx.AsyncClient` the service creates;
+    everything else still goes to the fake Kick (and Twitch, where a test
+    has that too). YouTube needs nothing set up."""
+    fake = FakeYouTube()
+    kick_api.others.append(fake)
+    return fake
 
 
 @pytest.fixture

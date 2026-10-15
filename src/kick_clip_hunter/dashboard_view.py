@@ -39,12 +39,23 @@ NICK_COLOURS = 6
 # is taken in, with the platform before the id: "[emote:twitch.25:Kappa]"
 # (the same token detector.NATIVE_EMOTE_TOKEN_PATTERN matches, with the id
 # kept). Each platform serves the picture for an id from its own address.
-_EMOTE_TOKEN = re.compile(r"\[emote:([0-9A-Za-z_.]+):([^\]]+)\]")
+_EMOTE_TOKEN = re.compile(r"\[emote:([0-9A-Za-z_.\-]+):([^\]]+)\]")
 KICK_EMOTE_IMAGE = "https://files.kick.com/emotes/{id}/fullsize"
 TWITCH_EMOTE_IMAGE = "https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/2.0"
+# YouTube's emoji (see youtube_chat.py): a channel's own, and YouTube's, by
+# their picture's name on YouTube's picture host - and the emoji everyone
+# has, by their code points, drawn as YouTube draws them, from Google's
+# Noto set.
+YOUTUBE_EMOTE_IMAGE = "https://yt3.ggpht.com/{id}=w48-h48-c-k-nd"
+EMOJI_IMAGE = "https://fonts.gstatic.com/s/e/notoemoji/latest/{id}/72.png"
 # Whose a native emote is and where its picture is, by what stands before
 # its id - nothing for Kick's, whose ids stand alone.
-NATIVE_EMOTE_IMAGES = {"": ("Kick", KICK_EMOTE_IMAGE), "twitch": ("Twitch", TWITCH_EMOTE_IMAGE)}
+NATIVE_EMOTE_IMAGES = {
+    "": ("Kick", KICK_EMOTE_IMAGE),
+    "twitch": ("Twitch", TWITCH_EMOTE_IMAGE),
+    "youtube": ("YouTube", YOUTUBE_EMOTE_IMAGE),
+    "emoji": ("YouTube", EMOJI_IMAGE),
+}
 # 7TV emotes are typed as plain words; which emote a word is depends on the
 # channel (see chat_parts). Twice the smallest size, so the picture stays
 # sharp on a dense screen.
@@ -420,7 +431,7 @@ def native_emote_image(token_id: str) -> str | None:
 
 def emote_source(picture: str) -> str:
     """Whose emote the picture at this address is: a platform's own - Kick's,
-    Twitch's - or a channel's on 7TV, BetterTTV or FrankerFaceZ."""
+    Twitch's, YouTube's - or a channel's on 7TV, BetterTTV or FrankerFaceZ."""
     for source, template in (*NATIVE_EMOTE_IMAGES.values(), *TYPED_EMOTE_IMAGES.values()):
         if picture.startswith(template.split("{", 1)[0]):
             return source
