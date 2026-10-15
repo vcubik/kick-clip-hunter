@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import db, detector, recording_manager, twitch_auth, twitch_chat
+from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_streamer
 from tests.support.eventsub import chat_event
@@ -360,6 +361,67 @@ class TestEmotePictures:
             await async_wait_until(lambda: self.pictures(user_id), "the channel's emote pictures to be stored")
 
         assert set(self.pictures(user_id)) == {"KEKW"}
+
+
+KICK_BADGE = "https://files.kick.com/channel_subscriber_badges/{}/conversion/original-fullsize.png"
+TWITCH_BADGE = "https://static-cdn.jtvnw.net/badges/v1/{}/3"
+
+
+class TestSubscriberBadges:
+    """A channel's own subscriber badges are fetched with its emote
+    pictures: on every start, and kept when they can't be."""
+
+    def badges(self, broadcaster_user_id: int) -> list[Picture]:
+        conn = db.get_connection()
+        try:
+            return db.get_channel_badges(conn, broadcaster_user_id)
+        finally:
+            conn.close()
+
+    async def test_a_kick_channels_come_from_kick(self, service):
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].subscriber_badges = {1: KICK_BADGE.format(1), 6: KICK_BADGE.format(6)}
+
+        await service.main._refresh_emote_pictures()
+
+        assert self.badges(user_id) == [Picture(1, 1, KICK_BADGE.format(1)), Picture(1, 6, KICK_BADGE.format(6))]
+
+    async def test_a_twitch_channels_from_twitch_by_its_twitch_id(self, service, twitch_api):
+        twitch_api.add_channel("twitch_channel", "123", subscriber_badges={"0": TWITCH_BADGE.format("a")})
+        conn = db.get_connection()
+        try:
+            twitch_channel = db.add_platform_streamer(conn, "twitch", "123", "twitch_channel@twitch")
+        finally:
+            conn.close()
+
+        await service.main._refresh_emote_pictures()
+
+        assert self.badges(twitch_channel) == [Picture(1, 0, TWITCH_BADGE.format("a"))]
+        assert twitch_api.calls("GET", "/helix/chat/badges") == [{"broadcaster_id": "123"}]
+
+    async def test_a_channel_that_has_dropped_them_has_none(self, service):
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].subscriber_badges = {1: KICK_BADGE.format(1)}
+        await service.main._refresh_emote_pictures()
+        service.api.channels["channel_a"].subscriber_badges = {}
+
+        await service.main._refresh_emote_pictures()
+
+        assert self.badges(user_id) == []
+
+    async def test_ones_that_cannot_be_fetched_stay_as_they_were(self, service, caplog):
+        user_id = service.watch("channel_a")
+        service.api.channels["channel_a"].subscriber_badges = {1: KICK_BADGE.format(1)}
+        await service.main._refresh_emote_pictures()
+        service.api.channels["channel_a"].seventv_emotes = ["KEKW"]
+        service.api.failures["kick.com/api/v2"] = 403
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            await service.main._refresh_emote_pictures()
+
+        assert self.badges(user_id) == [Picture(1, 1, KICK_BADGE.format(1))]
+        assert set(TestEmotePictures().pictures(user_id)) == {"KEKW"}
+        assert any("could not refresh the subscriber badges of channel_a" in r.getMessage() for r in caplog.records)
 
 
 class TestWatchlistViews:

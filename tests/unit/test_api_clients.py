@@ -12,10 +12,13 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, kick_client, seventv_client, watchlist
+from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.seventv_client import Emote
 from tests.support.kick_api import seventv_emote_id
 
 pytestmark = pytest.mark.anyio
+
+KICK_BADGE = "https://files.kick.com/channel_subscriber_badges/{}/conversion/original-fullsize.png"
 
 
 class TestAppAccessToken:
@@ -276,6 +279,34 @@ class TestAddingToTheWatchlist:
         await watchlist.add_channel_to_watchlist("some_channel")
 
         assert self.pictures() == {"KEKW": ("ANOTHERKEKW", 32, 32)}
+
+    def badges(self, broadcaster_user_id: int = 4242) -> list[Picture]:
+        conn = db.get_connection()
+        try:
+            return db.get_channel_badges(conn, broadcaster_user_id)
+        finally:
+            conn.close()
+
+    async def test_the_channels_subscriber_badges_are_stored_too(self, kick_api):
+        kick_api.add_channel("Some_Channel", 4242, subscriber_badges={3: KICK_BADGE.format(3), 1: KICK_BADGE.format(1)})
+
+        await watchlist.add_channel_to_watchlist("Some_Channel")
+
+        assert self.badges() == [Picture(1, 1, KICK_BADGE.format(1)), Picture(1, 3, KICK_BADGE.format(3))]
+        # Asked of kick.com's own API, which knows the channel in small letters.
+        assert [path for method, path, _ in kick_api.requests if "/api/v2/" in path] == [
+            "kick.com/api/v2/channels/some_channel"
+        ]
+
+    async def test_a_channel_whose_badges_cannot_be_fetched_is_added_without_them(self, kick_api, caplog):
+        kick_api.add_channel("some_channel", 4242, subscriber_badges={1: KICK_BADGE.format(1)})
+        kick_api.failures["kick.com/api/v2"] = 403
+
+        result = await watchlist.add_channel_to_watchlist("some_channel")
+
+        assert result["broadcaster_user_id"] == 4242 and kick_api.subscribed == [4242]
+        assert self.badges() == []
+        assert "could not fetch the subscriber badges of some_channel" in caplog.text
 
     async def test_pictures_can_be_refreshed_without_touching_what_the_detector_listens_for(self, kick_api):
         channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])

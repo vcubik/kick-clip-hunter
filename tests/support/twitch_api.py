@@ -49,6 +49,9 @@ class FakeTwitchChannel:
     # streams that are over.
     archive_id: str | None = None
     older_archives: list[str] = field(default_factory=list)
+    # The channel's own subscriber badges: the picture's address by the
+    # badge version (months, with the tier's thousands above the first).
+    subscriber_badges: dict[str, str] = field(default_factory=dict)
 
     def user_json(self) -> dict:
         return {
@@ -235,6 +238,20 @@ class FakeTwitchApi:
                         for video_id in channel.older_archives
                     )
                 return httpx.Response(200, json={"data": videos, "pagination": {}})
+            if path == "/helix/chat/badges":
+                channel = self._by_id(request.url.params.get("broadcaster_id", ""))
+                versions = [
+                    {
+                        "id": version,
+                        "image_url_1x": image.replace("/3", "/1"),
+                        "image_url_2x": image.replace("/3", "/2"),
+                        "image_url_4x": image,
+                        "title": "Subscriber",
+                    }
+                    for version, image in (channel.subscriber_badges if channel else {}).items()
+                ]
+                sets = [{"set_id": "subscriber", "versions": versions}] if versions else []
+                return httpx.Response(200, json={"data": sets})
             if path == "/helix/eventsub/subscriptions" and request.method == "POST":
                 return self._subscribe(request, body)  # type: ignore[arg-type]
 
