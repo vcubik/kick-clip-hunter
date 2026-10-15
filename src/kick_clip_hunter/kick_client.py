@@ -12,6 +12,9 @@ import httpx
 
 ID_BASE = "https://id.kick.com/oauth"
 API_BASE = "https://api.kick.com/public/v1"
+# The site's own API, which says more of a channel than the public one does
+# - its subscriber badges, among other things - and needs no token.
+SITE_API_BASE = "https://kick.com/api/v2"
 
 _token_cache: dict[str, float | str] = {}
 
@@ -77,5 +80,14 @@ async def subscribe_chat_messages(broadcaster_user_id: int, token: str) -> dict:
                 "method": "webhook",
             },
         )
+        response.raise_for_status()
+        return response.json()
+
+
+async def get_site_channel(slug: str) -> dict:
+    """A channel as kick.com's own pages are told about it, by its slug -
+    where its subscriber badges are (see channel_badges.from_kick)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{SITE_API_BASE}/channels/{slug.lower()}", headers={"Accept": "application/json"})
         response.raise_for_status()
         return response.json()

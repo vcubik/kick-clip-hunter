@@ -444,7 +444,7 @@ class TestChatReplay:
         known, unknown = chat_trace.chat_replay(messages, TIMELINE, self.WINDOW, None, identities)
 
         assert known["own_colour"] == "#9ad8ff"
-        assert known["badges"] == [{"icon": "moderator", "words": "Moderator"}]
+        assert known["badges"] == [{"icon": "moderator", "image": None, "words": "Moderator"}]
         assert (unknown["own_colour"], unknown["badges"]) == (None, [])
         # The colour worked out from the name is still there to fall back on.
         assert unknown["colour"] == chat_trace.nick_colour("carol")
@@ -462,7 +462,7 @@ class TestChatReplay:
         (line,) = chat_trace.chat_replay([message(5, "hello", "bob")], TIMELINE, self.WINDOW, None, identities)
 
         assert line["own_colour"] is None
-        assert line["badges"] == [{"icon": "vip", "words": "VIP"}]
+        assert line["badges"] == [{"icon": "vip", "image": None, "words": "VIP"}]
 
     def test_a_message_from_nobody_with_nothing_in_it_still_makes_a_line(self):
         nothing = {"received_at": chat_at(1).isoformat(), "sender_username": None, "content": None}

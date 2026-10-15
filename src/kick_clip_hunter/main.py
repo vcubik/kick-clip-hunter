@@ -65,6 +65,7 @@ from .db import (
     delete_moment,
     delete_stream_recording,
     finish_stream_recording,
+    get_channel_badges,
     get_channel_chat_between,
     get_channel_keywords,
     get_channel_moment_windows,
@@ -133,7 +134,7 @@ from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
 from .timeutil import to_local_datetime
-from .watchlist import add_to_watchlist, refresh_emote_pictures
+from .watchlist import add_to_watchlist, refresh_badge_pictures, refresh_emote_pictures
 from .webhook_security import get_kick_public_key, verify_signature
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
@@ -492,13 +493,14 @@ async def _keep_looking_at_tunnel() -> None:
 async def _refresh_emote_pictures() -> None:
     """Fetch every watched channel's 7TV emote set again, and the global
     emotes every channel has on top of its own, so chat on the dashboard is
-    drawn with the pictures in use now.
+    drawn with the pictures in use now - and its subscriber badges (see
+    channel_badges.py), for the same reason.
 
     Channels change their sets all the time, and one added before pictures
     were stored has none at all. Only the pictures are refreshed here - what
     the detector listens for changes when someone asks for it (subscribe.py,
     refresh_emotes.py), not behind a restart. A set 7TV can't be asked
-    about keeps the pictures it had.
+    about keeps the pictures it had, and so do badges that can't be.
     """
     try:
         logger.info("%d global 7TV emote picture(s) stored", await refresh_emote_pictures())
@@ -519,6 +521,11 @@ async def _refresh_emote_pictures() -> None:
             logger.info("%d 7TV emote picture(s) stored for %s", count, slug)
         except Exception:
             logger.exception("could not refresh the 7TV emote pictures of %s", slug)
+        try:
+            count = await refresh_badge_pictures(broadcaster_user_id, slug, platform_user_id)
+            logger.info("%d subscriber badge(s) stored for %s", count, slug)
+        except Exception as error:
+            logger.warning("could not refresh the subscriber badges of %s: %r", slug, error)
 
 
 # What reads the chat of the Twitch channels on the watchlist (see
@@ -1805,7 +1812,8 @@ def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[di
     emotes = get_chat_emotes(conn, row["broadcaster_user_id"])
     chatters = {message["sender_username"] for message in messages if message["sender_username"]}
     identities = get_chat_identities(conn, row["broadcaster_user_id"], chatters)
-    return strip, chat_trace.chat_replay(messages, timeline, window, emotes, identities)
+    badges = get_channel_badges(conn, row["broadcaster_user_id"])
+    return strip, chat_trace.chat_replay(messages, timeline, window, emotes, identities, badges)
 
 
 def _queue_activity(conn, rows) -> dict[int, dict]:
@@ -2447,6 +2455,7 @@ def _recording_chat_lines(
         lambda arrived: stream_recording.file_second(parts, arrived - delay),
         get_chat_emotes(conn, row["broadcaster_user_id"]),
         get_chat_identities(conn, row["broadcaster_user_id"], chatters),
+        badges=get_channel_badges(conn, row["broadcaster_user_id"]),
     )
 
 
@@ -3176,9 +3185,10 @@ def _named(conn, owner: int, *tables: list[dict]) -> None:
     page draws it: in their colour, behind their badges."""
     names = {row["name"] for rows in tables for row in rows}
     identities = get_chat_identities(conn, owner, names)
+    badges = get_channel_badges(conn, owner)
     for rows in tables:
         for row in rows:
-            row["who"] = chat_stats.chatter_name(row["name"], identities)
+            row["who"] = chat_stats.chatter_name(row["name"], identities, badges)
 
 
 def _analyze_lines(conn, owner: int, rows, emotes, today: date, url, asked: str = "") -> list[dict]:
@@ -3188,7 +3198,11 @@ def _analyze_lines(conn, owner: int, rows, emotes, today: date, url, asked: str 
     its id) is marked."""
     chatters = {row["sender_username"] for row in rows if row["sender_username"]}
     lines = chat_trace.chat_lines(
-        rows, lambda arrived: 0.0, emotes, get_chat_identities(conn, owner, chatters)
+        rows,
+        lambda arrived: 0.0,
+        emotes,
+        get_chat_identities(conn, owner, chatters),
+        badges=get_channel_badges(conn, owner),
     )
     for line, row in zip(lines, rows, strict=True):
         line["when"] = chat_stats.second_words(datetime.fromisoformat(row["received_at"]), today)

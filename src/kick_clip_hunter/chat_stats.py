@@ -31,7 +31,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
-from . import chat_identity
+from . import channel_badges, chat_identity
 from .dashboard_view import (
     chat_parts,
     clock_words,
@@ -505,15 +505,20 @@ def mentions_of(messages: Iterable[Row], name: str) -> int:
 # -- who is who -----------------------------------------------------------------
 
 
-def chatter_name(name: str, identities: Mapping[str, chat_identity.Identity] | None = None) -> dict[str, Any]:
+def chatter_name(
+    name: str,
+    identities: Mapping[str, chat_identity.Identity] | None = None,
+    pictures: Iterable[channel_badges.Picture] = (),
+) -> dict[str, Any]:
     """A chatter's name as the page draws it, like a line of chat does: in
-    the colour it has on Kick where that is known, behind their badges."""
+    the colour it has on Kick where that is known, behind their badges - a
+    subscriber's as the channel's own picture of it (`pictures`)."""
     own_colour, badges = (identities or {}).get(name, (None, chat_identity.NO_BADGES))
     return {
         "nick": name,
         "colour": nick_colour(name),
         "own_colour": chat_identity.readable(own_colour) if own_colour else None,
-        "badges": chat_identity.badge_parts(badges),
+        "badges": chat_identity.badge_parts(badges, pictures),
     }
 
 

@@ -6,7 +6,7 @@
     which a page that is never scrolled must not do. -#}
 {% macro chat_name(line) -%}
     <b class="ch-nick-{{ line.colour }}"{% if line.own_colour %} style="color: {{ line.own_colour }}"{% endif %}>
-      {%- for badge in line.badges %}<img class="ch-badge" src="/static/badges/{{ badge.icon }}.svg?v={{ asset_version }}" alt="{{ badge.words }}" title="{{ badge.words }}" width="16" height="16">{% endfor -%}
+      {%- for badge in line.badges %}<img class="ch-badge" src="{% if badge.image %}{{ badge.image }}{% else %}/static/badges/{{ badge.icon }}.svg?v={{ asset_version }}{% endif %}" alt="{{ badge.words }}" title="{{ badge.words }}" width="16" height="16">{% endfor -%}
       {{ line.nick }}</b>
 {%- endmacro %}
 

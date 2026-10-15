@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from kick_clip_hunter import chat_identity
+from kick_clip_hunter.channel_badges import Picture
 
 STATIC = Path(chat_identity.__file__).parent / "static"
 
@@ -104,6 +105,14 @@ class TestWhatIsKept:
             {"text": "Subscriber", "type": "subscriber"}
         ]
 
+    @pytest.mark.parametrize(
+        ("tier", "kept"), [(2, 2), (3, 3), (1, None), (0, None), (10, None), ("2", None), (True, None)]
+    )
+    def test_a_tier_is_kept_only_above_the_first(self, tier, kept):
+        (badge,) = stored_badges({"badges": [{"text": "Subscriber", "type": "subscriber", "tier": tier}]})
+
+        assert badge.get("tier") == kept
+
     def test_a_badges_text_is_kept_short_and_is_text(self):
         (long,) = stored_badges({"badges": [{"text": "x" * 500, "type": "vip"}]})
         (odd,) = stored_badges({"badges": [{"text": {"a": 1}, "type": "vip"}]})
@@ -185,14 +194,39 @@ class TestBadges:
         )
 
         assert chat_identity.badge_parts(stored) == [
-            {"icon": "moderator", "words": "Moderator"},
-            {"icon": "subscriber", "words": "Subscriber, 7 months"},
+            {"icon": "moderator", "image": None, "words": "Moderator"},
+            {"icon": "subscriber", "image": None, "words": "Subscriber, 7 months"},
         ]
 
     def test_a_type_there_is_no_picture_for_gets_the_general_one_and_keeps_its_name(self):
         stored = json.dumps([{"type": "brand_new_badge", "text": "Brand new"}])
 
-        assert chat_identity.badge_parts(stored) == [{"icon": chat_identity.OTHER_BADGE, "words": "Brand new"}]
+        assert chat_identity.badge_parts(stored) == [
+            {"icon": chat_identity.OTHER_BADGE, "image": None, "words": "Brand new"}
+        ]
+
+    def test_a_subscriber_is_drawn_with_the_channels_own_picture_for_their_months(self):
+        stored = json.dumps(
+            [
+                {"type": "moderator", "text": "Moderator"},
+                {"type": "subscriber", "text": "Subscriber", "count": 7},
+            ]
+        )
+        pictures = [Picture(1, 1, "https://files.kick.com/one"), Picture(1, 6, "https://files.kick.com/six")]
+
+        moderator, subscriber = chat_identity.badge_parts(stored, pictures)
+
+        assert moderator["image"] is None
+        assert subscriber["image"] == "https://files.kick.com/six"
+        assert subscriber["words"] == "Subscriber, 7 months"
+
+    def test_and_of_their_tier(self):
+        stored = json.dumps([{"type": "subscriber", "text": "Subscriber", "count": 4, "tier": 2}])
+        pictures = [Picture(1, 0, "https://static-cdn.jtvnw.net/t1"), Picture(2, 0, "https://static-cdn.jtvnw.net/t2")]
+
+        assert chat_identity.badge_parts(stored, pictures) == [
+            {"icon": "subscriber", "image": "https://static-cdn.jtvnw.net/t2", "words": "Subscriber, tier 2, 4 months"}
+        ]
 
     def test_no_badges(self):
         assert chat_identity.badge_parts(chat_identity.NO_BADGES) == []

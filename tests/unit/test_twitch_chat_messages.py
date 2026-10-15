@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from kick_clip_hunter import detector
 from kick_clip_hunter.twitch_chat import Channel, chat_message
 from tests.support.eventsub import chat_event
@@ -123,6 +125,14 @@ class TestWhoSaidIt:
             {"type": "verified", "text": "Partner"},
             {"type": "hype_train", "text": "Hype train"},
         ]
+
+    @pytest.mark.parametrize(("version", "tier"), [("2003", 2), ("3012", 3), ("12", None), ("x", None)])
+    def test_a_subscription_above_the_first_tier_keeps_its_tier(self, version, tier):
+        badges = [{"set_id": "subscriber", "id": version, "info": "4"}]
+
+        (badge,) = json.loads(message_of(chat_event("101", "x", "alice", badges=badges)).identity[1])
+
+        assert badge.get("tier") == tier and badge["count"] == 4
 
     def test_someone_who_never_chose_a_colour_has_none(self):
         assert message_of(chat_event("101", "x", "alice", color="")).identity == (None, "[]")

@@ -70,7 +70,7 @@ set from the dashboard's Settings page (see `tuning.py` below).
     subscription. A Twitch channel's chat is subscribed by the running service
   - `refresh_emotes.py <channel>` — re-fetch and re-classify an already-watched channel's
     emotes (keywords and pictures: 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's)
-    without talking to Kick's subscription API at all
+    and its subscriber badges, without talking to Kick's subscription API at all
   - `twitch_login.py` — one-time sign-in of the Twitch account chat is read as (see above)
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
@@ -115,7 +115,7 @@ set from the dashboard's Settings page (see `tuning.py` below).
   replayed beside it in step with the
   picture, emotes drawn as pictures (Kick's own and the channel's 7TV ones, both loaded
   straight from their CDNs) and each chatter's name in the colour it has on Kick, with
-  their badges in front of it. Where a message belongs against the picture is a guess (to
+  their badges in front of it (a subscriber's the channel's own picture for it). Where a message belongs against the picture is a guess (to
   start with, the frame broadcast 3s before it arrived), so under the chat is a slider that
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
@@ -205,7 +205,7 @@ Watchlist (streamers, each on its platform - see platforms.py)
     -> each message as a ChatMessage -> _take_chats (stored a batch at a time)
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
-       chat_identities, tuning, stream_recordings
+       channel_badges, chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer - found by a browser on Kick,
        by streamlink on Twitch) -> a detected moment cuts a clip from that buffer, path
@@ -412,7 +412,20 @@ Module map (`src/kick_clip_hunter/`):
   goes into a style attribute, a badge's type into a file name). A colour too dark for
   the page's grey is lightened until it can be read. The badge pictures in
   `static/badges/` are placeholders drawn for this project, one per badge type plus
-  `other.svg` for types without one; a channel's own subscriber badges are not fetched
+  `other.svg` for types without one; a subscriber's badge is drawn as the channel's own
+  picture for it where the channel has one (see `channel_badges.py`). A Twitch
+  subscription above tier 1 is kept with its tier (`tier`), read from the badge's version
+- `channel_badges.py` — a channel's own subscriber badges: a picture for subscribers of a
+  tier from so many months on (`Picture`; Kick has one tier). Kick lists them with the
+  channel on kick.com's own API (`kick_client.get_site_channel`, `/api/v2/channels/<slug>`
+  - unlike the channel page, a plain HTTP client can read it), Twitch as the channel's
+  `subscriber` badge set (Helix `chat/badges`, app token). Fetched with the emote pictures
+  - when a channel is added (a failure leaves it without them, it is still added), on
+  every start and by `refresh_emotes.py` - and kept in `channel_badges`; ones that can't
+  be fetched stay as they were. `pick` is the picture a subscriber wears: the longest
+  subscription they have reached, of their tier (or tier 1's). Pure; only https
+  addresses on the platforms' picture hosts are kept, since they go into a `src`. A chat
+  video loads them like emote pictures, but an animated one stands still there
 - `clip_trim.py` — a stretch of a moment's footage cut out for an editor, from the review
   page's Trim dialog: a player of its own and a copy of the strip with a handle at either
   end, anywhere in the file (the clip to begin with). `POST /moments/{id}/trim` takes the
