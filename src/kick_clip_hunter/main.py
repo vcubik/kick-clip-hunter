@@ -1959,7 +1959,6 @@ def _trim_dialog() -> dict:
             "scale_least": chat_video.SCALE_LEAST,
             "scale_most": chat_video.SCALE_MOST,
             "least": chat_video.COLUMN_LEAST,
-            "fade": chat_video.FADE_PIXELS,
             "bottom": chat_video.BOTTOM_PIXELS,
         },
     }

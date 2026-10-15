@@ -8,7 +8,8 @@ another in a column as wide as the video, and takes pictures of that
 column a screenful at a time, background left out. Each frame is then put
 together here from those pictures: the part of the column chat showed at
 that moment - the lines that had arrived by then, the newest at the
-bottom, the oldest fading out at the top. A new line is there at once,
+bottom, the oldest whole at the top until the next would cut it, and
+then gone. A new line is there at once,
 the ones before it moved up to make room, as in chat itself. Nothing is
 drawn twice and nothing runs on a clock: no frame is ever dropped, and
 half an hour of a busy chat is ready in a minute or two - when the browser
@@ -89,8 +90,6 @@ COLOUR_QUALITY = 18
 # Chat already on screen when the video starts: the last lines from before
 # its first frame. More than fit, so the column starts out full.
 PREFILL_LINES = 40
-# Over how much of the column's top the oldest lines fade out.
-FADE_PIXELS = 72
 # Room under the newest line.
 BOTTOM_PIXELS = 10
 # How much of the column the browser takes a picture of at a time: well
@@ -224,12 +223,6 @@ class Shape(NamedTuple):
     def size(self) -> tuple[int, int]:
         """How wide and how tall a frame is, in its own pixels."""
         return WIDTH * self.density, self.height * self.density
-
-    @property
-    def fade(self) -> int:
-        """Over how many of its rows the oldest lines fade out at the top:
-        FADE_PIXELS, or a quarter of a short column."""
-        return min(FADE_PIXELS, self.height // 4) * self.density
 
     @property
     def bottom(self) -> int:
@@ -370,6 +363,17 @@ def frame_top(column: Column, time: float, shape: Shape = OWN_SHAPE) -> int | No
     return round(column.bottoms[arrived - 1]) + shape.bottom - shape.size[1]
 
 
+def cut_rows(column: Column, time: float, top: int) -> int:
+    """How many rows at the top of the frame `time` seconds into the video,
+    whose top is `top` in the column, are left empty: the oldest line shown
+    is shown whole or not at all, never cut off by the frame's edge. The
+    newest line is shown even so when it alone is taller than the frame."""
+    arrived = bisect.bisect_right(column.arrivals, time)
+    # A line laid out at a fraction of a pixel is whole at that pixel.
+    first = min(bisect.bisect_left(column.tops, top - 0.5), arrived - 1)
+    return max(round(column.tops[first]) - top, 0)
+
+
 class _Pages:
     """The column's pictures, taken as a frame first needs them and let go
     of once the frames have gone past them: the column only ever moves on
@@ -416,8 +420,6 @@ def frames(column: Column, times: Sequence[float], shape: Shape = OWN_SHAPE) -> 
     moving = _Moving(column.emotes, shape)
     width, height = shape.size
     blank = bytes(width * height * 4)
-    # How much of each pixel row at the top of a frame is kept, out of 255.
-    fade = np.array([[round(255 * row / shape.fade)] for row in range(shape.fade)], np.uint16)
     shown: tuple[int, tuple[tuple[int, int], ...]] | None = None
     picture = blank
     for second in times:
@@ -425,16 +427,16 @@ def frames(column: Column, times: Sequence[float], shape: Shape = OWN_SHAPE) -> 
         now = None if top is None else (top, moving.shown(top, second))
         if now != shown:
             shown = now
-            picture = blank if now is None else _frame(pages.window(now[0], shape), moving, fade, *now)
+            if now is None:
+                picture = blank
+            else:
+                picture = _frame(pages.window(now[0], shape), moving, cut_rows(column, second, now[0]), *now)
         yield picture
 
 
-def _frame(
-    frame: np.ndarray, moving: _Moving, fade: np.ndarray, top: int, shown: Iterable[tuple[int, int]]
-) -> bytes:
+def _frame(frame: np.ndarray, moving: _Moving, cut: int, top: int, shown: Iterable[tuple[int, int]]) -> bytes:
     moving.draw(frame, top, shown)
-    rows = len(fade)
-    frame[:rows, :, 3] = frame[:rows, :, 3] * fade // 255
+    frame[:cut] = 0
     return frame.tobytes()
 
 

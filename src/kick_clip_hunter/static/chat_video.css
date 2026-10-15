@@ -4,9 +4,9 @@
    them: the video is laid over a clip, or drawn into its picture. What is
    behind the text is therefore unknown, so every letter carries a dark
    edge of its own. The lines are the review page's
-   (templates/_chat_line.html), drawn larger. A colour behind them, and the
-   fade at the top of the column, are put in where the frames are put
-   together. */
+   (templates/_chat_line.html), drawn larger. A colour behind them, and
+   leaving out the oldest line once the frame's top would cut it, are done
+   where the frames are put together. */
 
 @font-face {
   font-family: Archivo;

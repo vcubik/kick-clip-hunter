@@ -391,13 +391,30 @@ class TestComposition:
 
         assert frame[HEIGHT - BOTTOM :, :, 3].max() == 0
 
-    def test_the_oldest_lines_fade_out_at_the_top(self):
+    def test_the_oldest_line_is_whole_at_the_top_or_not_there(self):
         rows = seen(frame_at(MadeUpColumn([0.1 * step for step in range(40)]), 9.0))
 
-        fade = chat_video.FADE_PIXELS
-        assert rows[0] == 0
-        assert rows[fade // 2] == pytest.approx(128, abs=2)
-        assert rows[fade : HEIGHT - BOTTOM].min() == 255
+        # The frame's top cuts a line; the first whole one starts below it.
+        top = 40 * LINE + BOTTOM - HEIGHT
+        oldest = -(-top // LINE) * LINE - top
+        assert 0 < oldest < LINE
+        assert rows[:oldest].max() == 0
+        assert rows[oldest : HEIGHT - BOTTOM].min() == 255
+
+    def test_a_line_on_the_frames_top_edge_is_shown(self):
+        # Forty lines and a frame that starts exactly where one does.
+        column = MadeUpColumn([0.1 * step for step in range(40)]).column()
+        top = chat_video.frame_top(column, 9.0)
+
+        assert chat_video.cut_rows(column, 9.0, top - top % LINE) == 0
+
+    def test_the_newest_line_shows_even_taller_than_the_frame(self):
+        shape = chat_video.Shape(LINE - 6)
+
+        (frame,) = chat_video.frames(MadeUpColumn([0.5, 1.0]).column(), [1.5], shape)
+
+        rows = np.frombuffer(frame, np.uint8).reshape(LINE - 6, WIDTH, 4)[:, WIDTH // 2, 3]
+        assert rows[: LINE - 6 - BOTTOM].min() == 255
 
     def test_a_frame_like_the_one_before_is_that_one(self):
         times = [2.0, 2.0 + 1 / 30, 2.0 + 2 / 30]
@@ -444,16 +461,17 @@ class TestShapes:
     put it: of any height, and drawn twice as fine for chat larger than the
     page has it."""
 
-    def test_a_shorter_column_shows_the_newest_lines_and_fades_over_less(self):
+    def test_a_shorter_column_shows_the_newest_lines_whole(self):
         shape = chat_video.Shape(200)
         made_up = MadeUpColumn([0.1 * step for step in range(20)])
 
         (frame,) = chat_video.frames(made_up.column(), [5.0], shape)
 
         rows = np.frombuffer(frame, np.uint8).reshape(200, WIDTH, 4)[:, WIDTH // 2, 3]
-        assert shape.fade == 50
-        assert rows[0] == 0 and rows[25] == pytest.approx(128, abs=2)
-        assert rows[50 : 200 - BOTTOM].min() == 255 and rows[200 - BOTTOM :].max() == 0
+        top = 20 * LINE + BOTTOM - 200
+        oldest = -(-top // LINE) * LINE - top
+        assert rows[:oldest].max() == 0
+        assert rows[oldest : 200 - BOTTOM].min() == 255 and rows[200 - BOTTOM :].max() == 0
 
     def test_twice_as_fine_it_has_twice_as_many_pixels_every_way(self):
         shape = chat_video.Shape(HEIGHT, density=2)
@@ -507,17 +525,20 @@ class TestAnimatedEmotes:
 
         assert frame[HEIGHT - BOTTOM :, :, 3].max() == 0
 
-    def test_it_fades_out_at_the_top_like_its_line(self):
+    def test_it_leaves_the_top_with_its_line(self):
         arrivals = [0.1 * step for step in range(40)]
-        # The line whose top is 26 rows down the frame once all forty have
-        # arrived.
-        line = (40 * LINE + BOTTOM - HEIGHT + 26) // LINE
-        made_up = MadeUpColumn(arrivals, emotes=[(line, 100, self.PICTURE)])
+        # Once all forty have arrived, the frame's top cuts one line and the
+        # next is the oldest shown, whole.
+        top = 40 * LINE + BOTTOM - HEIGHT
+        oldest = -(-top // LINE)
+        made_up = MadeUpColumn(arrivals, emotes=[(oldest - 1, 100, self.PICTURE), (oldest, 300, self.PICTURE)])
 
         frame = pixels(frame_at(made_up, 9.05))
 
-        row = 26 + EMOTE_TOP + EMOTE // 2
-        assert tuple(frame[row, 100 + EMOTE // 2].tolist()) == (0, 255, 0, round(255 * row / chat_video.FADE_PIXELS))
+        row = (oldest - 1) * LINE - top + EMOTE_TOP + EMOTE // 2
+        assert row >= 0
+        assert tuple(frame[row, 100 + EMOTE // 2].tolist()) == (0, 0, 0, 0)
+        assert emote_middle(frame.tobytes(), oldest * LINE - top, 300) == GREEN
 
     def test_what_is_see_through_in_it_shows_what_is_under_it(self):
         half_seen = animated_picture([(255, 0, 0, 128), (0, 0, 255, 128)], [500, 500], "WEBP")

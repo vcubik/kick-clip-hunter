@@ -474,13 +474,12 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* Chat drawn into the picture: a box over it (placed by the script), which
    is dragged to where chat goes and by a corner to how large it is. The
    chat beside the player is moved into it and drawn as the video will have
-   it: the oldest lines fading out at the top, the newest above a little
-   room at the bottom. */
+   it: the oldest line whole at the top until the box would cut it (the
+   script hides it then), the newest above a little room at the bottom. */
 .trim-overlay { position: absolute; cursor: move; touch-action: none; outline: 1px dashed var(--lit); }
 .trim-overlay .trim-chat {
   position: absolute; top: 0; left: 0; width: var(--clip-chat-width); padding: 0; border: 0;
   transform: scale(var(--chat-scale, 1)); transform-origin: 0 0; pointer-events: none;
-  mask-image: linear-gradient(to bottom, transparent, var(--clip-chat-edge) var(--chat-fade, 0));
 }
 .trim-overlay .chat-lines { flex: 1 1 0; max-height: none; overflow: hidden; padding: 0 var(--space-12) var(--clip-chat-room); }
 .trim-overlay .ch-chat {
@@ -511,7 +510,12 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
    stands outside either end of the frame, so the track is inset by a
    handle's width to leave room for them. */
 .trim-track { margin-top: var(--space-8); padding: 0 var(--w-handle); }
-.trim-strip { --from: 0%; --to: 100%; --at: 0%; cursor: pointer; }
+.trim-strip { --from: 0%; --to: 100%; --at: 0%; cursor: pointer; user-select: none; }
+/* Near an end it is that end that is pressed, between them the whole
+   stretch, which is dragged as it is. */
+.trim-strip[data-trim-over="end"] { cursor: ew-resize; }
+.trim-strip[data-trim-over="stretch"] { cursor: grab; }
+.trim-strip.is-holding { cursor: grabbing; }
 .trim-drawing { position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; }
 .trim-out { position: absolute; top: 0; bottom: 0; background: var(--ink); opacity: 0.5; pointer-events: none; }
 .trim-out.is-before { left: 0; width: var(--from); }
