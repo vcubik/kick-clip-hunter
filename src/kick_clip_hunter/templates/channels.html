@@ -15,7 +15,7 @@
     <p class="section-lead">Tracking looks for clips while a channel is live. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. A TikTok channel is only ever recorded. What was kept is on the Recordings page.</p>
     <table class="watchlist">
       <thead>
-        <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Clip tracking</th><th scope="col">Always record</th><th scope="col">Stream recording</th></tr>
+        <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Clip tracking</th><th scope="col">Always record</th><th scope="col">Stream recording</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
       </thead>
       <tbody>
         {% for channel in watchlist %}
@@ -35,6 +35,8 @@
               <button type="button" class="ch-btn ch-btn-compact" aria-label="Stop recording {{ channel.slug }}" data-recording-stop{% if not (whole and whole.running) %} hidden{% endif %}>Stop recording</button>
             </span>
           </td>
+          {#- Asked once more in the dialog below, which says what goes. -#}
+          <td><button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" aria-label="Remove {{ channel.slug }}" data-remove-channel="{{ channel.slug }}" data-kept="{{ channel.kept }}">Remove</button></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -48,6 +50,20 @@
     </form>
     <p class="status-line" role="status" data-status></p>
   </section>
+
+  {#- Removing a channel is asked for twice: the button in its row, then
+      the same word again here, next to what it will do. What came of
+      watching the channel stays unless the box is ticked. -#}
+  <dialog class="ch-dialog ch-dialog-small" aria-labelledby="remove-channel-title" data-remove-channel-dialog data-status-scope>
+    <h2 class="title" id="remove-channel-title">Remove <span data-remove-channel-name></span></h2>
+    <p>Stops watching the channel and takes it off the watchlist, with its emotes and its own settings. Its moments, recordings and chat stay unless you tick the box. Adding it again later picks them up again.</p>
+    <label class="ch-check"><input type="checkbox" data-remove-everything> <span>Also delete its <span data-remove-channel-kept></span> and its chat, for good</span></label>
+    <div class="ch-line">
+      <button type="button" class="ch-btn ch-btn-primary" data-remove-channel-go>Remove</button>
+      <button type="button" class="ch-btn ch-btn-quiet" data-remove-channel-cancel>Cancel</button>
+    </div>
+    <p class="status-line" role="status" data-status></p>
+  </dialog>
 
   <section aria-labelledby="analysis-title" data-status-scope>
     <h2 class="title" id="analysis-title">Per-clip analysis</h2>

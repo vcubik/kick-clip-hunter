@@ -161,7 +161,7 @@ top labels above the confidence floor)?
 **8. Dashboard and controls** - `integration/test_api_dashboard.py`, `integration/test_api_controls.py`,
 `unit/test_dashboard_view.py`, `unit/test_chat_trace.py`, `unit/test_clip_trim.py`,
 `unit/test_chat_video.py`, `integration/test_chat_video.py`, `integration/test_api_transcript.py`,
-`unit/test_subtitles.py`
+`unit/test_subtitles.py`, `integration/test_api_removal.py`
 Do the pages render from an empty database and from a full one? Does the review queue hold the right
 moments - unrated, all, best - newest first, grouped by stream, paged and filtered by channel, and is
 the right one open, with its chat and its clip, started where the clip begins in its file? Is chat put on the clip's own time axis
@@ -171,7 +171,10 @@ chat said most" drawn from that as intended? Does changing a channel's chat dela
 only its? Does an empty queue say what the service
 is doing? Is everything a Kick user can type - chat, usernames, emote names - escaped? Do the file
 routes refuse to serve anything outside their directories? Are dates, counts and detector reasons
-worded as intended? Do rating, tags and notes validate and persist; do the switches survive a
+worded as intended? Does deleting a moment take every file beside its clip and nothing outside the
+clips folder, and wait for what is being made of it; does removing a channel stop its chat, recorder
+and Kick subscription, keep or remove what came of watching it as asked, and give it its id back
+when it is added again? Do rating, tags and notes validate and persist; do the switches survive a
 restart; does shutdown wait for work in flight and stop recorders before exiting? Is a stretch asked
 for from the Trim dialog cut out of the right part of the file and refused where it cannot be; does
 its chat video hold the stretch's chat counted from where the video really begins, moved by what was

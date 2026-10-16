@@ -422,6 +422,43 @@ class TestChannelsOfOtherPlatforms:
         assert again == first
         assert len(db.get_streamers(conn)) == 1
 
+    def test_taken_off_the_watchlist_and_added_again_it_has_its_id_again(self, conn):
+        # What came of watching it is kept by that id.
+        first = db.add_platform_streamer(conn, "twitch", "123", "some_channel@twitch")
+        db.remove_streamer(conn, first)
+
+        again = db.add_platform_streamer(conn, "twitch", "123", "some_channel@twitch")
+
+        assert again == first
+        assert not db.was_removed(conn, first)
+
+    def test_no_new_channel_is_given_the_id_of_one_taken_off_the_watchlist(self, conn):
+        first = db.add_platform_streamer(conn, "twitch", "123", "first@twitch")
+        db.remove_streamer(conn, first)
+
+        other = db.add_platform_streamer(conn, "youtube", "UC9", "other@youtube")
+
+        assert other != first and other < 0
+
+    def test_nor_one_that_chat_or_moments_are_still_kept_by(self, conn):
+        # From before channels were remembered once taken off the watchlist.
+        db.insert_moment(
+            conn,
+            broadcaster_user_id=-4,
+            channel_slug="gone@twitch",
+            window_start="2026-03-01T20:00:00",
+            window_end="2026-03-01T20:00:10",
+            reason="laugh",
+            score=1.0,
+            message_count=1,
+            baseline_message_rate=1.0,
+            current_message_rate=1.0,
+            emote_count=1,
+            keyword_hits=1,
+        )
+
+        assert db.add_platform_streamer(conn, "twitch", "123", "new@twitch") == -5
+
     def test_the_same_name_on_two_platforms_is_two_channels(self, conn):
         db.add_streamer(conn, 5, "some_channel")
         key = db.add_platform_streamer(conn, "twitch", "5", "some_channel@twitch")
@@ -1858,3 +1895,33 @@ class TestSubscriptionDrops:
         db.add_subscription_drop(conn, {"at": "first"})
 
         assert db.get_flag(conn, "watching_enabled") is False
+
+
+class TestRemovingAChannel:
+    def test_its_emotes_badges_and_settings_go_with_it(self, conn):
+        db.add_streamer(conn, 7, "some_channel")
+        db.add_streamer(conn, 8, "other_channel")
+        for owner in (7, 8):
+            db.replace_channel_keywords(conn, owner, {"kekw": 1.0})
+            db.replace_channel_emotes(conn, owner, {"KEKW": ("id", 32, 32)})
+            db.replace_tuning(conn, owner, {"post_roll_seconds": "12"})
+
+        db.remove_streamer(conn, 7)
+
+        assert [row["slug"] for row in db.get_streamers(conn)] == ["other_channel"]
+        assert db.get_channel_keywords(conn, 7) == {} and db.get_channel_keywords(conn, 8) == {"kekw": 1.0}
+        for table in ("channel_emotes", "tuning"):
+            owners = [row[0] for row in conn.execute(f"SELECT broadcaster_user_id FROM {table}")]
+            assert owners == [8]
+
+    def test_it_is_known_to_have_been_removed_until_it_is_added_again(self, conn):
+        db.add_streamer(conn, 7, "some_channel")
+        assert not db.was_removed(conn, 7)
+
+        db.remove_streamer(conn, 7)
+        assert db.was_removed(conn, 7)
+        # Never on the watchlist is not the same as taken off it.
+        assert not db.was_removed(conn, 9)
+
+        db.add_streamer(conn, 7, "some_channel")
+        assert not db.was_removed(conn, 7)
