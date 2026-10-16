@@ -990,14 +990,34 @@ class TestChatBot:
     def bot(self, *channels: BotChannel, kick: BotAccount = KICK, twitch: BotAccount = NO_TWITCH) -> ChatBot:
         return ChatBot(channels, (kick, twitch), sign_in_url="/bot/kick/sign_in", redirect_uri=self.REDIRECT)
 
-    def part(self, bot: ChatBot) -> dict:
-        return health.bot_part(facts(bot=bot), TODAY)
+    def part(self, bot: ChatBot, **known) -> dict:
+        return health.bot_part(facts(bot=bot, **known), TODAY)
 
     def test_writing_nowhere_as_nobody_there_is_no_such_part(self):
         report = health.report(facts(last_webhook_at=ago(2), bot=self.bot(kick=BotAccount("kick"))), TODAY)
 
         assert report["bot"]["shown"] is False
         assert "bot" not in report["lead"]
+
+    def test_a_kick_channel_on_the_watchlist_shows_it_so_that_an_account_can_sign_in(self):
+        report = health.report(
+            facts(last_webhook_at=ago(2), channels=(Channel("a"),), bot=self.bot(kick=BotAccount("kick"))), TODAY
+        )
+
+        part = report["bot"]
+        assert (part["shown"], part["trouble"]) == (True, False)
+        assert part["said"] == "The bot writes in no channel's chat. A channel's settings switch it on."
+        assert part["more"][0] == "No Kick account has signed in for the bot to write as."
+        assert part["sign_in"] == {"url": "/bot/kick/sign_in", "words": "Sign in on Kick"}
+        assert report["troubles"] == 0
+
+    def test_channels_only_elsewhere_do_not_show_it(self):
+        twitch = Channel("b@twitch", platform="twitch")
+        tiktok = Channel("c@tiktok", platform="tiktok")
+
+        part = self.part(self.bot(kick=BotAccount("kick")), channels=(twitch, tiktok))
+
+        assert part["shown"] is False
 
     def test_an_account_signed_in_on_kick_shows_it_before_any_channel_has_it_writing(self):
         part = self.part(self.bot())

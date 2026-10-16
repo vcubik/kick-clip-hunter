@@ -679,14 +679,17 @@ def _cannot_write(channel: BotChannel, bot: ChatBot) -> str | None:
 
 def bot_part(facts: Facts, today: date) -> dict[str, Any]:
     """Where the bot in chat stands. Shown while it writes in a channel's
-    chat, or an account has signed in for it on Kick. A channel it cannot
-    write in is trouble: whoever runs the channel is waiting for answers."""
+    chat, an account has signed in for it on Kick, or a Kick channel is
+    watched - where its account signs in, before any channel has it writing.
+    A channel it cannot write in is trouble: whoever runs the channel is
+    waiting for answers."""
     bot = facts.bot
     nothing: dict[str, Any] = {"shown": False, "trouble": False, "said": "", "more": [], "rows": [], "sign_in": None}
     if bot is None:
         return nothing
     kick = bot.account("kick")
-    if not bot.channels and not (kick and kick.login):
+    watched_on_kick = any(channel.platform == "kick" for channel in facts.channels)
+    if not bot.channels and not (kick and kick.login) and not watched_on_kick:
         return nothing
     now = facts.now
     on = {channel.platform for channel in bot.channels}
