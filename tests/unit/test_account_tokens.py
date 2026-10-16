@@ -10,6 +10,7 @@ renewal handed in.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -126,8 +127,11 @@ class TestTheKeeper:
         account_tokens.save(token("old", runs_out_in=60), tmp_path / "token.json")
 
         async def renew(old: AccountToken) -> AccountToken:
-            # Meanwhile, someone signs another account in.
+            # Meanwhile, someone signs another account in - within the same
+            # tick of the file system's clock, as on Windows, and as long.
+            before = (tmp_path / "token.json").stat()
             account_tokens.save(token("new"), tmp_path / "token.json")
+            os.utime(tmp_path / "token.json", ns=(before.st_atime_ns, before.st_mtime_ns))
             return token("old+")
 
         keeper = account_tokens.TokenKeeper(tmp_path / "token.json", renew, "Nobody has signed in here.")

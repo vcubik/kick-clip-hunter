@@ -10,6 +10,9 @@ patchright
 # Finds where a live Twitch or YouTube stream is (twitch_stream.py,
 # youtube_stream.py).
 streamlink
+# Reads the chat of a TikTok stream that is being recorded, through the
+# Euler Stream sign server (tiktok_chat.py).
+TikTokLive
 # The frames of a chat video are put together from the browser's pictures
 # of its chat (chat_video.py).
 Pillow

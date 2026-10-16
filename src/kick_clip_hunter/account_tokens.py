@@ -118,17 +118,20 @@ class TokenKeeper:
         self._token: AccountToken | None = None
         # The file as it was when it was last read or written, so that one
         # written since - a new sign-in - is told apart.
-        self._read: tuple[int, int] | None = None
+        self._read: tuple[int, int, int] | None = None
         self._lock = asyncio.Lock()
         # Why there is no token to be had, the last time there was none.
         self.trouble: str | None = None
 
-    def _stamp(self) -> tuple[int, int] | None:
+    def _stamp(self) -> tuple[int, int, int] | None:
+        """What tells the file apart from the one before: `save` replaces it
+        with a new file, which has an inode of its own - even where two
+        writes fall within one tick of the clock and are as long."""
         try:
             stat = self._path.stat()
         except OSError:
             return None
-        return stat.st_mtime_ns, stat.st_size
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size
 
     def _current(self) -> AccountToken | None:
         """The token in memory - or the file's, if it was written since it
@@ -162,13 +165,14 @@ class TokenKeeper:
                 self.trouble = self.trouble or self._nobody
                 raise SignInNeeded(self.trouble)
             if renew_now or token.runs_out_within(RENEW_BEFORE_SECONDS, datetime.now(timezone.utc)):
-                before = self._read
                 try:
                     renewed = await self._renew(token)
                 except SignInNeeded as refused:
                     self._token, self.trouble = None, str(refused)
                     raise
-                signed_in = load(self._path) if self._stamp() != before else None
+                # Read whatever the stamp says: it is what was renewed that is
+                # not to be written over the file, and that is its content.
+                signed_in = load(self._path)
                 if signed_in is not None and signed_in != token:
                     # An account signed in while this one's token was being
                     # renewed: that is the account now, not to be written over.

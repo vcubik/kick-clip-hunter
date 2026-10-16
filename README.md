@@ -5,7 +5,8 @@
 Watches a list of [Kick](https://kick.com), [Twitch](https://www.twitch.tv) and
 [YouTube](https://www.youtube.com) streamers, notices when chat reacts to something, and cuts a
 clip of that moment from a rolling recording of the stream - then puts it on a small dashboard to
-be reviewed and rated.
+be reviewed and rated. Whole streams can be recorded with their chat too, those of
+[TikTok](https://www.tiktok.com) streamers among them.
 
 ```
 Kick chat ────── signed webhooks ──┐
@@ -61,6 +62,11 @@ YouTube stream
   over the whole stream - hours on one timeline, with the moments that were found marked on it -
   which is how to find one's way about it. A channel can also be set to be recorded always: every
   stream of it is then recorded from when it goes live.
+- **Records TikTok streams.** A TikTok channel is added like any other, to be recorded and for
+  nothing else: no clips are looked for in it. Its stream, which TikTok serves as one FLV download
+  rather than a playlist, is cut into segments of its own as it arrives and kept in the quality the
+  streamer sends; its chat is read while it is recorded and replayed beside the recording like any
+  other.
 - **Finds the moments of a recorded stream afterwards.** The chat stored with a recording can be
   replayed through the detector at any time, under the settings as they are saved then. What would
   have been a moment is listed under the recording and marked on its timeline, each one a click
@@ -84,8 +90,9 @@ YouTube stream
   stream is over, Kick has dropped its chat subscriptions or the tunnel is down. The Health page
   tells them apart: when the last webhook arrived, what the last check of the subscriptions found
   and when Kick was found to have dropped some, how Twitch's chat connection stands and as which
-  account it reads, whose YouTube chat comes in, as whom the bot writes and where it cannot,
-  what each recorder is doing, how much room the disk has, where the tunnel stands. Every page says beside its name when one of them needs a look.
+  account it reads, whose YouTube and TikTok chat comes in, as whom the bot writes and where it
+  cannot, what each recorder is doing, how much room the disk has, where the tunnel stands. Every
+  page says beside its name when one of them needs a look.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -142,6 +149,11 @@ run on Windows; the test suite also runs on Linux.
 YouTube needs nothing set up: its channels are looked up, and their chat read, the way the site's
 own pages do it, as a visitor who is not signed in.
 
+TikTok needs nothing set up either. Its channels and streams are looked up the way the site's own
+pages do it; its chat is read with [TikTokLive](https://github.com/isaackogan/TikTokLive), which
+has the request that opens a chat signed by the [Euler Stream](https://www.eulerstream.com) sign
+server - a few thousand a day without a key, more with an `EULER_STREAM_API_KEY` in `.env`.
+
 ## Usage
 
 Run the server:
@@ -151,9 +163,9 @@ PYTHONPATH=src python -m uvicorn kick_clip_hunter.main:app --host 0.0.0.0 --port
 ```
 
 Open the dashboard at `http://localhost:8000/dashboard`. Channels can be added on its Channels
-page, or from the command line - by a Kick channel's name, a link to a Kick, Twitch or YouTube
-channel (or to a YouTube video of one), or a Twitch channel's name followed by `@twitch` or a
-YouTube channel's handle followed by `@youtube`:
+page, or from the command line - by a Kick channel's name, a link to a Kick, Twitch, YouTube or
+TikTok channel (or to a YouTube video of one), or a Twitch channel's name followed by `@twitch`, a
+YouTube channel's handle followed by `@youtube` or a TikTok channel's followed by `@tiktok`:
 
 ```
 PYTHONPATH=src python scripts/subscribe.py <channel>
@@ -202,6 +214,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `chat_bot.py`, `kick_auth.py`, `account_tokens.py` | The bot in chat: what it says and how it writes on each platform; the Kick account it writes as, signed in with Kick's OAuth 2.1 and PKCE; the tokens of any account the service acts as, kept and renewed. |
 | `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
 | `youtube_client.py`, `youtube_chat.py`, `youtube_stream.py`, `streamlink_support.py` | YouTube: the site's own API - who a channel is, whether it is live, its chat; the chat of a live channel, looked at every few seconds; where a live stream is (through streamlink, imported once for Twitch and YouTube). |
+| `tiktok_client.py`, `tiktok_stream.py`, `tiktok_chat.py`, `flv.py` | TikTok: the site's own API - who a channel is, whether it is live, where its stream is; the chat of a channel whose stream is recorded, through TikTokLive; an FLV stream read as it arrives and cut into pieces the recorder keeps as MPEG-TS segments. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
@@ -230,6 +243,13 @@ Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
   a robot. Its chat is looked at every few seconds, so a message arrives a second or few after it
   was written, and what is written while the service cannot look is not read. Where a stream is
   comes from streamlink, as for Twitch.
+- TikTok has no API for live streams. Whether a channel is live and where its stream is come from
+  an API of the site's own pages, which can change without notice; its chat can only be read
+  through a request signed the way TikTok's own pages sign theirs, which is left to a third party,
+  Euler Stream - which learns which streams are read, and from where. TikTok channels are
+  recorded only, never looked for clips in. The service watches as a visitor who is not signed
+  in, so a stream TikTok shows only to signed-in viewers (one for adults, or for subscribers) is
+  likely out of its reach.
 - The laugh patterns are tuned for the chat conventions of the channels this was built on (Czech
   and Slovak); the emote-based signals are language-independent, and which emotes count as
   laughing can be added to per channel.

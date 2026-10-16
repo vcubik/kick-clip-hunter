@@ -14,9 +14,11 @@ Twitch's chat comes another way, over a connection the service keeps open
 stands is a part of its own, there for as long as the service is set up for
 Twitch or watches a Twitch channel. YouTube's chat is read while a channel
 is live, by looking at it every few seconds (youtube_chat.py), and has a
-part of its own while a YouTube channel is watched. The bot that writes in
-chat (chat_bot.py) has one while it writes in a channel's chat or an account
-is signed in for it on Kick: as whom it writes, and whether it can.
+part of its own while a YouTube channel is watched. TikTok's chat is read
+while a TikTok channel's stream is recorded (tiktok_chat.py), and has a part
+of its own while a TikTok channel is watched. The bot that writes in chat
+(chat_bot.py) has one while it writes in a channel's chat or an account is
+signed in for it on Kick: as whom it writes, and whether it can.
 
 So what the service notices as it runs is kept - in memory, by main.py and
 recording_manager.py, and the subscriptions Kick dropped in the database as
@@ -73,6 +75,10 @@ TWITCH_LOST_SECONDS = 120
 # answer; one that has had no answer about a channel for this long is not
 # getting one.
 YOUTUBE_LOST_SECONDS = 120
+# TikTok's chat reader tries a connection that failed again within a minute
+# at first, and less often the longer it keeps failing: a chat it has not
+# been able to read for this long is not going to be read by itself.
+TIKTOK_LOST_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,24 @@ class ChatBot:
 
 
 @dataclass(frozen=True)
+class TikTokChat:
+    """Where reading TikTok's chat stands (see tiktok_chat.ChatReader)."""
+
+    # How many TikTok channels are on the watchlist, and how many of them
+    # are being recorded - whose chat is wanted.
+    channels: int = 0
+    recorded: int = 0
+    # The channels whose chat is being read, and since when.
+    reading: tuple[tuple[str, datetime], ...] = ()
+    # The recorded channels that are not live yet.
+    waiting: tuple[str, ...] = ()
+    # The channels whose chat could not be read: why, and since when.
+    failing: tuple[tuple[str, str, datetime], ...] = ()
+    # When the last word of TikTok's came.
+    last_heard_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class SubscriptionCheck:
     """What a check of Kick's chat subscriptions found."""
 
@@ -284,6 +308,8 @@ class Facts:
     twitch: TwitchChat | None = None
     # YouTube's chat, while a YouTube channel is watched; None otherwise.
     youtube: YouTubeChat | None = None
+    # TikTok's chat, while a TikTok channel is watched; None otherwise.
+    tiktok: TikTokChat | None = None
     # The bot in chat.
     bot: ChatBot | None = None
 
@@ -551,23 +577,81 @@ def youtube_part(facts: Facts, today: date) -> dict[str, Any]:
     return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
 
 
+# -- TikTok's chat -------------------------------------------------------------
+
+
+def tiktok_part(facts: Facts, today: date) -> dict[str, Any]:
+    """Where reading TikTok's chat stands. Shown only while a TikTok channel
+    is on the watchlist; its chat is read only while its stream is being
+    recorded. A chat that has not been read for long, while its stream is
+    recorded and live, is trouble."""
+    chat = facts.tiktok
+    if chat is None or chat.channels == 0:
+        return {"shown": False, "trouble": False, "said": "", "more": [], "rows": []}
+    now = facts.now
+    lost = [(slug, why, since) for slug, why, since in chat.failing if _seconds(now, since) >= TIKTOK_LOST_SECONDS]
+    rows = [
+        {"slug": slug, "why": f"Not read for {span_words(_seconds(now, since))}: {why}"} for slug, why, since in lost
+    ]
+    more: list[str] = []
+    reading = len(chat.reading)
+    if lost:
+        _, why, since = min(lost, key=lambda failing: failing[2])
+        names = list_words([slug for slug, _, _ in lost])
+        said = f"The chat of {names} has not been read for {span_words(_seconds(now, since))}: {why}."
+        more.append("The service keeps trying, less often the longer it fails. The server log says more.")
+    elif chat.recorded == 0:
+        said = (
+            "The TikTok channel is not being recorded, so its chat is not read."
+            if chat.channels == 1
+            else "No TikTok channel is being recorded, so no TikTok chat is read."
+        )
+        more.append("A TikTok channel's chat is read while its stream is recorded, and kept with the recording.")
+    elif reading:
+        if reading == chat.recorded:
+            whose = "the recorded TikTok channel" if reading == 1 else f"all {reading} recorded TikTok channels"
+        else:
+            whose = f"{reading} of the {chat.recorded} recorded TikTok channels"
+        said = f"The chat of {whose} comes in."
+    elif chat.failing:
+        slug, why, _ = chat.failing[0]
+        said = f"Connecting to the chat of {slug} again ({why})."
+    elif chat.waiting:
+        said = "No TikTok chat comes in: the recorded channels are not live yet."
+    else:
+        said = "Connecting to TikTok's chat."
+    if chat.waiting and (reading or lost or chat.failing):
+        more.append(f"Recorded but not live yet: {list_words(list(chat.waiting))}.")
+    if chat.recorded:
+        more.append("It is read through Euler Stream, which signs the requests TikTok asks for.")
+    if chat.last_heard_at is not None:
+        more.append(f"The last word from TikTok came {ago_words(chat.last_heard_at, now, today)}.")
+    return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
+
+
 # -- the bot in chat -----------------------------------------------------------
 
 # How each platform is called in a sentence, and how its account signs in.
-PLATFORM_WORDS = {"kick": "Kick", "twitch": "Twitch", "youtube": "YouTube"}
+PLATFORM_WORDS = {"kick": "Kick", "twitch": "Twitch", "youtube": "YouTube", "tiktok": "TikTok"}
 TWITCH_SIGN_IN_WORDS = "scripts/twitch_login.py signs one in"
 YOUTUBE_WORDS = (
     "The bot cannot write in YouTube's chat - the service reads it as a visitor who is not signed in - so "
     "there its commands are carried out without an answer."
 )
+TIKTOK_WORDS = (
+    "The bot cannot write in TikTok's chat - the service only reads it, as nobody, while the stream is "
+    "recorded - so there its commands are carried out without an answer."
+)
+# The platforms whose chat the bot never writes in, and what is said of each.
+NOT_WRITTEN = {"youtube": YOUTUBE_WORDS, "tiktok": TIKTOK_WORDS}
 
 
 def bot_account_words(account: BotAccount | None, platform: str) -> str:
     """As whom the bot writes on a platform, or why it cannot - in a
     sentence, for the Health page and a channel's Settings."""
     name = PLATFORM_WORDS.get(platform, platform)
-    if platform == "youtube":
-        return YOUTUBE_WORDS
+    if platform in NOT_WRITTEN:
+        return NOT_WRITTEN[platform]
     if account is None or not account.set_up:
         return f"The service is not set up for {name}, so the bot cannot write there."
     if account.sign_in:
@@ -605,13 +689,14 @@ def bot_part(facts: Facts, today: date) -> dict[str, Any]:
     if not bot.channels and not (kick and kick.login):
         return nothing
     now = facts.now
+    on = {channel.platform for channel in bot.channels}
     rows = []
     writing = []
     failing = []
     for channel in bot.channels:
-        if channel.platform == "youtube":
+        if channel.platform in NOT_WRITTEN:
             # Never written in, and said once below - no trouble.
-            note = "Cannot write in YouTube's chat"
+            note = f"Cannot write in {PLATFORM_WORDS[channel.platform]}'s chat"
         else:
             writing.append(channel.slug)
             note = _cannot_write(channel, bot) or ""
@@ -632,17 +717,17 @@ def bot_part(facts: Facts, today: date) -> dict[str, Any]:
     elif writing:
         said = f"The bot writes in the chat of {count_words(len(writing), 'channel')}."
     elif bot.channels:
-        said = "The bot writes in no channel's chat: it cannot write in YouTube's."
+        cannot = [f"{PLATFORM_WORDS[platform]}'s" for platform in NOT_WRITTEN if platform in on]
+        said = f"The bot writes in no channel's chat: it cannot write in {list_words(cannot)}."
     else:
         said = "The bot writes in no channel's chat. A channel's settings switch it on."
     # Kick's account always, Twitch's where it can write or is meant to,
-    # YouTube where it is meant to and cannot.
+    # YouTube and TikTok where it is meant to and cannot.
     named = ["kick"]
     twitch = bot.account("twitch")
-    if (twitch is not None and twitch.set_up) or any(channel.platform == "twitch" for channel in bot.channels):
+    if (twitch is not None and twitch.set_up) or "twitch" in on:
         named.append("twitch")
-    if any(channel.platform == "youtube" for channel in bot.channels):
-        named.append("youtube")
+    named += [platform for platform in NOT_WRITTEN if platform in on]
     more = [bot_account_words(bot.account(platform), platform) for platform in named]
     if kick is None or kick.login is None or kick.sign_in or kick.may_write is False:
         more.append(
@@ -813,6 +898,7 @@ PARTS = (
     ("subscriptions", "subscriptions", True),
     ("twitch", "Twitch chat", False),
     ("youtube", "YouTube chat", False),
+    ("tiktok", "TikTok chat", False),
     ("bot", "the chat bot", False),
     ("recorders", "the recorders", True),
     ("disk", "the disk", False),
@@ -828,6 +914,7 @@ def report(facts: Facts, today: date) -> dict[str, Any]:
         "subscriptions": subscriptions(facts, today),
         "twitch": twitch_part(facts, today),
         "youtube": youtube_part(facts, today),
+        "tiktok": tiktok_part(facts, today),
         "bot": bot_part(facts, today),
         "recorders": recorders(facts, today),
         "disk": disk(facts),

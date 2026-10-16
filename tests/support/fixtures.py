@@ -27,6 +27,7 @@ from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
 from tests.support.tailscale import FakeTailscale
+from tests.support.tiktok import FakeTikTok
 from tests.support.twitch_api import FakeTwitchApi
 from tests.support.waiting import async_wait_until
 from tests.support.webhook import WebhookSigner, chat_payload
@@ -132,6 +133,16 @@ def youtube(kick_api: FakeKickApi) -> FakeYouTube:
     everything else still goes to the fake Kick (and Twitch, where a test
     has that too). YouTube needs nothing set up."""
     fake = FakeYouTube()
+    kick_api.others.append(fake)
+    return fake
+
+
+@pytest.fixture
+def tiktok(kick_api: FakeKickApi) -> FakeTikTok:
+    """A fake TikTok for every `httpx.AsyncClient` the service creates;
+    everything else still goes to the fake Kick (and the others, where a test
+    has them too). TikTok needs nothing set up."""
+    fake = FakeTikTok()
     kick_api.others.append(fake)
     return fake
 

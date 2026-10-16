@@ -20,6 +20,10 @@ class Settings:
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
     kick_redirect_uri: str = DEFAULT_KICK_REDIRECT_URI
+    # A key of Euler Stream's, the service that signs the requests TikTok's
+    # chat is read with (see tiktok_chat.py), for more of them a day than it
+    # signs without one. The chat of a few channels needs none.
+    euler_stream_api_key: str = ""
 
     @property
     def twitch(self) -> bool:
@@ -36,4 +40,5 @@ def load_settings() -> Settings:
         twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", "").strip(),
         twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", "").strip(),
         kick_redirect_uri=os.environ.get("KICK_REDIRECT_URI", "").strip() or DEFAULT_KICK_REDIRECT_URI,
+        euler_stream_api_key=os.environ.get("EULER_STREAM_API_KEY", "").strip(),
     )

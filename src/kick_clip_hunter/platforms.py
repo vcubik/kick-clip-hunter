@@ -5,10 +5,14 @@ A channel is known in the service by one name: its chat and its moments are
 stored under it, its recorder and its folders are called by it, the
 dashboard shows it. A Kick channel's name is its slug, as it was before
 there were other platforms. A channel anywhere else is called by its name
-there and the platform's, `login@twitch`, `handle@youtube` - so the same name
-on two platforms is two channels, and the name alone says where to look for
-the channel. A YouTube channel's name is its handle, without the "@" YouTube
-writes it with.
+there and the platform's, `login@twitch`, `handle@youtube`, `handle@tiktok` -
+so the same name on two platforms is two channels, and the name alone says
+where to look for the channel. A YouTube or TikTok channel's name is its
+handle, without the "@" the platform writes it with.
+
+A TikTok channel is watched to be recorded and for nothing else: its whole
+stream is kept, with its chat, but no clips are looked for in it
+(RECORDED_ONLY).
 
 In the database a channel is kept by an id (streamers.broadcaster_user_id):
 a Kick channel's is its Kick user id, any other channel's a negative number
@@ -29,12 +33,17 @@ from urllib.parse import parse_qs, unquote
 KICK = "kick"
 TWITCH = "twitch"
 YOUTUBE = "youtube"
-PLATFORMS = (KICK, TWITCH, YOUTUBE)
+TIKTOK = "tiktok"
+PLATFORMS = (KICK, TWITCH, YOUTUBE, TIKTOK)
 # How each is written for people.
-TITLES = {KICK: "Kick", TWITCH: "Twitch", YOUTUBE: "YouTube"}
+TITLES = {KICK: "Kick", TWITCH: "Twitch", YOUTUBE: "YouTube", TIKTOK: "TikTok"}
+# The platforms whose channels are only ever recorded whole: never tracked
+# for clips, their chat kept with a recording and looked for nothing in.
+RECORDED_ONLY = frozenset({TIKTOK})
 
 # What stands between a channel's name on its platform and the platform's.
-# Neither Kick's names nor Twitch's can have one, nor YouTube's handles.
+# Neither Kick's names nor Twitch's can have one, nor YouTube's or TikTok's
+# handles.
 SEPARATOR = "@"
 
 
@@ -67,15 +76,19 @@ _YOUTUBE_LINK = re.compile(
 )
 _YOUTUBE_HANDLE = re.compile(r"/@([^/?#]+)")
 YOUTUBE_SITE = "https://www.youtube.com"
+# A link to a TikTok channel's page, or to its live stream: tiktok.com/@name
+# or tiktok.com/@name/live.
+_TIKTOK_LINK = re.compile(r"(?:https?://)?(?:www\.|m\.)?tiktok\.com/@([^/?#\s]+)", re.IGNORECASE)
+TIKTOK_SITE = "https://www.tiktok.com"
 
 
 def parse(text: str) -> tuple[str, str]:
     """Which channel someone means by what they typed: a link to its page,
-    its name with its platform's (`login@twitch`, `handle@youtube`), or a
-    bare name - which is taken for a Kick channel's, as it always was.
-    Returns the platform and the channel's name there - for a link to YouTube
-    that names no handle, the link itself, made whole, for YouTube to say
-    whose it is."""
+    its name with its platform's (`login@twitch`, `handle@youtube`,
+    `handle@tiktok`), or a bare name - which is taken for a Kick channel's,
+    as it always was. Returns the platform and the channel's name there - for
+    a link to YouTube that names no handle, the link itself, made whole, for
+    YouTube to say whose it is."""
     text = text.strip()
     link = _CHANNEL_LINK.match(text)
     if link:
@@ -83,9 +96,12 @@ def parse(text: str) -> tuple[str, str]:
     youtube = _YOUTUBE_LINK.match(text)
     if youtube:
         return YOUTUBE, _youtube_where(youtube.group(2) or "/", short=bool(youtube.group(1)))
+    tiktok = _TIKTOK_LINK.match(text)
+    if tiktok:
+        return TIKTOK, unquote(tiktok.group(1))
     platform, login = split(text)
-    # YouTube writes a handle with an "@" before it.
-    return platform, login.removeprefix(SEPARATOR) if platform == YOUTUBE else login
+    # YouTube and TikTok write a handle with an "@" before it.
+    return platform, login.removeprefix(SEPARATOR) if platform in (YOUTUBE, TIKTOK) else login
 
 
 def _youtube_where(path: str, *, short: bool) -> str:
@@ -128,11 +144,17 @@ class StreamUrlError(RuntimeError):
 class StreamUrls:
     """Where a live channel's stream is: what a recorder follows."""
 
+    # The stream's master playlist - or, where `flv` says so, the stream
+    # itself.
     live: str
     # Master playlist of the recording of the current broadcast, or None if
     # the channel doesn't keep one (or the lookup failed).
     vod: str | None = None
     # When these addresses stop working, where the platform says - the
-    # recorder asks for new ones before then. YouTube's do after six hours;
-    # Kick's and Twitch's work for as long as the stream is on.
+    # recorder asks for new ones before then. YouTube's do after six hours,
+    # TikTok's after weeks; Kick's and Twitch's work for as long as the
+    # stream is on.
     expires_at: datetime | None = None
+    # Whether `live` is the stream as one FLV download that does not end
+    # (TikTok's, see flv.py) rather than an HLS playlist.
+    flv: bool = False
