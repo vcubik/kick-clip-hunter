@@ -598,7 +598,8 @@ Module map (`src/kick_clip_hunter/`):
   do with them; TikTok's is trouble only when a recorded channel's chat has not been read for
   `TIKTOK_LOST_SECONDS`.
   The bot's part (`bot_part`, from `main._bot_facts`) is there while it writes in a
-  channel's chat or an account has signed in for it on Kick; a Kick or Twitch channel it
+  channel's chat, an account has signed in for it on Kick, or a Kick channel is watched (it
+  has the button the account signs in with); a Kick or Twitch channel it
   cannot write in - no account to write as, one that did not let it, the last message turned
   down - is trouble, a YouTube or TikTok one is not. `bot_account_words` says as whom it
   writes, here and on a channel's Settings page.
