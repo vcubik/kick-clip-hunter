@@ -5,7 +5,8 @@ credentials): looking a channel up by its name, asking whether it is live,
 finding the recording of its stream. Reading a channel's chat is different:
 Twitch lets an application read any channel's chat only on behalf of an
 account that reads it, so subscribing to it (`subscribe_chat`) takes that
-account's token (see twitch_auth.py).
+account's token (see twitch_auth.py) - and so does writing in it
+(`send_chat_message`), as that account.
 """
 
 from __future__ import annotations
@@ -122,3 +123,18 @@ async def subscribe_chat(broadcaster_user_id: str, user_id: str, session_id: str
         )
         response.raise_for_status()
         return response.json()
+
+
+async def send_chat_message(broadcaster_id: str, sender_id: str, message: str, client_id: str, user_token: str):
+    """Writes a message in a channel's chat as the account `sender_id`,
+    whose token it is (scope user:write:chat). Returns what Twitch answered
+    of it: whether it was sent (`is_sent`), and why not (`drop_reason`)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{API_BASE}/chat/messages",
+            headers=_headers(client_id, user_token),
+            json={"broadcaster_id": broadcaster_id, "sender_id": sender_id, "message": message},
+        )
+        response.raise_for_status()
+        sent = response.json().get("data") or [{}]
+        return sent[0]

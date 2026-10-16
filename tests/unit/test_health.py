@@ -14,7 +14,18 @@ import pytest
 
 from kick_clip_hunter import health, tunnel
 from kick_clip_hunter.dashboard_view import since_words, when_words
-from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TikTokChat, TwitchChat, YouTubeChat
+from kick_clip_hunter.health import (
+    BotAccount,
+    BotChannel,
+    Channel,
+    ChatBot,
+    Drop,
+    Facts,
+    SubscriptionCheck,
+    TikTokChat,
+    TwitchChat,
+    YouTubeChat,
+)
 
 NOW = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 TODAY = NOW.astimezone().date()
@@ -673,6 +684,7 @@ class TestThePageAsAWhole:
             "twitch",
             "youtube",
             "tiktok",
+            "bot",
             "recorders",
             "disk",
             "tunnel",
@@ -965,6 +977,150 @@ class TestTikTokChat:
         )
         report = health.report(facts(last_webhook_at=ago(2), tiktok=wrong), TODAY)
         assert (report["troubles"], report["lead"]) == (1, "TikTok chat needs a look.")
+
+
+class TestChatBot:
+    """The bot that writes in chat: a part of the page while it writes in a
+    channel's chat, or an account has signed in for it on Kick."""
+
+    KICK = BotAccount("kick", login="clip_bot", may_write=True)
+    NO_TWITCH = BotAccount("twitch", set_up=False)
+    REDIRECT = "http://localhost:8000/bot/kick/signed_in"
+
+    def bot(self, *channels: BotChannel, kick: BotAccount = KICK, twitch: BotAccount = NO_TWITCH) -> ChatBot:
+        return ChatBot(channels, (kick, twitch), sign_in_url="/bot/kick/sign_in", redirect_uri=self.REDIRECT)
+
+    def part(self, bot: ChatBot) -> dict:
+        return health.bot_part(facts(bot=bot), TODAY)
+
+    def test_writing_nowhere_as_nobody_there_is_no_such_part(self):
+        report = health.report(facts(last_webhook_at=ago(2), bot=self.bot(kick=BotAccount("kick"))), TODAY)
+
+        assert report["bot"]["shown"] is False
+        assert "bot" not in report["lead"]
+
+    def test_an_account_signed_in_on_kick_shows_it_before_any_channel_has_it_writing(self):
+        part = self.part(self.bot())
+
+        assert (part["shown"], part["trouble"]) == (True, False)
+        assert part["said"] == "The bot writes in no channel's chat. A channel's settings switch it on."
+        assert part["more"] == ["On Kick the bot writes as clip_bot."]
+        assert part["sign_in"] == {"url": "/bot/kick/sign_in", "words": "Sign in another account"}
+
+    def test_the_channels_it_writes_in_are_listed_with_when_it_last_wrote(self):
+        twitch = BotAccount("twitch", login="chat_reader", may_write=True)
+
+        part = self.part(self.bot(BotChannel("a", sent_at=ago(120)), BotChannel("b@twitch", "twitch"), twitch=twitch))
+
+        assert (part["trouble"], part["said"]) == (False, "The bot writes in the chat of 2 channels.")
+        assert [(row["slug"], row["platform"], row["sent"], row["note"]) for row in part["rows"]] == [
+            ("a", "Kick", "2 minutes ago", ""),
+            ("b@twitch", "Twitch", "Nothing yet", ""),
+        ]
+        assert part["more"] == [
+            "On Kick the bot writes as clip_bot.",
+            "On Twitch the bot writes as chat_reader, the account chat is read as.",
+        ]
+
+    def test_a_channel_it_has_no_account_to_write_in_as_is_trouble(self):
+        part = self.part(self.bot(BotChannel("a"), kick=BotAccount("kick")))
+
+        assert part["trouble"]
+        assert part["said"] == "The bot cannot write in the chat of a."
+        assert part["rows"][0]["note"] == "No Kick account has signed in for the bot to write as."
+        assert part["more"][-1] == (
+            f"The Kick app has to have {self.REDIRECT} as its redirect URL, and the scopes chat:write and user:read, "
+            "for an account to sign in."
+        )
+        assert part["sign_in"]["words"] == "Sign in on Kick"
+
+    def test_a_sign_in_that_lapsed_says_so(self):
+        lapsed = BotAccount("kick", sign_in="The bot's sign-in on Kick has lapsed (Invalid refresh token).")
+
+        part = self.part(self.bot(BotChannel("a"), kick=lapsed))
+
+        assert part["trouble"]
+        assert part["rows"][0]["note"] == "The bot's sign-in on Kick has lapsed (Invalid refresh token)."
+
+    def test_an_account_that_did_not_let_it_write_is_said_and_how_to_mend_it(self):
+        kick = BotAccount("kick", login="clip_bot", may_write=False)
+        twitch = BotAccount("twitch", login="chat_reader", may_write=False)
+
+        part = self.part(self.bot(BotChannel("a"), BotChannel("b@twitch", "twitch"), kick=kick, twitch=twitch))
+
+        assert part["said"] == "The bot cannot write in the chat of a and b@twitch."
+        assert "the scopes chat:write and user:read" in part["more"][-1]
+        assert [row["note"] for row in part["rows"]] == [
+            "clip_bot did not let the bot write in Kick's chat when it signed in. Sign it in again.",
+            "chat_reader did not let the bot write in Twitch's chat when it signed in. "
+            "Sign it in again with scripts/twitch_login.py.",
+        ]
+
+    def test_a_channel_whose_last_message_did_not_go_out_is_trouble_until_one_does(self):
+        refused = BotChannel("a", sent_at=ago(600), trouble="Kick did not take the message (403 You cannot chat here).")
+
+        part = self.part(self.bot(refused, BotChannel("b", sent_at=ago(5))))
+
+        assert (part["trouble"], part["said"]) == (True, "The bot cannot write in the chat of a.")
+        assert [row["note"] for row in part["rows"]] == [
+            "Kick did not take the message (403 You cannot chat here).",
+            "",
+        ]
+
+    def test_twitch_without_the_service_set_up_for_it(self):
+        part = self.part(self.bot(BotChannel("b@twitch", "twitch")))
+
+        assert part["trouble"]
+        assert part["rows"][0]["note"] == "The service is not set up for Twitch, so the bot cannot write there."
+        assert part["more"][-1] == "The service is not set up for Twitch, so the bot cannot write there."
+
+    def test_twitch_with_nobody_signed_in_says_what_signs_one_in(self):
+        part = self.part(self.bot(BotChannel("b@twitch", "twitch"), twitch=BotAccount("twitch")))
+
+        assert part["rows"][0]["note"] == (
+            "No Twitch account has signed in for the bot to write as: scripts/twitch_login.py signs one in."
+        )
+
+    def test_a_youtube_channel_is_said_once_and_is_no_trouble(self):
+        part = self.part(self.bot(BotChannel("c@youtube", "youtube")))
+
+        assert (part["trouble"], part["said"]) == (
+            False,
+            "The bot writes in no channel's chat: it cannot write in YouTube's.",
+        )
+        assert part["rows"][0]["note"] == "Cannot write in YouTube's chat"
+        assert part["more"][-1] == health.YOUTUBE_WORDS
+
+    def test_a_tiktok_channel_is_said_once_and_is_no_trouble_either(self):
+        part = self.part(self.bot(BotChannel("c@youtube", "youtube"), BotChannel("d@tiktok", "tiktok")))
+
+        assert (part["trouble"], part["said"]) == (
+            False,
+            "The bot writes in no channel's chat: it cannot write in YouTube's and TikTok's.",
+        )
+        assert [row["note"] for row in part["rows"]] == [
+            "Cannot write in YouTube's chat",
+            "Cannot write in TikTok's chat",
+        ]
+        assert part["more"][-2:] == [health.YOUTUBE_WORDS, health.TIKTOK_WORDS]
+        assert health.bot_account_words(None, "tiktok") == health.TIKTOK_WORDS
+
+    def test_it_is_named_in_the_lead_where_it_is_trouble_and_where_all_is_fine(self):
+        fine = self.bot(BotChannel("a", sent_at=ago(5)))
+        wrong = self.bot(BotChannel("a"), kick=BotAccount("kick"))
+
+        assert health.report(facts(last_webhook_at=ago(2), bot=fine), TODAY)["lead"] == (
+            "Webhooks, subscriptions, the chat bot, the recorders, the disk and the tunnel all look fine."
+        )
+        report = health.report(facts(last_webhook_at=ago(2), bot=wrong), TODAY)
+        assert (report["troubles"], report["lead"]) == (1, "The chat bot needs a look.")
+
+    def test_as_whom_it_writes_is_said_the_same_on_a_channels_settings(self):
+        assert health.bot_account_words(self.KICK, "kick") == "On Kick the bot writes as clip_bot."
+        assert health.bot_account_words(None, "youtube") == health.YOUTUBE_WORDS
+        assert health.bot_account_words(None, "twitch") == (
+            "The service is not set up for Twitch, so the bot cannot write there."
+        )
 
 
 class TestWebhooksAreKicks:

@@ -1,8 +1,9 @@
 """An in-memory stand-in for Twitch's side of the service.
 
 `FakeTwitchApi` answers what the service asks of Twitch over HTTP - its
-OAuth server and Helix - and of the emote services that know Twitch
-channels (7TV's lookup by a Twitch id), with the same response shapes. Like
+OAuth server and Helix, the chat a message is written in among it
+(`chat_written`) - and of the emote services that know Twitch channels
+(7TV's lookup by a Twitch id), with the same response shapes. Like
 `FakeKickApi` it plugs in as an `httpx` transport, so the real client code
 runs unmodified; the `twitch_api` fixture routes every request for one of
 its hosts here and everything else on to the fake Kick.
@@ -11,13 +12,16 @@ its hosts here and everything else on to the fake Kick.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import httpx
 
 from tests.support.kick_api import seventv_emote_id
 
 HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv", "api.betterttv.net", "api.frankerfacez.com"})
+# What an account signed in for the service lets it do: read chat, and write
+# in it - what twitch_login.py asks for.
+SCOPES = ("user:read:chat", "user:write:chat")
 
 
 def bttv_emote_id(name: str) -> str:
@@ -88,6 +92,8 @@ class _DeviceFlow:
     polls_before: int = 0
     denied: bool = False
     polls: int = 0
+    # What the flow asked the account to let the service do.
+    scopes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -108,13 +114,22 @@ class FakeTwitchApi:
     # (each works once).
     user_tokens: dict[str, FakeAccount] = field(default_factory=dict)
     refresh_tokens: dict[str, FakeAccount] = field(default_factory=dict)
-    # Scopes an access token was given, by token.
+    # Scopes an access token was given, by token - and a refresh token, by
+    # refresh token, which the tokens it renews are given in turn.
     token_scopes: dict[str, list[str]] = field(default_factory=dict)
+    refresh_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     user_tokens_issued: int = 0
     # The EventSub subscriptions made, in order, and the status a
     # subscription to a channel (by its Twitch id) is refused with.
     eventsub_subscriptions: list[dict] = field(default_factory=list)
     subscribe_failures: dict[str, int] = field(default_factory=dict)
+    # Every chat message written, in order: the channel (its Twitch id),
+    # what was written, and as whom. A channel in `chat_refusals` turns
+    # messages down with that status; one in `chat_drops` takes them and
+    # drops them, for that reason (a code of Twitch's: msg_duplicate, ...).
+    chat_written: list[dict] = field(default_factory=list)
+    chat_refusals: dict[str, int] = field(default_factory=dict)
+    chat_drops: dict[str, str] = field(default_factory=dict)
 
     def sign_in_will_happen(
         self, account: FakeAccount | None = None, *, after_polls: int = 0, denied: bool = False
@@ -123,7 +138,7 @@ class FakeTwitchApi:
         after that many polls have been answered "pending" - or turned down."""
         self.next_sign_in = _DeviceFlow(account=account or FakeAccount(), polls_before=after_polls, denied=denied)
 
-    def tokens_for(self, account: FakeAccount | None = None, scopes: tuple[str, ...] = ("user:read:chat",)) -> dict:
+    def tokens_for(self, account: FakeAccount | None = None, scopes: tuple[str, ...] = SCOPES) -> dict:
         """A working pair of tokens for an account, as the token endpoint
         hands them out."""
         account = account or FakeAccount()
@@ -132,6 +147,7 @@ class FakeTwitchApi:
         self.user_tokens[access] = account
         self.refresh_tokens[refresh] = account
         self.token_scopes[access] = list(scopes)
+        self.refresh_scopes[refresh] = tuple(scopes)
         return {
             "access_token": access,
             "refresh_token": refresh,
@@ -148,6 +164,10 @@ class FakeTwitchApi:
     def calls(self, method: str, path_fragment: str) -> list[object]:
         """Bodies/queries of the recorded requests matching a method and path."""
         return [body for m, path, body in self.requests if m == method and path_fragment in path]
+
+    def written_in(self, user_id: str) -> list[str]:
+        """What was written in a channel's chat (by its Twitch id), in order."""
+        return [sent["message"] for sent in self.chat_written if sent["broadcaster_id"] == user_id]
 
     def owns(self, request: httpx.Request) -> bool:
         return request.url.host in HOSTS or (
@@ -176,7 +196,7 @@ class FakeTwitchApi:
             return self._token(body)  # type: ignore[arg-type]
         if request.url.host == "id.twitch.tv" and path == "/oauth2/device":
             device_code = f"device-{len(self.device_flows) + 1}"
-            self.device_flows[device_code] = self.next_sign_in
+            self.device_flows[device_code] = replace(self.next_sign_in, scopes=tuple(body.get("scopes", "").split()))
             self.next_sign_in = _DeviceFlow()
             return httpx.Response(
                 200,
@@ -254,6 +274,8 @@ class FakeTwitchApi:
                 return httpx.Response(200, json={"data": sets})
             if path == "/helix/eventsub/subscriptions" and request.method == "POST":
                 return self._subscribe(request, body)  # type: ignore[arg-type]
+            if path == "/helix/chat/messages" and request.method == "POST":
+                return self._write(request, body)  # type: ignore[arg-type]
 
         if request.url.host == "api.betterttv.net" and path.startswith("/3/cached/users/twitch/"):
             channel = self._by_id(path.rsplit("/", 1)[1])
@@ -308,6 +330,32 @@ class FakeTwitchApi:
         self.eventsub_subscriptions.append(subscription)
         return httpx.Response(202, json={"data": [subscription], "total": len(self.eventsub_subscriptions)})
 
+    def _write(self, request: httpx.Request, body: dict) -> httpx.Response:
+        """A message written in a channel's chat, with an account's token."""
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        account = self.user_tokens.get(token)
+        if account is None:
+            return httpx.Response(401, json={"status": 401, "message": "Invalid OAuth token"})
+        if "user:write:chat" not in self.token_scopes.get(token, []):
+            return httpx.Response(401, json={"status": 401, "message": "Missing scope: user:write:chat"})
+        if body.get("sender_id") != account.user_id:
+            return httpx.Response(401, json={"status": 401, "message": "The sender must be the token's user"})
+        broadcaster, message = body.get("broadcaster_id"), body.get("message")
+        if not broadcaster or not message:
+            return httpx.Response(400, json={"status": 400, "message": "Missing broadcaster_id or message"})
+        if len(message) > 500:
+            return httpx.Response(422, json={"status": 422, "message": "The message is too large"})
+        if broadcaster in self.chat_refusals:
+            status = self.chat_refusals[broadcaster]
+            return httpx.Response(status, json={"status": status, "message": "The sender may not chat here"})
+        if broadcaster in self.chat_drops:
+            code = self.chat_drops[broadcaster]
+            dropped = {"message_id": "", "is_sent": False, "drop_reason": {"code": code, "message": f"Dropped: {code}"}}
+            return httpx.Response(200, json={"data": [dropped]})
+        self.chat_written.append({"broadcaster_id": broadcaster, "message": message, "sender": account.login})
+        sent = {"message_id": f"written-{len(self.chat_written)}", "is_sent": True, "drop_reason": None}
+        return httpx.Response(200, json={"data": [sent]})
+
     def _by_id(self, user_id: str) -> FakeTwitchChannel | None:
         return next((channel for channel in self.channels.values() if channel.user_id == user_id), None)
 
@@ -340,10 +388,11 @@ class FakeTwitchApi:
             if flow.account is None or flow.polls <= flow.polls_before:
                 return httpx.Response(400, json={"status": 400, "message": "authorization_pending"})
             del self.device_flows[body["device_code"]]
-            return httpx.Response(200, json=self.tokens_for(flow.account))
+            return httpx.Response(200, json=self.tokens_for(flow.account, flow.scopes))
         if body.get("grant_type") == "refresh_token":
-            account = self.refresh_tokens.pop(body.get("refresh_token", ""), None)
+            refresh = body.get("refresh_token", "")
+            account = self.refresh_tokens.pop(refresh, None)
             if account is None:
                 return httpx.Response(400, json={"status": 400, "message": "Invalid refresh token"})
-            return httpx.Response(200, json=self.tokens_for(account))
+            return httpx.Response(200, json=self.tokens_for(account, self.refresh_scopes.get(refresh, SCOPES)))
         return httpx.Response(400, json={"status": 400, "message": "invalid grant type"})

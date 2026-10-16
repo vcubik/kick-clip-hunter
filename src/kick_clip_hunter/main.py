@@ -15,12 +15,13 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import (
     audio_events,
+    chat_bot,
     chat_identity,
     chat_stats,
     chat_trace,
@@ -31,6 +32,7 @@ from . import (
     detector,
     frame_encoder,
     health,
+    kick_auth,
     kick_chat,
     platforms,
     recorder,
@@ -90,6 +92,7 @@ from .db import (
     get_recent_moments,
     get_stream_recording,
     get_stream_recordings,
+    get_streamer_by_id,
     get_streamer_by_slug,
     get_streamer_tracking_enabled,
     get_streamers,
@@ -554,13 +557,15 @@ def _twitch_channels() -> list[twitch_chat.Channel]:
 
 
 def _start_reading_twitch_chat() -> twitch_chat.ChatReader | None:
-    """The reader of Twitch's chat, if the service is set up for Twitch."""
-    global _twitch_reader
+    """The reader of Twitch's chat, if the service is set up for Twitch.
+    It reads as the account the bot writes in Twitch's chat as, and the two
+    share its token (see _twitch_token_keeper)."""
+    global _twitch_reader, _twitch_tokens
     if not settings.twitch:
         _twitch_reader = None
         return None
-    tokens = twitch_auth.TokenKeeper(settings.twitch_client_id, settings.twitch_client_secret)
-    _twitch_reader = twitch_chat.ChatReader(_twitch_channels, _take_chats, tokens, settings.twitch_client_id)
+    _twitch_tokens = twitch_auth.TokenKeeper(settings.twitch_client_id, settings.twitch_client_secret)
+    _twitch_reader = twitch_chat.ChatReader(_twitch_channels, _take_chats, _twitch_tokens, settings.twitch_client_id)
     return _twitch_reader
 
 
@@ -613,6 +618,174 @@ def _start_reading_tiktok_chat() -> tiktok_chat.ChatReader:
     tiktok_chat.use_sign_key(settings.euler_stream_api_key)
     _tiktok_reader = tiktok_chat.ChatReader(_tiktok_channels, _take_chats)
     return _tiktok_reader
+
+
+# -- the bot in chat ----------------------------------------------------------
+#
+# What the bot writes in a channel's chat, and the commands it takes there
+# (see chat_bot.py). Whether it writes in a channel at all, and which
+# messages are its commands, is the channel's own to set (tuning.py).
+
+# The token of the account the bot writes in Kick's chat as (kick_auth.py),
+# and of the one Twitch's chat is read - and written - as: the chat reader
+# and the bot share that, since a refresh token used twice signs the
+# account out.
+_kick_tokens: kick_auth.TokenKeeper | None = None
+_twitch_tokens: twitch_auth.TokenKeeper | None = None
+# What writes, and what has become of what it wrote.
+_chat_bot: chat_bot.ChatBot | None = None
+# The command messages carried out lately: each is carried out once.
+_bot_commands = chat_bot.Recent()
+# Sign-ins of the bot's Kick account that were started and have not come
+# back yet, by what they will come back with (their state).
+_kick_sign_ins: dict[str, kick_auth.SignIn] = {}
+
+
+def _kick_bot_tokens() -> kick_auth.TokenKeeper:
+    global _kick_tokens
+    if _kick_tokens is None:
+        _kick_tokens = kick_auth.TokenKeeper(settings.kick_client_id, settings.kick_client_secret)
+    return _kick_tokens
+
+
+def _twitch_token_keeper() -> twitch_auth.TokenKeeper:
+    """The Twitch account's token: the chat reader's, once it has started."""
+    global _twitch_tokens
+    if _twitch_tokens is None:
+        _twitch_tokens = twitch_auth.TokenKeeper(settings.twitch_client_id, settings.twitch_client_secret)
+    return _twitch_tokens
+
+
+def _bot_writer(platform: str) -> chat_bot.Writer | None:
+    """How the bot writes on a platform - not at all on YouTube or TikTok,
+    nor on Twitch while the service is not set up for it."""
+    if platform == platforms.KICK:
+        return chat_bot.KickWriter(_kick_bot_tokens())
+    if platform == platforms.TWITCH and settings.twitch:
+        return chat_bot.TwitchWriter(_twitch_token_keeper(), settings.twitch_client_id)
+    return None
+
+
+def _bot() -> chat_bot.ChatBot:
+    global _chat_bot
+    if _chat_bot is None:
+        _chat_bot = chat_bot.ChatBot(_bot_writer)
+    return _chat_bot
+
+
+def _bot_channel(row) -> chat_bot.Channel:
+    return chat_bot.Channel(
+        broadcaster_user_id=row["broadcaster_user_id"],
+        slug=row["slug"],
+        platform=row["platform"],
+        platform_user_id=row["platform_user_id"] or str(row["broadcaster_user_id"]),
+    )
+
+
+def _tell(broadcaster_user_id: int, text: str, *, of_a_clip: bool = False) -> None:
+    """Has the bot write `text` in a watched channel's chat, if the channel
+    has it writing there - and, `of_a_clip`, saying when a clip is made as
+    well. In the background: nothing waits for it. What holds is the
+    channel's settings as they are now."""
+    conn = get_connection()
+    try:
+        row = get_streamer_by_id(conn, broadcaster_user_id)
+        tuned = _tuning(conn, broadcaster_user_id)
+    finally:
+        conn.close()
+    if row is None or not tuned.bot_writes or (of_a_clip and not tuned.bot_tells_clips):
+        return
+    _track_task(_bot().say(_bot_channel(row), text))
+
+
+def _bot_command(conn, message: ChatMessage) -> str | None:
+    """Which of the bot's commands a chat message is (tuning.RECORD, STOP,
+    STATUS): one of its channel's, posted by its streamer or a moderator."""
+    if not message.runs_channel:
+        return None
+    return _tuning(conn, message.broadcaster_user_id).bot_command(message.content)
+
+
+def _record_on_command(row) -> str | None:
+    """Starts recording a channel's stream, as asked in its chat. What is
+    answered: why not, where it isn't - otherwise nothing, as starting it
+    says so itself (_start_stream_recording)."""
+    slug = row["slug"]
+    kept = recording_manager.stream_recording_of(slug)
+    if kept is not None:
+        return chat_bot.recording_already_words(kept.writer.seconds, waiting=not kept.writer.size)
+    try:
+        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"])
+    except _NotStarted as refused:
+        logger.warning("[%s] a recording asked for in chat was not started: %s", slug, refused.words)
+        return chat_bot.NOT_STARTED_WORDS[refused.status_code == 409]
+    logger.info("[%s] stream recording %d started - asked for in chat", slug, recording_id)
+    return None
+
+
+def _stop_on_command(row) -> str | None:
+    """Ends the recording of a channel's stream, as asked in its chat - as
+    the button on the Channels page does. What is answered where there was
+    none to end; ending one says so itself (_end_stream_recording)."""
+    slug = row["slug"]
+    if recording_manager.stream_recording_of(slug) is None:
+        return chat_bot.NOT_RECORDING_WORDS
+    _end_stream_recording(slug, stream_recording.STOPPED)
+    return None
+
+
+def _status_answer(row) -> str:
+    """How things stand for a channel, as the bot answers when asked."""
+    slug, owner = row["slug"], row["broadcaster_user_id"]
+    look = recording_manager.looks().get(slug)
+    clips = None
+    if look is not None and look.live_since is not None:
+        conn = get_connection()
+        try:
+            clips = len(
+                get_moment_times(
+                    conn, owner, look.live_since, datetime.now(timezone.utc), not_for=dashboard_view.IMPORT_REASON
+                )
+            )
+        finally:
+            conn.close()
+    kept = recording_manager.stream_recording_of(slug)
+    return chat_bot.status_words(
+        chat_bot.Status(
+            watching=_flags.get("watching_enabled", True),
+            tracked=bool(row["tracking_enabled"]),
+            clips=clips,
+            recording=kept is not None,
+            seconds=kept.writer.seconds if kept else 0.0,
+            waiting=kept is not None and not kept.writer.size,
+            saving=any(save["channel"] == slug for save in _stream_saves.values()),
+        )
+    )
+
+
+def _carry_out(message: ChatMessage, command: str) -> None:
+    """Does what one of the bot's commands asks: starts or ends the
+    recording of the channel's stream, or says how things stand - answering
+    in chat where the channel has the bot writing there. A message that
+    comes again is not carried out again."""
+    if not _bot_commands.first_time(message.message_id):
+        return
+    conn = get_connection()
+    try:
+        row = get_streamer_by_id(conn, message.broadcaster_user_id)
+    finally:
+        conn.close()
+    if row is None:
+        return
+    logger.info("[%s] %s asked the bot to %s", row["slug"], message.sender or "?", command)
+    if command == tuning.RECORD:
+        answer = _record_on_command(row)
+    elif command == tuning.STOP:
+        answer = _stop_on_command(row)
+    else:
+        answer = _status_answer(row)
+    if answer:
+        _tell(row["broadcaster_user_id"], answer)
 
 
 @asynccontextmanager
@@ -737,6 +910,18 @@ def _tuning(conn, broadcaster_user_id: int) -> tuning.Tuning:
     return tuning.tuned(_tuning_values.get(TUNING_FOR_ALL, {}), own)
 
 
+def _tuning_now(broadcaster_user_id: int) -> tuning.Tuning:
+    """The same, for a caller with no connection of its own: one is opened
+    only where the settings have to be read."""
+    if _tuning_values is not None:
+        return _tuning(None, broadcaster_user_id)
+    conn = get_connection()
+    try:
+        return _tuning(conn, broadcaster_user_id)
+    finally:
+        conn.close()
+
+
 def _own_values(conn, streamer) -> dict[str, tuning.Value]:
     """What a watched channel has of its own that is in force: all of it
     where it goes by its own settings, otherwise only what is a channel's
@@ -821,8 +1006,15 @@ async def _create_clip_background(
             context_before=clip.context_before,
             context_after=clip.context_after,
         )
+        moment = get_moment(conn, moment_id)
     finally:
         conn.close()
+    if moment is not None:
+        _tell(
+            moment["broadcaster_user_id"],
+            chat_bot.clip_words(clip.duration, moment["stream_elapsed_seconds"]),
+            of_a_clip=True,
+        )
     logger.info(
         "[%s] clip saved for moment %d: %s (%.0f s, with %.0f s before it and %.0f s after)",
         channel, moment_id, clip_path, clip.duration, clip.context_before, clip.context_after,
@@ -1171,6 +1363,7 @@ def _end_stream_recording(slug: str, ended_by: str) -> bool:
             delete_stream_recording(conn, kept.recording_id)
     finally:
         conn.close()
+    _tell(kept.broadcaster_user_id, chat_bot.ended_words(ended_by, bool(writer.size), writer.seconds))
     if not writer.size:
         shutil.rmtree(writer.folder, ignore_errors=True)
         logger.info("[%s] stream recording %d ended (%s) before any footage", slug, kept.recording_id, ended_by)
@@ -1230,6 +1423,8 @@ def _start_stream_recording(slug: str, broadcaster_user_id: int) -> int:
         finally:
             conn.close()
         raise _NotStarted(500, "Could not make a place to keep the recording. The server log says why.") from None
+    look = recording_manager.looks().get(slug)
+    _tell(broadcaster_user_id, chat_bot.started_words(None if look is None else look.live_since is not None))
     return recording_id
 
 
@@ -2094,6 +2289,7 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         twitch=_twitch_facts(sum(1 for row in streamers if row["platform"] == platforms.TWITCH)),
         youtube=_youtube_facts(sum(1 for row in streamers if row["platform"] == platforms.YOUTUBE)),
         tiktok=_tiktok_facts(sum(1 for row in streamers if row["platform"] == platforms.TIKTOK)),
+        bot=_bot_facts(streamers),
         **looked_up,
     )
 
@@ -2114,6 +2310,43 @@ def _tiktok_facts(channels: int) -> health.TikTokChat | None:
         waiting=tuple(sorted(reader.waiting)),
         failing=tuple(sorted((slug, why, since) for slug, (why, since) in failing.items())),
         last_heard_at=reader.last_heard_at,
+    )
+
+
+def _bot_account(platform: str) -> health.BotAccount:
+    """As whom the bot writes on Kick or Twitch, as far as the service knows
+    without asking: the account that signed in, and what it let the bot
+    do."""
+    if platform == platforms.TWITCH:
+        if not settings.twitch:
+            return health.BotAccount(platform, set_up=False)
+        tokens, scope = _twitch_token_keeper(), twitch_auth.WRITE_SCOPE
+    else:
+        tokens, scope = _kick_bot_tokens(), kick_auth.WRITE_SCOPE
+    token = tokens.account
+    if token is None:
+        # Why there is none, where a token was asked for and none could be
+        # had: a sign-in that lapsed says so.
+        return health.BotAccount(platform, sign_in=tokens.trouble)
+    return health.BotAccount(platform, login=token.login, may_write=token.may(scope))
+
+
+def _bot_facts(streamers) -> health.ChatBot:
+    """Where the bot in chat stands, for the Health page: the channels it
+    writes in the chat of, as which accounts."""
+    bot = _bot()
+    channels = []
+    for row in streamers:
+        owner = row["broadcaster_user_id"]
+        if not _tuning_now(owner).bot_writes:
+            continue
+        written = bot.written.get(owner) or chat_bot.Written()
+        channels.append(health.BotChannel(row["slug"], row["platform"], written.sent_at, written.trouble))
+    return health.ChatBot(
+        channels=tuple(channels),
+        accounts=(_bot_account(platforms.KICK), _bot_account(platforms.TWITCH)),
+        sign_in_url=KICK_SIGN_IN_PATH,
+        redirect_uri=settings.kick_redirect_uri,
     )
 
 
@@ -2414,9 +2647,10 @@ async def _disk_use_now() -> tuple[tuple[str, int], ...]:
 @app.get("/dashboard/health", response_class=HTMLResponse)
 async def dashboard_health(request: Request):
     """The Health page: whether what the service depends on is there -
-    webhooks arriving, Kick's chat subscriptions, the recorders, room on the
-    disk, the tunnel (see health.py). Its script fetches it again every few
-    seconds and puts what it says now in place of what it said."""
+    webhooks arriving, Kick's chat subscriptions, the bot in chat, the
+    recorders, room on the disk, the tunnel (see health.py). Its script
+    fetches it again every few seconds and puts what it says now in place of
+    what it said."""
     global _served_port, _tunnel_look
     server = request.scope.get("server")
     if server and server[1]:
@@ -2505,12 +2739,30 @@ async def dashboard_settings(request: Request, channel: str | None = None):
                     else None
                 ),
                 "trial_messages": dashboard_view.count_words(TRIAL_MESSAGE_LIMIT, "message"),
+                "bot": _bot_settings_words(row) if row is not None else None,
             }
         )
     finally:
         conn.close()
 
     return templates.TemplateResponse(request, "settings.html", context)
+
+
+def _bot_settings_words(row) -> dict:
+    """What a channel's Settings say of the bot beside its own section: as
+    whom it writes on the channel's platform - and, on Kick, where another
+    account signs in."""
+    platform = row["platform"]
+    account = None if platform in health.NOT_WRITTEN else _bot_account(platform)
+    kick = platform == platforms.KICK
+    return {
+        "words": health.bot_account_words(account, platform),
+        "sign_in": (
+            {"url": KICK_SIGN_IN_PATH, "words": "Sign in another account" if account.login else "Sign one in"}
+            if kick
+            else None
+        ),
+    }
 
 
 # How much of a recording's chat the page is given at a time: from this long
@@ -4095,6 +4347,69 @@ async def set_setting(name: str, enabled: int = 1):
     return {"setting": name, "enabled": value}
 
 
+# Where Kick sends the browser back to once the bot's account has signed in:
+# the redirect URL the Kick app has (see config.DEFAULT_KICK_REDIRECT_URI).
+KICK_SIGNED_IN_PATH = "/bot/kick/signed_in"
+KICK_SIGN_IN_PATH = "/bot/kick/sign_in"
+
+
+@app.get(KICK_SIGN_IN_PATH)
+async def sign_in_kick_bot():
+    """Sends the browser to Kick, for the account the bot is to write in
+    Kick's chat as to sign in (see kick_auth.py). Kick sends it back to
+    KICK_SIGNED_IN_PATH."""
+    now = time.monotonic()
+    for state, started in list(_kick_sign_ins.items()):
+        if started.gone_by(now):
+            del _kick_sign_ins[state]
+    address, sign_in = kick_auth.start_sign_in(settings.kick_client_id, settings.kick_redirect_uri)
+    _kick_sign_ins[sign_in.state] = sign_in
+    logger.info("bot: an account is signing in on Kick")
+    return RedirectResponse(address, status_code=303)
+
+
+@app.get(KICK_SIGNED_IN_PATH, response_class=HTMLResponse)
+async def kick_bot_signed_in(
+    request: Request, code: str = "", state: str = "", error: str = "", error_description: str = ""
+):
+    """Where Kick sends the browser back to once the account has signed in -
+    or has not, which the page says. The tokens Kick hands out for the code
+    are kept, and the bot writes in Kick's chat as that account from then
+    on."""
+    sign_in = _kick_sign_ins.pop(state, None)
+    account = why = None
+    if sign_in is None or sign_in.gone_by(time.monotonic()):
+        why = "This sign-in was not started here, or it took too long. Start it again."
+    elif error:
+        why = f"Kick did not sign the account in ({error_description or error})."
+    elif not code:
+        why = "Kick sent no code back."
+    else:
+        try:
+            token = await kick_auth.finish_sign_in(
+                settings.kick_client_id, settings.kick_client_secret, settings.kick_redirect_uri, sign_in, code
+            )
+        except kick_auth.SignInNeeded as refused:
+            why = str(refused)
+        except httpx.HTTPError as failed:
+            logger.warning("bot: Kick could not be asked to sign the account in", exc_info=True)
+            why = f"Kick could not be asked ({type(failed).__name__}). Try again."
+        else:
+            _kick_bot_tokens().keep(token)
+            account = token.login
+    if account:
+        logger.info("bot: signed in on Kick as %s", account)
+    else:
+        logger.warning("bot: signing in on Kick failed: %s", why)
+    conn = get_connection()
+    try:
+        context = _page_context(conn, "health")
+    finally:
+        conn.close()
+    context.update({"account": account, "why": why, "sign_in_url": KICK_SIGN_IN_PATH})
+    return templates.TemplateResponse(request, "signed_in.html", context, status_code=200 if account else 400)
+
+
 @app.post("/subscriptions/check")
 async def check_subscriptions():
     """Checks Kick's chat subscriptions now rather than at the next round,
@@ -4916,7 +5231,22 @@ async def _take_chats(messages: Sequence[ChatMessage]) -> list[str]:
     However many there are, they are stored in one go: a commit takes a
     tenth of a second on a spinning disk, longer than a busy chat leaves
     between two messages. A platform that delivers chat in bulk hands it
-    over a batch at a time; Kick's webhooks come one message each."""
+    over a batch at a time; Kick's webhooks come one message each.
+
+    The bot's commands among them are carried out once they are stored
+    (_carry_out) - whatever the switches say, as the buttons on the
+    Channels page work whatever they say. Not if they could not be stored:
+    the platform delivers them again."""
+    asked: list[tuple[ChatMessage, str]] = []
+    statuses = await _take_in(messages, asked)
+    for message, command in asked:
+        _carry_out(message, command)
+    return statuses
+
+
+async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessage, str]]) -> list[str]:
+    """_take_chats but for the bot's commands, which are put in `asked`
+    for it to carry out."""
     now = datetime.now(timezone.utc)
     statuses = ["watching disabled"] * len(messages)
     watching = _flags.get("watching_enabled", True)
@@ -4929,6 +5259,8 @@ async def _take_chats(messages: Sequence[ChatMessage]) -> list[str]:
             # For the Health page: that the channel's chat is coming in, kept
             # or not.
             _heard.chat_at[owner] = message.received_at or now
+            if not _shutdown_requested and (command := _bot_command(conn, message)) is not None:
+                asked.append((message, command))
             # The switches are about looking for clips. A channel whose stream
             # is being kept whole has its chat kept with it whatever they say.
             kept_whole = recording_manager.keeps_chat_of(owner)
@@ -5002,6 +5334,9 @@ async def _detect(conn, message: ChatMessage) -> None:
     # Everything from here on is judged by the channel's settings as they
     # stand for this message.
     tuned = _tuning(conn, broadcaster_user_id)
+    if tuned.bot_command(message.content) is not None:
+        # Asks the bot for something (see _carry_out). No reaction either.
+        return
     commanded = False
     if tuned.is_clip_command(message.content):
         # One of the channel's clip commands. It is no reaction, so the

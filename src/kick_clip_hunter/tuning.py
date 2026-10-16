@@ -10,18 +10,19 @@ settings for all channels in everything it was not given a value of its own
 for, and everything nobody set follows the code.
 
 A few settings are a channel's alone (`Setting.per_channel`: the messages
-that ask for a clip). Those are not on offer for all channels, and what a
-channel has of them holds whether or not it goes by its own settings in the
-rest.
+that ask for a clip, and what the bot does in its chat). Those are not on
+offer for all channels, and what a channel has of them holds whether or not
+it goes by its own settings in the rest.
 
 Three things are in this module:
 
 * `Tuning` - everything the service does for a channel that a setting can
   change: the detector's settings, how long a moment stays open, how its
-  clip is cut around it, and which messages in chat ask for a clip
-  outright. `recommended()` is what the constants say, read where they are
-  kept (detector.py, recorder.py, and the moment session's below) at the
-  time it is called;
+  clip is cut around it, which messages in chat ask for a clip outright,
+  and whether the bot writes in the channel's chat and what it is asked
+  there (see chat_bot.py). `recommended()` is what the constants say, read
+  where they are kept (detector.py, recorder.py, and the moment session's
+  below) at the time it is called;
 * `SETTINGS` - the ones on offer: what each is called on the page, what it
   may be, and which fields of a Tuning it sets. One setting can set two:
   the lull that ends a moment is also how soon the next one may fire;
@@ -77,6 +78,12 @@ MOMENT_SESSION_MAX_SECONDS = 60
 # needs far less trailing padding than a fixed-window cut would.
 DYNAMIC_POST_ROLL_SECONDS = 10
 
+# The commands the bot takes in a channel's chat (see chat_bot.py): start a
+# recording of the stream, stop it, say how things stand.
+RECORD = "record"
+STOP = "stop"
+STATUS = "status"
+
 
 @dataclass(frozen=True)
 class Tuning:
@@ -100,12 +107,36 @@ class Tuning:
     # posts one - or anyone at all, with the switch on. None to begin with.
     clip_commands: frozenset[str] = frozenset()
     clip_command_from_anyone: bool = False
+    # The bot in chat: whether it writes in the channel's chat at all, and
+    # whether it says there when a clip was made - and the messages (whole,
+    # lowercased) the channel's streamer or one of its moderators asks it
+    # with: to start a recording of the stream, to stop it, to say how
+    # things stand. Off, and none, to begin with.
+    bot_writes: bool = False
+    bot_tells_clips: bool = False
+    record_commands: frozenset[str] = frozenset()
+    stop_commands: frozenset[str] = frozenset()
+    status_commands: frozenset[str] = frozenset()
 
     def is_clip_command(self, content: str) -> bool:
         """Whether a chat message is one of the channel's clip commands.
         Compared whole, like a message to ignore: a command named in the
         middle of a sentence is somebody talking about it."""
         return content.strip().lower() in self.clip_commands
+
+    def bot_command(self, content: str) -> str | None:
+        """Which of the bot's commands a chat message is (RECORD, STOP,
+        STATUS), if it is one of the channel's - compared whole, like a clip
+        command. A message is in one list at the most (see `check`)."""
+        said = content.strip().lower()
+        for command, messages in (
+            (RECORD, self.record_commands),
+            (STOP, self.stop_commands),
+            (STATUS, self.status_commands),
+        ):
+            if said in messages:
+                return command
+        return None
 
     def framing(self) -> dict[str, float]:
         """How a clip is cut for the channel, as recorder.extract_clip takes it."""
@@ -158,12 +189,13 @@ PHRASE_MAX_LENGTH = 100
 LIST_MAX_ITEMS = 50
 
 # The sections of the page, in the order they come: key, heading, and what is
-# said under it. The first is on a channel's page only (see
+# said under it. The first two are on a channel's page only (see
 # Setting.per_channel).
 MOMENTS = "moments"
 SIGNALS = "signals"
 CLIPS = "clips"
 COMMANDS = "commands"
+BOT = "bot"
 GROUPS = (
     (
         COMMANDS,
@@ -171,6 +203,13 @@ GROUPS = (
         "A message in chat that makes a moment there and then, however quiet chat is - for a channel too small "
         "for its chat to set one off. The clip is cut like any other, reaching back from the command. Each "
         "channel has its own, whether or not it goes by its own settings in the rest.",
+    ),
+    (
+        BOT,
+        "The bot in chat",
+        "The bot can write in the channel's chat, and listens there to the commands below - from the channel's "
+        "streamer and its moderators, nobody else. Each channel has its own, whether or not it goes by its own "
+        "settings in the rest.",
     ),
     (
         MOMENTS,
@@ -438,6 +477,46 @@ SETTINGS: tuple[Setting, ...] = (
         ("clip_command_from_anyone",),
         per_channel=True,
     ),
+    Setting(
+        "bot_writes", BOT, SWITCH,
+        "Write in chat",
+        "The bot says in chat when a recording of the stream starts and when it ends, and answers the commands "
+        "below. Off, it writes nothing there, and the commands are carried out without an answer.",
+        ("bot_writes",),
+        per_channel=True,
+    ),
+    Setting(
+        "bot_tells_clips", BOT, SWITCH,
+        "Say when a clip is made",
+        "Once a clip's file is saved, the bot says so in chat, and how far into the stream the clip is. Only while "
+        "it writes in chat.",
+        ("bot_tells_clips",),
+        per_channel=True,
+    ),
+    Setting(
+        "record_commands", BOT, PHRASES,
+        "Messages that start a recording",
+        "Whole messages, with commas between them: !record start, for one. Any of them starts a recording of the "
+        "whole stream, as the button on the Channels page does - whether or not the channel is tracked.",
+        ("record_commands",),
+        per_channel=True,
+    ),
+    Setting(
+        "stop_commands", BOT, PHRASES,
+        "Messages that stop a recording",
+        "The same, !record stop for one. The recording ends and is saved; a channel that is recorded always is "
+        "recorded again from its next stream.",
+        ("stop_commands",),
+        per_channel=True,
+    ),
+    Setting(
+        "status_commands", BOT, PHRASES,
+        "Messages that ask how things stand",
+        "The same, !status for one. The bot answers whether it looks for clips and how many it made of this "
+        "stream, and whether the stream is being recorded and for how long.",
+        ("status_commands",),
+        per_channel=True,
+    ),
 )
 
 BY_NAME: dict[str, Setting] = {setting.name: setting for setting in SETTINGS}
@@ -453,6 +532,9 @@ RULES = (
     # nothing.
     ("lull_seconds", "longest_seconds", True),
 )
+# The lists of messages that are commands. A message can be one command at
+# the most: in two lists, it would be carried out as whichever came first.
+COMMAND_LISTS = ("clip_commands", "record_commands", "stop_commands", "status_commands")
 
 
 # -- values ------------------------------------------------------------------
@@ -588,6 +670,13 @@ def check(every: Mapping[str, Value]) -> None:
             raise ValueError(f'"{high}" has to be more than "{low}".')
         if every[lower] > every[upper]:
             raise ValueError(f'"{low}" cannot be more than "{high}".')
+    for index, first in enumerate(COMMAND_LISTS):
+        for second in COMMAND_LISTS[index + 1 :]:
+            both = sorted(set(every[first]) & set(every[second]))
+            if both:
+                raise ValueError(
+                    f'{both[0]!r} cannot be in both "{BY_NAME[first].label}" and "{BY_NAME[second].label}".'
+                )
 
 
 def differing(given: Mapping[str, Value], rest: Mapping[str, Value]) -> dict[str, Value]:
@@ -676,6 +765,7 @@ def form(
         advanced = [field for field in fields if field["advanced"]]
         sections.append(
             {
+                "key": key,
                 "title": title,
                 "lead": lead,
                 "fields": [field for field in fields if not field["advanced"]],

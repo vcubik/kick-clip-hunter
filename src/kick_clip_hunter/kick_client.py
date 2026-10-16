@@ -4,6 +4,11 @@ Uses an App Access Token (OAuth2 client credentials grant) rather than a
 user-authorized token. This is deliberate: app tokens can subscribe to
 webhook events for *any* broadcaster_user_id without that streamer having
 to authorize our app, which is exactly what a watchlist bot needs.
+
+The one thing an app token can't do is write in a channel's chat as
+someone: that takes the user access token of the account the bot writes as
+(see kick_auth.py), which is what `get_user` and `send_chat_message` are
+handed.
 """
 
 import time
@@ -91,3 +96,29 @@ async def get_site_channel(slug: str) -> dict:
         response = await client.get(f"{SITE_API_BASE}/channels/{slug.lower()}", headers={"Accept": "application/json"})
         response.raise_for_status()
         return response.json()
+
+
+async def get_user(token: str) -> dict:
+    """The account a user access token is of: its id (`user_id`) and its
+    name. Raises ValueError if Kick names none."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{API_BASE}/users", headers={"Authorization": f"Bearer {token}"})
+        response.raise_for_status()
+        users = response.json().get("data") or []
+    if not users:
+        raise ValueError("Kick did not say whose account the token is")
+    return users[0]
+
+
+async def send_chat_message(broadcaster_user_id: int, content: str, token: str) -> dict:
+    """Writes a message in a channel's chat as the account whose user access
+    token it is (scope chat:write). Returns what Kick answered of it:
+    whether it was sent (`is_sent`) and its id."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{API_BASE}/chat",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"broadcaster_user_id": broadcaster_user_id, "content": content, "type": "user"},
+        )
+        response.raise_for_status()
+        return response.json().get("data") or {}

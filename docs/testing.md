@@ -79,7 +79,8 @@ service's own code:
 |---|---|
 | `chat.ChatSim` | A chat room on a simulated clock: scripted messages go through the same classification calls the webhook handler makes - under a channel's own detector settings, if it is given some. |
 | `chat.StoredStream` | The same script written to the database instead, as the service leaves a stream's chat behind - for replaying it. |
-| `kick_api.FakeKickApi` | Kick's public API (token, channel lookup, subscriptions, webhook public key) and 7TV's emote lookup, as an `httpx` transport - the real client code runs unmodified against it. |
+| `kick_api.FakeKickApi` | Kick's public API (token, channel lookup, subscriptions, webhook public key) and 7TV's emote lookup, as an `httpx` transport - the real client code runs unmodified against it. Also the account the bot writes in Kick's chat as: Kick's consent page (`consent`, called with the address the service sent the browser to), its token endpoint checking the PKCE verifier against the challenge, who a user token is of, and the chat a message is written in. |
+| `bot.kick_bot_signed_in` / `twitch_signed_in` | An account signed in for the bot, its tokens kept where the service finds them - as the dashboard's sign-in leaves Kick's, as `scripts/twitch_login.py` leaves Twitch's (or as one signed in before the bot could write). |
 | `webhook.WebhookSigner` | Kick's signing key: produces deliveries signed exactly the way Kick signs them (RSA-SHA256 over id, timestamp and body). |
 | `hls.FakeHlsServer` | A live HLS stream over real HTTP, driven by the test: how much has been broadcast, where it has a discontinuity or an ad, which requests fail. |
 | `tiktok.FakeTikTok` | TikTok's own web API (`api-live/user/room`): a channel, whether it is live and where its stream is, as an `httpx` transport (the `tiktok` fixture). |
@@ -282,6 +283,27 @@ by a page? Is trouble what the page says it is and nothing less rare - silence o
 is live and the service has been up to hear it, a quiet chat among talking ones not at all - and is
 the count beside Health in the bar of every page the one the page itself comes to?
 
+**12a. The bot in chat** - `unit/test_chat_bot.py`, `unit/test_kick_auth.py`,
+`unit/test_account_tokens.py`, `integration/test_api_bot.py`, and in `unit/test_tuning.py`,
+`unit/test_health.py`, `unit/test_twitch_auth.py` and `unit/test_replay_chat.py`
+Is the bot off for every channel until its own settings switch it on - writing nothing, taking no
+command - and are those settings each channel's alone, never two commands in one message? Is a
+command the whole message, from the channel's streamer or a moderator only, carried out whatever
+the tracking and watching switches say, once however often the platform delivers it, never during
+a shutdown - and kept from the detector, live and in a replay? Does it start and stop a recording
+as the buttons do, and answer how things stand: clips of the stream that is on, the recording and
+how long it runs? Is what it says written in the channel's chat only where the channel has it
+writing there - about recordings whoever started or ended them, about a clip where that is asked
+for too - the same words not twice in a row, and never past the length of a chat? Does it write on
+Kick as the account signed in for it and on Twitch as the account chat is read as, renewing a token
+the platform turned down once, not asking an account that did not let it write, and saying in words
+what a channel or a platform refused; does it write nothing on YouTube and still carry the commands
+out? Does the Kick account sign in through Kick's OAuth flow with PKCE - a challenge only the
+service's secret answers, a sign-in that comes back once, in time and only if it was started here,
+one turned down kept as nothing - and is a newer sign-in, Kick's or Twitch's, the account that is
+gone on with? Do the Health page and a channel's Settings say as whom it writes and where it
+cannot, and is a channel it cannot write in trouble until a message goes out there?
+
 **13. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
 `unit/test_scripts.py`, `unit/test_replay_chat.py`
 Does a restart heal the chat subscriptions Kick silently drops - re-subscribing exactly the missing
@@ -388,6 +410,7 @@ only test the fake:
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. That the speech model still hands over words with their times, and what a real transcript looks like as subtitles in an editor, is step 15 below. |
 | `static/dashboard.js` - the transcript beside a clip: its tab, asking for it and following it while it is made, marking the line being said, a line's time playing the clip, saving what is put right in a line | As for the rest of the script: the tab the service renders and every request it makes are tested, the script is checked by hand (step 15 below). |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
+| Kick's actual consent page and chat API, and Twitch's chat API: the bot's sign-in on Kick, a message written in a Kick or Twitch chat | `FakeKickApi` and `FakeTwitchApi` encode what Kick and Twitch document (Kick's OAuth 2.1 with PKCE, `POST /public/v1/chat`; Helix's `POST chat/messages`); a channel's own rules of who may chat exist only there. Step 17 below is what notices a change. |
 | Twitch's actual API, chat connection and playlists: Helix, the device flow of `scripts/twitch_login.py`, the EventSub WebSocket, streamlink finding a stream and its VOD | `FakeTwitchApi`, `FakeEventSub` and `FakeHlsServer` encode what Twitch documents and what was observed (a live playlist's tags, a VOD in fragmented MP4); streamlink itself is never run - a test that would reach it fails. Step 14 below is what notices a change. |
 | YouTube's actual web API, chat and playlists: InnerTube's answers, a live chat's page and its looks, streamlink finding a stream | `FakeYouTube` and `FakeHlsServer` encode what was observed of them (October 2026: the shapes of `resolve_url`, `browse`, `player`, the chat page's settings and data, `get_live_chat`'s actions; a live playlist with one program date-time at the top); InnerTube is not published, so a change is only noticed live. streamlink itself is never run. Step 16 below is what notices a change. |
 | TikTok's actual web API, its FLV streams and its chat: `api-live/user/room`, a live FLV download, `tiktok_chat.tiktoklive_chat` (TikTokLive connecting through the Euler Stream sign server) | `FakeTikTok` and `FakeFlvServer` encode what was observed (October 2026: the room answer's shape and its qualities, FLV with `start_time` in onMetaData and a SEI unit after every keyframe's picture); the connection to a room's chat is stood in for by `FakeTikTokChats`, while the comments it hands over are TikTokLive's own CommentEvent. Step 17 below is what notices a change. |
@@ -588,6 +611,25 @@ Run this on a live channel after changing any of the above, or the code right ne
    with its chat replayed beside it and lined up with the picture after the calibration of step 6;
    ffprobe finds the file whole (`ffmpeg -v error -i <file> -f null -` says nothing). Nothing of
    its chat is a moment, and nothing is beside "Health" in the bar.
+18. **Let the bot write in chat.** In the Kick app's settings, set the redirect URL to
+   `http://localhost:8000/bot/kick/signed_in` and allow the scopes `chat:write` and `user:read`.
+   On a Kick channel's Settings page, under "The bot in chat", follow "Sign one in" - in a private
+   window if the browser is signed in to Kick as someone else - and sign in the account the bot is
+   to write as on Kick's own page: the browser comes back to a page that says "Signed in on Kick as
+   <account>", and the log says `bot: signed in on Kick as <account>`. Switch "Write in chat" on
+   for a channel that is live, put `!record start`, `!record stop` and `!status` in the three
+   fields of messages, and save. In that channel's chat, as its streamer or a moderator, write
+   `!status`: within a couple of seconds the bot answers under the account's name, and the log
+   says `the bot wrote in chat`. `!record start` starts a recording - the Channels page counts it
+   up - and the bot says so; `!record stop` stops it and says how much of the stream it kept.
+   Written from a viewer's account, the same do nothing; with "Write in chat" off, they are
+   carried out without an answer. The Health page's Chat bot part lists the channel and when the
+   bot last wrote there, nothing beside "Health" in the bar. With "Say when a clip is made" on,
+   the channel's next clip is said in its chat about a minute and a half after the reaction, with
+   how far into the stream it was. On Twitch: run `scripts/twitch_login.py` again - it asks to
+   write in chat as well now - and do the same on a Twitch channel; the bot answers as the
+   account chat is read as. On a YouTube channel, `!record start` starts a recording and nothing
+   is written.
 
 ## Checking a detector change against a real stream
 

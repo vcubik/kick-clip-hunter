@@ -1,11 +1,15 @@
-"""CLI that signs in the Twitch account the service reads chat as.
+"""CLI that signs in the Twitch account the service reads chat as - and
+the bot writes in Twitch's chat as, where a channel has it write there.
 
 Twitch lets an application read a channel's chat only on behalf of an
-account (see twitch_auth.py). Run this once, and again whenever the Health
-page says the sign-in has lapsed: it shows a code to confirm on twitch.tv
-and keeps the account's tokens in data/twitch_token.json, where the running
+account, and write in it only as one (see twitch_auth.py). Run this once,
+and again whenever the Health page says the sign-in has lapsed or that the
+account did not let the bot write - one signed in before the bot could
+write was asked to read alone. It shows a code to confirm on twitch.tv and
+keeps the account's tokens in data/twitch_token.json, where the running
 service picks them up. Any Twitch account will do - one kept for this is
-best, since it is listed among the viewers of every chat it reads.
+best, since it is listed among the viewers of every chat it reads, and what
+the bot writes is written under its name.
 
 Usage: python scripts/twitch_login.py
 """
@@ -33,7 +37,7 @@ async def main() -> None:
     except twitch_auth.SignInNeeded as refused:
         raise SystemExit(str(refused)) from None
     twitch_auth.save(token)
-    print(f"Signed in as {token.login}. The service reads Twitch chat as this account.")
+    print(f"Signed in as {token.login}. The service reads Twitch chat as this account, and the bot writes in it as it.")
 
 
 if __name__ == "__main__":

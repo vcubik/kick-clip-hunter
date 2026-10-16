@@ -1,5 +1,6 @@
-"""The Twitch account the service reads chat as: signing it in with the
-device flow, keeping its tokens, renewing them before they run out.
+"""The Twitch account the service reads chat as, and the bot writes in it
+as: signing it in with the device flow, keeping its tokens, renewing them
+before they run out.
 
 Everything goes through the real code against `FakeTwitchApi`; waiting for a
 code to be confirmed is handed a sleep that does not sleep.
@@ -8,6 +9,7 @@ code to be confirmed is handed a sleep that does not sleep.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -16,7 +18,7 @@ import pytest
 import twitch_login
 from kick_clip_hunter import twitch_auth
 from kick_clip_hunter.twitch_auth import AccountToken, SignInNeeded
-from tests.support.twitch_api import FakeAccount
+from tests.support.twitch_api import SCOPES, FakeAccount
 
 pytestmark = pytest.mark.anyio
 
@@ -34,10 +36,12 @@ def no_wait():
     return sleep, waits
 
 
-def account_token(twitch_api, account: FakeAccount | None = None, runs_out_in: float = 3600) -> AccountToken:
+def account_token(
+    twitch_api, account: FakeAccount | None = None, runs_out_in: float = 3600, scopes: tuple[str, ...] = SCOPES
+) -> AccountToken:
     """A token the fake Twitch takes, as the service would have it kept."""
     account = account or FakeAccount()
-    tokens = twitch_api.tokens_for(account)
+    tokens = twitch_api.tokens_for(account, scopes)
     return AccountToken(
         access_token=tokens["access_token"],
         refresh_token=tokens["refresh_token"],
@@ -74,11 +78,23 @@ class TestKeepingTheTokens:
 
 
 class TestSigningIn:
-    async def test_the_flow_starts_with_the_applications_id_asking_to_read_chat(self, twitch_api):
+    async def test_the_flow_starts_with_the_applications_id_asking_to_read_and_write_chat(self, twitch_api):
         started = await twitch_auth.start_sign_in(CLIENT_ID)
 
         assert started["user_code"] == "ABCDEFGH"
-        assert twitch_api.calls("POST", "/oauth2/device") == [{"client_id": CLIENT_ID, "scopes": "user:read:chat"}]
+        assert twitch_api.calls("POST", "/oauth2/device") == [
+            {"client_id": CLIENT_ID, "scopes": "user:read:chat user:write:chat"}
+        ]
+
+    async def test_what_the_account_let_the_service_do_is_kept_with_it(self, twitch_api):
+        twitch_api.sign_in_will_happen()
+        started = await twitch_auth.start_sign_in(CLIENT_ID)
+
+        token = await twitch_auth.finish_sign_in(CLIENT_ID, SECRET, started, sleep=no_wait()[0])
+
+        assert token.scopes == ("user:read:chat", "user:write:chat")
+        assert token.may(twitch_auth.WRITE_SCOPE) is True
+        assert twitch_auth.load() is None  # keeping it is the script's
 
     async def test_it_waits_for_the_code_to_be_confirmed_and_learns_whose_account_it_is(self, twitch_api):
         twitch_api.sign_in_will_happen(FakeAccount("someone", "4242"), after_polls=2)
@@ -144,6 +160,17 @@ class TestRenewing:
         assert (renewed.user_id, renewed.login) == (token.user_id, token.login)
         with pytest.raises(SignInNeeded, match="lapsed"):
             await twitch_auth.renew(token, CLIENT_ID, SECRET)
+
+    async def test_what_twitch_says_the_renewed_token_may_do_is_kept(self, twitch_api):
+        # An account signed in before the bot could write: what it let the
+        # service do was not kept with it, and is learnt at its next renewal.
+        token = dataclasses.replace(account_token(twitch_api, scopes=("user:read:chat",)), scopes=None)
+        assert token.may(twitch_auth.WRITE_SCOPE) is None
+
+        renewed = await twitch_auth.renew(token, CLIENT_ID, SECRET)
+
+        assert renewed.scopes == ("user:read:chat",)
+        assert renewed.may(twitch_auth.WRITE_SCOPE) is False
 
     async def test_a_token_twitch_no_longer_takes_is_found_out_by_validating_it(self, twitch_api):
         with pytest.raises(SignInNeeded):
@@ -211,6 +238,38 @@ class TestTokenKeeper:
         assert await keeper.token() == token
         assert keeper.trouble is None
 
+    async def test_a_new_sign_in_takes_the_place_of_the_account_in_use(self, twitch_api):
+        # The script signs an account in while the service runs on another:
+        # the next token is the new account's, and renewing it later keeps
+        # the new one - not the old one written back over it.
+        old = account_token(twitch_api, FakeAccount("old_reader", "1"))
+        twitch_auth.save(old)
+        keeper = twitch_auth.TokenKeeper(CLIENT_ID, SECRET)
+        assert await keeper.token() == old
+
+        new = account_token(twitch_api, FakeAccount("new_reader", "2"), runs_out_in=60)
+        twitch_auth.save(new)
+        renewed = await keeper.token()
+
+        assert (renewed.login, keeper.account.login, twitch_auth.load().login) == ("new_reader",) * 3
+
+    async def test_a_sign_in_that_lapsed_is_not_tried_again_until_another_is_made(self, twitch_api):
+        twitch_auth.save(account_token(twitch_api, runs_out_in=60))
+        twitch_api.refresh_tokens.clear()
+        keeper = twitch_auth.TokenKeeper(CLIENT_ID, SECRET)
+        with pytest.raises(SignInNeeded):
+            await keeper.token()
+        asked = len(twitch_api.calls("POST", "/oauth2/token"))
+
+        with pytest.raises(SignInNeeded, match="lapsed"):
+            await keeper.token()
+
+        assert len(twitch_api.calls("POST", "/oauth2/token")) == asked
+        assert keeper.account is None
+        signed_in_again = account_token(twitch_api)
+        twitch_auth.save(signed_in_again)
+        assert await keeper.token() == signed_in_again
+
     async def test_two_asking_at_once_renew_it_once(self, twitch_api):
         twitch_auth.save(account_token(twitch_api, runs_out_in=60))
         keeper = twitch_auth.TokenKeeper(CLIENT_ID, SECRET)
@@ -231,6 +290,7 @@ class TestLoginScript:
         assert "confirm the code ABCDEFGH" in output
         assert "Signed in as someone." in output
         assert twitch_auth.load().login == "someone"
+        assert twitch_auth.load().may(twitch_auth.WRITE_SCOPE) is True
 
     async def test_without_twitch_set_up_it_says_what_is_missing(self, kick_api):
         with pytest.raises(SystemExit, match="TWITCH_CLIENT_ID"):

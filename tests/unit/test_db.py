@@ -342,6 +342,21 @@ class TestStreamers:
         assert (row["broadcaster_user_id"], row["tracking_enabled"]) == (42, 1)
         assert db.get_streamer_by_slug(conn, "nobody") is None
 
+    def test_lookup_by_id_says_the_name_it_is_on_the_watchlist_under(self, conn):
+        db.add_streamer(conn, 42, "SomeChannel")
+        twitch = db.add_platform_streamer(conn, "twitch", "101", "someone@twitch")
+
+        row = db.get_streamer_by_id(conn, 42)
+
+        assert (row["slug"], row["platform"], row["platform_user_id"], row["tracking_enabled"]) == (
+            "SomeChannel",
+            "kick",
+            "42",
+            1,
+        )
+        assert db.get_streamer_by_id(conn, twitch)["slug"] == "someone@twitch"
+        assert db.get_streamer_by_id(conn, 999) is None
+
     def test_a_new_channel_is_tracked(self, conn):
         db.add_streamer(conn, 1, "some_channel")
 

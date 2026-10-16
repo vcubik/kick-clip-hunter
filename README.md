@@ -78,13 +78,21 @@ YouTube stream
   most used emotes, what was said and who was addressed most. A chatter can be looked up, with
   everything they wrote and what there is to say of them, and any message read in the chat
   around it.
+- **Talks in chat, where it is asked to.** A channel can have the bot write in its chat - when
+  a recording of its stream starts and ends, and, if wanted, when a clip of it was made - and
+  take commands there from its streamer and moderators: start a recording, stop it, say how
+  things stand (whether it looks for clips and how many it made of the stream, whether the
+  stream is being recorded and for how long). The commands are whatever messages the channel's
+  settings say, and nothing of it happens on a channel until its settings switch it on. It
+  writes on Kick as an account signed in for it from the dashboard, on Twitch as the account
+  chat is read as; on YouTube its commands work, but it cannot answer.
 - **Says when something it depends on is gone.** Chat stops arriving the same way whether a
   stream is over, Kick has dropped its chat subscriptions or the tunnel is down. The Health page
   tells them apart: when the last webhook arrived, what the last check of the subscriptions found
   and when Kick was found to have dropped some, how Twitch's chat connection stands and as which
-  account it reads, whose YouTube and TikTok chat comes in, what each recorder is doing, how much
-  room the disk has, where the tunnel stands. Every page says beside its name when one of them
-  needs a look.
+  account it reads, whose YouTube and TikTok chat comes in, as whom the bot writes and where it
+  cannot, what each recorder is doing, how much room the disk has, where the tunnel stands. Every
+  page says beside its name when one of them needs a look.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -128,7 +136,15 @@ run on Windows; the test suite also runs on Linux.
    PYTHONPATH=src python scripts/twitch_login.py
    ```
    Nothing has to reach the service from outside for Twitch: its chat comes over a connection the
-   service opens itself.
+   service opens itself. The same account is what the bot writes in Twitch's chat as, which the
+   sign-in asks it to allow; one signed in before the bot could write has to sign in again for it to.
+7. Optional, for the bot to write in Kick's chat: in the Kick app, set the redirect URL to
+   `http://localhost:8000/bot/kick/signed_in` (or put another host and port in `.env` as
+   `KICK_REDIRECT_URI`, keeping the path) and allow it the scopes `chat:write` (sending chat
+   messages) and `user:read` (reading who the account is). Then, with the service running, sign the account the
+   bot is to write as in from the dashboard - "Sign one in" beside a Kick channel's bot settings,
+   or on the Health page - in a browser on the same machine (a private window, if it is signed in
+   to Kick as someone else). Kick shows its own consent page; the service never sees a password.
 
 YouTube needs nothing set up: its channels are looked up, and their chat read, the way the site's
 own pages do it, as a visitor who is not signed in.
@@ -160,7 +176,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 | Script | What it does |
 |---|---|
 | `refresh_emotes.py <channel>` | Re-fetch a watched channel's emotes - 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's: what the detector listens for and the pictures chat is drawn with. (A YouTube channel has none: its emoji come with every message.) |
-| `twitch_login.py` | Sign in the Twitch account the service reads chat as - once, and again if the Health page says the sign-in has lapsed. |
+| `twitch_login.py` | Sign in the Twitch account the service reads chat as, and the bot writes in it as - once, and again if the Health page says the sign-in has lapsed or the account has not let the bot write. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. The Settings page does the same with the values in its form. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |
@@ -176,7 +192,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-About 3600 tests cover the pipeline from a signed webhook, or a Twitch or YouTube chat message,
+About 3800 tests cover the pipeline from a signed webhook, or a Twitch or YouTube chat message,
 to a clip on the dashboard. They need no Kick or Twitch credentials, no network and none of the ML
 models, and CI runs them on Windows and Linux on every push. [docs/testing.md](docs/testing.md) describes how the suite is organised, when to run
 what, and the short manual checklist for the parts that only exist against the real Kick.
@@ -195,6 +211,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `stream_recording.py` | A stream kept whole: what is written while it is recorded, how that becomes one video file, and how a second of the file is tied back to when it was on air - which is what places chat against it. |
 | `recording_moments.py` | Moments looked for in a recorded stream afterwards: which chat to replay, where in the recording's file a replayed moment's clip lies, and which of them are moments already. |
 | `kick_client.py`, `kick_chat.py`, `seventv_client.py`, `webhook_security.py` | Kick's public API, its webhook's chat message, 7TV's emote API, webhook signature verification. |
+| `chat_bot.py`, `kick_auth.py`, `account_tokens.py` | The bot in chat: what it says and how it writes on each platform; the Kick account it writes as, signed in with Kick's OAuth 2.1 and PKCE; the tokens of any account the service acts as, kept and renewed. |
 | `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
 | `youtube_client.py`, `youtube_chat.py`, `youtube_stream.py`, `streamlink_support.py` | YouTube: the site's own API - who a channel is, whether it is live, its chat; the chat of a live channel, looked at every few seconds; where a live stream is (through streamlink, imported once for Twitch and YouTube). |
 | `tiktok_client.py`, `tiktok_stream.py`, `tiktok_chat.py`, `flv.py` | TikTok: the site's own API - who a channel is, whether it is live, where its stream is; the chat of a channel whose stream is recorded, through TikTokLive; an FLV stream read as it arrives and cut into pieces the recorder keeps as MPEG-TS segments. |

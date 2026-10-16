@@ -406,6 +406,16 @@ class TestReplay:
         assert replay.replay(messages, keywords, tuning.recommended()) != []
         assert deaf == []
 
+    @pytest.mark.parametrize("commands", ["record_commands", "stop_commands", "status_commands"])
+    def test_so_is_one_of_the_bots(self, stream, commands):
+        typical_evening(stream)
+        messages, keywords = load()
+        laughs = {message.content.lower() for message in messages if detector.classify_message(message.content)[0]}
+
+        deaf = replay.replay(messages, keywords, replace(tuning.recommended(), **{commands: frozenset(laughs)}))
+
+        assert deaf == []
+
     def test_replaying_twice_gives_the_same_answer(self, stream):
         # Each replay starts from a clean detector, not the previous one's state.
         typical_evening(stream)

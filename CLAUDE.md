@@ -9,7 +9,10 @@ viral/funny moments from chat activity (message-rate spikes, emote/keyword frequ
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
 whole stream can also be recorded on request, with its chat - and a TikTok channel is
-watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). See
+watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). A bot
+can write in a channel's chat - when a recording starts or ends, when a clip was made - and
+take commands there from its streamer and moderators (start or stop a recording, say how
+things stand); it is off for every channel until that channel's settings switch it on. See
 [README.md](README.md) for the roadmap.
 
 ## Current status
@@ -43,7 +46,18 @@ set from the dashboard's Settings page (see `tuning.py` below).
   `PYTHONPATH=src python scripts/twitch_login.py` - shows a code to confirm on
   twitch.tv/activate (Twitch's device flow) and keeps the tokens in
   `data/twitch_token.json`, where the running service picks them up. See
-  `twitch_auth.py` below for why an account is needed at all
+  `twitch_auth.py` below for why an account is needed at all. The bot writes in Twitch's
+  chat as the same account, which the sign-in asks for (`user:write:chat`) - one signed in
+  before the bot could write reads as it did, and has to sign in again for the bot to write
+- For the bot to write in Kick's chat (see `chat_bot.py` below), an account signs in for it
+  from the dashboard - "Sign one in" beside a Kick channel's bot settings, or the Health
+  page's Chat bot part - through Kick's OAuth 2.1 flow with PKCE (`kick_auth.py`); the
+  tokens are kept in `data/kick_bot_token.json`. The Kick app has to have the scopes
+  `chat:write` and `user:read`, and as its redirect URL exactly
+  `http://localhost:8000/bot/kick/signed_in` - or what `KICK_REDIRECT_URI` in `.env` says,
+  whose path stays `/bot/kick/signed_in`. Kick sends the browser back there, so it has to be
+  a browser on the machine the service runs on (a private window, to sign in another
+  account than the one the browser is signed in to Kick as)
 - YouTube needs nothing set up: a channel is looked up, and its chat read while it is
   live, through YouTube's own web API (InnerTube), as a visitor who is not signed in -
   see `youtube_client.py` below for why not the official API
@@ -82,10 +96,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
     YouTube channel's read by it while the channel is live; a YouTube channel has no emote
     set anywhere (7TV, BetterTTV and FrankerFaceZ know none). A TikTok channel is added
     with its tracking off for good - it is only ever recorded - and its chat read while it is
+    recorded
   - `refresh_emotes.py <channel>` — re-fetch and re-classify an already-watched channel's
     emotes (keywords and pictures: 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's)
     and its subscriber badges, without talking to Kick's subscription API at all
-  - `twitch_login.py` — one-time sign-in of the Twitch account chat is read as (see above)
+  - `twitch_login.py` — one-time sign-in of the Twitch account chat is read as, and the
+    bot writes in Twitch's chat as (see above)
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
   - `create_clip.py <slug>` — manually publish an official Kick clip for a channel's
@@ -183,12 +199,16 @@ set from the dashboard's Settings page (see `tuning.py` below).
   its "Own settings" switch is on. Each setting has a button that puts back what it would
   be if left alone (what is recommended, or for a channel what all channels have), the form
   is saved as a whole, and "Try on stored chat" replays a channel's newest chat under the
-  saved settings and under the form's, without saving anything. `GET /dashboard/health` says
+  saved settings and under the form's, without saving anything. A channel's page begins with
+  what is its own whatever it goes by: its clips on command, and "The bot in chat" - whether
+  the bot writes in its chat, and the messages that ask it for something - with a sentence on
+  as whom the bot writes on the channel's platform. `GET /dashboard/health` says
   whether what the service depends on is there (see `health.py` below): when the last webhook
   arrived and when each channel's chat last spoke, what the last check of Kick's chat
   subscriptions found - with a button that checks now, and the list of the times Kick was found to
-  have dropped some - what each recorder is doing, how much room the disk has and what takes it,
-  and where the tunnel stands. Each part says it in a sentence, in bold when it is trouble, and
+  have dropped some - as whom the bot writes in which channels' chat and whether it can (with
+  the button that signs its Kick account in), what each recorder is doing, how much room the
+  disk has and what takes it, and where the tunnel stands. Each part says it in a sentence, in bold when it is trouble, and
   how many of them are trouble stands beside "Health" in the bar of every page. Its script fetches
   the page again every few seconds and swaps in what each part says now. No page reloads on its own; the
   queue announces how many new moments/clips have arrived since the page was loaded
@@ -232,6 +252,10 @@ Watchlist (streamers, each on its platform - see platforms.py)
        stored back on the moment
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
+    -> the bot (chat_bot), where a channel has it: a command in its chat starts or stops
+       that recording or asks how things stand, and what it says goes back into the
+       chat - on Kick through the public API as an account signed in for it, on Twitch
+       through Helix as the account chat is read as
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
        watchlist and moments
 ```
@@ -268,7 +292,27 @@ Module map (`src/kick_clip_hunter/`):
   `twitch_chat.chat_message` of a Twitch event, `youtube_chat.chat_message` of a YouTube
   chat item; what a chatter typed that would read as a token is kept so that it does not
   (`typed`)
-- `kick_client.py` — app access token + channel lookup + event subscription
+- `kick_client.py` — app access token + channel lookup + event subscription; and, with
+  the user access token of the account the bot writes as, who that account is
+  (`get_user`) and a message written in a channel's chat (`send_chat_message`,
+  `POST /public/v1/chat`, as type "user": the bot writes in other channels' chat as an
+  ordinary account - Kick's type "bot" writes only in the token's own channel)
+- `kick_auth.py` — the Kick account the bot writes in chat as. Kick's chat is read with no
+  account at all, but written only as one, with a user access token (scope `chat:write`;
+  `user:read` says whose it is). Signed in from the dashboard with Kick's OAuth 2.1 flow
+  with PKCE: `start_sign_in` is where the browser is sent (a challenge of a secret only the
+  service knows, a state that the sign-in comes back with, and the redirect URL - with a
+  sacrificial `redirect=127.0.0.1` before it where it is on 127.0.0.1, which Kick's page
+  would otherwise rewrite), `finish_sign_in` exchanges the code Kick sends back with that
+  secret for the account's tokens. Kept in `data/kick_bot_token.json` and renewed as
+  `account_tokens.py` does it
+- `account_tokens.py` — what is kept of an account the service acts as, on any platform
+  (`AccountToken`: its tokens, who it is, what it let the service do - `scopes`, None for
+  a token kept before that was): one file, written whole or not at all, and the
+  `TokenKeeper` that renews its token before it runs out (one renewal at a time - a
+  refresh token works once). The keeper reads the file again whenever it was written
+  since it last did, so an account signed in while the service runs is the one it goes
+  on with - rather than renewing the old one and writing it back over the new
 - `seventv_client.py` — fetches a channel's 7TV emote set (public API), by its id on its
   own platform (7TV knows Kick and Twitch channels): each emote's name
   in that channel, its id and the shape of its picture. Stored twice over, for two uses:
@@ -281,15 +325,20 @@ Module map (`src/kick_clip_hunter/`):
 - `webhook_security.py` — verifies Kick's RSA-signed webhook payloads
 - `twitch_client.py` — Twitch's API (Helix) with an app access token (client
   credentials, like Kick's): a channel by its name, whether it is live, its recordings;
-  and an EventSub subscription, made with the signed-in account's token. `app_token`
-  raises `NotSetUp` while `.env` has no Twitch application
-- `twitch_auth.py` — the Twitch account chat is read as. Twitch lets an application read
-  any channel's chat over EventSub only on behalf of an account that reads it (scope
-  `user:read:chat`; up to 100 channels at once, the streamers are asked nothing).
-  `twitch_login.py` signs it in with the device flow; `TokenKeeper` gives the running
-  service a token that does not run out for a while yet, renews one about to (each
-  renewal hands out a new refresh token, which replaces the old - a refresh token works
-  once and lapses after 30 days unused), and says why there is none when there is none
+  and, with the signed-in account's token, an EventSub subscription and a message written
+  in a channel's chat (`send_chat_message`, `POST chat/messages` - which can come back
+  "not sent", with why). `app_token` raises `NotSetUp` while `.env` has no Twitch
+  application
+- `twitch_auth.py` — the Twitch account chat is read as, and the bot writes in it as.
+  Twitch lets an application read any channel's chat over EventSub only on behalf of an
+  account that reads it (scope `user:read:chat`; up to 100 channels at once, the streamers
+  are asked nothing), and write in it only as one that let it (`user:write:chat`, which
+  the sign-in asks for too). `twitch_login.py` signs it in with the device flow;
+  `TokenKeeper` (see `account_tokens.py`) gives the running service a token that does not
+  run out for a while yet, renews one about to (each renewal hands out a new refresh token,
+  which replaces the old - a refresh token works once and lapses after 30 days unused), and
+  says why there is none when there is none. The chat reader and the bot share one keeper
+  (`main._twitch_tokens`)
 - `twitch_chat.py` — Twitch's chat over an EventSub WebSocket the service holds open
   (`ChatReader`, started by the lifespan while Twitch is set up): nothing has to reach the
   service from outside. Every connection is greeted with a session, and every Twitch
@@ -418,13 +467,19 @@ Module map (`src/kick_clip_hunter/`):
   posts one (`chat_identity.runs_channel`), or anyone with the switch on. The webhook
   opens the moment without the detector (`reason=command`, its figures zero), so it
   needs no chat history, only a tracked channel; the detector never sees a command, and
-  a replay leaves commands out without counting them. These two are a channel's alone
-  (`Setting.per_channel`, `PER_CHANNEL`): not on offer for all channels (posted there
-  they are refused, and one stored there holds for nobody), in force for a channel
-  whether or not its "Own settings" switch is on, and the first section of a channel's
-  Settings page - the only one that is not locked while the switch is off. The page's
-  script sends only what is not locked, so saving them leaves alone the values a
-  channel keeps for when it goes by its own again
+  a replay leaves commands out without counting them. And the bot in chat (see
+  `chat_bot.py`): whether it writes in the channel's chat (`bot_writes`) and says there
+  when a clip was made (`bot_tells_clips`), and the whole messages that ask it to start a
+  recording, stop it, or say how things stand (`record_commands`, `stop_commands`,
+  `status_commands`; `Tuning.bot_command` says which a message is) - all off, and none,
+  to begin with. A message may be in one list of commands at the most (`COMMAND_LISTS`,
+  refused in `check`). These seven are a channel's alone (`Setting.per_channel`,
+  `PER_CHANNEL`): not on offer for all channels (posted there they are refused, and one
+  stored there holds for nobody), in force for a channel whether or not its "Own
+  settings" switch is on, and the first two sections of a channel's Settings page - the
+  only ones that are not locked while the switch is off. The page's script sends only
+  what is not locked, so saving them leaves alone the values a channel keeps for when it
+  goes by its own again
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
   rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`,
   the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`
@@ -454,7 +509,34 @@ Module map (`src/kick_clip_hunter/`):
   out from it. The Analyze page (`GET /dashboard/analyze`) is put together by `_analysis`
   on a worker thread, with a connection of its own - a pass over a long period takes
   seconds - which is handed what it needs of the service's cached state (`_ChatWords`)
-  rather than reading it from there
+  rather than reading it from there. The bot (see `chat_bot.py`): `_take_chats` picks out
+  the bot's commands among the messages - a channel's own, posted by its streamer or a
+  moderator (`_bot_command`) - whatever the switches say, as the buttons on the Channels
+  page work whatever they say, and once the messages are stored (not if they could not
+  be: the platform delivers them again) has each carried out once (`_carry_out`: a
+  recording started or stopped as the buttons do it, or how things stand). The detector
+  never sees one. What the bot says goes through `_tell`, which writes in a channel's
+  chat in the background where the channel has the bot writing there:
+  `_start_stream_recording` and `_end_stream_recording` say so whoever started or ended
+  the recording, and `_create_clip_background` says a clip was saved where that is asked
+  for too. The bot's Kick account signs in through `GET /bot/kick/sign_in` (to Kick's
+  consent page) and `GET /bot/kick/signed_in` (where Kick sends the browser back:
+  `signed_in.html` says what came of it); the sign-ins under way are in memory
+  (`_kick_sign_ins`, by their state)
+- `chat_bot.py` — the bot in chat. What it says, worded for a chat (`started_words`,
+  `ended_words`, `status_words`, `clip_words` - in English, like the dashboard), and how it
+  writes on each platform (`KickWriter`, `TwitchWriter`; nothing on YouTube, read as a
+  visitor who is not signed in, nor on TikTok, read as nobody while a stream is recorded -
+  its commands are carried out without an answer there). A writer
+  asks with the account's token, and once more with a renewed one if the platform turns it
+  down; an account that did not let it write is not asked to (`AccountToken.may`), and
+  everything that can't be written is `CannotWrite`, in words for the Health page.
+  `ChatBot.say` never raises and holds nothing up; the same words in the same chat are
+  not written twice within `REPEAT_SECONDS` (a moderator asking twice gets one answer),
+  and what became of the last message in each channel is kept for the Health page
+  (`written` - a trouble of the account's own is the account keeper's to say, so it ends
+  with the next sign-in). `Recent` is the command messages carried out lately, so that
+  one a platform delivers twice is carried out once
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page
@@ -509,6 +591,11 @@ Module map (`src/kick_clip_hunter/`):
   YouTube's and TikTok's chat have a part each, shown only while the service has anything to
   do with them; TikTok's is trouble only when a recorded channel's chat has not been read for
   `TIKTOK_LOST_SECONDS`.
+  The bot's part (`bot_part`, from `main._bot_facts`) is there while it writes in a
+  channel's chat or an account has signed in for it on Kick; a Kick or Twitch channel it
+  cannot write in - no account to write as, one that did not let it, the last message turned
+  down - is trouble, a YouTube or TikTok one is not. `bot_account_words` says as whom it
+  writes, here and on a channel's Settings page.
 - `tunnel.py` — where the Tailscale Funnel in front of the webhook receiver stands, as the
   machine's own Tailscale client says (`tailscale status --json`, `tailscale funnel status
   --json`): not installed, not connected, nothing forwarding `/webhooks/kick`, served inside
@@ -665,7 +752,8 @@ Module map (`src/kick_clip_hunter/`):
   served on its own; `_recording_moments.html` is what looking for moments in a recording
   has come to, on the page and served on its own; `_trim.html` is the Trim dialog, included
   by the open moment and by the open recording; `_transcript.html` is a moment's transcript
-  beside its clip, on the open moment and served on its own
+  beside its clip, on the open moment and served on its own; `signed_in.html` is what came
+  of signing the bot's Kick account in, where Kick sends the browser back to
 - `static/` — `dashboard.css` (design tokens first - every colour, size and space used
   is one of them - then components, then page layout; its opening comment states the
   rules), `dashboard.js` (no dependencies, everything wired by delegation because the
@@ -839,7 +927,7 @@ Module map (`src/kick_clip_hunter/`):
 [docs/testing.md](docs/testing.md) is the full guide (layout, what each level covers, when to
 run what, the manual live checklist). What matters when changing code:
 
-- `python -m pytest` runs everything (about 3600 tests, a few minutes); `python
+- `python -m pytest` runs everything (about 3800 tests, a few minutes); `python
   scripts/check.py` runs what CI runs (lint, test formatting, tests with coverage). CI
   (`.github/workflows/tests.yml`) does so on every push and pull request, on Windows and
   Linux, and fails under 90 % coverage. Before opening a PR, run lint (`python -m ruff
@@ -854,9 +942,13 @@ run what, the manual live checklist). What matters when changing code:
   server is running from the same checkout - but don't *edit* production files in place for
   experiments while it is (a restart would pick them up); use a copy.
 - A behaviour change comes with a test that would fail without it; a bug gets a failing test
-  first. Fake at the boundary (`tests/support/`: `FakeKickApi`, `FakeTwitchApi` (Helix,
+  first. Fake at the boundary (`tests/support/`: `FakeKickApi` (with the account the bot
+  writes as: Kick's consent page, which a test calls with the address the service sent the
+  browser to, its token endpoint checking the PKCE verifier, and the chat a message is
+  written in), `FakeTwitchApi` (Helix - the chat a message is written in among it -,
   Twitch's OAuth, BetterTTV, FrankerFaceZ - the `twitch_api` fixture, which also sets the
-  service up for Twitch), `FakeEventSub` (Twitch's chat WebSocket, the `eventsub`
+  service up for Twitch), `bot.kick_bot_signed_in` / `twitch_signed_in` (an account
+  signed in for the bot, kept where the service finds it), `FakeEventSub` (Twitch's chat WebSocket, the `eventsub`
   fixture), `FakeYouTube` (InnerTube: a channel's addresses, its page, a video's player, a
   live chat's page and every look at it - the `youtube` fixture; the other platforms'
   fakes answer through the fake Kick's transport, so a test can have several),
@@ -980,6 +1072,18 @@ service is a visitor that is not signed in), and a stream whose encoding changes
   names, logs, the dashboard), and kept in the database under a negative id. A Twitch
   login can be renamed: the channel's Twitch id stays the same, but its name here does
   not follow - such a channel is found live by nobody until it is added again.
+- The bot writes as an ordinary account: on Kick the one signed in for it (any account -
+  one kept for the bot is best, as every message shows its name; the streamer's own works
+  too), on Twitch the account chat is read as. It can write only where that account may
+  chat: a channel that has it banned, or is in followers-only or subscribers-only mode it
+  does not meet, turns the message down, which the Health page lists against the channel.
+  Its commands are whole messages from the channel's streamer or a moderator (by the
+  badges the platform sends, which a chatter has no say over); the same words from anyone
+  else are chat. What it writes comes back as chat like any other message and is stored
+  with it. Its messages are in English, like the dashboard. A sign-in that lapsed on Kick
+  (access taken back in Kick's settings, its refresh token left unused too long) stops it
+  writing there until an account signs in again from the dashboard, which the Health page
+  says.
 - Twitch's chat is read as an account; a sign-in that lapsed (password changed, access
   taken back, 30 days without a renewal) stops Twitch's chat until `twitch_login.py` is
   run again, which the Health page says.

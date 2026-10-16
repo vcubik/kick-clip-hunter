@@ -4,8 +4,10 @@
     were left alone - what is recommended, or for a channel what all
     channels have - and what is in the form can be tried on stored chat
     before it is saved. A channel that goes by the settings for all
-    channels is shown those, locked - all but the section that is a
-    channel's alone, which comes first and can be set either way. -#}
+    channels is shown those, locked - all but the sections that are a
+    channel's alone, which come first and can be set either way: a clip on
+    command, and the bot in chat. Beside the bot's is as whom it writes on
+    the channel's platform. -#}
 {% extends "base.html" %}
 {% from "_macros.html" import switch %}
 {% block title %}Settings{% endblock %}
@@ -66,11 +68,11 @@
     </div>
     <p class="section-lead set-whose">
       {%- if not channel -%}
-      These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code. The messages that ask for a clip are set channel by channel: choose one above.{% if own_words %} {{ own_words }}{% endif %}
+      These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code. The messages that ask for a clip, and what the bot does in chat, are set channel by channel: choose one above.{% if own_words %} {{ own_words }}{% endif %}
       {%- elif own -%}
       {{ channel }} goes by the settings below. Whatever is the same as for all channels keeps following them.
       {%- else -%}
-      {{ channel }} goes by the settings for all channels, shown below. Switch its own settings on to change any of them for this channel only. What asks for a clip on command is the channel's own either way.
+      {{ channel }} goes by the settings for all channels, shown below. Switch its own settings on to change any of them for this channel only. What asks for a clip on command, and what the bot does in chat, is the channel's own either way.
       {%- endif -%}
     </p>
     <p class="status-line" role="status" data-status></p>
@@ -82,6 +84,9 @@
       <section aria-labelledby="set-title-{{ loop.index }}">
         <h2 class="title" id="set-title-{{ loop.index }}">{{ section.title }}</h2>
         <p class="section-lead">{{ section.lead }}</p>
+        {% if section.key == "bot" and bot %}
+        <p class="section-lead set-bot">{{ bot.words }}{% if bot.sign_in %} <a href="{{ bot.sign_in.url }}">{{ bot.sign_in.words }}</a>{% endif %}</p>
+        {% endif %}
         {% for field in section.fields %}
         {{ setting(field) }}
         {% endfor %}

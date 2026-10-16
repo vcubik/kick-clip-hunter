@@ -529,6 +529,17 @@ def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | N
     ).fetchone()
 
 
+def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sqlite3.Row | None:
+    """A watched channel by its id, with the name it is on the watchlist
+    under - for what starts from its chat, which may spell it otherwise."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        "SELECT slug, broadcaster_user_id, tracking_enabled, own_tuning, always_record, platform, platform_user_id"
+        " FROM streamers WHERE broadcaster_user_id = ?",
+        (broadcaster_user_id,),
+    ).fetchone()
+
+
 def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id: int) -> bool:
     row = conn.execute(
         "SELECT tracking_enabled FROM streamers WHERE broadcaster_user_id = ?", (broadcaster_user_id,)

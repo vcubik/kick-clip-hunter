@@ -34,6 +34,14 @@ class TestSettings:
         with pytest.raises(KeyError, match=missing):
             config.load_settings()
 
+    def test_kick_sends_the_bots_sign_in_back_to_this_service_unless_told_otherwise(self, monkeypatch):
+        monkeypatch.delenv("KICK_REDIRECT_URI", raising=False)
+        assert config.load_settings().kick_redirect_uri == "http://localhost:8000/bot/kick/signed_in"
+        assert config.load_settings().kick_redirect_uri.endswith(main.KICK_SIGNED_IN_PATH)
+
+        monkeypatch.setenv("KICK_REDIRECT_URI", " http://localhost:8123/bot/kick/signed_in ")
+        assert config.load_settings().kick_redirect_uri == "http://localhost:8123/bot/kick/signed_in"
+
     def test_settings_cannot_be_changed_after_loading(self):
         settings = config.load_settings()
 
