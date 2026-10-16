@@ -14,3 +14,18 @@
   {%- for n in range(1, 6) %}<i{% if rating and n <= rating %} class="is-lit"{% endif %}></i>{% endfor -%}
 </span>
 {%- endmacro %}
+
+{#- Deleting is asked for twice: the button, then the same word again next
+    to a sentence that says what it will do. The script posts to `url`, and
+    then goes to the page `then` names - or, for "moment", takes the open
+    moment out of the review page's queue and opens the next one. -#}
+{% macro delete(url, what, then, label="Delete") -%}
+<span class="ch-line" data-delete data-delete-then="{{ then }}">
+  <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-open>{{ label }}</button>
+  <span class="ch-line" hidden data-delete-confirm>
+    <span>{{ what }}</span>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-primary" data-delete-go="{{ url }}">{{ label }}</button>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-cancel>Cancel</button>
+  </span>
+</span>
+{%- endmacro %}

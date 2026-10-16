@@ -4,13 +4,14 @@
 // makes them quick to use: it opens a moment from the queue without loading
 // the page again, saves a rating, tag or note as it is set, drives the clip
 // player from the strip under it, replays chat in step with the clip, runs
-// the review from the keyboard (1 to 5 rate, J and K move, Space plays), has
-// the dialog a stretch of footage is cut out for an editor in - a moment's or
-// a recording's - has a moment's transcript made, follows it as the clip
-// plays and saves what is put right in it, saves the Settings page's form,
-// starts and stops the recording of a whole stream, replays a recording's
-// chat beside it, puts what chat did over all of it under it, looks for
-// moments in it, and keeps the Health page saying what holds now.
+// the review from the keyboard (1 to 5 rate, J and K move, Space plays, Del
+// deletes), has the dialog a stretch of footage is cut out for an editor in
+// - a moment's or a recording's - has a moment's transcript made, follows it
+// as the clip plays and saves what is put right in it, saves the Settings
+// page's form, starts and stops the recording of a whole stream, replays a
+// recording's chat beside it, puts what chat did over all of it under it,
+// looks for moments in it, deletes moments and recordings and takes channels
+// off the watchlist, and keeps the Health page saying what holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -1651,22 +1652,115 @@
     one(asking ? "[data-delete-cancel]" : "[data-delete-open]", group).focus();
   }
 
-  async function deleteRecording(button) {
+  // A recording or a moment: what to go to once it is gone is the page the
+  // group names, or for a moment the next one in the queue.
+  async function deleteIt(button) {
+    const group = button.closest("[data-delete]");
+    const then = group.dataset.deleteThen;
     button.disabled = true;
     // A file that is being played is held open, and can't be removed - by
     // the player on the page, or by the one in its Trim dialog.
-    for (const video of all("[data-recording-clip], .recording [data-trim-clip]")) {
+    for (const video of all("video", button.closest("article") || document)) {
       video.pause();
       video.removeAttribute("src");
       video.load();
     }
-    const response = await post(`/recordings/${button.dataset.deleteGo}/delete`);
+    const response = await post(button.dataset.deleteGo);
     if (response && response.ok) {
-      location.assign("/dashboard/recordings");
+      if (then === "moment") removeMoment(button.closest(".moment"));
+      else location.assign(then);
       return;
     }
     button.disabled = false;
-    say(button, response ? await problem(response, "Could not delete the recording.") : "Could not reach the service.");
+    say(button, response ? await problem(response, "Could not delete it.") : "Could not reach the service.");
+  }
+
+  // The deleted moment's row goes from the queue, the counts on its tabs
+  // and the ones new moments are told by go down, and the next moment opens
+  // - or, with none left on the page, the list is fetched again.
+  function removeMoment(article) {
+    const row = one(`a.ch-row[data-moment="${article.dataset.moment}"]`);
+    const list = rows();
+    const index = list.indexOf(row);
+    const next = index < 0 ? null : list[index + 1] || list[index - 1] || null;
+
+    const queue = one("[data-queue]");
+    if (queue && !(queue.dataset.channel && queue.dataset.channel !== article.dataset.channel)) {
+      const rating = Number(article.dataset.rating);
+      const bump = (show, by) => {
+        const count = one(`[data-show="${show}"] [data-count]`, queue);
+        if (count && by) count.textContent = String(Math.max(0, Number(count.textContent) - by));
+      };
+      bump("all", 1);
+      bump("unrated", Number(rating === 0));
+      bump("best", Number(rating >= Number(queue.dataset.bestFrom)));
+    }
+    const news = one("[data-news]");
+    if (news) {
+      news.dataset.moments = String(Number(news.dataset.moments) - 1);
+      if (one("[data-clip]", article)) news.dataset.clips = String(Number(news.dataset.clips) - 1);
+    }
+
+    if (row) {
+      const group = row.closest(".queue-group");
+      row.remove();
+      if (group && !one("a.ch-row", group)) group.remove();
+    }
+    if (next) {
+      openMoment(next);
+      return;
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete("moment");
+    location.assign(url);
+  }
+
+  // Del asks to delete the open moment, and Del again deletes it; Escape
+  // backs out.
+  function deleteKey(key) {
+    const group = one(".moment [data-delete]");
+    if (!group || loading) return false;
+    const asking = !one("[data-delete-confirm]", group).hidden;
+    if (key === "delete") {
+      if (asking) deleteIt(one("[data-delete-go]", group));
+      else askToDelete(group, true);
+      return true;
+    }
+    if (key === "escape" && asking) {
+      askToDelete(group, false);
+      return true;
+    }
+    return false;
+  }
+
+  // Removing a channel from the watchlist is asked for in a dialog, which
+  // also offers to delete what came of watching it.
+  function askToRemoveChannel(button) {
+    const dialog = one("[data-remove-channel-dialog]");
+    dialog.dataset.slug = button.dataset.removeChannel;
+    one("[data-remove-channel-name]", dialog).textContent = button.dataset.removeChannel;
+    one("[data-remove-channel-kept]", dialog).textContent = button.dataset.kept;
+    one("[data-remove-everything]", dialog).checked = false;
+    one("[data-remove-channel-go]", dialog).disabled = false;
+    say(dialog, "");
+    dialog.showModal();
+    // Cancel takes the focus, so a stray Enter or Space backs out.
+    one("[data-remove-channel-cancel]", dialog).focus();
+  }
+
+  async function removeChannel(button) {
+    const dialog = button.closest("[data-remove-channel-dialog]");
+    const everything = one("[data-remove-everything]", dialog).checked;
+    button.disabled = true;
+    say(dialog, everything ? "Deleting. A channel with a lot of chat takes a while." : "");
+    const slug = encodeURIComponent(dialog.dataset.slug);
+    const response = await post(`/channels/${slug}/delete?everything=${everything ? 1 : 0}`);
+    if (response && response.ok) {
+      location.reload();
+      return;
+    }
+    button.disabled = false;
+    say(dialog, response ? await problem(response, "Could not remove the channel.") : "Could not reach the service.");
   }
 
   async function saveRecordingAgain(button) {
@@ -2253,7 +2347,10 @@
     ["[data-recording-stop]", (button) => setRecording(button, false)],
     ["[data-delete-open]", (button) => askToDelete(button, true)],
     ["[data-delete-cancel]", (button) => askToDelete(button, false)],
-    ["[data-delete-go]", deleteRecording],
+    ["[data-delete-go]", deleteIt],
+    ["[data-remove-channel]", askToRemoveChannel],
+    ["[data-remove-channel-go]", removeChannel],
+    ["[data-remove-channel-cancel]", (button) => button.closest("dialog").close()],
     ["[data-save-again]", saveRecordingAgain],
     ["[data-subscriptions-check]", checkSubscriptions],
     ["[data-find-moments]", findMoments],
@@ -2440,7 +2537,8 @@
     if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
 
     const key = event.key.toLowerCase();
-    if (key === "j") move(1);
+    if (deleteKey(key)) event.preventDefault();
+    else if (key === "j") move(1);
     else if (key === "k") move(-1);
     else if (key.length === 1 && key >= "1" && key <= "5") rateFromKeyboard(Number(key));
     else if (key === " " && !target.matches("button, a.ch-btn, a.ch-tab")) {

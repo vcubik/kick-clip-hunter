@@ -484,8 +484,12 @@ class TestARecordingThatCanBePlayed:
         confirm = control.one("span", data_delete_confirm=True)
         assert "hidden" in confirm.attrs
         assert "Removes the file, and what was cut out of it, for good." in confirm.text
-        assert confirm.one("button", data_delete_go=True).attrs["data-delete-go"] == str(recording_id)
+        assert (
+            confirm.one("button", data_delete_go=True).attrs["data-delete-go"] == f"/recordings/{recording_id}/delete"
+        )
         assert [button.text for button in confirm.find("button")] == ["Delete", "Cancel"]
+        # Once it is gone, so is the page of it.
+        assert control.attrs["data-delete-then"] == "/dashboard/recordings"
 
     async def test_a_file_name_is_made_safe_for_an_address(self, service):
         add_stream_recording(CHANNEL, file=False, file_path="some channel/a file #1?.mp4")
@@ -547,7 +551,9 @@ class TestARecordingThatCanNotBePlayed:
         assert str(folder) in statement.one("p", class_="lead").text
         again = statement.one("button", data_save_again=True)
         assert (again.text, again.attrs["data-save-again"]) == ("Try saving again", str(recording_id))
-        assert statement.one("button", data_delete_go=True).attrs["data-delete-go"] == str(recording_id)
+        assert (
+            statement.one("button", data_delete_go=True).attrs["data-delete-go"] == f"/recordings/{recording_id}/delete"
+        )
 
     async def test_one_whose_file_is_gone_says_which_file_and_can_be_taken_off_the_list(self, service):
         recording_id = add_stream_recording(CHANNEL, file=False)
@@ -561,7 +567,9 @@ class TestARecordingThatCanNotBePlayed:
         assert (
             str((stream_recording.STREAMS_DIR / row["file_path"]).resolve()) in statement.one("p", class_="lead").text
         )
-        assert statement.one("button", data_delete_go=True).attrs["data-delete-go"] == str(recording_id)
+        assert (
+            statement.one("button", data_delete_go=True).attrs["data-delete-go"] == f"/recordings/{recording_id}/delete"
+        )
         assert statement.find("button", data_save_again=True) == []
 
     async def test_a_recording_whose_parts_can_not_be_read_is_not_offered_to_play(self, service):

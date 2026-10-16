@@ -3,6 +3,7 @@
     (/dashboard/moments/<id>) so the page can open another moment without
     loading the queue around it again. -#}
 {% from "_chat_line.html" import chat_line with context -%}
+{% from "_macros.html" import delete -%}
 <article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-status-scope>
 <div class="stage">
 <div class="stage-in">
@@ -126,6 +127,11 @@
     {% for value, label in stream_types %}
     <button type="button" class="ch-tag" aria-pressed="{{ 'true' if moment.stream_type == value else 'false' }}" data-tag="stream_type" data-value="{{ value }}">{{ label }}</button>
     {% endfor %}
+  </div>
+
+  {#- Del on the keyboard asks the same, and Del again deletes. -#}
+  <div class="moment-delete">
+    {{ delete("/moments/%d/delete" % moment.id, "Removes the moment, its clip and what was cut out of it, for good.", "moment") }}
   </div>
 
   {% if moment.analysis %}

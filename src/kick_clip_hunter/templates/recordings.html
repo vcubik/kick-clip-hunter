@@ -3,19 +3,13 @@
     that went with it replayed in step. A recording that is not over yet
     says what it is doing instead, and the script keeps that current. -#}
 {% extends "base.html" %}
+{% from "_macros.html" import delete %}
 {% block title %}Recordings{% endblock %}
 
-{#- Deleting is asked for twice: the button, then the same word again next
-    to a sentence that says what it will do. -#}
-{% macro delete(recording, what) -%}
-<span class="ch-line" data-delete>
-  <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-open>Delete</button>
-  <span class="ch-line" hidden data-delete-confirm>
-    <span>{{ what }}</span>
-    <button type="button" class="ch-btn ch-btn-compact ch-btn-primary" data-delete-go="{{ recording.id }}">Delete</button>
-    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-delete-cancel>Cancel</button>
-  </span>
-</span>
+{#- A recording that is deleted is gone from the list, and so is the page
+    of it. -#}
+{% macro delete_recording(recording, what) -%}
+{{ delete("/recordings/%d/delete" % recording.id, what, "/dashboard/recordings") }}
 {%- endmacro %}
 
 {% block main %}
@@ -77,7 +71,7 @@
         <button type="button" class="ch-btn ch-btn-compact" hidden data-trim-open>Trim</button>
         <span class="ch-meta">{{ recording.file }}</span>
         <span class="ch-gap"></span>
-        {{ delete(recording, "Removes the file, and what was cut out of it, for good.") }}
+        {{ delete_recording(recording, "Removes the file, and what was cut out of it, for good.") }}
       </div>
       <p class="status-line" role="status" data-status></p>
       {#- What would have been a moment in the recording's chat, looked for
@@ -119,13 +113,13 @@
     {% elif recording.standing == "gone" %}
     <h1 class="heading">The file of this recording is gone</h1>
     <p class="lead">It was {{ recording.file }}. Deleting the recording takes it off this list.</p>
-    {{ delete(recording, "Takes the recording off the list.") }}
+    {{ delete_recording(recording, "Takes the recording off the list.") }}
     {% else %}
     <h1 class="heading">This recording could not be saved</h1>
     <p class="lead">No file came of it. What was recorded of {{ recording.channel }} is still in {{ recording.folder }}, and the server log says what went wrong.</p>
     <div class="ch-line">
       <button type="button" class="ch-btn" data-save-again="{{ recording.id }}">Try saving again</button>
-      {{ delete(recording, "Removes what was recorded for good.") }}
+      {{ delete_recording(recording, "Removes what was recorded for good.") }}
     </div>
     {% endif %}
     <p class="status-line" role="status" data-status></p>

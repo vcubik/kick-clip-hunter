@@ -369,6 +369,7 @@ def add_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) 
         "INSERT OR IGNORE INTO streamers (broadcaster_user_id, slug, platform, platform_user_id) VALUES (?, ?, ?, ?)",
         (broadcaster_user_id, slug, KICK, str(broadcaster_user_id)),
     )
+    conn.execute("DELETE FROM app_settings WHERE key = ?", (_removed_channel_key(KICK, str(broadcaster_user_id)),))
     conn.commit()
 
 
@@ -383,13 +384,55 @@ def add_platform_streamer(conn: sqlite3.Connection, platform: str, platform_user
     ).fetchone()
     if found is not None:
         return found[0]
-    (key,) = conn.execute("SELECT min(coalesce(min(broadcaster_user_id), 0), 0) - 1 FROM streamers").fetchone()
+    # Added again after it was taken off the watchlist: under the id its
+    # chat, moments and recordings were kept by.
+    remembered = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (_removed_channel_key(platform, platform_user_id),)
+    ).fetchone()
+    if remembered is not None:
+        key = int(remembered[0])
+    else:
+        # Never one a channel that was taken off the watchlist had: what
+        # came of watching it may still be kept by it.
+        key = _least_id(conn) - 1
     conn.execute(
         "INSERT INTO streamers (broadcaster_user_id, slug, platform, platform_user_id) VALUES (?, ?, ?, ?)",
         (key, slug, platform, platform_user_id),
     )
+    conn.execute("DELETE FROM app_settings WHERE key = ?", (_removed_channel_key(platform, platform_user_id),))
     conn.commit()
     return key
+
+
+# The tables whose rows are kept by a channel's id.
+_KEPT_BY_ID = ("streamers", "chat_messages", "moments", "stream_recordings")
+
+
+def _least_id(conn: sqlite3.Connection) -> int:
+    """The lowest id anything is kept by, or remembered by (see
+    remove_streamer) - 0 if none is below it."""
+    least = 0
+    for table in _KEPT_BY_ID:
+        (lowest,) = conn.execute(f"SELECT coalesce(min(broadcaster_user_id), 0) FROM {table}").fetchone()
+        least = min(least, lowest)
+    for (value,) in conn.execute("SELECT value FROM app_settings WHERE key LIKE 'removed_channel:%'"):
+        least = min(least, int(value))
+    return least
+
+
+def _removed_channel_key(platform: str, platform_user_id: str) -> str:
+    """Where the id of a channel that was taken off the watchlist is kept,
+    until it is added again (see remove_streamer)."""
+    return f"removed_channel:{platform}:{platform_user_id}"
+
+
+def was_removed(conn: sqlite3.Connection, broadcaster_user_id: int) -> bool:
+    """Whether a channel that is not on the watchlist was taken off it -
+    rather than never put on it here, as one subscribed some other way."""
+    found = conn.execute(
+        "SELECT 1 FROM app_settings WHERE key LIKE 'removed_channel:%' AND value = ?", (str(broadcaster_user_id),)
+    ).fetchone()
+    return found is not None
 
 
 def replace_channel_keywords(
@@ -547,6 +590,53 @@ def rename_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: st
     sqlite3.IntegrityError if another watched channel goes by that name."""
     conn.execute("UPDATE streamers SET slug = ? WHERE broadcaster_user_id = ?", (slug, broadcaster_user_id))
     conn.commit()
+
+
+def remove_streamer(conn: sqlite3.Connection, broadcaster_user_id: int) -> None:
+    """Takes a channel off the watchlist, with what it had because it was
+    on it: its emotes and keywords, its subscriber badges, its own settings.
+    What came of watching it - chat, moments, recordings - stays (see
+    remove_channel_chat for its chat), and so does its id (was_removed)."""
+    row = conn.execute(
+        "SELECT platform, platform_user_id FROM streamers WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
+    ).fetchone()
+    if row is not None:
+        # Remembered until it is added again: chat a platform still sends
+        # of it is dropped meanwhile, and a channel of another platform than
+        # Kick, which is kept by an id given out here, gets the same one
+        # again (see add_platform_streamer).
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+            (_removed_channel_key(row[0], row[1]), str(broadcaster_user_id)),
+        )
+    for table in ("streamers", "channel_keywords", "channel_emotes", "channel_badges", "tuning"):
+        conn.execute(f"DELETE FROM {table} WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.commit()
+
+
+# How many chat messages are removed in one commit. Removing a busy
+# channel's chat at once would hold every other commit off for longer than
+# the busy timeout - and with it the chat still coming in (see CHAT_CHUNK).
+REMOVE_CHUNK = 5_000
+
+
+def remove_channel_chat(conn: sqlite3.Connection, broadcaster_user_id: int) -> int:
+    """Removes every chat message stored of a channel, and who its chatters
+    were, a chunk at a time. Returns how many messages there were."""
+    removed = 0
+    while True:
+        cursor = conn.execute(
+            "DELETE FROM chat_messages WHERE rowid IN"
+            " (SELECT rowid FROM chat_messages WHERE broadcaster_user_id = ? LIMIT ?)",
+            (broadcaster_user_id, REMOVE_CHUNK),
+        )
+        conn.commit()
+        removed += cursor.rowcount
+        if cursor.rowcount < REMOVE_CHUNK:
+            break
+    conn.execute("DELETE FROM chat_identities WHERE broadcaster_user_id = ?", (broadcaster_user_id,))
+    conn.commit()
+    return removed
 
 
 def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id: int) -> bool:
@@ -1239,10 +1329,24 @@ def insert_moment(
 
 
 def delete_moment(conn: sqlite3.Connection, moment_id: int) -> None:
-    """Takes a moment back: for one that was stored a moment ago for a file
-    that then could not be put in its place. Nothing else removes a moment."""
+    """Removes a moment's row - its files are the caller's to remove."""
     conn.execute("DELETE FROM moments WHERE id = ?", (moment_id,))
     conn.commit()
+
+
+def count_moments_by_channel(conn: sqlite3.Connection) -> dict[int, int]:
+    """How many moments each channel has, by its id."""
+    return dict(conn.execute("SELECT broadcaster_user_id, COUNT(*) FROM moments GROUP BY broadcaster_user_id"))
+
+
+def get_channel_moments(conn: sqlite3.Connection, broadcaster_user_id: int) -> list[sqlite3.Row]:
+    """Every moment of a channel, by its id: what goes with it when it is
+    removed with everything that came of watching it."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        "SELECT id, channel_slug, clip_path FROM moments WHERE broadcaster_user_id = ? ORDER BY id",
+        (broadcaster_user_id,),
+    ).fetchall()
 
 
 def get_moments_with_clip_alone(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1467,6 +1571,11 @@ def get_chat_delay(conn: sqlite3.Connection, channel_slug: str) -> int | None:
     outlasts the channel being on it, as its moments do."""
     row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (_chat_delay_key(channel_slug),)).fetchone()
     return int(row[0]) if row else None
+
+
+def forget_chat_delay(conn: sqlite3.Connection, channel_slug: str) -> None:
+    conn.execute("DELETE FROM app_settings WHERE key = ?", (_chat_delay_key(channel_slug),))
+    conn.commit()
 
 
 def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) -> None:

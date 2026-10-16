@@ -423,6 +423,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .note { flex: 1 1 0; min-width: 0; height: var(--h-control); max-height: 116px; padding: 7px 10px; line-height: 20px; resize: none; }
 .verdict + .status-line { margin-bottom: var(--space-4); }
 .ch-tags + .ch-tags { margin-top: var(--space-8); }
+.moment-delete { margin-top: var(--space-12); }
 
 /* What the per-clip analysis found, when it has run. */
 .analysis { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; }
@@ -530,8 +531,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-handle.is-to { left: var(--to); }
 
 .trim-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); min-height: var(--h-control); margin-top: var(--space-8); }
-.trim-check { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: 600; cursor: pointer; }
-.trim-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lit); }
+.trim-check, .ch-check { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: 600; cursor: pointer; }
+.trim-check input, .ch-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lit); }
 .trim-check input:disabled { opacity: 0.45; cursor: not-allowed; }
 .trim-where { height: var(--h-compact); }
 .trim-where:disabled { opacity: 0.45; cursor: not-allowed; }

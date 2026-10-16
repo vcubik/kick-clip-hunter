@@ -335,11 +335,20 @@ class FakeKickApi:
                     200,
                     json={
                         "data": [
-                            {"broadcaster_user_id": user_id, "event": "chat.message.sent", "method": "webhook"}
+                            {
+                                "id": f"subscription-{user_id}",
+                                "broadcaster_user_id": user_id,
+                                "event": "chat.message.sent",
+                                "method": "webhook",
+                            }
                             for user_id in self.subscribed
                         ]
                     },
                 )
+            if path == "/public/v1/events/subscriptions" and request.method == "DELETE":
+                gone = set(request.url.params.get_list("id"))
+                self.subscribed[:] = [user_id for user_id in self.subscribed if f"subscription-{user_id}" not in gone]
+                return httpx.Response(204)
             if path == "/public/v1/events/subscriptions" and request.method == "POST":
                 if body["broadcaster_user_id"] in self.subscribe_failures:  # type: ignore[index]
                     return httpx.Response(500, json={"message": "Internal Server Error"})

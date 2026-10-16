@@ -55,6 +55,17 @@ class TestCountsAndNumbers:
         assert view.count_words(count, "message") == words
 
     @pytest.mark.parametrize(
+        ("moments", "recordings", "words"),
+        [
+            (0, 0, "0 moments and 0 recordings"),
+            (1, 1, "1 moment and 1 recording"),
+            (12, 3, "12 moments and 3 recordings"),
+        ],
+    )
+    def test_what_came_of_watching_a_channel(self, moments, recordings, words):
+        assert view.kept_words(moments, recordings) == words
+
+    @pytest.mark.parametrize(
         ("value", "words"), [(0.5, "0.5"), (1.25, "1.25"), (12.0, "12"), (0.071, "0.07"), (0.0, "0"), (100.0, "100")]
     )
     def test_a_measured_value_carries_no_trailing_zeros(self, value, words):

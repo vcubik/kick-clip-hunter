@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from . import (
     health,
     kick_auth,
     kick_chat,
+    kick_client,
     platforms,
     recorder,
     recording_manager,
@@ -65,16 +67,19 @@ from .db import (
     add_subscription_drop,
     count_channel_chat,
     count_moments,
+    count_moments_by_channel,
     count_moments_with_clip,
     count_returning_chatters,
     count_stream_recordings,
     delete_moment,
     delete_stream_recording,
     finish_stream_recording,
+    forget_chat_delay,
     get_channel_badges,
     get_channel_chat_between,
     get_channel_keywords,
     get_channel_moment_windows,
+    get_channel_moments,
     get_channel_renames,
     get_chat_around,
     get_chat_between,
@@ -98,7 +103,6 @@ from .db import (
     get_stream_recordings,
     get_streamer_by_id,
     get_streamer_by_slug,
-    get_streamer_tracking_enabled,
     get_streamers,
     get_subscription_drops,
     get_tuning,
@@ -108,6 +112,8 @@ from .db import (
     insert_stream_recording,
     iter_channel_chat,
     iter_channel_chat_between,
+    remove_channel_chat,
+    remove_streamer,
     rename_streamer,
     replace_tuning,
     search_channel_chat,
@@ -133,6 +139,7 @@ from .db import (
     update_moment_transcript,
     update_moment_type,
     update_moment_window_end,
+    was_removed,
 )
 from .kick_client import (
     NoSuchChannel,
@@ -1124,12 +1131,16 @@ async def _create_clip_background(
         moment = get_moment(conn, moment_id)
     finally:
         conn.close()
-    if moment is not None:
-        _tell(
-            moment["broadcaster_user_id"],
-            chat_bot.clip_words(clip.duration, moment["stream_elapsed_seconds"]),
-            of_a_clip=True,
-        )
+    if moment is None:
+        # Removed while its clip was being cut.
+        clip_path.unlink(missing_ok=True)
+        logger.info("[%s] clip of moment %d thrown away: the moment was removed", channel, moment_id)
+        return
+    _tell(
+        moment["broadcaster_user_id"],
+        chat_bot.clip_words(clip.duration, moment["stream_elapsed_seconds"]),
+        of_a_clip=True,
+    )
     logger.info(
         "[%s] clip saved for moment %d: %s (%.0f s, with %.0f s before it and %.0f s after)",
         channel, moment_id, clip_path, clip.duration, clip.context_before, clip.context_after,
@@ -2678,6 +2689,8 @@ async def dashboard_channels(request: Request):
     try:
         context = _page_context(conn, "channels")
         whole_streams = _by_channel(_stream_recordings_not_over())
+        moments = count_moments_by_channel(conn)
+        recordings = Counter(row["broadcaster_user_id"] for row in get_stream_recordings(conn))
         context.update(
             {
                 "watchlist": [
@@ -2695,6 +2708,10 @@ async def dashboard_channels(request: Request):
                         # Its stream being kept whole, or the last such
                         # recording still being saved - None if neither.
                         "whole_stream": whole_streams.get(row["slug"]),
+                        # What removing it can delete as well.
+                        "kept": dashboard_view.kept_words(
+                            moments.get(row["broadcaster_user_id"], 0), recordings[row["broadcaster_user_id"]]
+                        ),
                     }
                     for row in context["streamers"]
                 ],
@@ -4056,6 +4073,68 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     return {"moment_id": moment_id, "rating": value or None}
 
 
+def _moment_files(row) -> list[Path]:
+    """Every file a moment has, or may have, next to its clip: the clip,
+    what was cut out of it with Trim and the chat video that went with
+    that, what was kept of the cut, and the context clips of a moment from
+    before a moment had one file. Only within the clips folder, whatever
+    the row says."""
+    if not row["clip_path"]:
+        return []
+    clip = CLIPS_DIR / row["clip_path"]
+    if not clip.resolve().is_relative_to(CLIPS_DIR.resolve()):
+        return []
+    video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
+    context = [clip.with_name(name) for name in recorder.context_clip_names(clip.name).values()]
+    return [clip, video, chat, _cut_record_path(video), *context]
+
+
+def _moment_busy(moment_id: int) -> str | None:
+    """Why a moment can't be removed right now - something is being made of
+    its file - or None if it can be."""
+    if _trims.get(moment_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+        return "A stretch of this moment is being cut out. Try again once that is done."
+    if _transcripts.get(moment_id, {}).get("state") == dashboard_view.TRANSCRIPT_MAKING:
+        return "This moment is being transcribed. Try again once that is done."
+    return None
+
+
+def _remove_moment(conn, row) -> None:
+    """Removes a moment for good: its files, then its row. Raises OSError,
+    with the row left where it is, if a file can't be removed - on Windows,
+    one that something still has open."""
+    for file in _moment_files(row):
+        file.unlink(missing_ok=True)
+    delete_moment(conn, row["id"])
+    _trims.pop(row["id"], None)
+    _transcripts.pop(row["id"], None)
+
+
+@app.post("/moments/{moment_id}/delete")
+async def remove_moment(moment_id: int):
+    """Removes a moment for good - its clip, whatever was cut out of it,
+    and its row. A moment whose clip is still being cut can be removed too:
+    the clip is thrown away once it is there (see _create_clip_background)."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        if (busy := _moment_busy(moment_id)) is not None:
+            raise HTTPException(status_code=409, detail=busy)
+        try:
+            _remove_moment(conn, row)
+        except OSError:
+            logger.warning("moment %d could not be removed", moment_id, exc_info=True)
+            raise HTTPException(
+                status_code=409, detail="The clip could not be removed. Something may still have its file open."
+            ) from None
+    finally:
+        conn.close()
+    logger.info("[%s] moment %d deleted", row["channel_slug"], moment_id)
+    return {"deleted": moment_id}
+
+
 async def _asked_trim(request: Request) -> dict:
     """What a Trim dialog asks to have cut, as it was posted - unless the
     service is on its way down, or what was posted says nothing of the
@@ -4706,6 +4785,111 @@ async def set_channel_always_record(slug: str, enabled: int = 1):
     }
 
 
+async def _unsubscribe_kick_chat(broadcaster_user_id: int, slug: str) -> None:
+    """Has Kick stop sending the chat of a channel that is no longer
+    watched. Chat that still arrives is dropped (see _take_in), so a
+    failure here is logged and nothing more."""
+    try:
+        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+        ids = [
+            sub["id"]
+            for sub in await get_event_subscriptions(token)
+            if sub.get("broadcaster_user_id") == broadcaster_user_id and sub.get("id")
+        ]
+        if ids:
+            await kick_client.unsubscribe(ids, token)
+    except Exception:
+        logger.warning("[%s] its chat subscription on Kick could not be removed", slug, exc_info=True)
+
+
+async def _remove_everything_of(conn, broadcaster_user_id: int, slug: str) -> dict:
+    """Removes what came of watching a channel: its moments with their
+    files, its stream recordings with theirs, and its chat. Raises
+    HTTPException (409) before removing anything if something is being
+    made of one of them, and OSError if a file can't be removed - what was
+    removed by then stays removed."""
+    moments = get_channel_moments(conn, broadcaster_user_id)
+    recordings = [row for row in get_stream_recordings(conn) if row["broadcaster_user_id"] == broadcaster_user_id]
+    busy = [row["id"] for row in moments if _moment_busy(row["id"]) is not None]
+    if busy:
+        raise HTTPException(
+            status_code=409, detail=f"Something is being made of moment {busy[0]}. Try again once that is done."
+        )
+    busy = [row["id"] for row in recordings if _recording_busy(row["id"]) is not None]
+    if busy:
+        raise HTTPException(
+            status_code=409, detail=f"Something is being made of recording {busy[0]}. Try again once that is done."
+        )
+    for row in moments:
+        _remove_moment(conn, row)
+    for row in recordings:
+        await _remove_recording(conn, row)
+    # What is kept by the name its chat comes under.
+    for name in {row["channel_slug"] for row in moments} | {get_chat_name(conn, broadcaster_user_id) or slug}:
+        forget_chat_delay(conn, name)
+
+    def remove_chat() -> int:
+        # A connection of its own: a busy channel's chat takes a while.
+        own = get_connection()
+        try:
+            return remove_channel_chat(own, broadcaster_user_id)
+        finally:
+            own.close()
+
+    messages = await asyncio.to_thread(remove_chat)
+    for key in [key for key in _chat_identity_cache if key[0] == broadcaster_user_id]:
+        del _chat_identity_cache[key]
+    return {"moments": len(moments), "recordings": len(recordings), "messages": messages}
+
+
+@app.post("/channels/{slug}/delete")
+async def remove_channel(slug: str, everything: int = 0):
+    """Takes a channel off the watchlist: it is watched no more, its chat no
+    longer taken in, and what it had for being on it - its emotes, badges,
+    own settings - is gone. What came of watching it stays, unless
+    `everything`: then its moments, stream recordings and chat are removed
+    for good as well. Not while its stream is being recorded, or its last
+    recording saved."""
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        broadcaster_user_id = row["broadcaster_user_id"]
+        whole = _by_channel(_stream_recordings_not_over()).get(slug)
+        if recording_manager.stream_recording_of(slug) is not None or whole is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{slug} is being recorded, or its recording saved. Stop it, or wait until it is saved.",
+            )
+        removed = None
+        if everything:
+            try:
+                removed = await _remove_everything_of(conn, broadcaster_user_id, slug)
+            except OSError:
+                logger.warning("[%s] what came of watching it could not all be removed", slug, exc_info=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail="Not everything could be removed. Something may still have a file open.",
+                ) from None
+        remove_streamer(conn, broadcaster_user_id)
+    finally:
+        conn.close()
+    _forget_tuning()
+    _stream_start_cache.pop(slug, None)
+    await recording_manager.forget(slug)
+    if row["platform"] == platforms.KICK:
+        await _unsubscribe_kick_chat(broadcaster_user_id, slug)
+    if removed is None:
+        logger.info("[%s] taken off the watchlist", slug)
+    else:
+        logger.info(
+            "[%s] taken off the watchlist, with %d moment(s), %d recording(s) and %d chat message(s)",
+            slug, removed["moments"], removed["recordings"], removed["messages"],
+        )
+    return {"slug": slug, "removed": removed}
+
+
 @app.get("/recordings/status")
 async def recordings_status():
     """What the stream recordings that are not over yet are doing - by
@@ -4740,6 +4924,39 @@ def _stream_recording_at_rest(conn, recording_id: int):
     return row
 
 
+def _recording_busy(recording_id: int) -> str | None:
+    """Why a recording that is over can't be removed right now - something
+    is being made of its file - or None if it can be."""
+    if _recording_trims.get(recording_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+        return "A stretch of this recording is being cut out. Try again once that is done."
+    if _recording_chat_files.get(recording_id, {}).get("state") == dashboard_view.CHAT_FILE_MAKING:
+        return "The chat video of this recording is being made. Try again once that is done."
+    if _recording_finds.get(recording_id, {}).get("state") in dashboard_view.FIND_BUSY:
+        return "Moments are being looked for in this recording, or cut out of it. Try again once that is done."
+    return None
+
+
+async def _remove_recording(conn, row) -> None:
+    """Removes a stream recording that is over for good: its file, what was
+    cut out of it, whatever is left of its parts, then its row. Raises
+    OSError, with the row left where it is, if a file can't be removed."""
+    recording_id = row["id"]
+    file = _stream_file(row)
+    if file is not None:
+        # What was cut out of it goes with it.
+        for cut in (*_recording_cut_files(file), *_recording_chat_file_paths(file)):
+            cut.unlink(missing_ok=True)
+        file.unlink(missing_ok=True)
+    folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
+    if folder.exists():
+        await asyncio.to_thread(shutil.rmtree, folder)
+    delete_stream_recording(conn, recording_id)
+    _recording_trims.pop(recording_id, None)
+    _recording_counts.pop(recording_id, None)
+    _recording_finds.pop(recording_id, None)
+    _recording_chat_files.pop(recording_id, None)
+
+
 @app.post("/recordings/{recording_id}/delete")
 async def delete_recording(recording_id: int):
     """Removes a stream recording for good: its file, whatever is left of
@@ -4747,41 +4964,17 @@ async def delete_recording(recording_id: int):
     conn = get_connection()
     try:
         row = _stream_recording_at_rest(conn, recording_id)
-        if _recording_trims.get(recording_id, {}).get("state") in dashboard_view.TRIM_BUSY:
-            raise HTTPException(
-                status_code=409, detail="A stretch of this recording is being cut out. Try again once that is done."
-            )
-        if _recording_chat_files.get(recording_id, {}).get("state") == dashboard_view.CHAT_FILE_MAKING:
-            raise HTTPException(
-                status_code=409, detail="The chat video of this recording is being made. Try again once that is done."
-            )
-        if _recording_finds.get(recording_id, {}).get("state") in dashboard_view.FIND_BUSY:
-            raise HTTPException(
-                status_code=409,
-                detail="Moments are being looked for in this recording, or cut out of it. Try again once that is done.",
-            )
-        file = _stream_file(row)
+        if (busy := _recording_busy(recording_id)) is not None:
+            raise HTTPException(status_code=409, detail=busy)
         try:
-            if file is not None:
-                # What was cut out of it goes with it.
-                for cut in (*_recording_cut_files(file), *_recording_chat_file_paths(file)):
-                    cut.unlink(missing_ok=True)
-                file.unlink(missing_ok=True)
-            folder = stream_recording.parts_folder(row["channel_slug"], recording_id)
-            if folder.exists():
-                await asyncio.to_thread(shutil.rmtree, folder)
+            await _remove_recording(conn, row)
         except OSError:
             logger.warning("stream recording %d could not be removed", recording_id, exc_info=True)
             raise HTTPException(
                 status_code=409, detail="The recording could not be removed. Something may still have its file open."
             ) from None
-        delete_stream_recording(conn, recording_id)
     finally:
         conn.close()
-    _recording_trims.pop(recording_id, None)
-    _recording_counts.pop(recording_id, None)
-    _recording_finds.pop(recording_id, None)
-    _recording_chat_files.pop(recording_id, None)
     logger.info("[%s] stream recording %d deleted", row["channel_slug"], recording_id)
     return {"deleted": recording_id}
 
@@ -5374,6 +5567,7 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
     watching = _flags.get("watching_enabled", True)
     taken: list[tuple[int, ChatMessage, bool]] = []
     tracked: dict[int, bool] = {}
+    watched: dict[int, bool] = {}
     conn = get_connection()
     try:
         for index, message in enumerate(messages):
@@ -5393,11 +5587,20 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
                 # moments pile up.
                 continue
             if owner not in tracked:
+                streamer = get_streamer_by_id(conn, owner)
+                # A channel missing from the watchlist is processed - Kick
+                # delivers only what was subscribed to, so the watchlist is
+                # behind - unless it was taken off it, after which a
+                # platform may go on sending its chat for a while.
+                watched[owner] = streamer is not None or not was_removed(conn, owner)
                 tracked[owner] = (
                     watching
                     and platforms.platform_of(message.channel) not in platforms.RECORDED_ONLY
-                    and get_streamer_tracking_enabled(conn, owner)
+                    and (streamer is None or bool(streamer["tracking_enabled"]))
                 )
+            if not watched[owner] and not kept_whole:
+                statuses[index] = "not on the watchlist"
+                continue
             if not tracked[owner] and not kept_whole:
                 # Tracking paused for this one channel - same drop as the
                 # global pause, scoped to it.
