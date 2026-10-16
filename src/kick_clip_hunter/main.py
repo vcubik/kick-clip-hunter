@@ -6,6 +6,7 @@ import mimetypes
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
@@ -37,6 +38,7 @@ from . import (
     kick_auth,
     kick_chat,
     kick_client,
+    notify,
     platforms,
     recorder,
     recording_manager,
@@ -258,6 +260,10 @@ SETTING_KEYS = {
     "audio_events": "audio_events_enabled",
     "frames": "frames_enabled",
     "sound_events": "sound_events_enabled",
+    "notify_clips": "notify_clips_enabled",
+    "notify_clip_videos": "notify_clip_videos_enabled",
+    "notify_recordings": "notify_recordings_enabled",
+    "notify_health": "notify_health_enabled",
 }
 # The per-clip analysis steps (everything but "watching") are pure data
 # capture for a future classifier, and each one costs real CPU time on every
@@ -270,6 +276,16 @@ ANALYSIS_SETTINGS = [
     ("sound_events", "Sound events"),
     ("frames", "Frame embeddings"),
 ]
+# What notifications tell of (see notify.py), each switched on its own on
+# the Channels page - and all of it on to begin with but the clips
+# themselves, which can be tens of megabytes each. (dashboard name, button
+# label) in display order.
+NOTIFY_SETTINGS = [
+    ("notify_clips", "Clips"),
+    ("notify_clip_videos", "Clip videos"),
+    ("notify_recordings", "Recordings"),
+    ("notify_health", "Problems"),
+]
 # Used until a setting is first toggled from the dashboard.
 SETTING_DEFAULTS = {
     "watching_enabled": True,
@@ -277,6 +293,10 @@ SETTING_DEFAULTS = {
     "audio_events_enabled": False,
     "frames_enabled": False,
     "sound_events_enabled": False,
+    "notify_clips_enabled": True,
+    "notify_clip_videos_enabled": False,
+    "notify_recordings_enabled": True,
+    "notify_health_enabled": True,
 }
 _flags: dict[str, bool] = {}
 
@@ -721,16 +741,16 @@ def _bot_command(conn, message: ChatMessage) -> str | None:
     return _tuning(conn, message.broadcaster_user_id).bot_command(message.content)
 
 
-def _record_on_command(row) -> str | None:
-    """Starts recording a channel's stream, as asked in its chat. What is
-    answered: why not, where it isn't - otherwise nothing, as starting it
-    says so itself (_start_stream_recording)."""
+def _record_on_command(row, asked_by: str) -> str | None:
+    """Starts recording a channel's stream, as asked in its chat (by
+    `asked_by`). What is answered: why not, where it isn't - otherwise
+    nothing, as starting it says so itself (_start_stream_recording)."""
     slug = row["slug"]
     kept = recording_manager.stream_recording_of(slug)
     if kept is not None:
         return chat_bot.recording_already_words(kept.writer.seconds, waiting=not kept.writer.size)
     try:
-        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"])
+        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"], notify.CHAT, asked_by)
     except _NotStarted as refused:
         logger.warning("[%s] a recording asked for in chat was not started: %s", slug, refused.words)
         return chat_bot.NOT_STARTED_WORDS[refused.status_code == 409]
@@ -794,7 +814,7 @@ def _carry_out(message: ChatMessage, command: str) -> None:
         return
     logger.info("[%s] %s asked the bot to %s", row["slug"], message.sender or "?", command)
     if command == tuning.RECORD:
-        answer = _record_on_command(row)
+        answer = _record_on_command(row, message.sender)
     elif command == tuning.STOP:
         answer = _stop_on_command(row)
     else:
@@ -803,11 +823,148 @@ def _carry_out(message: ChatMessage, command: str) -> None:
         _tell(row["broadcaster_user_id"], answer)
 
 
+# -- notifications -------------------------------------------------------------
+#
+# What the service tells whoever runs it, on Telegram and Discord (see
+# notify.py): where to is .env's to say, which kinds the switches on the
+# Channels page.
+
+# How often the Health page's judgement is looked at for what to tell of,
+# and how long a part has to have been trouble on end before it is.
+HEALTH_NOTE_SECONDS = 60
+HEALTH_NOTE_AFTER_SECONDS = 120
+
+# What sends the notes, and what has become of them.
+_notifier: notify.Notifier | None = None
+# The parts of the Health page that were told of as trouble.
+_health_watch = notify.HealthWatch(HEALTH_NOTE_AFTER_SECONDS)
+
+
+def _notes() -> notify.Notifier:
+    global _notifier
+    if _notifier is None:
+        found = notify.destinations(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+            settings.discord_webhook_url,
+            sleep=asyncio.sleep,
+        )
+        _notifier = notify.Notifier(found, sleep=asyncio.sleep)
+    return _notifier
+
+
+def _notifying(name: str) -> bool:
+    """Whether notes of a kind (its switch's name) go out: there is
+    somewhere to send them, and the switch is on."""
+    key = SETTING_KEYS[name]
+    return bool(_notes().destinations) and _flags.get(key, SETTING_DEFAULTS[key])
+
+
+def _notify(name: str, note: notify.Note) -> None:
+    """Sends a note of a kind where notes go, in the background - where
+    notes of that kind go out at all."""
+    if _notifying(name):
+        _track_task(_notes().notify(note))
+
+
+def _link(path: str) -> str | None:
+    """Where a page of the dashboard is, for a note to lead to."""
+    return notify.dashboard_link(settings.dashboard_url, path)
+
+
+def _clip_to_send(clip_path: Path, extent: "ClipExtent", folder: Path) -> Path:
+    """The clip itself, without the footage around it, as a file in
+    `folder` - or the clip's own file, where that is all it holds."""
+    with recorder.clip_alone(clip_path, *extent) as alone:
+        if alone == clip_path:
+            return clip_path
+        return Path(shutil.move(alone, folder / clip_path.name))
+
+
+async def _notify_of_clip(moment, channel: str, clip_path: Path, extent: "ClipExtent") -> None:
+    """Tells of a clip that was saved - with the clip itself, where that is
+    switched on and a destination takes it."""
+    conn = get_connection()
+    try:
+        said = _queue_activity(conn, [moment]).get(moment["id"], {}).get("said")
+    finally:
+        conn.close()
+    note = notify.clip_note(
+        channel,
+        extent[1],
+        moment["stream_elapsed_seconds"],
+        said=said,
+        reasons=dashboard_view.reason_words(moment["reason"], main_only=True),
+        commanded=moment["reason"] == dashboard_view.COMMAND_REASON,
+        link=_link(dashboard_view.review_url(moment=moment["id"])),
+    )
+    if not _notifying("notify_clip_videos"):
+        await _notes().notify(note)
+        return
+    with tempfile.TemporaryDirectory(prefix="notify_") as folder:
+        try:
+            video = await asyncio.to_thread(_clip_to_send, clip_path, extent, Path(folder))
+        except Exception:
+            logger.warning(
+                "[%s] the clip of moment %d could not be cut out to be sent", channel, moment["id"], exc_info=True
+            )
+            note, video = note.plus("The clip could not be cut out to be sent."), None
+        await _notes().notify(note, video)
+
+
+async def _keep_telling_of_health() -> None:
+    """Looks at the Health page's judgement every HEALTH_NOTE_SECONDS, and
+    tells of what changed in it."""
+    while True:
+        await asyncio.sleep(HEALTH_NOTE_SECONDS)
+        try:
+            _tell_of_health()
+        except Exception:
+            logger.exception("the Health page could not be looked at for notifications")
+
+
+def _tell_of_health(now: datetime | None = None) -> None:
+    """Tells of the parts of the Health page that have needed a look for
+    HEALTH_NOTE_AFTER_SECONDS, and of the ones told of that look fine again
+    (see notify.HealthWatch). With the switch off nothing is kept either:
+    what is trouble once it is on again is told of as it is found. Not
+    while the service is shutting down, which ends what it depends on."""
+    if not _notifying("notify_health"):
+        _health_watch.forget()
+        return
+    if _shutdown_requested:
+        return
+    conn = get_connection()
+    try:
+        streamers = get_streamers(conn)
+    finally:
+        conn.close()
+    report = health.report(_health_facts(streamers, _right_now(streamers)["channels"]), _today())
+    link = _link("/dashboard/health")
+    for change in _health_watch.look(report, health.PARTS, now or datetime.now(timezone.utc)):
+        _track_task(
+            _notes().notify(notify.health_note(change.words, change.plural, change.said, change.trouble, link=link))
+        )
+
+
+def _say_where_notes_go() -> None:
+    """Logs where notifications go, and what in .env keeps them from going
+    where it was meant to."""
+    for trouble in notify.setup_trouble(
+        settings.telegram_bot_token, settings.telegram_chat_id, settings.discord_webhook_url
+    ):
+        logger.warning("notifications: %s", trouble)
+    names = [destination.name for destination in _notes().destinations]
+    if names:
+        logger.info("notifications go to %s", dashboard_view.list_words(names))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _started_at
     _started_at = datetime.now(timezone.utc)
     _load_flags()
+    _say_where_notes_go()
     _take_up_stream_recordings()
     await _ensure_chat_subscriptions()
     tasks = [
@@ -827,6 +984,7 @@ async def lifespan(app: FastAPI):
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
         asyncio.create_task(_keep_looking_at_tunnel()),
+        asyncio.create_task(_keep_telling_of_health()),
     ]
     reader = _start_reading_twitch_chat()
     if reader is not None:
@@ -1149,6 +1307,8 @@ async def _create_clip_background(
         channel, moment_id, clip_path, clip.duration, clip.context_before, clip.context_after,
     )
     extent = (clip.context_before, clip.duration, clip.context_after)
+    if _notifying("notify_clips"):
+        _track_task(_notify_of_clip(moment, channel, clip_path, extent))
     for analyse in _analysis_steps():
         _track_task(analyse(moment_id, channel, clip_path, extent))
 
@@ -1426,7 +1586,10 @@ async def _save_stream_recording(recording_id: int, channel: str, folder: Path) 
             parts = await asyncio.to_thread(stream_recording.save, folder, output)
         conn = get_connection()
         try:
+            asked = get_stream_recording(conn, recording_id)
+            ended_by = asked["ended_by"] if asked is not None else None
             if parts:
+                size = output.stat().st_size
                 finish_stream_recording(
                     conn,
                     recording_id,
@@ -1435,7 +1598,7 @@ async def _save_stream_recording(recording_id: int, channel: str, folder: Path) 
                     started_at=parts[0].started_at.isoformat(),
                     ended_at=parts[-1].ended_at.isoformat(),
                     duration=stream_recording.length(parts),
-                    size_bytes=output.stat().st_size,
+                    size_bytes=size,
                     parts=stream_recording.encoded(parts),
                 )
             else:
@@ -1451,6 +1614,10 @@ async def _save_stream_recording(recording_id: int, channel: str, folder: Path) 
             set_stream_recording_state(conn, recording_id, stream_recording.FAILED)
         finally:
             conn.close()
+        _notify(
+            "notify_recordings",
+            notify.recording_failed_note(channel, link=_link(dashboard_view.recordings_url(recording_id))),
+        )
         return
     finally:
         # From here on its row says how it stands.
@@ -1464,6 +1631,17 @@ async def _save_stream_recording(recording_id: int, channel: str, folder: Path) 
         logger.info(
             "[%s] stream recording %d saved: %s (%.0f s in %d part(s))",
             channel, recording_id, output, stream_recording.length(parts), len(parts),
+        )
+        _notify(
+            "notify_recordings",
+            notify.recording_saved_note(
+                channel,
+                ended_by,
+                stream_recording.length(parts),
+                size,
+                len(parts),
+                link=_link(dashboard_view.recordings_url(recording_id)),
+            ),
         )
     else:
         logger.info("[%s] stream recording %d kept no footage - nothing to save", channel, recording_id)
@@ -1496,6 +1674,7 @@ def _end_stream_recording(slug: str, ended_by: str) -> bool:
     if not writer.size:
         shutil.rmtree(writer.folder, ignore_errors=True)
         logger.info("[%s] stream recording %d ended (%s) before any footage", slug, kept.recording_id, ended_by)
+        _notify("notify_recordings", notify.recording_empty_note(slug, ended_by))
         return False
     unasked = ended_by in (stream_recording.DISK_FULL, stream_recording.WRITE_FAILED)
     (logger.warning if unasked else logger.info)(
@@ -1516,10 +1695,14 @@ class _NotStarted(Exception):
         self.words = words
 
 
-def _start_stream_recording(slug: str, broadcaster_user_id: int) -> int:
+def _start_stream_recording(
+    slug: str, broadcaster_user_id: int, started_by: str = notify.DASHBOARD, asked_by: str | None = None
+) -> int:
     """Starts keeping a channel's stream whole and returns the recording's
     id - or says why not (_NotStarted): the channel is being recorded
-    already, or the disk is too full."""
+    already, or the disk is too full. `started_by` is where it was asked
+    for (notify.DASHBOARD, CHAT - by `asked_by` - or ALWAYS), which a
+    notification says."""
     if recording_manager.stream_recording_of(slug) is not None:
         raise _NotStarted(409, f"{slug} is being recorded already.")
     room = recording_manager.room_left()
@@ -1553,7 +1736,14 @@ def _start_stream_recording(slug: str, broadcaster_user_id: int) -> int:
             conn.close()
         raise _NotStarted(500, "Could not make a place to keep the recording. The server log says why.") from None
     look = recording_manager.looks().get(slug)
-    _tell(broadcaster_user_id, chat_bot.started_words(None if look is None else look.live_since is not None))
+    live = None if look is None else look.live_since is not None
+    _tell(broadcaster_user_id, chat_bot.started_words(live))
+    _notify(
+        "notify_recordings",
+        notify.recording_started_note(
+            slug, started_by, live=live, asked_by=asked_by, link=_link(dashboard_view.recordings_url(recording_id))
+        ),
+    )
     return recording_id
 
 
@@ -1573,7 +1763,7 @@ async def _record_stream_by_itself(slug: str) -> None:
     if row is None or not row["always_record"]:
         return  # switched off since the loop last looked
     try:
-        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"])
+        recording_id = _start_stream_recording(slug, row["broadcaster_user_id"], notify.ALWAYS)
     except _NotStarted as refused:
         recording_manager.hold_off(slug)
         logger.warning(
@@ -2426,7 +2616,32 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         youtube=_youtube_facts(sum(1 for row in streamers if row["platform"] == platforms.YOUTUBE)),
         tiktok=_tiktok_facts(sum(1 for row in streamers if row["platform"] == platforms.TIKTOK)),
         bot=_bot_facts(streamers),
+        notifications=_notification_facts(),
         **looked_up,
+    )
+
+
+def _notification_facts() -> health.Notifications | None:
+    """Where notifications go and what they tell of, for the Health page:
+    None while they go nowhere."""
+    notes = _notes()
+    if not notes.destinations:
+        return None
+    return health.Notifications(
+        destinations=tuple(
+            health.NoteDestination(
+                destination.name,
+                destination.where(),
+                notes.sent[destination.name].sent_at,
+                notes.sent[destination.name].trouble,
+            )
+            for destination in notes.destinations
+        ),
+        clips=_notifying("notify_clips"),
+        clip_videos=_notifying("notify_clip_videos"),
+        recordings=_notifying("notify_recordings"),
+        problems=_notifying("notify_health"),
+        dashboard_url=settings.dashboard_url,
     )
 
 
@@ -2716,6 +2931,22 @@ async def dashboard_channels(request: Request):
                     }
                     for name, label in ANALYSIS_SETTINGS
                 ],
+                "notify_lead": dashboard_view.notify_lead_words(
+                    [destination.name for destination in _notes().destinations]
+                ),
+                "notify_settings": (
+                    [
+                        {
+                            "name": name,
+                            "label": label,
+                            "caption": dashboard_view.NOTIFY_CAPTIONS[name],
+                            "enabled": _flags.get(SETTING_KEYS[name], SETTING_DEFAULTS[SETTING_KEYS[name]]),
+                        }
+                        for name, label in NOTIFY_SETTINGS
+                    ]
+                    if _notes().destinations
+                    else []
+                ),
             }
         )
     finally:
@@ -4618,6 +4849,19 @@ async def check_subscriptions():
     logger.info("chat subscriptions checked from the dashboard")
     await _ensure_chat_subscriptions(report_all_present=False)
     return {"status": "checked"}
+
+
+@app.post("/notifications/test")
+async def test_notifications():
+    """Sends a note everywhere notifications go, whatever the switches say -
+    the button on the Health page - and says to how many of them it went.
+    The Health page says why not, where it did not."""
+    notes = _notes()
+    if not notes.destinations:
+        raise HTTPException(status_code=409, detail="Notifications go nowhere: .env sets up none.")
+    logger.info("a test notification was asked for from the dashboard")
+    sent = await notes.notify(notify.test_note(link=_link("/dashboard/health")))
+    return {"sent": sent, "of": len(notes.destinations)}
 
 
 @app.post("/shutdown")

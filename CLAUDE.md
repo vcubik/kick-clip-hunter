@@ -12,8 +12,10 @@ whole stream can also be recorded on request, with its chat - and a TikTok chann
 watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). A bot
 can write in a channel's chat - when a recording starts or ends, when a clip was made - and
 take commands there from its streamer and moderators (start or stop a recording, say how
-things stand); it is off for every channel until that channel's settings switch it on. See
-[README.md](README.md) for the roadmap.
+things stand); it is off for every channel until that channel's settings switch it on. And
+the service can tell whoever runs it what happens - a clip saved, a recording started or
+saved, something on the Health page that needs a look - in a Telegram chat, a Discord channel
+or both (`notify.py`), once `.env` says where. See [README.md](README.md) for the roadmap.
 
 ## Current status
 
@@ -67,6 +69,14 @@ set from the dashboard's Settings page (see `tuning.py` below).
   server (`tiktok_chat.py`) - a few thousand signed connections a day without a key; an
   optional `EULER_STREAM_API_KEY` in `.env` raises that. TikTokLive came with the
   user's explicit consent to it and to Euler Stream (2026-10-15)
+- Notifications (optional, see `notify.py` below) go where `.env` says: `TELEGRAM_BOT_TOKEN`
+  (a bot made with @BotFather) and `TELEGRAM_CHAT_ID` (a chat that has written to the bot -
+  `PYTHONPATH=src python scripts/telegram_chats.py` lists them, with their ids), and/or
+  `DISCORD_WEBHOOK_URL` (a channel's webhook: its settings, Integrations, Webhooks). Their
+  links lead to the dashboard where `DASHBOARD_URL` says where it is reached from - from a
+  phone, the machine's MagicDNS name on the tailnet with the port, e.g.
+  `http://<machine>.<tailnet>.ts.net:8000` (the Funnel exposes only the webhook route, so the
+  dashboard is reached inside the tailnet). Without any of them nothing is sent anywhere
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
@@ -102,6 +112,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
     and its subscriber badges, without talking to Kick's subscription API at all
   - `twitch_login.py` — one-time sign-in of the Twitch account chat is read as, and the
     bot writes in Twitch's chat as (see above)
+  - `telegram_chats.py` — the chats that wrote to the Telegram bot in `TELEGRAM_BOT_TOKEN`
+    lately, with their ids: which one goes in `TELEGRAM_CHAT_ID` (see above)
   - `list_watchlist.py`, `list_moments.py` — inspect the DB from the CLI
   - `kick_login.py` — one-time interactive browser login for clip creation (see above)
   - `create_clip.py <slug>` — manually publish an official Kick clip for a channel's
@@ -160,7 +172,10 @@ set from the dashboard's Settings page (see `tuning.py` below).
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut or it is being transcribed; one whose clip is still being cut has
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
-  watchlist and the per-clip analysis switches; shutting the service down is the button
+  watchlist, the per-clip analysis switches, and - while notifications go anywhere - a switch
+  for each kind of them (clips, the clips themselves as videos, recordings, problems;
+  `app_settings` like the analysis ones; all on but the videos to begin with), or how to set
+  them up where they go nowhere; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
   "Recorded only"; `POST /channels/{slug}/tracking` refuses to switch it on), and the button that
@@ -224,8 +239,9 @@ set from the dashboard's Settings page (see `tuning.py` below).
   arrived and when each channel's chat last spoke, what the last check of Kick's chat
   subscriptions found - with a button that checks now, and the list of the times Kick was found to
   have dropped some - as whom the bot writes in which channels' chat and whether it can (with
-  the button that signs its Kick account in), what each recorder is doing (and which channels
-  renamed themselves on Kick and were followed), how much room the
+  the button that signs its Kick account in), where notifications go and when the last one went
+  out (with a button that sends a test, `POST /notifications/test`), what each recorder is
+  doing (and which channels renamed themselves on Kick and were followed), how much room the
   disk has and what takes it, and where the tunnel stands. Each part says it in a sentence, in bold when it is trouble, and
   how many of them are trouble stands beside "Health" in the bar of every page. Its script fetches
   the page again every few seconds and swaps in what each part says now. No page reloads on its own; the
@@ -274,6 +290,9 @@ Watchlist (streamers, each on its platform - see platforms.py)
        that recording or asks how things stand, and what it says goes back into the
        chat - on Kick through the public API as an account signed in for it, on Twitch
        through Helix as the account chat is read as
+    -> notifications (notify), where .env says: a clip saved, a recording started or
+       saved or not, a part of the Health page that needs a look and looks fine again -
+       to a Telegram chat through the Bot API, to a Discord channel through its webhook
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
        watchlist and moments
 ```
@@ -561,6 +580,36 @@ Module map (`src/kick_clip_hunter/`):
   (`written` - a trouble of the account's own is the account keeper's to say, so it ends
   with the next sign-in). `Recent` is the command messages carried out lately, so that
   one a platform delivers twice is carried out once
+- `notify.py` — notifications: what the service tells whoever runs it, in a Telegram chat
+  and/or a Discord channel. What a note says, worded for a phone (`clip_note` - how long, how
+  far into the stream, what chat said most or what set it off -, `recording_started_note`,
+  `recording_saved_note`, `recording_failed_note`, `recording_empty_note`, `health_note`,
+  `test_note`), a `Note` (a title, a few lines, the channel, a link to the dashboard by
+  `DASHBOARD_URL`, whether it is trouble), and how it is sent: `Telegram` (Bot API, as the
+  bot: `sendMessage` in its HTML, `sendVideo` for a clip - 50 MB at most), `Discord` (the
+  channel's webhook, `?wait=true`: an embed - author the channel, the title its link, red
+  for trouble - and a clip as `files[0]` beside `payload_json`, 20 MB at most on a server
+  without boosts). What chat wrote is escaped for each (Telegram's HTML, Discord's markdown)
+  and mentions nobody on Discord (`allowed_mentions`). A 429 is waited out once, up to
+  `RETRY_AFTER_MAX_SECONDS`; a destination that could not be reached is tried once more
+  after `RETRY_SECONDS`; a clip too big for one (`video_max_bytes`, or a 413) goes there as
+  words that say so. `Notifier.notify` never raises and holds nothing up: the notes for one
+  destination go one at a time in the order they came, and what became of the last is kept
+  for the Health page (`sent`, its trouble until the next goes out). A Telegram bot's token
+  is in every address it is asked at, so no address is ever put into words - a transport
+  error is said by its type alone - and httpx's own request log stays at WARNING (main.py).
+  `HealthWatch` decides what of the Health page is told of: a part that has been trouble for
+  `after_seconds` on end, once, and again once it is fine; switched off, it forgets. Also the
+  set-up's words for the log (`setup_trouble`), and what `scripts/telegram_chats.py` asks
+  (`telegram_bot`, `telegram_chats` - getMe, getUpdates). main.py wires it: `_notes()` (from
+  `.env`, built when first asked), `_notify` (in the background, where a kind's switch is on),
+  `_notify_of_clip` (after a clip's file is saved, from `_create_clip_background`; with the
+  clip alone cut out by `recorder.clip_alone` into a temporary folder where "Clip videos" is
+  on - not for clips made from a recording by hand), the recording notes from
+  `_start_stream_recording` (who started it: `notify.DASHBOARD`, `CHAT` and by whom, `ALWAYS`),
+  `_end_stream_recording` and `_save_stream_recording`, and `_keep_telling_of_health`, which
+  looks at the Health page's judgement every `HEALTH_NOTE_SECONDS` (`_tell_of_health`) and
+  tells of a part after `HEALTH_NOTE_AFTER_SECONDS`
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page
@@ -623,7 +672,10 @@ Module map (`src/kick_clip_hunter/`):
   has the button the account signs in with); a Kick or Twitch channel it
   cannot write in - no account to write as, one that did not let it, the last message turned
   down - is trouble, a YouTube or TikTok one is not. `bot_account_words` says as whom it
-  writes, here and on a channel's Settings page.
+  writes, here and on a channel's Settings page. The notifications' part
+  (`notifications_part`, from `main._notification_facts`) is there while they go anywhere:
+  where, what they tell of, where their links lead, and when the last went out to each
+  destination - one that turned the last down is trouble until the next goes out.
 - `tunnel.py` — where the Tailscale Funnel in front of the webhook receiver stands, as the
   machine's own Tailscale client says (`tailscale status --json`, `tailscale funnel status
   --json`): not installed, not connected, nothing forwarding `/webhooks/kick`, served inside
@@ -984,7 +1036,10 @@ run what, the manual live checklist). What matters when changing code:
   connection TikTokLive makes to a room's chat; the comments are TikTokLive's own
   CommentEvent, `tiktok.comment`), `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an
   initialization segment), `FakeFlvServer` (an FLV download, made TikTok-like by
-  `as_tiktok_sends_it`), `WebhookSigner`, `ChatSim`, the `service` fixture) rather than
+  `as_tiktok_sends_it`), `FakeTelegram` and `FakeDiscord` (where notifications go: the Bot
+  API with its HTML read as Telegram reads it, and a channel's webhook - the `telegram` and
+  `discord` fixtures, which put them in `.env`; a test then loads the service's settings
+  again), `WebhookSigner`, `ChatSim`, the `service` fixture) rather than
   patching the service's own functions, and never `sleep` - pass the clock in or use
   `wait_until`.
 - Detector tests are written against `detector.py`'s constants, not their current values, so
@@ -1139,6 +1194,15 @@ service is a visitor that is not signed in), and a stream whose encoding changes
 - A TikTok recording is kept in the quality the streamer sends - HEVC as a rule, which the
   browser playing it on the Recordings page has to be able to decode (Chrome and Edge on
   Windows do with a graphics card that decodes HEVC, as this host's RX 480 does).
+
+- Notifications are only as good as where they go. Telegram takes a video of up to 50 MB from
+  a bot and Discord a file of up to 20 MB on a server without boosts (raised from 10 MB in
+  August 2026), so with "Clip videos" on a clip of half a minute at 1080p60 (25-35 MB) goes to
+  Telegram and not, as a rule, to Discord - its note says so. A Telegram bot writes only in a
+  chat that has written to it first (or a group it is in): "chat not found" or a 403 on the
+  Health page means `TELEGRAM_CHAT_ID` is not such a chat. A Discord webhook deleted in Discord
+  answers "Unknown Webhook" (404). Changes to `.env` take a restart. A part of the Health page
+  is told of after it has been trouble for two minutes; one that flickers is never told of.
 
 - A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
   and as much again for the minutes its file takes to make (the footage is copied once,

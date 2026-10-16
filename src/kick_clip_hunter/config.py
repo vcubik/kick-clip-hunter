@@ -24,6 +24,14 @@ class Settings:
     # chat is read with (see tiktok_chat.py), for more of them a day than it
     # signs without one. The chat of a few channels needs none.
     euler_stream_api_key: str = ""
+    # Where notifications go (see notify.py): a Telegram bot's token and the
+    # chat it writes in, a Discord channel's webhook - either, both or
+    # neither. And where the dashboard is reached from, for the links in
+    # them: none without it.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    discord_webhook_url: str = ""
+    dashboard_url: str = ""
 
     @property
     def twitch(self) -> bool:
@@ -41,4 +49,8 @@ def load_settings() -> Settings:
         twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", "").strip(),
         kick_redirect_uri=os.environ.get("KICK_REDIRECT_URI", "").strip() or DEFAULT_KICK_REDIRECT_URI,
         euler_stream_api_key=os.environ.get("EULER_STREAM_API_KEY", "").strip(),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", "").strip(),
+        dashboard_url=os.environ.get("DASHBOARD_URL", "").strip(),
     )

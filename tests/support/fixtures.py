@@ -26,6 +26,7 @@ from tests.support.eventsub import FakeEventSub
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
+from tests.support.notify import TELEGRAM_CHAT, FakeDiscord, FakeTelegram
 from tests.support.tailscale import FakeTailscale
 from tests.support.tiktok import FakeTikTok
 from tests.support.twitch_api import FakeTwitchApi
@@ -143,6 +144,28 @@ def tiktok(kick_api: FakeKickApi) -> FakeTikTok:
     everything else still goes to the fake Kick (and the others, where a test
     has them too). TikTok needs nothing set up."""
     fake = FakeTikTok()
+    kick_api.others.append(fake)
+    return fake
+
+
+@pytest.fixture
+def telegram(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTelegram:
+    """A fake Telegram for every `httpx.AsyncClient` the service creates,
+    and .env naming its bot and a chat it writes in. The service is set up
+    with it once a test loads its settings again (see config.py)."""
+    fake = FakeTelegram()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", fake.token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", TELEGRAM_CHAT)
+    kick_api.others.append(fake)
+    return fake
+
+
+@pytest.fixture
+def discord(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeDiscord:
+    """A fake Discord webhook for every `httpx.AsyncClient` the service
+    creates, and .env naming it - as `telegram` does."""
+    fake = FakeDiscord()
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", fake.url)
     kick_api.others.append(fake)
     return fake
 

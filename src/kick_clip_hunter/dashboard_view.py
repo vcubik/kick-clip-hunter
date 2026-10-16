@@ -955,3 +955,27 @@ ANALYSIS_CAPTIONS = {
     "sound_events": "What is heard in each new clip is tagged: speech, music, laughter, game sound.",
     "frames": "Three frames of each new clip are stored as embeddings for a future model.",
 }
+
+# What each kind of notification tells of, said beside its switch. Keyed
+# like main.NOTIFY_SETTINGS.
+NOTIFY_CAPTIONS = {
+    "notify_clips": "Each new clip: whose, how long, how far into the stream, what chat said most.",
+    "notify_clip_videos": (
+        "The clip itself goes with it, without the footage around it, where it fits: "
+        "Telegram takes up to 50 MB, Discord 20 MB."
+    ),
+    "notify_recordings": "A recording of a whole stream started, was saved, or could not be.",
+    "notify_health": "Something on the Health page needs a look, and when it looks fine again.",
+}
+
+
+def notify_lead_words(destinations: list[str]) -> str:
+    """What the Channels page says of notifications: where they go, or how
+    they are set up."""
+    if not destinations:
+        return (
+            "None are set up. TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env send them to a Telegram chat, "
+            "DISCORD_WEBHOOK_URL to a Discord channel - the README says how."
+        )
+    return f"They go to {list_words(destinations)}. Each kind is sent until it is switched off here."
+

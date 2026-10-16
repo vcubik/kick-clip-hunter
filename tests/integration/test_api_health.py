@@ -114,8 +114,9 @@ class TestThePage:
         # Nothing to list of channels there are none of.
         assert part(page, "webhooks").find("table") == [] and part(page, "recorders").find("table") == []
         # Twitch's, YouTube's and TikTok's chat are no part of a service that
-        # has nothing to do with them, nor is a bot that writes nowhere as nobody.
-        apart = ("twitch", "youtube", "tiktok", "bot")
+        # has nothing to do with them, nor is a bot that writes nowhere as
+        # nobody, nor notifications that go nowhere.
+        apart = ("twitch", "youtube", "tiktok", "bot", "notifications")
         assert all(page.find("div", data_health_part=name) == [] for name in apart)
         assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in apart)
 

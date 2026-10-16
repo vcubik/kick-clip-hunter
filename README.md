@@ -93,6 +93,13 @@ YouTube stream
   account it reads, whose YouTube and TikTok chat comes in, as whom the bot writes and where it
   cannot, what each recorder is doing, how much room the disk has, where the tunnel stands. Every
   page says beside its name when one of them needs a look.
+- **Tells you what happens, wherever you are.** Where `.env` names a Telegram bot or a Discord
+  channel's webhook - or both - a short note goes there when a clip is saved (whose, how long, how
+  far into the stream, what chat said most, and the clip itself if you want it and it fits), when a
+  recording of a whole stream starts and when it is saved or could not be, and when something on
+  the Health page has needed a look for a couple of minutes, and again once it looks fine. Each
+  kind is switched on the Channels page; the Health page says where they go and sends a test. With
+  the dashboard's address on the tailnet in `.env`, every note links to what it is about.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -146,6 +153,17 @@ run on Windows; the test suite also runs on Linux.
    or on the Health page - in a browser on the same machine (a private window, if it is signed in
    to Kick as someone else). Kick shows its own consent page; the service never sees a password.
 
+8. Optional, for notifications: make a Telegram bot with [@BotFather](https://t.me/BotFather), put
+   its token in `.env` as `TELEGRAM_BOT_TOKEN`, write anything to the bot, then run
+   ```
+   PYTHONPATH=src python scripts/telegram_chats.py
+   ```
+   and put the id it lists for your chat in `.env` as `TELEGRAM_CHAT_ID`. For Discord, make a
+   webhook in a channel's settings (Integrations, Webhooks) and put its address in `.env` as
+   `DISCORD_WEBHOOK_URL`. For the notes to link to the dashboard from a phone, put the address it is
+   reached at on the tailnet in `.env` as `DASHBOARD_URL` (e.g.
+   `http://<machine>.<tailnet>.ts.net:8000`).
+
 YouTube needs nothing set up: its channels are looked up, and their chat read, the way the site's
 own pages do it, as a visitor who is not signed in.
 
@@ -177,6 +195,7 @@ Other scripts (`PYTHONPATH=src python scripts/<name>.py`):
 |---|---|
 | `refresh_emotes.py <channel>` | Re-fetch a watched channel's emotes - 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's: what the detector listens for and the pictures chat is drawn with. (A YouTube channel has none: its emoji come with every message.) |
 | `twitch_login.py` | Sign in the Twitch account the service reads chat as, and the bot writes in it as - once, and again if the Health page says the sign-in has lapsed or the account has not let the bot write. |
+| `telegram_chats.py` | List the chats that wrote to the Telegram bot notifications go through, with their ids - which one goes in `TELEGRAM_CHAT_ID`. |
 | `list_watchlist.py`, `list_moments.py` | Inspect the database from the terminal. |
 | `replay_chat.py <slug>` | Replay a channel's stored chat through the detector and report how many moments would fire, optionally with detector constants overridden - the way to check a tuning change against a real stream. The Settings page does the same with the values in its form. |
 | `import_clip.py`, `import_clips_dir.py` | Import clips from elsewhere as moments, to rate them as reference data. |
@@ -217,6 +236,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | `tiktok_client.py`, `tiktok_stream.py`, `tiktok_chat.py`, `flv.py` | TikTok: the site's own API - who a channel is, whether it is live, where its stream is; the chat of a channel whose stream is recorded, through TikTokLive; an FLV stream read as it arrives and cut into pieces the recorder keeps as MPEG-TS segments. |
 | `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
+| `notify.py` | Notifications: what is told of a clip, a recording or a part of the Health page that needs a look, and how it goes to a Telegram chat (the Bot API) and a Discord channel (its webhook). |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |
 | `db.py` | SQLite schema, in-place upgrades and queries. |
 | `subtitles.py` | A clip's transcript as subtitles: lines a subtitle long made of the words the speech model heard, put right on the review page, written out as SubRip timed to the video they go with. |

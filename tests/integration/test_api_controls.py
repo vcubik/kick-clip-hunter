@@ -75,6 +75,10 @@ class TestSwitches:
             "audio_events_enabled": True,
             "frames_enabled": False,
             "sound_events_enabled": False,
+            "notify_clips_enabled": True,
+            "notify_clip_videos_enabled": False,
+            "notify_recordings_enabled": True,
+            "notify_health_enabled": True,
         }
 
     async def test_a_fresh_installation_watches_but_analyses_nothing(self, service):
@@ -82,13 +86,25 @@ class TestSwitches:
 
         assert service.main._flags == service.main.SETTING_DEFAULTS
         assert service.main.SETTING_DEFAULTS["watching_enabled"] is True
-        assert not any(value for key, value in service.main.SETTING_DEFAULTS.items() if key != "watching_enabled")
+        analysis = [service.main.SETTING_KEYS[name] for name, _label in service.main.ANALYSIS_SETTINGS]
+        assert not any(service.main.SETTING_DEFAULTS[key] for key in analysis)
 
-    async def test_every_switch_has_a_default_and_every_analysis_switch_a_label(self, service):
+    async def test_notifications_tell_of_everything_but_the_clips_themselves_to_begin_with(self, service):
+        main = service.main
+
+        assert {name: main.SETTING_DEFAULTS[main.SETTING_KEYS[name]] for name, _label in main.NOTIFY_SETTINGS} == {
+            "notify_clips": True,
+            "notify_clip_videos": False,
+            "notify_recordings": True,
+            "notify_health": True,
+        }
+
+    async def test_every_switch_has_a_default_and_every_analysis_and_notification_switch_a_label(self, service):
         main = service.main
 
         assert set(main.SETTING_DEFAULTS) == set(main.SETTING_KEYS.values())
-        assert {name for name, _label in main.ANALYSIS_SETTINGS} == set(main.SETTING_KEYS) - {"watching"}
+        labelled = {name for name, _label in [*main.ANALYSIS_SETTINGS, *main.NOTIFY_SETTINGS]}
+        assert labelled == set(main.SETTING_KEYS) - {"watching"}
 
 
 class TestRating:

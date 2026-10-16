@@ -714,6 +714,7 @@ class TestThePageAsAWhole:
             "youtube",
             "tiktok",
             "bot",
+            "notifications",
             "recorders",
             "disk",
             "tunnel",
@@ -1169,6 +1170,75 @@ class TestChatBot:
         assert health.bot_account_words(None, "youtube") == health.YOUTUBE_WORDS
         assert health.bot_account_words(None, "twitch") == (
             "The service is not set up for Twitch, so the bot cannot write there."
+        )
+
+
+class TestNotifications:
+    """Where notifications go: a part of the page while they go anywhere."""
+
+    TELEGRAM = health.NoteDestination("Telegram", "chat 42")
+    DISCORD = health.NoteDestination("Discord", "the webhook's channel")
+
+    def part(self, notes: health.Notifications | None) -> dict:
+        return health.notifications_part(facts(notifications=notes), TODAY)
+
+    @pytest.mark.parametrize("notes", [None, health.Notifications()])
+    def test_going_nowhere_there_is_no_such_part(self, notes):
+        report = health.report(facts(last_webhook_at=ago(2), notifications=notes), TODAY)
+
+        assert report["notifications"]["shown"] is False
+        assert "notifications" not in report["lead"]
+
+    def test_it_says_where_they_go_and_when_the_last_went_out(self):
+        sent = health.NoteDestination("Telegram", "chat 42", sent_at=ago(90))
+
+        part = self.part(health.Notifications((sent, self.DISCORD), dashboard_url="http://pc:8000"))
+
+        assert (part["shown"], part["trouble"]) == (True, False)
+        assert part["said"] == "Notifications go to Telegram and Discord."
+        assert part["more"][1] == "Their links lead to the dashboard at http://pc:8000."
+        assert [(row["name"], row["where"], row["sent"], row["note"]) for row in part["rows"]] == [
+            ("Telegram", "chat 42", "1 minute ago", ""),
+            ("Discord", "the webhook's channel", "Nothing yet", ""),
+        ]
+        assert part["rows"][0]["sent_title"] == when_words(ago(90).astimezone(), TODAY)
+
+    def test_one_that_turned_the_last_down_is_trouble_and_says_why(self):
+        failing = health.NoteDestination("Discord", "the webhook's channel", trouble="Discord did not take it (404).")
+
+        part = self.part(health.Notifications((self.TELEGRAM, failing)))
+        report = health.report(facts(last_webhook_at=ago(2), notifications=health.Notifications((failing,))), TODAY)
+
+        assert part["trouble"] is True
+        assert part["said"] == "The last notification could not be sent to Discord."
+        assert part["rows"][1]["note"] == "Discord did not take it (404)."
+        assert report["troubles"] == 1 and report["lead"] == "Notifications need a look."
+
+    @pytest.mark.parametrize(
+        ("kinds", "words"),
+        [
+            (
+                {},
+                "They tell of clips, recordings of whole streams and what on this page needs a look. "
+                "The Channels page switches each kind on and off.",
+            ),
+            (
+                {"clip_videos": True, "recordings": False, "problems": False},
+                "They tell of clips, with the clip itself where it fits. "
+                "The Channels page switches each kind on and off.",
+            ),
+            (
+                {"clips": False, "recordings": False, "problems": False},
+                "They tell of nothing: the Channels page has every kind switched off.",
+            ),
+        ],
+    )
+    def test_it_says_what_they_tell_of(self, kinds, words):
+        assert self.part(health.Notifications((self.TELEGRAM,), **kinds))["more"][0] == words
+
+    def test_without_an_address_for_the_dashboard_it_says_where_one_is_set(self):
+        assert self.part(health.Notifications((self.TELEGRAM,)))["more"][1] == (
+            "They have no links to the dashboard: DASHBOARD_URL in .env says where it is reached from."
         )
 
 
