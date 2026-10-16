@@ -302,6 +302,7 @@ class TestWatchlist:
             "Clip tracking",
             "Always record",
             "Stream recording",
+            "Remove",
         ]
 
     async def test_each_tracking_switch_posts_to_its_own_channel(self, service):

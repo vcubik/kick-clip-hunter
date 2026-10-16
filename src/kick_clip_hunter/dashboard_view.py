@@ -679,6 +679,12 @@ def recording_stopped_words(kept: bool, always: bool) -> str:
     return f"{words} The channel's next stream is recorded again." if always else words
 
 
+def kept_words(moments: int, recordings: int) -> str:
+    """What came of watching a channel, as the dialog that removes it
+    offers to delete it: "3 moments and 1 recording"."""
+    return f"{count_words(moments, 'moment')} and {count_words(recordings, 'recording')}"
+
+
 # What switching a channel to being recorded always, or back, answers with.
 ALWAYS_RECORD_WORDS = {
     True: "Every stream of {channel} is recorded from when it goes live. Stopping a recording ends it for that stream.",

@@ -89,6 +89,18 @@ async def subscribe_chat_messages(broadcaster_user_id: int, token: str) -> dict:
         return response.json()
 
 
+async def unsubscribe(subscription_ids: list[str], token: str) -> None:
+    """Removes event subscriptions, by the ids get_event_subscriptions
+    lists them with."""
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(
+            f"{API_BASE}/events/subscriptions",
+            params=[("id", subscription_id) for subscription_id in subscription_ids],
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+
+
 async def get_site_channel(slug: str) -> dict:
     """A channel as kick.com's own pages are told about it, by its slug -
     where its subscriber badges are (see channel_badges.from_kick)."""

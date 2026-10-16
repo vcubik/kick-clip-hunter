@@ -137,7 +137,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   otherwise freezes the whole app whenever someone clicks in the terminal window.
 - Dashboard: `GET /dashboard` is the review page - a queue of moments (unrated, all, or
   best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
-  (1-5 rate and move on, J/K move, Space plays). Under the clip is the chat trace:
+  (1-5 rate and move on, J/K move, Space plays, Del and Del again deletes the open
+  moment). Under the clip is the chat trace:
   messages a second and how many of them were laughing, on the clip's own time axis, from
   30s before the clip to 60s after it. It is also the scrubber - a timeline over the
   clip's file, which opens with the footage that led up to the clip and runs on into what
@@ -154,14 +155,29 @@ set from the dashboard's Settings page (see `tuning.py` below).
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
   line's time plays the clip from there - and downloaded as subtitles (.srt) timed to the
-  moment's file, or beside the cut in the Trim dialog. `GET /dashboard/channels` has the
+  moment's file, or beside the cut in the Trim dialog. Delete, under the moment's tags, asks once
+  more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
+  beside its clip - the cut, its chat video and record, old context clips - but not while a
+  stretch of it is being cut or it is being transcribed; one whose clip is still being cut has
+  that clip thrown away when it arrives. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
   "Recorded only"; `POST /channels/{slug}/tracking` refuses to switch it on), and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
   how much has been recorded so far - and its "Always record" switch, with which a
-  recording is started by itself whenever the channel goes live. `GET
+  recording is started by itself whenever the channel goes live. Remove, at the end of its
+  row, opens a dialog that takes it off the watchlist (`POST /channels/{slug}/delete`): its
+  emotes, badges and own settings go, its recorder is stopped, its Kick chat subscription
+  removed (a failure is only logged), and chat a platform still sends of it is dropped from
+  then on (`db.was_removed`; a channel that was never on the watchlist is still taken in, as
+  before). Its moments, recordings and chat stay unless the dialog's box is ticked
+  (`everything=1`), which removes them for good too - the chat a chunk at a time
+  (`db.REMOVE_CHUNK`). Refused while its stream is being recorded or saved, and with
+  `everything` while something is being made of one of its moments or recordings. Added again,
+  a channel has its old id again - a Kick channel by its Kick id, any other because the id is
+  remembered (`removed_channel:<platform>:<id>` in `app_settings`) and never given to a new
+  channel. `GET
   /dashboard/recordings` lists those recordings,
   the newest first, and plays the open one with its chat replayed beside it - fetched a
   stretch at a time as the video plays on or is moved in, since a recording runs for hours -
@@ -1115,7 +1131,8 @@ service is a visitor that is not signed in), and a stream whose encoding changes
 - A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
   and as much again for the minutes its file takes to make (the footage is copied once,
   twice if the stream broke off and its parts have to be joined). Nothing deletes
-  recordings but the button on the Recordings page.
+  recordings but the button on the Recordings page, and removing their channel from the
+  watchlist with everything that came of watching it.
 - The browser has to be able to move about in a multi-gigabyte recording, which it does
   by asking for byte ranges; Starlette's `StaticFiles` answers those (pinned by a test),
   so the file is written with its index at the end and not rewritten to move it forward.

@@ -234,6 +234,19 @@ def is_held_off(channel_slug: str) -> bool:
     return channel_slug in _held_off
 
 
+async def forget(channel_slug: str) -> None:
+    """Stops a channel's recorder for good, and forgets what was seen of
+    it - for a channel taken off the watchlist, which the loop no longer
+    looks at, so would never stop. Its buffer stays on disk until the
+    recorder of a channel of that name prunes it: a moment of the channel
+    whose clip is still to be cut is cut from it."""
+    recorder = _recorders.pop(channel_slug, None)
+    if recorder is not None and recorder.is_active:
+        await asyncio.to_thread(recorder.stop)
+    _looks.pop(channel_slug, None)
+    _held_off.discard(channel_slug)
+
+
 def hold_room(recording_id: int, size: int) -> None:
     """Counts a recording that is being saved as taking that much of the
     disk's free room, until `release_room`."""
