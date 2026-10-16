@@ -24,17 +24,30 @@
     <span class="ch-cap"></span>
     <button type="button" class="set-rest" data-rest="{{ '1' if field.rest == 'On' else '0' }}"{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
   </span>
+  {%- elif field.kind in ("words", "phrases") -%}
+  {#- A list: what is typed is added to it, one item at a time, and each item
+      it holds has a cross that takes it out again. -#}
+  <label class="set-name" for="set-{{ field.name }}">{{ field.label }}</label>
+  <span class="set-value set-value-list">
+    <span class="set-add">
+      <input type="text" class="ch-input set-add-input" id="set-{{ field.name }}" minlength="{{ field.item_least }}" maxlength="{{ field.item_most }}" placeholder="{{ 'Part of an emote name' if field.kind == 'words' else 'A whole message' }}" autocomplete="off" spellcheck="false" data-item-input>
+      <button type="button" class="ch-btn" data-item-add>Add</button>
+    </span>
+    <span class="ch-cap"></span>
+    <button type="button" class="set-rest" data-rest='{{ field.rest_items | tojson }}'{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
+  </span>
+  <ul class="set-items" aria-label="{{ field.label }}" data-setting="{{ field.name }}" data-kind="{{ field.kind }}" data-most="{{ field.items_most }}">
+    {%- for item in field.list_items -%}
+    <li class="set-item" data-item="{{ item }}"><span>{{ item }}</span><button type="button" class="set-item-x" aria-label="Remove {{ item }}" data-item-remove>×</button></li>
+    {%- endfor -%}
+  </ul>
   {%- else -%}
   <label class="set-name" for="set-{{ field.name }}">{{ field.label }}</label>
   <span class="set-value">
-    {% if field.kind in ("words", "phrases") -%}
-    <input type="text" class="ch-input set-list" id="set-{{ field.name }}" value="{{ field.value }}" autocomplete="off" spellcheck="false" data-setting="{{ field.name }}" data-kind="{{ field.kind }}">
-    {%- else -%}
     {#- A text field, not a number one: a browser writes a number field's
         value in its own language's way, with a comma where the page writes
         a point. -#}
     <input type="text" inputmode="{{ 'numeric' if field.kind == 'whole' else 'decimal' }}" class="ch-input set-number" id="set-{{ field.name }}" value="{{ field.value }}" title="{{ field.range_words }}" autocomplete="off" data-setting="{{ field.name }}" data-kind="{{ field.kind }}">
-    {%- endif %}
     <span class="ch-cap">{{ field.unit }}</span>
     <button type="button" class="set-rest" data-rest="{{ field.rest }}"{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
   </span>

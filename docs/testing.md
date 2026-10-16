@@ -496,8 +496,11 @@ Run this on a live channel after changing any of the above, or the code right ne
    made, and the second row has fewer. Save: the page says so, the setting is marked as set with a
    button that would put back what all channels have, and the log has `settings of <channel> ->
    reacting_least=...`. A value outside its range, or a floor above its ceiling, is refused in a
-   sentence and what was typed stays in the form. With the channel live, the next moments follow
-   the new values without a restart. Put the value back and save, or switch the channel's own
+   sentence and what was typed stays in the form. In "More laughing emotes" type a part of an emote
+   name and press Enter (or Add): it is listed under the field with a cross, which takes it out
+   again; one with a space in it, too short or already there is refused in the form's status line,
+   and one typed but not added is added when the form is saved. With the channel live, the next
+   moments follow the new values without a restart. Put the value back and save, or switch the channel's own
    settings off, when done.
 11. **Record a stream.** On the Channels page press "Start recording" beside a live channel -
    one with tracking off shows that the two are independent. Within a few seconds (a browser

@@ -652,7 +652,17 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .set-value > .ch-cap { justify-self: start; }
 .set-row > .ch-cap { grid-column: 1 / -1; max-width: 76ch; }
 .set-number { width: 96px; font-variant-numeric: tabular-nums; }
-.set-list { width: 260px; }
+/* A list: a field and Add beside it, and under them the items it holds,
+   each `inset` like what is typed, with a cross that takes it out. */
+.set-add { display: flex; gap: var(--space-4); }
+.set-add-input { width: 200px; }
+.set-items { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.set-items:empty { display: none; }
+.set-item { display: inline-flex; align-items: center; max-width: 100%; height: var(--h-compact); padding-left: 10px; border-radius: var(--radius-control); background-color: var(--inset); font-size: 13px; }
+.set-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-item-x { flex: none; width: var(--h-compact); height: var(--h-compact); padding: 0; border: 0; border-radius: var(--radius-control); background: none; color: var(--text-2); font-size: 16px; line-height: 1; }
+.set-item-x:hover { background-image: linear-gradient(var(--veil), var(--veil)); color: var(--text); }
+.set-item-x:disabled { opacity: 0.45; cursor: not-allowed; background-image: none; }
 .set-rest { width: 100%; height: var(--h-compact); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 12px; font-stretch: var(--width-compact); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .set-rest:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .set-rest:disabled { background: none; color: var(--text-2); cursor: default; }
@@ -773,7 +783,11 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .health-table { display: block; overflow-x: auto; }
   .set-row { grid-template-columns: minmax(0, 1fr); }
   .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
-  .set-list { width: 100%; }
+  .set-value-list { display: flex; flex-wrap: wrap; justify-content: start; gap: var(--space-4) var(--space-8); }
+  .set-value-list > .ch-cap { display: none; }
+  .set-value-list .set-add { flex: 1 1 100%; }
+  .set-value-list .set-add-input { flex: 1 1 auto; width: auto; min-width: 0; }
+  .set-value-list .set-rest { width: auto; max-width: 100%; }
   .set-foot { bottom: 0; }
   .an-page { overflow: visible; padding: var(--space-16); }
   .an-head { flex-wrap: wrap; align-items: flex-start; }

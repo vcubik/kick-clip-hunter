@@ -196,6 +196,13 @@ class TestTakingAValue:
         with pytest.raises(ValueError, match="'ab' has to be"):
             tuning.clean("ignored_emote_words", "kekw ab")
 
+    def test_a_part_of_an_emote_name_has_no_spaces_in_it(self):
+        # The page adds the items of a list one at a time, so nothing splits
+        # one that holds a space into words.
+        with pytest.raises(ValueError, match="'haha smich' is more than one word"):
+            tuning.clean("laugh_emote_words", ["kekw", "haha smich"])
+        assert tuning.clean("ignored_messages", ["gg wp"]) == ("gg wp",)
+
     def test_the_patterns_built_in_would_all_be_taken(self):
         for pattern in (*detector.LAUGH_EMOTE_NAME_PATTERNS, *detector.DANCE_EMOTE_NAME_PATTERNS):
             assert tuning.clean("laugh_emote_words", pattern) == (pattern,)
@@ -497,7 +504,7 @@ class TestOnThePage:
         assert tuning.words(setting("lull_seconds"), 30) == "30"
         assert tuning.words(setting("laugh_signal"), True) == "On"
         assert tuning.words(setting("laugh_signal"), False) == "Off"
-        assert tuning.words(setting("laugh_emote_words"), ("haha2", "smich")) == "haha2 smich"
+        assert tuning.words(setting("laugh_emote_words"), ("haha2", "smich")) == "haha2, smich"
         assert tuning.words(setting("ignored_messages"), ("!join", "gg wp")) == "!join, gg wp"
 
     def test_what_is_written_is_taken_back_as_the_same_value(self):
@@ -514,6 +521,20 @@ class TestOnThePage:
 
     def fields(self, form: list[dict]) -> dict[str, dict]:
         return {field["name"]: field for section in form for field in [*section["fields"], *section["advanced"]]}
+
+    def test_a_list_is_on_the_page_as_its_items(self):
+        fields = self.fields(self.form({"laugh_emote_words": ("smich",), "ignored_messages": ("gg wp",)}))
+
+        words, messages, number = fields["laugh_emote_words"], fields["ignored_messages"], fields["reacting_share"]
+        assert (words["list_items"], words["rest_items"]) == (["smich"], [])
+        assert (words["item_least"], words["item_most"]) == (tuning.WORD_MIN_LENGTH, tuning.WORD_MAX_LENGTH)
+        assert (messages["list_items"], messages["item_least"], messages["item_most"]) == (
+            ["gg wp"],
+            1,
+            tuning.PHRASE_MAX_LENGTH,
+        )
+        assert words["items_most"] == tuning.LIST_MAX_ITEMS
+        assert number["list_items"] is number["rest_items"] is None
 
     def test_a_channels_form_has_the_sections_in_order_with_every_setting_in_one(self):
         form = self.form(own={})

@@ -2134,7 +2134,7 @@
   // sent as nothing, and the service says what the field takes.
   function settingValue(field) {
     if (field.dataset.kind === "switch") return one('[aria-pressed="true"]', field).dataset.enabled === "1";
-    if (isList(field)) return field.value;
+    if (isList(field)) return listItems(field);
     const typed = field.value.trim().replace(",", ".");
     return typed === "" || Number.isNaN(Number(typed)) ? null : Number(typed);
   }
@@ -2158,7 +2158,7 @@
       const value = settingValue(field);
       let atRest;
       if (field.dataset.kind === "switch") atRest = value === (rest.dataset.rest === "1");
-      else if (isList(field)) atRest = value.trim() === rest.dataset.rest;
+      else if (isList(field)) atRest = sameItems(value, JSON.parse(rest.dataset.rest));
       else atRest = value === Number(rest.dataset.rest);
       row.classList.toggle("is-set", !atRest);
       rest.disabled = atRest;
@@ -2174,9 +2174,80 @@
     const field = one("[data-setting]", rest.closest(".set-row"));
     if (field.dataset.kind === "switch") {
       for (const half of all("button", field)) half.setAttribute("aria-pressed", String(half.dataset.enabled === rest.dataset.rest));
+    } else if (isList(field)) {
+      fillList(field, JSON.parse(rest.dataset.rest));
     } else {
       field.value = rest.dataset.rest;
     }
+  }
+
+  // A list among the settings is the items it holds, each with a cross that
+  // takes it out, and a field beside it whose words are added as one item -
+  // in small letters, in order and once, as the service keeps them.
+  const listItems = (list) => all("[data-item]", list).map((item) => item.dataset.item);
+  const sameItems = (some, others) => JSON.stringify([...some].sort()) === JSON.stringify([...others].sort());
+
+  function listItem(text) {
+    const item = document.createElement("li");
+    item.className = "set-item";
+    item.dataset.item = text;
+    const words = document.createElement("span");
+    words.textContent = text;
+    const cross = document.createElement("button");
+    cross.type = "button";
+    cross.className = "set-item-x";
+    cross.setAttribute("aria-label", `Remove ${text}`);
+    cross.dataset.itemRemove = "";
+    cross.textContent = "×";
+    item.append(words, cross);
+    return item;
+  }
+
+  function fillList(list, items) {
+    list.replaceChildren(...[...items].sort().map(listItem));
+  }
+
+  // Adds what is typed in a list's field to the list. What can't be added
+  // stays in the field, and the form's status line says why. Says whether
+  // the field is empty now.
+  function addTyped(input) {
+    const list = one("[data-setting]", input.closest(".set-row"));
+    const typed = input.value.trim().toLowerCase();
+    if (!typed) {
+      input.value = "";
+      return true;
+    }
+    const items = listItems(list);
+    let wrong = null;
+    if (list.dataset.kind === "words" && /\s/.test(typed)) wrong = `"${typed}" is more than one word. Add them one at a time.`;
+    else if (typed.length < input.minLength) wrong = `"${typed}" is too short: it has to be ${input.minLength} characters long at the least.`;
+    else if (items.includes(typed)) wrong = `"${typed}" is in the list already.`;
+    else if (items.length >= Number(list.dataset.most)) wrong = `The list can hold ${list.dataset.most} at the most.`;
+    if (wrong) {
+      say(input, wrong);
+      input.focus();
+      return false;
+    }
+    fillList(list, [...items, typed]);
+    input.value = "";
+    input.focus();
+    settingsEdited(settingsOf(input));
+    return true;
+  }
+
+  // What was typed into a list's field and not added yet is added before
+  // the form is saved or tried, rather than left out without a word.
+  const addAllTyped = (form) =>
+    all("[data-item-input]", form)
+      .filter((input) => !input.closest("fieldset:disabled"))
+      .every(addTyped);
+
+  function removeItem(cross) {
+    const form = settingsOf(cross);
+    const row = cross.closest(".set-row");
+    cross.closest("[data-item]").remove();
+    one("[data-item-input]", row).focus();
+    settingsEdited(form);
   }
 
   // A switch among the settings is set like any other field: it is saved
@@ -2215,6 +2286,7 @@
   }
 
   async function saveSettings(form) {
+    if (!addAllTyped(form)) return;
     say(form, "Saving.");
     const response = await post(form.dataset.tuning, { values: settingValues(form) });
     if (!response) {
@@ -2233,6 +2305,7 @@
   // form has them, and puts what each came to in the table.
   async function trySettings(button) {
     const form = one("[data-tuning]");
+    if (!addAllTyped(form)) return;
     const chat = one("[data-trial-chat]");
     const url = chat ? `${form.dataset.trial}?chat=${encodeURIComponent(chat.value)}` : form.dataset.trial;
     button.disabled = true;
@@ -2332,7 +2405,9 @@
     ["[data-transcribe]", transcribe],
     ["[data-transcript-go]", playLine],
     ["[data-switch] button", flip],
-    ["[data-setting] button", chooseSetting],
+    ["[data-item-add]", (button) => addTyped(one("[data-item-input]", button.closest(".set-row")))],
+    ["[data-item-remove]", removeItem],
+    ['[data-setting][data-kind="switch"] button', chooseSetting],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
     [
       "[data-rest-all]",
@@ -2511,6 +2586,14 @@
     }
     // The shutdown dialog's keys are the browser's own (Escape closes it).
     if (one("[data-shutdown][open]")) return;
+    if (target.matches("[data-item-input]")) {
+      // Enter adds what is typed to the list rather than saving the form.
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addTyped(target);
+      }
+      return;
+    }
     if (target.matches("[data-title]")) {
       // Enter finishes the name and so does Escape; leaving the field saves it.
       if (event.key === "Escape" || event.key === "Enter") {

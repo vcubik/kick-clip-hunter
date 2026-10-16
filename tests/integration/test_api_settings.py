@@ -11,6 +11,7 @@ the moment that fires, the clip that is cut for it, the pages.
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -545,15 +546,22 @@ async def settings_page(service, channel: str | None = None) -> Element:
 
 
 def field(page: Element, name: str) -> Element:
-    """The control a setting is set with: an input, or a switch's two halves."""
+    """The control a setting is set with: an input, a switch's two halves,
+    or the items of a list."""
     return page.one(data_setting=name)
 
 
+def items(page: Element, name: str) -> list[str]:
+    return [item.attrs["data-item"] for item in field(page, name).find("li")]
+
+
 def shown(page: Element, name: str) -> str:
-    """What the page has a setting at."""
+    """What the page has a setting at, written as `tuning.words` writes it."""
     control = field(page, name)
     if control.tag == "input":
         return control.attrs["value"]
+    if control.tag == "ul":
+        return ", ".join(items(page, name))
     (lit,) = [half.text for half in control.find("button") if half.attrs["aria-pressed"] == "true"]
     return lit
 
@@ -626,6 +634,42 @@ class TestTheSettingsPage:
         assert decimal.attrs["title"] == "A number from 0.01 to 1"
         assert row_of(page, "lull_seconds").one("span", class_="ch-cap").text == "seconds"
         assert row_of(page, "reacting_share").one("span", class_="ch-cap").text == ""
+
+    async def test_a_list_is_its_items_each_with_a_cross_and_a_field_to_add_one_more(self, service):
+        await save(service, laugh_emote_words=["smich", "haha2"], ignored_messages=["gg wp", "!join"])
+
+        page = await settings_page(service)
+
+        for name, kind, saved in (
+            ("laugh_emote_words", "words", ["haha2", "smich"]),
+            ("ignored_messages", "phrases", ["!join", "gg wp"]),
+        ):
+            row, list_ = row_of(page, name), field(page, name)
+            assert (list_.tag, list_.attrs["data-kind"]) == ("ul", kind)
+            assert list_.attrs["data-most"] == str(tuning.LIST_MAX_ITEMS)
+            assert items(page, name) == saved
+            assert [item.one("span").text for item in list_.find("li")] == saved
+            assert [cross.attrs["aria-label"] for cross in list_.find("button", data_item_remove=True)] == [
+                f"Remove {item}" for item in saved
+            ]
+            # One field, which the label is for, and Add beside it.
+            typed = row.one("input", data_item_input=True)
+            assert row.one("label").attrs["for"] == typed.attrs["id"]
+            assert "value" not in typed.attrs
+            assert row.one("button", data_item_add=True).text == "Add"
+            assert "is-set" in row.classes
+            assert json.loads(rest_button(page, name).attrs["data-rest"]) == []
+        assert row_of(page, "laugh_emote_words").one("input", data_item_input=True).attrs["minlength"] == str(
+            tuning.WORD_MIN_LENGTH
+        )
+        assert row_of(page, "ignored_messages").one("input", data_item_input=True).attrs["maxlength"] == str(
+            tuning.PHRASE_MAX_LENGTH
+        )
+
+    async def test_an_empty_list_has_no_items(self, service):
+        page = await settings_page(service)
+
+        assert field(page, "ignored_emote_words").children == []
 
     async def test_a_saved_value_is_shown_marked_and_can_be_put_back(self, service):
         await save(service, reacting_share=0.2, mention_signal=False, ignored_messages="!join, gg wp")

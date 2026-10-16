@@ -400,21 +400,21 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "laugh_emote_words", SIGNALS, WORDS,
         "More laughing emotes",
-        "Parts of emote names, with spaces between them. An emote whose name has one in it counts as "
+        "Parts of emote names, added one at a time. An emote whose name has one in it counts as "
         f"laughing, as do the ones built in: {_BUILT_IN_LAUGHING}.",
         (DETECTOR + "added_laugh_emote_patterns",),
     ),
     Setting(
         "ignored_emote_words", SIGNALS, WORDS,
         "Emotes to ignore",
-        "Parts of emote names, with spaces between them. An emote whose name has one in it is no reaction at "
+        "Parts of emote names, added one at a time. An emote whose name has one in it is no reaction at "
         f"all, like the dancing ones built in: {_BUILT_IN_DANCING}.",
         (DETECTOR + "added_ignored_emote_patterns",),
     ),
     Setting(
         "ignored_messages", SIGNALS, PHRASES,
         "Messages to ignore",
-        "Whole messages, with commas between them, that the detector leaves out the way it does a bare 1 or 2 "
+        "Whole messages, added one at a time, that the detector leaves out the way it does a bare 1 or 2 "
         "answering a poll: a giveaway's keyword, a bot's command.",
         (DETECTOR + "added_ignored_messages",),
     ),
@@ -465,7 +465,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "clip_commands", COMMANDS, PHRASES,
         "Messages that ask for a clip",
-        "Whole messages, with commas between them: !clip, for one. Posted by the channel's streamer or one of its "
+        "Whole messages, added one at a time: !clip, for one. Posted by the channel's streamer or one of its "
         "moderators, any of them makes a moment. The channel has to be tracked, and the detector leaves these "
         "messages out.",
         ("clip_commands",),
@@ -498,7 +498,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "record_commands", BOT, PHRASES,
         "Messages that start a recording",
-        "Whole messages, with commas between them: !record start, for one. Any of them starts a recording of the "
+        "Whole messages, added one at a time: !record start, for one. Any of them starts a recording of the "
         "whole stream, as the button on the Channels page does - whether or not the channel is tracked.",
         ("record_commands",),
         per_channel=True,
@@ -641,6 +641,9 @@ def clean(name: str, raw: object) -> Value:
                 raise ValueError(
                     f"{label}: {wrong[0]!r} has to be {WORD_MIN_LENGTH} to {WORD_MAX_LENGTH} characters long."
                 )
+            spaced = [item for item in items if any(character.isspace() for character in item)]
+            if spaced:
+                raise ValueError(f"{label}: {spaced[0]!r} is more than one word. Add them one at a time.")
         elif any(len(item) > PHRASE_MAX_LENGTH for item in items):
             raise ValueError(f"{label}: a message can be {PHRASE_MAX_LENGTH} characters long at the most.")
         return tuple(items)
@@ -710,9 +713,7 @@ def words(setting: Setting, value: Value) -> str:
     field would be if it were left alone."""
     if setting.kind == SWITCH:
         return "On" if value else "Off"
-    if setting.kind == WORDS:
-        return " ".join(value)
-    if setting.kind == PHRASES:
+    if setting.kind in LISTS:
         return ", ".join(value)
     return _number_words(value)
 
@@ -731,6 +732,13 @@ def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) ->
         "at_rest": value == rest,
         # What may be typed into the field, for its tooltip.
         "range_words": _range_words(setting).capitalize() if numeric else None,
+        # A list is shown as its items, each with a button that takes it out,
+        # and added to one item at a time - which may be this long.
+        "list_items": list(value) if setting.kind in LISTS else None,
+        "rest_items": list(rest) if setting.kind in LISTS else None,
+        "item_least": WORD_MIN_LENGTH if setting.kind == WORDS else 1,
+        "item_most": WORD_MAX_LENGTH if setting.kind == WORDS else PHRASE_MAX_LENGTH,
+        "items_most": LIST_MAX_ITEMS,
         "unit": setting.unit,
         "advanced": setting.advanced,
     }
