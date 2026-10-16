@@ -3,7 +3,7 @@
     doing instead - an empty queue is the normal state, since moments are
     rare. -#}
 {% extends "base.html" %}
-{% from "_macros.html" import meter %}
+{% from "_macros.html" import meter, pages %}
 {% block title %}Review{% endblock %}
 {% block main %}
 <main class="review">
@@ -58,13 +58,7 @@
     {% if empty %}
     <p class="queue-empty">{{ empty.queue }}</p>
     {% endif %}
-    {% if paging %}
-    <nav class="queue-pages" aria-label="Pages of the list">
-      <span>{{ paging.words }}</span>
-      {% if paging.newer_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.newer_href }}" rel="prev">Newer</a>{% endif %}
-      {% if paging.older_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.older_href }}" rel="next">Older</a>{% endif %}
-    </nav>
-    {% endif %}
+    {% if paging %}{{ pages(paging, "Pages of the list", "Newer", "Older") }}{% endif %}
   </div>
 
   <p class="ch-keys-hint">

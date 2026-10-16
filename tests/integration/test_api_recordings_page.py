@@ -398,6 +398,80 @@ class TestTheListOfRecordings:
         assert page.one("article", class_="recording").one("h1").text == "<b>bold</b>"
 
 
+class TestPagingTheList:
+    @pytest.fixture(autouse=True)
+    def five_recordings_two_per_page(self, service, monkeypatch):
+        monkeypatch.setattr(service.main, "RECORDINGS_PAGE_SIZE", 2)
+        self.recordings = [add_stream_recording(f"channel_{number}") for number in range(5)]
+
+    def listed(self, page: Element) -> list[int]:
+        return [int(row.attrs["href"].split("recording=")[1].split("&")[0]) for row in page.find("a", class_="rec-row")]
+
+    def opened(self, page: Element) -> str:
+        return page.one("article", class_="recording").one("h1").text
+
+    def pages(self, page: Element) -> tuple[str, dict[str, str]]:
+        paging = page.one("nav", class_="queue-pages")
+        return paging.one("span", class_="page-words").text, {
+            link.text: link.attrs["href"] for link in paging.find("a", class_="ch-btn")
+        }
+
+    async def test_the_first_page_holds_the_newest(self, service):
+        page = await recordings(service)
+
+        assert self.listed(page) == self.recordings[4:2:-1]
+        assert self.opened(page) == "channel_4"
+        assert self.pages(page) == ("1 to 2 of 5", {"Older": "/dashboard/recordings?offset=2"})
+        assert [link.text for link in page.one("nav", class_="queue-pages").find("a", class_="page-number")] == [
+            "1",
+            "2",
+            "3",
+        ]
+
+    async def test_another_page_opens_its_own_first_and_its_rows_stay_on_it(self, service):
+        page = await recordings(service, offset=2)
+
+        assert self.listed(page) == self.recordings[2:0:-1]
+        assert self.opened(page) == "channel_2"
+        assert self.pages(page) == (
+            "3 to 4 of 5",
+            {"Newer": "/dashboard/recordings", "Older": "/dashboard/recordings?offset=4"},
+        )
+        assert page.find("a", class_="rec-row")[0].attrs["href"] == view.recordings_url(self.recordings[2], offset=2)
+
+    async def test_a_recording_asked_for_alone_opens_on_the_page_that_lists_it(self, service):
+        page = await recordings(service, recording=self.recordings[0])
+
+        assert self.listed(page) == self.recordings[:1]
+        assert self.opened(page) == "channel_0"
+        assert page.one("a", class_="rec-row", aria_current="true").attrs["href"] == view.recordings_url(
+            self.recordings[0], offset=4
+        )
+
+    async def test_a_recording_from_another_page_still_opens(self, service):
+        page = await recordings(service, recording=self.recordings[0], offset=0)
+
+        assert self.listed(page) == self.recordings[4:2:-1]
+        assert self.opened(page) == "channel_0"
+        assert page.find("a", class_="rec-row", aria_current="true") == []
+
+    async def test_an_offset_past_the_end_is_the_last_page(self, service):
+        # Recordings are deleted from the page; the one it was on must not
+        # turn into an empty one.
+        assert self.listed(await recordings(service, offset=50)) == self.recordings[:1]
+
+    async def test_the_mark_counts_all_of_them_not_the_page(self, service):
+        page = await recordings(service)
+
+        status = (await service.client.get("/recordings/status")).json()
+        assert page.one("aside", data_recordings=True).attrs["data-mark"] == status["mark"] == "5:"
+
+    async def test_a_list_that_fits_one_page_has_no_paging(self, service, monkeypatch):
+        monkeypatch.setattr(service.main, "RECORDINGS_PAGE_SIZE", 5)
+
+        assert (await recordings(service)).find("nav", class_="queue-pages") == []
+
+
 class TestARecordingThatCanBePlayed:
     async def test_shows_its_video_and_what_it_is(self, service, today):
         recording_id = add_stream_recording(CHANNEL, started_at=T0 - minutes(150), seconds=9230)

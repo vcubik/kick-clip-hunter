@@ -97,6 +97,9 @@ CHATTER_ROWS = 5
 MESSAGES_PAGE_SIZE = 100
 CONTEXT_MESSAGES = 50
 MESSAGE_ANCHOR = "asked"
+# Where the messages of a search begin, under what is said of its chatter -
+# which every other page of it opens at.
+MESSAGES_ANCHOR = "messages"
 
 _ADDRESS = "/dashboard/analyze"
 _LOCAL_FORMAT = "%Y-%m-%dT%H:%M"
@@ -921,10 +924,6 @@ def session_rows(
             }
         )
     return rows
-
-
-def paging_words(offset: int, shown: int, total: int) -> str:
-    return f"{whole_words(offset + 1)} to {whole_words(offset + shown)} of {whole_words(total)}"
 
 
 def found_words(total: int, chatter: str | None, text: str) -> str:

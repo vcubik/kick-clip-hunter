@@ -90,7 +90,7 @@ def opened(page: Element) -> int | None:
 
 
 def tabs(page: Element) -> list[str]:
-    return [tab.text for tab in page.one("aside", class_="queue").find("a", class_="ch-tab")]
+    return [tab.text for tab in page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")]
 
 
 def switch_states(page: Element) -> dict[str, str]:
@@ -358,7 +358,9 @@ class TestQueue:
         page = await review(service, show="best")
 
         assert tabs(page) == ["Unrated 1", "All 3", "Best 1"]
-        marked = [tab.text for tab in page.find("a", class_="ch-tab") if tab.attrs.get("aria-current") == "true"]
+        marked = [
+            tab.text for tab in page.one("nav", class_="ch-tabs").find("a") if tab.attrs.get("aria-current") == "true"
+        ]
         assert marked == ["Best 1"]
 
     async def test_a_list_it_does_not_know_is_the_unrated_one(self, service):
@@ -1609,7 +1611,17 @@ class TestPaging:
     def pages(self, page: Element) -> tuple[str, dict[str, str]]:
         """What the paging line says and where its links lead."""
         paging = page.one("nav", class_="queue-pages")
-        return paging.one("span").text, {link.text: link.attrs["href"] for link in paging.find("a")}
+        return paging.one("span", class_="page-words").text, {
+            link.text: link.attrs["href"] for link in paging.find("a", class_="ch-btn")
+        }
+
+    def numbers(self, page: Element) -> list[tuple[str, str, bool]]:
+        """The pages by their number: each one's label, where it leads and
+        whether it is the open one."""
+        return [
+            (link.text, link.attrs["href"], link.attrs.get("aria-current") == "true")
+            for link in page.one("nav", class_="queue-pages").find("a", class_="page-number")
+        ]
 
     async def test_the_first_page_holds_the_newest(self, service):
         page = await review(service)
@@ -1622,6 +1634,20 @@ class TestPaging:
 
         assert queued(page) == self.moments[2:0:-1]
         assert self.pages(page) == ("3 to 4 of 5", {"Newer": "/dashboard", "Older": "/dashboard?offset=4"})
+
+    async def test_every_page_is_offered_by_its_number(self, service):
+        page = await review(service, offset=2)
+
+        assert self.numbers(page) == [
+            ("1", "/dashboard", False),
+            ("2", "/dashboard?offset=2", True),
+            ("3", "/dashboard?offset=4", False),
+        ]
+
+    async def test_an_offset_inside_a_page_is_that_page(self, service):
+        page = await review(service, offset=3)
+
+        assert queued(page) == self.moments[2:0:-1]
 
     async def test_the_last_page_only_links_back(self, service):
         page = await review(service, offset=4)
@@ -1695,12 +1721,12 @@ class TestChannelFilter:
         page = await review(service, channel="channel_a")
 
         queue = page.one("aside", class_="queue")
-        assert [tab.attrs["href"] for tab in queue.find("a", class_="ch-tab")] == [
+        assert [tab.attrs["href"] for tab in queue.one("nav", class_="ch-tabs").find("a")] == [
             "/dashboard?channel=channel_a",
             "/dashboard?show=all&channel=channel_a",
             "/dashboard?show=best&channel=channel_a",
         ]
-        assert [link.attrs["href"] for link in page.one("nav", class_="queue-pages").find("a")] == [
+        assert [link.attrs["href"] for link in page.one("nav", class_="queue-pages").find("a", rel="next")] == [
             "/dashboard?channel=channel_a&offset=1"
         ]
 

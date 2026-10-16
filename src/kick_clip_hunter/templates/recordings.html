@@ -3,7 +3,7 @@
     that went with it replayed in step. A recording that is not over yet
     says what it is doing instead, and the script keeps that current. -#}
 {% extends "base.html" %}
-{% from "_macros.html" import delete %}
+{% from "_macros.html" import delete, pages %}
 {% block title %}Recordings{% endblock %}
 
 {#- A recording that is deleted is gone from the list, and so is the page
@@ -25,6 +25,7 @@
     {% else %}
     <p class="queue-empty">No recordings yet</p>
     {% endfor %}
+    {% if paging %}{{ pages(paging, "Pages of the list", "Newer", "Older") }}{% endif %}
   </div>
   <p class="queue-foot">{{ free_words }}</p>
 </aside>

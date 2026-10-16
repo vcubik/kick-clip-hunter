@@ -589,12 +589,27 @@ class TestTheMessagesOfAPeriod:
 
         assert [said for _who, said in lines(first)] == [f"line {number}" for number in range(129, 29, -1)]
         assert [said for _who, said in lines(second)] == [f"line {number}" for number in range(29, -1, -1)]
-        pages = first.one("nav", class_="an-pages")
-        assert pages.one("span").text == "1 to 100 of 130"
-        assert [link.text for link in pages.find("a")] == ["On"]
-        assert "offset=100" in pages.one("a").attrs["href"]
-        assert [link.text for link in second.one("nav", class_="an-pages").find("a")] == ["Back"]
-        assert second.one("nav", class_="an-pages").one("span").text == "101 to 130 of 130"
+        for pages in first.find("nav", class_="an-pages"):
+            assert pages.one("span", class_="page-words").text == "1 to 100 of 130"
+            assert [link.text for link in pages.find("a", class_="ch-btn")] == ["On"]
+            assert "offset=100" in pages.one("a", rel="next").attrs["href"]
+        for pages in second.find("nav", class_="an-pages"):
+            assert [link.text for link in pages.find("a", class_="ch-btn")] == ["Back"]
+            assert pages.one("span", class_="page-words").text == "101 to 130 of 130"
+
+    async def test_their_pages_are_above_them_and_under_them(self, service):
+        for number in range(130):
+            say(number, content=f"line {number}")
+
+        page = await analyze(service, view="messages", **TEN_MINUTES)
+
+        above, under = page.find("nav", class_="an-pages")
+        assert "an-pages-top" in above.classes
+        assert [link.attrs["href"] for link in above.find("a")] == [link.attrs["href"] for link in under.find("a")]
+        assert [(link.text, link.attrs.get("aria-current")) for link in under.find("a", class_="page-number")] == [
+            ("1", "true"),
+            ("2", None),
+        ]
 
     async def test_a_page_past_the_end_is_the_last_one(self, service):
         for number in range(130):
@@ -732,15 +747,21 @@ class TestLookingForAChatter:
 
         page = await analyze(service, chatter="alice", q="gg", order="oldest", **TEN_MINUTES)
 
-        onward = page.one("nav", class_="an-pages").one("a").attrs["href"]
-        assert onward == chat_stats.analyze_url(
-            CHANNEL,
-            period=chat_stats.Period(T0, T0 + minutes(10)),
-            chatter="alice",
-            text="gg",
-            order=chat_stats.ORDER_OLDEST,
-            offset=100,
+        onward = page.find("nav", class_="an-pages")[-1].one("a", rel="next").attrs["href"]
+        # It opens at the messages, under what is said of the chatter.
+        assert (
+            onward
+            == chat_stats.analyze_url(
+                CHANNEL,
+                period=chat_stats.Period(T0, T0 + minutes(10)),
+                chatter="alice",
+                text="gg",
+                order=chat_stats.ORDER_OLDEST,
+                offset=100,
+            )
+            + f"#{chat_stats.MESSAGES_ANCHOR}"
         )
+        assert page.find("section", id=chat_stats.MESSAGES_ANCHOR) != []
 
 
 class TestTheChatAroundAMessage:

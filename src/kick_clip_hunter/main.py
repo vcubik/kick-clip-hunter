@@ -100,6 +100,7 @@ from .db import (
     get_moment_times,
     get_recent_moments,
     get_stream_recording,
+    get_stream_recording_offset,
     get_stream_recordings,
     get_streamer_by_id,
     get_streamer_by_slug,
@@ -1672,6 +1673,7 @@ async def health_check():
 
 
 MOMENTS_PAGE_SIZE = 50
+RECORDINGS_PAGE_SIZE = 50
 
 # Which moments each of the review queue's lists holds, as filters for the
 # moment queries.
@@ -2578,8 +2580,7 @@ async def dashboard(
         }
         # A list gets shorter as its moments are rated, so a page that was
         # there a minute ago may be past its end now: show the last one then.
-        last_page = max(counts[show] - 1, 0) // MOMENTS_PAGE_SIZE * MOMENTS_PAGE_SIZE
-        offset = min(max(0, offset), last_page)
+        offset = dashboard_view.page_offset(offset, MOMENTS_PAGE_SIZE, counts[show])
         rows = get_recent_moments(
             conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel, **SHOW_FILTERS[show]
         )
@@ -2623,7 +2624,12 @@ async def dashboard(
                 "selected_channel": channel,
                 "groups": groups,
                 "empty": empty,
-                "paging": _paging(show, channel, offset, len(rows), counts[show]),
+                "paging": dashboard_view.pages(
+                    offset,
+                    MOMENTS_PAGE_SIZE,
+                    counts[show],
+                    lambda other: dashboard_view.review_url(show, channel, offset=other),
+                ),
                 "moment": _open_moment(conn, opened, today) if opened is not None else None,
                 # Offered from an empty list when there is something to go through elsewhere.
                 "rated_href": (
@@ -2643,22 +2649,6 @@ async def dashboard(
         conn.close()
 
     return templates.TemplateResponse(request, "review.html", context)
-
-
-def _paging(show: str, channel: str | None, offset: int, shown: int, total: int) -> dict | None:
-    """Links to the neighbouring pages of the queue, or None when the whole
-    list fits on one."""
-    newer = offset > 0
-    older = offset + shown < total
-    if not newer and not older:
-        return None
-    return {
-        "words": f"{offset + 1} to {offset + shown} of {total}",
-        "newer_href": (
-            dashboard_view.review_url(show, channel, offset=max(offset - MOMENTS_PAGE_SIZE, 0)) if newer else None
-        ),
-        "older_href": dashboard_view.review_url(show, channel, offset=offset + MOMENTS_PAGE_SIZE) if older else None,
-    }
 
 
 @app.get("/dashboard/moments/{moment_id}", response_class=HTMLResponse)
@@ -3508,17 +3498,24 @@ def _open_recording(conn, row, today: date, not_over: dict | None) -> dict:
 
 
 @app.get("/dashboard/recordings", response_class=HTMLResponse)
-async def dashboard_recordings(request: Request, recording: int | None = None):
+async def dashboard_recordings(request: Request, recording: int | None = None, offset: int | None = None):
     """The Recordings page: the streams that were kept whole, the newest
-    first, and the one that is open - its video, with the chat that went
-    with it replayed beside it. `recording` is the one to open; left out, it
-    is the newest."""
+    first and a page of them at a time from `offset` on, and the one that is
+    open - its video, with the chat that went with it replayed beside it.
+    `recording` is the one to open; left out, it is the first of the page.
+    With no `offset`, the page is the one that lists the recording to open."""
     today = _today()
     conn = get_connection()
     try:
-        rows = get_stream_recordings(conn)
+        opened = get_stream_recording(conn, recording) if recording is not None else None
+        total = count_stream_recordings(conn)
+        if offset is None:
+            offset = get_stream_recording_offset(conn, opened["id"]) if opened is not None else 0
+        offset = dashboard_view.page_offset(offset, RECORDINGS_PAGE_SIZE, total)
+        rows = get_stream_recordings(conn, limit=RECORDINGS_PAGE_SIZE, offset=offset)
         not_over = _stream_recordings_not_over()
-        opened = next((row for row in rows if row["id"] == recording), rows[0] if rows else None)
+        if opened is None and rows:
+            opened = rows[0]
         context = _page_context(conn, "recordings")
         context.update(
             {
@@ -3532,7 +3529,7 @@ async def dashboard_recordings(request: Request, recording: int | None = None):
                         "length": dashboard_view.stream_time_words(row["duration"]),
                         "words": dashboard_view.recording_row_words(row["state"], not_over.get(row["id"])),
                         "running": row["id"] in not_over,
-                        "href": f"/dashboard/recordings?recording={row['id']}",
+                        "href": dashboard_view.recordings_url(row["id"], offset=offset),
                         "current": opened is not None and row["id"] == opened["id"],
                     }
                     for row in rows
@@ -3540,7 +3537,10 @@ async def dashboard_recordings(request: Request, recording: int | None = None):
                 "recording": (
                     _open_recording(conn, opened, today, not_over.get(opened["id"])) if opened is not None else None
                 ),
-                "mark": _recordings_mark(not_over, len(rows)),
+                "paging": dashboard_view.pages(
+                    offset, RECORDINGS_PAGE_SIZE, total, lambda other: dashboard_view.recordings_url(offset=other)
+                ),
+                "mark": _recordings_mark(not_over, total),
                 # Whether a recording may begin without anyone on a page
                 # having started it - which the page then has to ask about.
                 "awaited": any(row["always_record"] for row in context["streamers"]),
@@ -3850,7 +3850,7 @@ def _analyze_messages(conn, owner: int, period: chat_stats.Period, words: _ChatW
     total = count_channel_chat(conn, owner, period.start, period.end, **found)
     size = chat_stats.MESSAGES_PAGE_SIZE
     # As in the review queue, a page past the end is the last one.
-    offset = min(max(asked.offset, 0), max(total - 1, 0) // size * size)
+    offset = dashboard_view.page_offset(asked.offset, size, total)
     oldest_first = asked.order == chat_stats.ORDER_OLDEST
     rows = search_channel_chat(
         conn, owner, period.start, period.end, newest_first=not oldest_first, limit=size, offset=offset, **found
@@ -3869,14 +3869,10 @@ def _analyze_messages(conn, owner: int, period: chat_stats.Period, words: _ChatW
             {"label": "Newest first", "href": page(order=chat_stats.ORDER_NEWEST), "current": not oldest_first},
             {"label": "Oldest first", "href": page(order=chat_stats.ORDER_OLDEST), "current": oldest_first},
         ],
-        "paging": (
-            {
-                "words": chat_stats.paging_words(offset, len(rows), total),
-                "back_href": page(offset=max(offset - size, 0)) if offset > 0 else None,
-                "on_href": page(offset=offset + size) if offset + len(rows) < total else None,
-            }
-            if total > len(rows)
-            else None
+        # Another page opens at its messages, not at what is said of the
+        # chatter above them.
+        "paging": dashboard_view.pages(
+            offset, size, total, lambda other: f"{page(offset=other)}#{chat_stats.MESSAGES_ANCHOR}"
         ),
     }
 
