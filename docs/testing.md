@@ -593,9 +593,11 @@ Run this on a live channel after changing any of the above, or the code right ne
    "Live chat" view, not "Top chat"); the Health page's YouTube part says its chat comes in.
    No browser window opens for its recording: the log says `recording started`, VOD not
    available. A moment of it plays like a Kick one, YouTube's emoji in its chat drawn as
-   pictures - laughing ones counted as laughing - and its chat sits against the picture after
-   the calibration of step 6 (YouTube's player runs further behind the broadcast than Kick's,
-   the more so for a stream of normal latency). Six hours into its stream the log says
+   pictures - laughing ones counted as laughing - and its chat comes in a line at a time, as it
+   was written, not a few lines at once. It sits against the picture after the calibration of
+   step 6, which for a YouTube channel starts at 6 s rather than Kick's 3 (YouTube's player runs
+   further behind the broadcast, the more so for a stream of normal latency) - note the figure
+   it settles at, to correct that default by. Six hours into its stream the log says
    `the stream's address was renewed before it ran out`, with no `discontinuity` line and no
    restart around it. When the stream ends the log says `the chat of <handle>@youtube is
    over`. A channel whose streamer turned chat off is listed on the Health page with what

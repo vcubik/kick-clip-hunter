@@ -20,6 +20,13 @@ once, as if just written. So is what is written while the reader cannot
 look: a chat it has to open again is read from then on, as Twitch's is after
 a lost connection.
 
+A look brings what was written over the last second or few at once, so the
+messages of a look are not taken to have arrived when it was made: each is
+taken to have arrived when YouTube says it was sent - never after the look,
+and in the order they came (`arrived`). That spreads them against the
+picture as they were written, where they would otherwise land in bursts.
+The detector still counts them as they are handed on.
+
 A message is turned into a ChatMessage (chat_message.py). YouTube sends
 every emoji as a picture of its own, and those stand in the text as tokens
 like Kick's emotes - a channel's own and YouTube's as
@@ -37,8 +44,8 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -193,10 +200,52 @@ def chat_message(item: Mapping[str, Any], channel: Channel, received_at: datetim
 
 
 def messages(
-    actions: Iterable[Mapping[str, Any]], channel: Channel, received_at: datetime | None = None
+    actions: Iterable[Mapping[str, Any]],
+    channel: Channel,
+    received_at: datetime | None = None,
+    not_before: datetime | None = None,
 ) -> list[ChatMessage]:
     """The messages someone wrote among what a look at a chat brought, in
-    the order they came."""
+    the order they came.
+
+    With `received_at`, the time of the look, each is taken to have arrived
+    when YouTube says it was sent (see `arrived`), so that the messages of a
+    look are not all put at one instant; without it, "just now"."""
+    taken = _messages(actions, channel, received_at)
+    if received_at is None:
+        return taken
+    times = arrived(taken, received_at, not_before)
+    return [replace(message, received_at=when) for message, when in zip(taken, times, strict=True)]
+
+
+def arrived(taken: Sequence[ChatMessage], looked_at: datetime, not_before: datetime | None = None) -> list[datetime]:
+    """When the messages a look brought are taken to have arrived: each when
+    YouTube says it was sent.
+
+    Nothing pushes YouTube's chat, so the time of the look itself is up to
+    POLL_SECONDS after a message was written - and the same for every
+    message it brought, which would put them against the picture in bursts.
+    Their own send times spread them out as they were written. Never later
+    than the look (YouTube's clock may run ahead of this machine's), never
+    earlier than `not_before` (what the reader handed on before, so a chat's
+    messages stay in the order they came in, across looks too), and never
+    earlier than the message before - one that says nothing of when it was
+    sent arrived with the look."""
+    times: list[datetime] = []
+    least = not_before
+    for message in taken:
+        sent = datetime.fromisoformat(message.created_at) if message.created_at else looked_at
+        when = min(sent, looked_at)
+        if least is not None:
+            when = max(when, least)
+        times.append(when)
+        least = when
+    return times
+
+
+def _messages(
+    actions: Iterable[Mapping[str, Any]], channel: Channel, received_at: datetime | None
+) -> list[ChatMessage]:
     taken: list[ChatMessage] = []
     for action in actions:
         item = _at(action, "addChatItemAction", "item")
@@ -225,15 +274,17 @@ class ChatReader:
     """Reads the chat of every YouTube channel on the watchlist while it is
     live, for as long as it runs (`run_forever`). `channels` says whose chat
     is wanted, `take` is handed what was written, a look at a chat at a
-    time."""
+    time. `now` is the clock, when the service's is not wanted."""
 
     def __init__(
         self,
         channels: Callable[[], Iterable[Channel]],
         take: Callable[[list[ChatMessage]], Awaitable[object]],
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._channels = channels
         self._take = take
+        self._now = now or (lambda: datetime.now(timezone.utc))
         # For the Health page, by channel: whose chat is being read and
         # since when, the live ones whose chat cannot be and why, the ones
         # YouTube could not be asked about and why, since when - and how
@@ -310,10 +361,13 @@ class ChatReader:
         self.unavailable.pop(name, None)
         # What the first look brings was written before the reader came.
         continuation = (await youtube_client.look_at_chat(chat, client)).continuation
+        # What comes after it was written since; nothing of it arrives
+        # earlier than this (see `arrived`).
+        handed_on = self._now()
         self._heard(name)
         if name not in self.reading:
             logger.info("youtube chat: reading the chat of %s", name)
-            self.reading[name] = datetime.now(timezone.utc)
+            self.reading[name] = self._now()
         quiet = failures = 0
         while continuation is not None:
             await asyncio.sleep(
@@ -330,10 +384,11 @@ class ChatReader:
             failures = 0
             self._heard(name)
             continuation = page.continuation
-            batch = messages(page.actions, channel, datetime.now(timezone.utc))
+            batch = messages(page.actions, channel, self._now(), handed_on)
             quiet = 0 if batch else quiet + 1
             if not batch:
                 continue
+            handed_on = batch[-1].received_at or handed_on
             try:
                 await self._take(batch)
             except Exception:
@@ -343,7 +398,7 @@ class ChatReader:
         logger.info("youtube chat: the chat of %s is over", name)
 
     def _heard(self, name: str) -> None:
-        self.last_heard_at = datetime.now(timezone.utc)
+        self.last_heard_at = self._now()
         if self.failing.pop(name, None) is not None:
             logger.info("youtube chat: YouTube answers about %s again", name)
 
@@ -351,7 +406,7 @@ class ChatReader:
         why = _why(error)
         if name not in self.failing:
             logger.warning("youtube chat: YouTube could not be asked about %s (%s)", name, why)
-        since = self.failing[name][1] if name in self.failing else datetime.now(timezone.utc)
+        since = self.failing[name][1] if name in self.failing else self._now()
         self.failing[name] = (why, since)
 
     def _forget(self, name: str) -> None:
