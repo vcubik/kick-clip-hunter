@@ -372,7 +372,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "laugh_strong_weight", SIGNALS, NUMBER,
         "Weight of an exaggerated laugh",
-        '"xDDD" and longer.',
+        '"xDD" and longer.',
         (DETECTOR + "laugh_strong_weight",),
         least=0, most=20,
     ),

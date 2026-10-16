@@ -17,7 +17,7 @@ signals are tracked this way over a rolling window per channel:
   messages, still only counts as one)
 - laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
   of a funny moment as chat gets, so it needs a lower multiplier. Not all
-  laughs are equal either: the exaggerated "xDDDD" form counts for more
+  laughs are equal either: the exaggerated form ("xDD" and longer) counts for more
   than a bare "xd" (see LAUGH_STRONG_WEIGHT / LAUGH_WEAK_WEIGHT), same
   weighting idea as emote_mention below
 - emote_mention: a channel's 7TV emote name typed as plain text - noisier
@@ -210,7 +210,7 @@ MAX_RATIO_SCORE = 20.0
 # moment fires (that's decided purely by the ratio thresholds above).
 VOLUME_DAMPEN_REFERENCE = 10.0
 
-# Matches the exaggerated "xDDDD" laugh. Word-bounded so it doesn't match
+# Matches the exaggerated laugh, "xDD" and longer. Word-bounded so it doesn't match
 # inside unrelated words.
 LAUGH_STRONG_PATTERN = re.compile(r"\bxd{2,}\b", re.IGNORECASE)
 # Matches bare "xd" as its own word (not e.g. "maxdps") - weaker signal than
@@ -465,7 +465,7 @@ def classify_message(
     """Returns (laugh_weight, mention_weight) for a chat message's text.
 
     laugh_weight is 0.0 (no match), the weak laugh's weight (bare "xd"), or
-    the strong one's ("xddd" or more d's) - LAUGH_WEAK_WEIGHT and
+    the strong one's ("xdd" or more d's) - LAUGH_WEAK_WEIGHT and
     LAUGH_STRONG_WEIGHT unless the channel's settings say otherwise.
 
     mention_weight is 0.0 if no channel keyword matched, otherwise the
@@ -737,7 +737,7 @@ def record_message(
         scores.append(min(emote_ratio, MAX_RATIO_SCORE))
 
     # laugh_weight sums LAUGH_STRONG_WEIGHT/_WEAK_WEIGHT per laughing
-    # sender, so "xddd"+ reaches the threshold - and score - faster than an
+    # sender, so "xdd"+ reaches the threshold - and score - faster than an
     # equal number of bare "xd"s would.
     laugh_ratio = _spike_ratio(short_laugh_weight, baseline_laugh_weight, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
     laugh_sender_ratio = _spike_ratio(
