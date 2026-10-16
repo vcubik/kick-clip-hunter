@@ -18,6 +18,10 @@ markers = [
 # resource (a task, a thread, a file) that a test did not clean up.
 filterwarnings = [
     "error",
+    # TikTokLive (tiktok_chat.py) is built on the websockets library's
+    # legacy client, which websockets marks as deprecated, piece by piece,
+    # when it is imported - TikTokLive's to move off, not this repository's.
+    'ignore:websockets\.[\w.]+ is deprecated:DeprecationWarning',
 ]
 # A test that hangs dumps every thread's stack after this many seconds
 # instead of sitting there silently - several tests involve threads.

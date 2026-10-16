@@ -15,12 +15,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, detector, recording_manager, twitch_auth, twitch_chat, youtube_chat
+from kick_clip_hunter import db, detector, recording_manager, tiktok_chat, twitch_auth, twitch_chat, youtube_chat
 from kick_clip_hunter.channel_badges import Picture
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_streamer
 from tests.support.eventsub import chat_event
 from tests.support.kick_api import seventv_emote_id
+from tests.support.tiktok import FakeTikTokChats, comment
 from tests.support.twitch_api import FakeAccount
 from tests.support.waiting import async_wait_until
 from tests.support.youtube import emoji as youtube_emoji
@@ -315,6 +316,75 @@ class TestYouTubeChat:
     async def test_the_reader_starts_with_the_service(self, youtube_service):
         async with youtube_service.main.lifespan(youtube_service.main.app):
             assert youtube_service.main._youtube_reader is not None
+
+
+class TestTikTokChat:
+    """The service reads the chat of a TikTok channel while its stream is
+    being recorded, from its start, keeps it with the recording - and looks
+    for nothing in it."""
+
+    @pytest.fixture
+    def chats(self, monkeypatch) -> FakeTikTokChats:
+        chats = FakeTikTokChats()
+        monkeypatch.setattr(tiktok_chat, "tiktoklive_chat", chats.connect)
+        monkeypatch.setattr(tiktok_chat, "CHANNELS_SECONDS", 0.02)
+        monkeypatch.setattr(tiktok_chat, "BATCH_SECONDS", 0.01)
+        return chats
+
+    @pytest.fixture
+    def tiktok_service(self, service, tiktok, chats, monkeypatch):
+        async def no_recording(*_args):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(recording_manager, "run_forever", no_recording)
+        return service
+
+    async def add(self, service, tiktok, handle: str) -> int:
+        tiktok.add_channel(handle).go_live()
+        response = await service.client.post("/channels", params={"slug": f"{handle}@tiktok"})
+        return response.json()["broadcaster_user_id"]
+
+    async def test_a_recorded_tiktok_channels_chat_is_kept_and_looked_for_nothing(self, tiktok_service, tiktok, chats):
+        key = await self.add(tiktok_service, tiktok, "some_channel")
+
+        async with tiktok_service.main.lifespan(tiktok_service.main.app):
+            started = await tiktok_service.client.post("/channels/some_channel@tiktok/recording/start")
+            assert started.status_code == 200
+            await async_wait_until(lambda: chats.connections, "the chat connected to")
+            chats.latest().say(comment(11, "Alice", "xDDD 😂"), comment(12, "Bob", "KEKW"))
+            await async_wait_until(lambda: len(tiktok_service.rows("SELECT * FROM chat_messages")) == 2, "the chat")
+
+        rows = tiktok_service.rows("SELECT * FROM chat_messages ORDER BY message_id")
+        assert [(row["message_id"], row["broadcaster_user_id"], row["channel_slug"]) for row in rows] == [
+            ("11", key, "some_channel@tiktok"),
+            ("12", key, "some_channel@tiktok"),
+        ]
+        assert [(row["sender_username"], row["content"]) for row in rows] == [("Alice", "xDDD 😂"), ("Bob", "KEKW")]
+        # Nothing of it is counted, and no moment can come of it.
+        assert "some_channel@tiktok" not in detector._entries
+        assert tiktok_service.moments() == []
+
+    async def test_a_tiktok_channel_that_is_not_recorded_has_no_chat_read(self, tiktok_service, tiktok, chats):
+        await self.add(tiktok_service, tiktok, "some_channel")
+        tiktok.requests.clear()
+
+        async with tiktok_service.main.lifespan(tiktok_service.main.app):
+            reader = tiktok_service.main._tiktok_reader
+            await asyncio.sleep(0.1)
+            assert reader.wanted == 0
+
+        assert chats.connections == [] and tiktok.requests == []
+
+    async def test_the_reader_starts_with_the_service_and_signs_with_a_key_where_there_is_one(
+        self, tiktok_service, monkeypatch
+    ):
+        monkeypatch.setenv("EULER_STREAM_API_KEY", "a-key")
+        monkeypatch.setattr(tiktok_service.main, "settings", load_settings())
+
+        async with tiktok_service.main.lifespan(tiktok_service.main.app):
+            assert tiktok_service.main._tiktok_reader is not None
+
+        assert tiktok_chat._sign_key == "a-key"
 
 
 class TestEmotePictures:

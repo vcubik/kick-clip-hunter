@@ -41,6 +41,7 @@ from . import (
     stream_recording,
     streams,
     subtitles,
+    tiktok_chat,
     transcriber,
     tuning,
     tunnel,
@@ -204,6 +205,8 @@ def _watchlist_slugs() -> list[str]:
 
 
 def _is_channel_tracked(slug: str) -> bool:
+    if platforms.platform_of(slug) in platforms.RECORDED_ONLY:
+        return False
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, slug)
@@ -587,6 +590,31 @@ def _start_reading_youtube_chat() -> youtube_chat.ChatReader:
     return _youtube_reader
 
 
+# What reads the chat of the TikTok channels whose streams are being
+# recorded (see tiktok_chat.py); None until the service has started it.
+_tiktok_reader: tiktok_chat.ChatReader | None = None
+
+
+def _tiktok_channels() -> list[tiktok_chat.Channel]:
+    """The TikTok channels whose chat is read: those whose stream is being
+    kept whole right now - a TikTok channel is watched for nothing else
+    (see platforms.RECORDED_ONLY)."""
+    return [
+        tiktok_chat.Channel(kept.broadcaster_user_id, slug)
+        for slug, kept in recording_manager.stream_recordings().items()
+        if platforms.platform_of(slug) == platforms.TIKTOK
+    ]
+
+
+def _start_reading_tiktok_chat() -> tiktok_chat.ChatReader:
+    """The reader of TikTok's chat. It needs nothing set up: its requests
+    are signed without a key of Euler Stream's, up to a few thousand a day."""
+    global _tiktok_reader
+    tiktok_chat.use_sign_key(settings.euler_stream_api_key)
+    _tiktok_reader = tiktok_chat.ChatReader(_tiktok_channels, _take_chats)
+    return _tiktok_reader
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _started_at
@@ -615,6 +643,7 @@ async def lifespan(app: FastAPI):
     if reader is not None:
         tasks.append(asyncio.create_task(reader.run_forever()))
     tasks.append(asyncio.create_task(_start_reading_youtube_chat().run_forever()))
+    tasks.append(asyncio.create_task(_start_reading_tiktok_chat().run_forever()))
     try:
         yield
     finally:
@@ -2064,7 +2093,27 @@ def _health_facts(streamers, right_now: dict, *, stored_chat: dict | None = None
         port=_served_port,
         twitch=_twitch_facts(sum(1 for row in streamers if row["platform"] == platforms.TWITCH)),
         youtube=_youtube_facts(sum(1 for row in streamers if row["platform"] == platforms.YOUTUBE)),
+        tiktok=_tiktok_facts(sum(1 for row in streamers if row["platform"] == platforms.TIKTOK)),
         **looked_up,
+    )
+
+
+def _tiktok_facts(channels: int) -> health.TikTokChat | None:
+    """Where reading TikTok's chat stands, for the Health page: None while
+    no TikTok channel is watched."""
+    if not channels:
+        return None
+    reader = _tiktok_reader
+    if reader is None:
+        return health.TikTokChat(channels=channels)
+    reading, failing = dict(reader.reading), dict(reader.failing)
+    return health.TikTokChat(
+        channels=channels,
+        recorded=reader.wanted,
+        reading=tuple(sorted(reading.items())),
+        waiting=tuple(sorted(reader.waiting)),
+        failing=tuple(sorted((slug, why, since) for slug, (why, since) in failing.items())),
+        last_heard_at=reader.last_heard_at,
     )
 
 
@@ -2286,6 +2335,8 @@ async def dashboard_channels(request: Request):
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
                         "tracking_enabled": bool(row["tracking_enabled"]),
+                        # Never tracked: there is no switch for it.
+                        "recorded_only": row["platform"] in platforms.RECORDED_ONLY,
                         "always_record": bool(row["always_record"]),
                         # Its stream being kept whole, or the last such
                         # recording still being saved - None if neither.
@@ -4079,7 +4130,7 @@ async def shutdown():
 async def add_channel(slug: str):
     """Puts a channel on the watchlist: `slug` is what was typed - a Kick
     channel's name, a link to a channel's page, `login@twitch`,
-    `handle@youtube`."""
+    `handle@youtube`, `handle@tiktok`."""
     slug = slug.strip()
     if not slug:
         raise HTTPException(status_code=400, detail="slug must not be empty")
@@ -4113,6 +4164,11 @@ async def set_channel_tracking(slug: str, enabled: int = 1):
         row = get_streamer_by_slug(conn, slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        if row["platform"] in platforms.RECORDED_ONLY and value:
+            title = platforms.TITLES[row["platform"]]
+            raise HTTPException(
+                status_code=409, detail=f"{title} channels are only recorded: no clips are looked for in them."
+            )
         set_streamer_tracking(conn, row["broadcaster_user_id"], value)
     finally:
         conn.close()
@@ -4882,7 +4938,11 @@ async def _take_chats(messages: Sequence[ChatMessage]) -> list[str]:
                 # moments pile up.
                 continue
             if owner not in tracked:
-                tracked[owner] = watching and get_streamer_tracking_enabled(conn, owner)
+                tracked[owner] = (
+                    watching
+                    and platforms.platform_of(message.channel) not in platforms.RECORDED_ONLY
+                    and get_streamer_tracking_enabled(conn, owner)
+                )
             if not tracked[owner] and not kept_whole:
                 # Tracking paused for this one channel - same drop as the
                 # global pause, scoped to it.

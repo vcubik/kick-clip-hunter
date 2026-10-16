@@ -120,6 +120,28 @@
   </section>
   {% endif %}
 
+  {% if health.tiktok.shown %}
+  <section aria-labelledby="tiktok-title">
+    <h2 class="title" id="tiktok-title">TikTok chat</h2>
+    <div data-health-part="tiktok">
+      {{ statement(health.tiktok) }}
+      {% if health.tiktok.rows %}
+      <table class="an-table health-table">
+        <caption class="health-caption">Recorded channels whose chat does not come in</caption>
+        <thead>
+          <tr><th scope="col">Channel</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.tiktok.rows %}
+          <tr><th scope="row">{{ row.slug }}</th><td>{{ row.why }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
   <section aria-labelledby="recorders-title">
     <h2 class="title" id="recorders-title">Recorders</h2>
     <div data-health-part="recorders">

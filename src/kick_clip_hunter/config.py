@@ -14,6 +14,10 @@ class Settings:
     # Twitch channel can be (see `twitch`).
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
+    # A key of Euler Stream's, the service that signs the requests TikTok's
+    # chat is read with (see tiktok_chat.py), for more of them a day than it
+    # signs without one. The chat of a few channels needs none.
+    euler_stream_api_key: str = ""
 
     @property
     def twitch(self) -> bool:
@@ -29,4 +33,5 @@ def load_settings() -> Settings:
         kick_client_secret=client_secret,
         twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", "").strip(),
         twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", "").strip(),
+        euler_stream_api_key=os.environ.get("EULER_STREAM_API_KEY", "").strip(),
     )

@@ -428,6 +428,56 @@ class TestAddingAChannel:
         assert response.status_code == 404
         assert service.rows("SELECT * FROM streamers") == []
 
+    async def test_a_link_to_a_tiktok_channel_adds_it_to_be_recorded_and_never_tracked(self, service, tiktok):
+        tiktok.add_channel("New.Channel", user_id="6800000000123")
+
+        response = await service.client.post("/channels", params={"slug": "https://www.tiktok.com/@New.Channel/live"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "slug": "new.channel@tiktok",
+            "broadcaster_user_id": -1,
+            "emote_count": 0,
+            "laugh_emote_count": 0,
+        }
+        (streamer,) = service.rows(
+            "SELECT slug, platform, platform_user_id, tracking_enabled, always_record FROM streamers"
+        )
+        assert tuple(streamer) == ("new.channel@tiktok", "tiktok", "6800000000123", 0, 0)
+        assert service.main._is_channel_tracked("new.channel@tiktok") is False
+        # Its chat is not Kick's to deliver, and no emote service knows it.
+        assert service.api.subscribed == []
+        assert not [path for _, path, _ in service.api.requests if "7tv.io" in path]
+
+    async def test_adding_a_tiktok_channel_twice_keeps_one(self, service, tiktok):
+        tiktok.add_channel("new_channel")
+
+        await service.client.post("/channels", params={"slug": "new_channel@tiktok"})
+        again = await service.client.post("/channels", params={"slug": "tiktok.com/@New_Channel"})
+
+        assert again.json()["broadcaster_user_id"] == -1
+        assert len(service.rows("SELECT * FROM streamers")) == 1
+
+    async def test_a_tiktok_account_tiktok_does_not_have_is_a_404(self, service, tiktok):
+        response = await service.client.post("/channels", params={"slug": "no_such_channel@tiktok"})
+
+        assert response.status_code == 404
+        assert "no such TikTok account" in response.json()["detail"]
+        assert service.rows("SELECT * FROM streamers") == []
+
+    async def test_a_tiktok_channel_has_no_tracking_switch_but_can_be_recorded(self, service, tiktok):
+        tiktok.add_channel("new_channel", user_id="6800000000123")
+        await service.client.post("/channels", params={"slug": "new_channel@tiktok"})
+        service.watch("kick_channel", 555)
+
+        page = (await service.client.get("/dashboard/channels")).text
+
+        assert 'title="TikTok user id 6800000000123">new_channel@tiktok<' in page
+        assert 'aria-label="Tracking new_channel@tiktok"' not in page and "Recorded only" in page
+        assert 'aria-label="Tracking kick_channel"' in page
+        assert 'aria-label="Always record new_channel@tiktok"' in page
+        assert 'aria-label="Start recording new_channel@tiktok"' in page
+
 
 class TestChannelTracking:
     async def test_pausing_and_resuming_one_channel(self, service):
@@ -458,6 +508,30 @@ class TestChannelTracking:
         add_streamer("channel_b", 2)
 
         assert service.main._watchlist_slugs() == ["channel_a", "channel_b"]
+
+    async def test_a_tiktok_channel_cannot_be_tracked_only_recorded(self, service, tiktok):
+        tiktok.add_channel("new_channel")
+        await service.client.post("/channels", params={"slug": "new_channel@tiktok"})
+
+        refused = await service.client.post("/channels/new_channel@tiktok/tracking?enabled=1")
+        paused = await service.client.post("/channels/new_channel@tiktok/tracking?enabled=0")
+
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == "TikTok channels are only recorded: no clips are looked for in them."
+        # Off it is, and off it may be said to be.
+        assert paused.json() == {"slug": "new_channel@tiktok", "tracking_enabled": False}
+        assert service.main._is_channel_tracked("new_channel@tiktok") is False
+
+    async def test_a_tiktok_channel_is_never_taken_for_tracked_whatever_is_stored(self, service):
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "tiktok", "6800000000123", "new_channel@tiktok")
+        finally:
+            conn.close()
+
+        # Added some other way than through the watchlist, with tracking on.
+        assert service.rows("SELECT tracking_enabled FROM streamers")[0][0] == 1
+        assert service.main._is_channel_tracked("new_channel@tiktok") is False
 
 
 class TestShutdown:

@@ -15,6 +15,7 @@ class TestChannelNames:
     def test_a_channel_elsewhere_is_called_by_its_name_and_its_platforms(self):
         assert platforms.channel_name(platforms.TWITCH, "some_channel") == "some_channel@twitch"
         assert platforms.channel_name(platforms.YOUTUBE, "some.channel") == "some.channel@youtube"
+        assert platforms.channel_name(platforms.TIKTOK, "some.channel") == "some.channel@tiktok"
 
     @pytest.mark.parametrize(
         ("name", "platform", "login"),
@@ -25,6 +26,7 @@ class TestChannelNames:
             ("some_channel@twitch", "twitch", "some_channel"),
             ("some.channel@youtube", "youtube", "some.channel"),
             ("český-kanál@youtube", "youtube", "český-kanál"),
+            ("some.channel_1@tiktok", "tiktok", "some.channel_1"),
         ],
     )
     def test_the_name_says_where_the_channel_is(self, name, platform, login):
@@ -41,6 +43,9 @@ class TestChannelNames:
 
     def test_every_platform_has_a_name_for_people(self):
         assert set(platforms.TITLES) == set(platforms.PLATFORMS)
+
+    def test_only_tiktok_channels_are_recorded_and_never_tracked(self):
+        assert platforms.RECORDED_ONLY == {platforms.TIKTOK}
 
 
 class TestWhatWasTyped:
@@ -64,6 +69,12 @@ class TestWhatWasTyped:
             ("https://m.youtube.com/@some_channel/streams?view=2", ("youtube", "some_channel")),
             ("HTTPS://WWW.YOUTUBE.COM/@Some_Channel#about", ("youtube", "Some_Channel")),
             ("https://www.youtube.com/@%C4%8Desk%C3%BD-kan%C3%A1l", ("youtube", "český-kanál")),
+            ("some.channel@tiktok", ("tiktok", "some.channel")),
+            ("@Some.Channel@tiktok", ("tiktok", "Some.Channel")),
+            ("https://www.tiktok.com/@some.channel", ("tiktok", "some.channel")),
+            ("https://www.tiktok.com/@some.channel/live", ("tiktok", "some.channel")),
+            ("tiktok.com/@Some_Channel?lang=cs-CZ", ("tiktok", "Some_Channel")),
+            ("HTTPS://M.TIKTOK.COM/@some_channel/video/7600000000000000000", ("tiktok", "some_channel")),
         ],
     )
     def test_a_name_or_a_link_says_which_channel_is_meant(self, typed, meant):
@@ -99,3 +110,6 @@ class TestWhatWasTyped:
 
     def test_a_site_that_only_begins_like_youtube_is_not_youtube(self):
         assert platforms.parse("youtube.community/@some_channel")[0] == "kick"
+
+    def test_a_link_to_tiktok_that_names_no_channel_is_not_taken_for_one(self):
+        assert platforms.parse("https://www.tiktok.com/live")[0] == "kick"

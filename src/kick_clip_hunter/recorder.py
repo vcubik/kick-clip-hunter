@@ -72,6 +72,15 @@ playlist at the new address without starting over: the segments keep their
 numbering, so nothing is missed or fetched twice, and they stay in the same
 group unless the variant that is followed has changed.
 
+TikTok's stream is no playlist at all but one FLV download that does not
+end (StreamUrls.flv). A run reads it as it arrives and cuts it into pieces of
+a few seconds, from one keyframe to another, each of which ffmpeg copies into
+MPEG-TS - so what is saved is a segment like any other, named by the time
+the stream's onMetaData gives its first frame (see flv.py). A break in the
+stream (its picture encoded otherwise, its times jumping) starts a group, as
+a discontinuity does. Such an address works for weeks; one that runs out
+ends the run, and the next starts at a new one.
+
 The buffer is only ever a few minutes deep. A stream that is to be kept
 whole (see stream_recording.py) is not kept here: while one is, every
 segment of the broadcast is also handed on, as it is saved, to whatever the
@@ -94,6 +103,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from . import flv
 from .platforms import StreamUrls
 from .streams import stream_urls
 
@@ -142,6 +152,10 @@ STALL_TIMEOUT_SECONDS = 90
 PLAYLIST_POLL_SECONDS = 2
 PLAYLIST_TIMEOUT_SECONDS = 10
 SEGMENT_TIMEOUT_SECONDS = 20
+# How much of an FLV stream is read at a time, and how long copying one of
+# its pieces into MPEG-TS may take - a few hundredths of a second, as a rule.
+FLV_READ_BYTES = 64 * 1024
+FLV_COPY_TIMEOUT_SECONDS = 30
 # A fresh run starts this many segments back from the live edge rather than
 # downloading the playlist's whole window.
 INITIAL_SEGMENTS = 3
@@ -317,6 +331,8 @@ class _Run:
     # stream's addresses are to be asked for anew, if they run out.
     variant: str = ""
     renew_at: datetime | None = None
+    # Whether `variant_url` is the stream itself as FLV, not a playlist.
+    flv: bool = False
 
 
 def _attributes(tag_line: str) -> dict[str, str]:
@@ -439,6 +455,31 @@ def _segment_name(started_at: datetime, duration: float, group: str, suffix: str
     return f"{int(started_at.timestamp() * 1000)}_{int(duration * 1000)}_{group}{suffix}"
 
 
+def _flv_piece_as_ts(piece: flv.Piece) -> bytes:
+    """A piece of an FLV stream copied into MPEG-TS, nothing re-encoded and
+    its times kept (see flv.py) - less the SEI units of its picture that
+    would cost the copy a frame's time (flv.SEI_UNITS)."""
+    units = flv.SEI_UNITS.get(piece.codec or "")
+    leave_out = ["-bsf:v", f"filter_units=remove_types={units}"] if units else []
+    # fmt: off
+    result = subprocess.run(
+        [
+            FFMPEG_BIN, "-v", "error",
+            "-f", "flv", "-i", "pipe:0",
+            "-map", "0", "-c", "copy", "-copyts", *leave_out,
+            "-f", "mpegts", "pipe:1",
+        ],
+        input=piece.flv,
+        capture_output=True,
+        timeout=FLV_COPY_TIMEOUT_SECONDS,
+        check=True,
+    )
+    # fmt: on
+    if not result.stdout:
+        raise ValueError("ffmpeg made nothing of it")
+    return result.stdout
+
+
 class ChannelRecorder:
     def __init__(self, channel_slug: str):
         self.channel_slug = channel_slug
@@ -460,15 +501,20 @@ class ChannelRecorder:
 
     def _start_run(self) -> None:
         urls = stream_urls(self.channel_slug)
-        response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        variant_url, variant = _choose_variant(response.text, urls.live)
+        if urls.flv:
+            # The stream itself: nothing to choose from.
+            variant_url, variant = urls.live, ""
+        else:
+            response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            variant_url, variant = _choose_variant(response.text, urls.live)
         run = _Run(
             started_at=datetime.now(timezone.utc),
             variant_url=variant_url,
             vod_url=urls.vod,
             variant=variant,
             renew_at=_renew_at(urls),
+            flv=urls.flv,
         )
         run.thread = threading.Thread(target=self._record, args=(run,), daemon=True)
         self._run = run
@@ -514,7 +560,10 @@ class ChannelRecorder:
     def _record(self, run: _Run) -> None:
         try:
             with httpx.Client(timeout=SEGMENT_TIMEOUT_SECONDS) as client:
-                self._follow_playlist(run, client)
+                if run.flv:
+                    self._follow_flv(run, client)
+                else:
+                    self._follow_playlist(run, client)
         except Exception:
             logger.exception("[%s] recording thread failed", self.channel_slug)
 
@@ -577,18 +626,74 @@ class ChannelRecorder:
                     # before this hole.
                     group += 1
                     continue
-                run.last_progress_at = datetime.now(timezone.utc)
-                if self._footage_until is None or last_end > self._footage_until:
-                    # A run that starts over fetches the newest segments it
-                    # finds once more. That is the buffer being filled, not
-                    # the stream coming in.
-                    self._footage_until, self._footage_at = last_end, run.last_progress_at
-                self._hand_on(started_at, segment.duration, group_name, content)
+                self._kept(run, started_at, segment.duration, group_name, content)
 
             if playlist.ended:
                 logger.info("[%s] stream playlist ended", self.channel_slug)
                 return
             run.stop_event.wait(PLAYLIST_POLL_SECONDS)
+
+    def _follow_flv(self, run: _Run, client: httpx.Client) -> None:
+        """Reads a stream that comes as one FLV download, as it arrives, and
+        keeps it in segments cut out of it (see flv.py) - until the stream
+        ends, its address runs out or the run is stopped."""
+        run_id = int(run.started_at.timestamp())
+        reader = flv.FlvReader()
+        cutter: flv.Cutter | None = None
+        counters = flv.TsCounters()
+        group = cut_run = 0
+        with client.stream("GET", run.variant_url) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes(FLV_READ_BYTES):
+                if run.stop_event.is_set():
+                    return
+                if run.renew_at is not None and datetime.now(timezone.utc) >= run.renew_at:
+                    logger.info("[%s] the stream's address is running out - starting at a new one", self.channel_slug)
+                    return
+                received_ms = int(time.time() * 1000)
+                for tag in reader.feed(chunk):
+                    cutter = cutter or flv.Cutter(reader.flags)
+                    for piece in cutter.add(tag, received_ms):
+                        if piece.run != cut_run:
+                            group, cut_run, counters = group + 1, piece.run, flv.TsCounters()
+                            logger.info(
+                                "[%s] stream discontinuity (FLV: encoded otherwise, or times jumped)", self.channel_slug
+                            )
+                        if not self._keep_piece(run, piece, f"{run_id}-{group}", counters):
+                            # The next piece can't be joined straight onto the
+                            # one before this hole.
+                            group, counters = group + 1, flv.TsCounters()
+        logger.info("[%s] the stream's FLV download ended", self.channel_slug)
+
+    def _keep_piece(self, run: _Run, piece: flv.Piece, group: str, counters: flv.TsCounters) -> bool:
+        """Saves a piece of an FLV stream into the buffer as an MPEG-TS
+        segment. Returns whether it could be."""
+        try:
+            content = counters.carry_on(_flv_piece_as_ts(piece))
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            logger.warning(
+                "[%s] a piece of the stream could not be copied into MPEG-TS: %s", self.channel_slug, error
+            )
+            return False
+        started_at = datetime.fromtimestamp(piece.started_at / 1000, tz=timezone.utc)
+        duration = piece.duration / 1000
+        name = _segment_name(started_at, duration, group)
+        partial = self._base_dir / (name + ".part")
+        partial.write_bytes(content)
+        partial.replace(self._base_dir / name)
+        self._kept(run, started_at, duration, group, content)
+        return True
+
+    def _kept(self, run: _Run, started_at: datetime, duration: float, group: str, content: bytes) -> None:
+        """Notes a segment that was just saved, and hands it on."""
+        run.last_progress_at = datetime.now(timezone.utc)
+        ended_at = started_at + timedelta(seconds=duration)
+        if self._footage_until is None or ended_at > self._footage_until:
+            # A run that starts over fetches the newest segments it finds
+            # once more. That is the buffer being filled, not the stream
+            # coming in.
+            self._footage_until, self._footage_at = ended_at, run.last_progress_at
+        self._hand_on(started_at, duration, group, content)
 
     def _download(
         self, client: httpx.Client, segment: _PlaylistSegment, started_at: datetime, group: str, suffix: str = ".ts"

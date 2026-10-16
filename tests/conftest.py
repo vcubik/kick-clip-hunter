@@ -44,6 +44,7 @@ from tests.support.fixtures import recording as recording
 from tests.support.fixtures import service as service
 from tests.support.fixtures import signer as signer
 from tests.support.fixtures import tailscale as tailscale
+from tests.support.fixtures import tiktok as tiktok
 from tests.support.fixtures import ts_segments as ts_segments
 from tests.support.fixtures import twitch_api as twitch_api
 from tests.support.fixtures import youtube as youtube
@@ -170,12 +171,14 @@ def _reset_module_state() -> None:
         detector,
         kick_client,
         recording_manager,
+        tiktok_chat,
         twitch_client,
         webhook_security,
         youtube_client,
     )
 
     detector._entries.clear()
+    tiktok_chat._sign_key = ""
     detector._last_moment_at.clear()
     kick_client._token_cache.clear()
     twitch_client._token_cache.clear()
@@ -223,6 +226,7 @@ def _reset_module_state() -> None:
         main._disk_use = None
         main._twitch_reader = None
         main._youtube_reader = None
+        main._tiktok_reader = None
 
 
 @pytest.fixture(autouse=True)
