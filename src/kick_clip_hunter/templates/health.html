@@ -195,6 +195,19 @@
         </tbody>
       </table>
       {% endif %}
+      {% if health.recorders.renames %}
+      <table class="an-table health-table">
+        <caption class="health-caption">Channels that renamed themselves, followed by the watchlist</caption>
+        <thead>
+          <tr><th scope="col">Noticed</th><th scope="col">Was</th><th scope="col">Is now</th></tr>
+        </thead>
+        <tbody>
+          {% for rename in health.recorders.renames %}
+          <tr><th scope="row">{{ rename.when }}</th><td>{{ rename.old }}</td><td>{{ rename.new }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
     </div>
   </section>
 

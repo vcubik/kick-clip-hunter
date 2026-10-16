@@ -5,6 +5,7 @@ import math
 import mimetypes
 import os
 import shutil
+import sqlite3
 import time
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -60,6 +61,7 @@ from .db import (
     STREAM_TYPES,
     TUNING_FOR_ALL,
     ChatRow,
+    add_channel_rename,
     add_subscription_drop,
     count_channel_chat,
     count_moments,
@@ -73,6 +75,7 @@ from .db import (
     get_channel_chat_between,
     get_channel_keywords,
     get_channel_moment_windows,
+    get_channel_renames,
     get_chat_around,
     get_chat_between,
     get_chat_channel_ids,
@@ -88,6 +91,7 @@ from .db import (
     get_flag,
     get_moment,
     get_moment_channels,
+    get_moment_names,
     get_moment_times,
     get_recent_moments,
     get_stream_recording,
@@ -104,6 +108,7 @@ from .db import (
     insert_stream_recording,
     iter_channel_chat,
     iter_channel_chat_between,
+    rename_streamer,
     replace_tuning,
     search_channel_chat,
     set_chat_delay,
@@ -130,7 +135,9 @@ from .db import (
     update_moment_window_end,
 )
 from .kick_client import (
+    NoSuchChannel,
     get_app_access_token,
+    get_channel_by_id,
     get_event_subscriptions,
     subscribe_chat_messages,
 )
@@ -807,6 +814,7 @@ async def lifespan(app: FastAPI):
                 _stream_recording_over,
                 _always_recorded_slugs,
                 _record_stream_by_itself,
+                _look_failed,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -958,6 +966,113 @@ async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
     if start_time is None:
         return None
     return int((datetime.now(timezone.utc) - start_time).total_seconds())
+
+
+# A Kick channel can rename itself. It is kept by its id, which stays, and
+# its chat comes under the new name from then on - but the watchlist has the
+# old one, by which Kick no longer finds its stream. The rename is noticed
+# two ways: chat arriving under a name that is not the watchlist's, or Kick
+# knowing no channel by the watchlist's name when the recording loop asks.
+# Either way Kick is asked what the channel is called now, by its id, and
+# the watchlist follows it (_follow_rename).
+#
+# The name each Kick channel's chat last came under, by channel id: chat
+# under another one is what has the watchlist's name checked.
+_chat_names_seen: dict[int, str] = {}
+# When Kick was last asked for a channel's name because the loop could not
+# find it, by channel id. A channel that is really gone would otherwise be
+# asked about every round.
+_renames_asked_at: dict[int, float] = {}
+RENAME_ASK_SECONDS = 600
+
+
+def _notice_chat_name(conn, message: ChatMessage) -> None:
+    """Has the watchlist's name of a Kick channel checked against Kick's
+    when its chat comes under another one."""
+    owner, name = message.broadcaster_user_id, message.channel
+    if _chat_names_seen.get(owner) == name or platforms.platform_of(name) != platforms.KICK:
+        return
+    _chat_names_seen[owner] = name
+    row = get_streamer_by_id(conn, owner)
+    # Kick sends its names in small letters; the watchlist keeps the one a
+    # channel was added under, which may have capitals.
+    if row is not None and row["platform"] == platforms.KICK and row["slug"].lower() != name.lower():
+        _track_task(_follow_rename(owner))
+
+
+async def _look_failed(slug: str, error: Exception) -> None:
+    """What the recording loop calls when a look at a channel fails (see
+    recording_manager.run_forever): a Kick channel that Kick knows no
+    channel by the name of may have renamed itself."""
+    if not isinstance(error, NoSuchChannel):
+        return
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+    finally:
+        conn.close()
+    if row is None or row["platform"] != platforms.KICK:
+        return
+    owner = row["broadcaster_user_id"]
+    asked = _renames_asked_at.get(owner)
+    if asked is not None and time.monotonic() - asked < RENAME_ASK_SECONDS:
+        return
+    _renames_asked_at[owner] = time.monotonic()
+    await _follow_rename(owner)
+
+
+async def _follow_rename(broadcaster_user_id: int) -> str | None:
+    """Asks Kick what a watched channel is called now, and has the watchlist
+    follow it if it renamed itself. Returns its new name, or None if it is
+    still called what the watchlist says (or Kick knows it no more).
+
+    What is kept of a channel by its id goes with it as it is. What is kept
+    by name stays under the old one: its past moments and chat, and its
+    stream recordings - a recording that runs goes on, in its folder. The
+    chat delay set for it is carried over to the new name, which is what its
+    chat and moments come under from now on."""
+    try:
+        token = await get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
+        channel = await get_channel_by_id(broadcaster_user_id, token)
+    except NoSuchChannel:
+        logger.warning("Kick knows no channel of broadcaster %d any more - left on the watchlist", broadcaster_user_id)
+        return None
+    except httpx.HTTPError as error:
+        logger.warning("could not ask Kick what channel %d is called now: %r", broadcaster_user_id, error)
+        return None
+    new = str(channel.get("slug") or "")
+    conn = get_connection()
+    try:
+        row = get_streamer_by_id(conn, broadcaster_user_id)
+        if row is None or row["platform"] != platforms.KICK or not new or new.lower() == row["slug"].lower():
+            return None
+        old = row["slug"]
+        try:
+            rename_streamer(conn, broadcaster_user_id, new)
+        except sqlite3.IntegrityError:
+            logger.error("[%s] renamed itself on Kick to %s, which another watched channel is called", old, new)
+            return None
+        _carry_chat_delay(conn, broadcaster_user_id, new)
+        add_channel_rename(conn, health.Rename(datetime.now(timezone.utc), old, new).stored())
+    finally:
+        conn.close()
+    recording_manager.rename(old, new)
+    for name in {old, old.lower()}:
+        _stream_start_cache.pop(name, None)
+    logger.warning("[%s] renamed itself on Kick to %s - the watchlist follows it", old, new)
+    return new
+
+
+def _carry_chat_delay(conn, broadcaster_user_id: int, new: str) -> None:
+    """Gives a channel's new name the chat delay that was set for it under
+    the name of its newest moments, unless one is set for the new name."""
+    if get_chat_delay(conn, new) is not None:
+        return
+    for name in get_moment_names(conn, broadcaster_user_id):
+        seconds = get_chat_delay(conn, name) if name != new else None
+        if seconds is not None:
+            set_chat_delay(conn, new, seconds)
+            return
 
 
 async def _create_clip_background(
@@ -1484,13 +1599,19 @@ def _take_up_stream_recordings() -> None:
         for row in reversed(get_stream_recordings(conn, (stream_recording.RECORDING, stream_recording.SAVING))):
             slug, recording_id = row["channel_slug"], row["id"]
             was_running = row["state"] == stream_recording.RECORDING
-            written = stream_recording.last_written(stream_recording.parts_folder(slug, recording_id))
+            folder = stream_recording.parts_folder(slug, recording_id)
+            written = stream_recording.last_written(folder)
             fresh = written is None or now - written < stale
-            if was_running and fresh and recording_manager.stream_recording_of(slug) is None:
-                kept = recording_manager.start_stream_recording(slug, row["broadcaster_user_id"], recording_id)
+            # Under the name the channel goes by now, which is not the one
+            # the recording was started under if the channel renamed itself
+            # since. Its footage stays in the folder it was started in.
+            watched = get_streamer_by_id(conn, row["broadcaster_user_id"])
+            name = watched["slug"] if watched is not None else slug
+            if was_running and fresh and recording_manager.stream_recording_of(name) is None:
+                kept = recording_manager.start_stream_recording(name, row["broadcaster_user_id"], recording_id, folder)
                 logger.warning(
                     "[%s] stream recording %d goes on after the restart, with %.0f s of footage so far",
-                    slug, recording_id, kept.writer.seconds,
+                    name, recording_id, kept.writer.seconds,
                 )
                 continue
             if was_running:
@@ -2677,6 +2798,7 @@ async def dashboard_health(request: Request):
             context["now"]["channels"],
             stored_chat=stored_chat,
             drops=health.read_drops(get_subscription_drops(conn)),
+            renames=health.read_renames(get_channel_renames(conn)),
             use=use,
         )
     finally:
@@ -5259,6 +5381,7 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
             # For the Health page: that the channel's chat is coming in, kept
             # or not.
             _heard.chat_at[owner] = message.received_at or now
+            _notice_chat_name(conn, message)
             if not _shutdown_requested and (command := _bot_command(conn, message)) is not None:
                 asked.append((message, command))
             # The switches are about looking for clips. A channel whose stream

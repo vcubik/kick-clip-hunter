@@ -214,6 +214,8 @@ def _reset_module_state() -> None:
         main._recording_counts.clear()
         main._chat_identity_cache.clear()
         main._stream_start_cache.clear()
+        main._chat_names_seen.clear()
+        main._renames_asked_at.clear()
         main._stream_saves.clear()
         main._recording_finds.clear()
         main._recording_chat_files.clear()

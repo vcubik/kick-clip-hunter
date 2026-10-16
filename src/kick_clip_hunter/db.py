@@ -540,6 +540,15 @@ def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sq
     ).fetchone()
 
 
+def rename_streamer(conn: sqlite3.Connection, broadcaster_user_id: int, slug: str) -> None:
+    """Has a watched channel go by another name on the watchlist: the one it
+    renamed itself to on its platform. What is kept of it by its id goes
+    with it; what is kept by name stays under the old one. Raises
+    sqlite3.IntegrityError if another watched channel goes by that name."""
+    conn.execute("UPDATE streamers SET slug = ? WHERE broadcaster_user_id = ?", (slug, broadcaster_user_id))
+    conn.commit()
+
+
 def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id: int) -> bool:
     row = conn.execute(
         "SELECT tracking_enabled FROM streamers WHERE broadcaster_user_id = ?", (broadcaster_user_id,)
@@ -709,6 +718,19 @@ def get_moment_channels(conn: sqlite3.Connection) -> list[str]:
     """
     conn.row_factory = sqlite3.Row
     return [row[0] for row in conn.execute("SELECT DISTINCT channel_slug FROM moments ORDER BY channel_slug")]
+
+
+def get_moment_names(conn: sqlite3.Connection, broadcaster_user_id: int) -> list[str]:
+    """The names a channel's moments are stored under - more than one if it
+    renamed itself - the one of its newest moment first."""
+    return [
+        row[0]
+        for row in conn.execute(
+            "SELECT channel_slug FROM moments WHERE broadcaster_user_id = ?"
+            " GROUP BY channel_slug ORDER BY MAX(id) DESC",
+            (broadcaster_user_id,),
+        )
+    ]
 
 
 def get_chat_between(
@@ -1463,22 +1485,51 @@ SUBSCRIPTION_DROPS_KEY = "subscription_drops"
 SUBSCRIPTION_DROPS_KEPT = 20
 
 
-def get_subscription_drops(conn: sqlite3.Connection) -> list:
-    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (SUBSCRIPTION_DROPS_KEY,)).fetchone()
+def _stored_list(conn: sqlite3.Connection, key: str) -> list:
+    """A list kept in app_settings as JSON, or an empty one if there is none
+    that can be read."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
     try:
-        drops = json.loads(row[0]) if row else []
+        entries = json.loads(row[0]) if row else []
     except ValueError:
         return []
-    return drops if isinstance(drops, list) else []
+    return entries if isinstance(entries, list) else []
+
+
+def _store_first(conn: sqlite3.Connection, key: str, entry: dict, kept: int) -> None:
+    """Puts an entry at the front of a list kept in app_settings, and
+    forgets the oldest past `kept`."""
+    entries = [entry, *_stored_list(conn, key)][:kept]
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, json.dumps(entries)),
+    )
+    conn.commit()
+
+
+def get_subscription_drops(conn: sqlite3.Connection) -> list:
+    return _stored_list(conn, SUBSCRIPTION_DROPS_KEY)
 
 
 def add_subscription_drop(conn: sqlite3.Connection, drop: dict) -> None:
     """Remembers one more, and forgets the oldest past
     SUBSCRIPTION_DROPS_KEPT."""
-    drops = [drop, *get_subscription_drops(conn)][:SUBSCRIPTION_DROPS_KEPT]
-    conn.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (SUBSCRIPTION_DROPS_KEY, json.dumps(drops)),
-    )
-    conn.commit()
+    _store_first(conn, SUBSCRIPTION_DROPS_KEY, drop, SUBSCRIPTION_DROPS_KEPT)
+
+
+# The watched channels that renamed themselves on their platform, and which
+# the watchlist followed to their new names (see health.Rename), newest
+# first, as one JSON list - for the Health page, like the drops above.
+CHANNEL_RENAMES_KEY = "channel_renames"
+CHANNEL_RENAMES_KEPT = 20
+
+
+def get_channel_renames(conn: sqlite3.Connection) -> list:
+    return _stored_list(conn, CHANNEL_RENAMES_KEY)
+
+
+def add_channel_rename(conn: sqlite3.Connection, rename: dict) -> None:
+    """Remembers one more, and forgets the oldest past
+    CHANNEL_RENAMES_KEPT."""
+    _store_first(conn, CHANNEL_RENAMES_KEY, rename, CHANNEL_RENAMES_KEPT)

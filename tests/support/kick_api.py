@@ -153,6 +153,18 @@ class FakeKickApi:
         self.channels[slug] = channel
         return channel
 
+    def rename_channel(self, old: str, new: str) -> FakeChannel:
+        """The channel renames itself on Kick: it keeps its id, and is found
+        by its new name only."""
+        channel = self.channels.pop(old)
+        channel.slug = new
+        self.channels[new] = channel
+        return channel
+
+    def remove_channel(self, slug: str) -> None:
+        """The channel is gone from Kick, by name and by id."""
+        del self.channels[slug]
+
     def calls(self, method: str, path_fragment: str) -> list[object]:
         """Bodies/queries of the recorded requests matching a method and path."""
         return [body for m, path, body in self.requests if m == method and path_fragment in path]
@@ -309,6 +321,10 @@ class FakeKickApi:
                 return httpx.Response(401, json={"message": "Unauthorized", "data": None})
             if not request.headers.get("authorization", "").startswith("Bearer app-token-"):
                 return httpx.Response(401, json={"message": "Unauthorized"})
+            if path == "/public/v1/channels" and "broadcaster_user_id" in request.url.params:
+                wanted = int(request.url.params["broadcaster_user_id"])
+                channel = next((c for c in self.channels.values() if c.broadcaster_user_id == wanted), None)
+                return httpx.Response(200, json={"data": [self._channel_json(channel)] if channel else []})
             if path == "/public/v1/channels":
                 channel = self.channels.get(request.url.params.get("slug", ""))
                 if channel is None and self.unknown_slug_status is not None:
