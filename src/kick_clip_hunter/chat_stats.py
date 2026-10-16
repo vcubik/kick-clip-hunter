@@ -43,7 +43,7 @@ from .dashboard_view import (
     sentence_case,
     stream_time_words,
 )
-from .detector import is_laughing
+from .detector import is_laughing, mention_pattern
 
 Row = Mapping[str, Any]
 Emotes = Mapping[str, tuple[str, int, int]]
@@ -377,7 +377,7 @@ def laugh_test(laugh_names: Iterable[str], laugh_patterns: Iterable[str]) -> Cal
     looks for one after the other, are looked for all at once. The answer
     for a message is the same."""
     laugh_patterns = tuple(laugh_patterns)
-    names = [re.escape(name) for name in laugh_names if name]
+    names = [mention_pattern(name) for name in laugh_names if name]
     named = re.compile("|".join(names)) if names else None
 
     def laughing(content: str) -> bool:

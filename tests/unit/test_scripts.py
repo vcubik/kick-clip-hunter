@@ -311,13 +311,13 @@ class TestWatchlistCommands:
         # Subscribing a second time would create a duplicate on Kick's side.
         channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
         asyncio.run(subscribe.main("some_channel"))
-        channel.seventv_emotes = ["OMEGALUL", "PogChamp"]
+        channel.seventv_emotes = ["OMEGALUL", "monkaS"]
 
         asyncio.run(refresh_emotes.main("some_channel"))
 
         assert self.stored_keywords(4242) == {
             "omegalul": detector.EMOTE_MENTION_LAUGH_WEIGHT,
-            "pogchamp": detector.EMOTE_MENTION_OTHER_WEIGHT,
+            "monkas": detector.EMOTE_MENTION_OTHER_WEIGHT,
         }
         assert len(kick_api.calls("POST", "/events/subscriptions")) == 1  # the original one only
         output = capsys.readouterr().out
@@ -327,13 +327,13 @@ class TestWatchlistCommands:
     def test_refreshing_emotes_replaces_their_pictures_too(self, kick_api, capsys):
         channel = kick_api.add_channel("some_channel", 4242, seventv_emotes=["KEKW"])
         asyncio.run(subscribe.main("some_channel"))
-        channel.seventv_emotes = ["OMEGALUL", "PogChamp"]
+        channel.seventv_emotes = ["OMEGALUL", "monkaS"]
 
         asyncio.run(refresh_emotes.main("some_channel"))
 
         connection = db.get_connection()
         try:
-            assert set(db.get_channel_emotes(connection, 4242)) == {"OMEGALUL", "PogChamp"}
+            assert set(db.get_channel_emotes(connection, 4242)) == {"OMEGALUL", "monkaS"}
         finally:
             connection.close()
 

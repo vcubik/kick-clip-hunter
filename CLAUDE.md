@@ -1191,7 +1191,9 @@ service is a visitor that is not signed in), and a stream whose encoding changes
 - The 7TV public API (`7tv.io/v3/users/kick/{broadcaster_user_id}`) has no auth and
   returns a channel's full emote set, including very short names ("lo", "re", "xd") that
   are useless as substring keywords — `MIN_EMOTE_NAME_LENGTH` in `detector.py` filters
-  these out before they're stored.
+  these out before they're stored. The exception is a laughing emote whose whole name is
+  one of `LAUGH_EMOTE_WHOLE_NAMES` ("lo"): kept, and found in text only as a word of its
+  own (`detector.mentions`). Emote names are compared in small letters everywhere.
 - Event subscriptions (`chat.message.sent`) have, more than once, silently gone back to
   zero on Kick's side with no error or warning — the app token still works fine, chat
   messages just stop arriving entirely for every watched channel. There's no known

@@ -17,7 +17,7 @@ signals are tracked this way over a rolling window per channel:
   messages, still only counts as one)
 - laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
   of a funny moment as chat gets, so it needs a lower multiplier. Not all
-  laughs are equal either: the exaggerated "xDDDD" form counts for more
+  laughs are equal either: the exaggerated form ("xDD" and longer) counts for more
   than a bare "xd" (see LAUGH_STRONG_WEIGHT / LAUGH_WEAK_WEIGHT), same
   weighting idea as emote_mention below
 - emote_mention: a channel's 7TV emote name typed as plain text - noisier
@@ -210,7 +210,7 @@ MAX_RATIO_SCORE = 20.0
 # moment fires (that's decided purely by the ratio thresholds above).
 VOLUME_DAMPEN_REFERENCE = 10.0
 
-# Matches the exaggerated "xDDDD" laugh. Word-bounded so it doesn't match
+# Matches the exaggerated laugh, "xDD" and longer. Word-bounded so it doesn't match
 # inside unrelated words.
 LAUGH_STRONG_PATTERN = re.compile(r"\bxd{2,}\b", re.IGNORECASE)
 # Matches bare "xd" as its own word (not e.g. "maxdps") - weaker signal than
@@ -221,14 +221,22 @@ LAUGH_WEAK_PATTERN = re.compile(r"\bxd\b", re.IGNORECASE)
 # laugh-related. A first pass based on well-known Twitch/7TV emotes (KEKW,
 # KEKWait, LUL, LULW, OMEGALUL, LOL, pepeLaugh, monkaLaugh, ...) - expected
 # to be tuned as we see which emotes actually show up in real streams.
-LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy")
+LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy", "pog")
+# Emote names that mean laughing only as the whole name (in any case): too
+# short to be looked for inside other names - "lo" is in Glow, Love, Slow,
+# pepeLost. Being laughing emotes, they are listened for in typed text too,
+# though shorter than MIN_EMOTE_NAME_LENGTH - but only as a word of their
+# own (see mentions).
+LAUGH_EMOTE_WHOLE_NAMES = ("lo",)
 
 
 def is_laugh_emote_name(emote_name: str, added_patterns: Iterable[str] = ()) -> bool:
     """`added_patterns` are the ones a channel has on top of the list above
     (see Settings), lowercased like it."""
     lowered = emote_name.lower()
-    return any(pattern in lowered for pattern in (*LAUGH_EMOTE_NAME_PATTERNS, *added_patterns))
+    return lowered in LAUGH_EMOTE_WHOLE_NAMES or any(
+        pattern in lowered for pattern in (*LAUGH_EMOTE_NAME_PATTERNS, *added_patterns)
+    )
 
 
 # Substrings marking an emote as the "dancing/vibing to music" convention
@@ -291,11 +299,28 @@ def classify_native_emotes(content: str, settings: Settings | None = None) -> fl
 MIN_EMOTE_NAME_LENGTH = 4
 
 
+def mention_pattern(keyword: str) -> str:
+    """The regular expression a stored emote keyword is found in lowercased
+    text by: anywhere, as it always was - or, for one shorter than
+    MIN_EMOTE_NAME_LENGTH (only ever one of LAUGH_EMOTE_WHOLE_NAMES), as a
+    word of its own, so that "lo" is not found in "clovek" or "napadlo"."""
+    escaped = re.escape(keyword)
+    return escaped if len(keyword) >= MIN_EMOTE_NAME_LENGTH else rf"(?<!\w){escaped}(?!\w)"
+
+
+def mentions(lowered: str, keyword: str) -> bool:
+    """Whether lowercased text names a stored emote keyword (see mention_pattern)."""
+    if len(keyword) >= MIN_EMOTE_NAME_LENGTH:
+        return keyword in lowered
+    return re.search(mention_pattern(keyword), lowered) is not None
+
+
 def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     """Maps each 7TV emote name (lowercased, to match classify_message's lookup) to its mention weight.
 
-    Emote names shorter than MIN_EMOTE_NAME_LENGTH, and dance/music-hype
-    names (see is_dance_emote_name), are skipped entirely - typing one as
+    Emote names shorter than MIN_EMOTE_NAME_LENGTH (but for the laughing
+    ones of LAUGH_EMOTE_WHOLE_NAMES), and dance/music-hype names (see
+    is_dance_emote_name), are skipped entirely - typing one as
     plain text is no more a sign of comedy than posting it as a native
     emote is.
 
@@ -306,7 +331,8 @@ def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     return {
         name.lower(): EMOTE_MENTION_LAUGH_WEIGHT if is_laugh_emote_name(name) else EMOTE_MENTION_OTHER_WEIGHT
         for name in emote_names
-        if len(name) >= MIN_EMOTE_NAME_LENGTH and not is_dance_emote_name(name)
+        if (len(name) >= MIN_EMOTE_NAME_LENGTH or name.lower() in LAUGH_EMOTE_WHOLE_NAMES)
+        and not is_dance_emote_name(name)
     }
 
 
@@ -439,7 +465,7 @@ def classify_message(
     """Returns (laugh_weight, mention_weight) for a chat message's text.
 
     laugh_weight is 0.0 (no match), the weak laugh's weight (bare "xd"), or
-    the strong one's ("xddd" or more d's) - LAUGH_WEAK_WEIGHT and
+    the strong one's ("xdd" or more d's) - LAUGH_WEAK_WEIGHT and
     LAUGH_STRONG_WEIGHT unless the channel's settings say otherwise.
 
     mention_weight is 0.0 if no channel keyword matched, otherwise the
@@ -456,7 +482,9 @@ def classify_message(
         laugh_weight = 0.0
 
     lowered = content.lower()
-    matched_weights = [weight for keyword, weight in (channel_keyword_weights or {}).items() if keyword in lowered]
+    matched_weights = [
+        weight for keyword, weight in (channel_keyword_weights or {}).items() if mentions(lowered, keyword)
+    ]
     mention_weight = max(matched_weights) if matched_weights else 0.0
     return laugh_weight, mention_weight
 
@@ -485,7 +513,7 @@ def is_laughing(content: str, laugh_names: Iterable[str] = (), added_patterns: I
     if any(is_laugh_emote_name(name, added_patterns) for name in NATIVE_EMOTE_TOKEN_PATTERN.findall(content)):
         return True
     lowered = content.lower()
-    return any(name in lowered for name in laugh_names)
+    return any(mentions(lowered, name) for name in laugh_names)
 
 
 def _reaction_weight(entries: list, index: int) -> float:
@@ -709,7 +737,7 @@ def record_message(
         scores.append(min(emote_ratio, MAX_RATIO_SCORE))
 
     # laugh_weight sums LAUGH_STRONG_WEIGHT/_WEAK_WEIGHT per laughing
-    # sender, so "xddd"+ reaches the threshold - and score - faster than an
+    # sender, so "xdd"+ reaches the threshold - and score - faster than an
     # equal number of bare "xd"s would.
     laugh_ratio = _spike_ratio(short_laugh_weight, baseline_laugh_weight, baseline_seconds, MIN_ABSOLUTE_LAUGHS)
     laugh_sender_ratio = _spike_ratio(

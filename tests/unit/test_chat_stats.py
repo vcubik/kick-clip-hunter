@@ -328,8 +328,10 @@ class TestWhatCountsAsTheSameThingSaid:
 
 
 class TestLaughing:
-    NAMES = ("kekw", "omegalul")
+    NAMES = ("kekw", "omegalul", "lo")
     SAID = (
+        "LO LO",
+        "clovek",
         "xD",
         "to je xddd teda",
         "maxdps",
