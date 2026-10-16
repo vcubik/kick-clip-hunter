@@ -100,6 +100,35 @@ class TestChannelLookup:
             await kick_client.get_channel_by_slug("no_such_channel", token)
 
 
+class TestChannelById:
+    """A channel by its broadcaster's id, which stays when it renames itself."""
+
+    async def test_says_the_name_the_channel_goes_by_now(self, kick_api):
+        kick_api.add_channel("oldname", 4242)
+        kick_api.rename_channel("oldname", "newname")
+        token = await kick_client.get_app_access_token("id", "secret")
+
+        channel = await kick_client.get_channel_by_id(4242, token)
+
+        assert (channel["slug"], channel["broadcaster_user_id"]) == ("newname", 4242)
+        assert kick_api.calls("GET", "api.kick.com/public/v1/channels") == [{"broadcaster_user_id": "4242"}]
+
+    async def test_one_kick_does_not_know_is_no_such_channel(self, kick_api):
+        token = await kick_client.get_app_access_token("id", "secret")
+
+        with pytest.raises(kick_client.NoSuchChannel, match="broadcaster user id 4242"):
+            await kick_client.get_channel_by_id(4242, token)
+
+    async def test_by_name_it_is_no_such_channel_too_once_it_renamed_itself(self, kick_api):
+        kick_api.unknown_slug_status = None
+        kick_api.add_channel("oldname", 4242)
+        kick_api.rename_channel("oldname", "newname")
+        token = await kick_client.get_app_access_token("id", "secret")
+
+        with pytest.raises(kick_client.NoSuchChannel):
+            await kick_client.get_channel_by_slug("oldname", token)
+
+
 class TestEventSubscriptions:
     async def test_lists_what_is_currently_subscribed(self, kick_api):
         kick_api.subscribed.extend([11, 22])

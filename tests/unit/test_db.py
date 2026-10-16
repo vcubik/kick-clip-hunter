@@ -1846,6 +1846,49 @@ class TestStreamRecordings:
             connection.close()
 
 
+class TestRenamedChannels:
+    """A watched channel that renamed itself on its platform (see
+    main._follow_rename)."""
+
+    def test_goes_by_its_new_name_on_the_watchlist_and_keeps_the_rest(self, conn):
+        db.add_streamer(conn, 42, "OldName")
+        db.set_streamer_tracking(conn, 42, False)
+
+        db.rename_streamer(conn, 42, "newname")
+
+        assert db.get_streamer_by_slug(conn, "OldName") is None
+        row = db.get_streamer_by_slug(conn, "newname")
+        assert (row["broadcaster_user_id"], row["tracking_enabled"]) == (42, 0)
+
+    def test_a_name_another_channel_has_is_refused(self, conn):
+        db.add_streamer(conn, 1, "first")
+        db.add_streamer(conn, 2, "second")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            db.rename_streamer(conn, 1, "second")
+
+        assert [row["slug"] for row in db.get_streamers(conn)] == ["first", "second"]
+
+    def test_the_names_its_moments_are_under_come_the_newest_first(self, conn):
+        store_moment(conn, "oldname", broadcaster_user_id=42)
+        store_moment(conn, "oldname", broadcaster_user_id=42)
+        store_moment(conn, "newname", broadcaster_user_id=42)
+        store_moment(conn, "someone_else", broadcaster_user_id=7)
+
+        assert db.get_moment_names(conn, 42) == ["newname", "oldname"]
+        assert db.get_moment_names(conn, 99) == []
+
+    def test_the_renames_followed_are_kept_the_newest_first_and_so_many_of_them(self, conn, monkeypatch):
+        monkeypatch.setattr(db, "CHANNEL_RENAMES_KEPT", 2)
+        assert db.get_channel_renames(conn) == []
+
+        for number in range(3):
+            db.add_channel_rename(conn, {"at": number})
+
+        assert db.get_channel_renames(conn) == [{"at": 2}, {"at": 1}]
+        assert db.get_subscription_drops(conn) == []
+
+
 class TestSubscriptionDrops:
     """The checks that found Kick without a chat subscription, kept for the
     Health page as whatever the service makes of them (see health.Drop)."""

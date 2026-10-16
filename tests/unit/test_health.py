@@ -378,6 +378,35 @@ class TestRememberingDrops:
         assert health.read_drops(stored) == (good,)
 
 
+class TestRenames:
+    """Watched channels that renamed themselves and were followed."""
+
+    def test_are_listed_under_the_recorders_as_they_were_noticed_and_are_no_trouble(self):
+        renames = (health.Rename(ago(hours=3), "OldName", "newname"), health.Rename(ago(days=4), "a", "b"))
+
+        part = health.recorders(facts(renames=renames), TODAY)
+
+        assert part["renames"] == [
+            {"when": when_words(ago(hours=3).astimezone(), TODAY), "old": "OldName", "new": "newname"},
+            {"when": when_words(ago(days=4).astimezone(), TODAY), "old": "a", "new": "b"},
+        ]
+        assert part["trouble"] is False
+
+    def test_none_is_an_empty_list(self):
+        assert health.recorders(facts(), TODAY)["renames"] == []
+
+    def test_what_is_stored_reads_back_as_it_was(self):
+        renames = (health.Rename(NOW, "OldName", "newname"), health.Rename(ago(days=1), "a", "b"))
+
+        assert health.read_renames([rename.stored() for rename in renames]) == renames
+
+    def test_an_entry_that_cannot_be_read_is_left_out(self):
+        good = health.Rename(NOW, "a", "b")
+        stored = ["not a rename", {"at": "not a time", "old": "a", "new": "b"}, {"at": NOW.isoformat()}, None]
+
+        assert health.read_renames([*stored, good.stored()]) == (good,)
+
+
 class TestRecorders:
     def recording(self, slug: str = "channel_a", **known) -> Channel:
         known.setdefault("recording_since", ago(3600))

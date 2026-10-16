@@ -24,6 +24,11 @@ SITE_API_BASE = "https://kick.com/api/v2"
 _token_cache: dict[str, float | str] = {}
 
 
+class NoSuchChannel(ValueError):
+    """Kick knows no channel by that name (or id) - as a rule, because the
+    channel has renamed itself, or is gone."""
+
+
 async def get_app_access_token(client_id: str, client_secret: str) -> str:
     cached = _token_cache.get("token")
     expires_at = _token_cache.get("expires_at", 0.0)
@@ -60,7 +65,24 @@ async def get_channel_by_slug(slug: str, token: str) -> dict:
         channels = response.json()["data"]
 
     if not channels:
-        raise ValueError(f"No Kick channel found for slug {slug!r}")
+        raise NoSuchChannel(f"No Kick channel found for slug {slug!r}")
+    return channels[0]
+
+
+async def get_channel_by_id(broadcaster_user_id: int, token: str) -> dict:
+    """A channel by its broadcaster's user id, which stays the same when the
+    channel renames itself - so its `slug` is the name it goes by now."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{API_BASE}/channels",
+            params={"broadcaster_user_id": broadcaster_user_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        channels = response.json()["data"]
+
+    if not channels:
+        raise NoSuchChannel(f"No Kick channel found for broadcaster user id {broadcaster_user_id}")
     return channels[0]
 
 

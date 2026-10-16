@@ -24,6 +24,11 @@ recording of it is started without anyone asking. Once per stream: a channel
 whose recording was ended while its stream was still on is left alone until
 that stream is over (`hold_off`).
 
+Everything here is kept by the channel's name on the watchlist. A channel
+that renames itself on its platform has it all go by its new name once the
+watchlist follows it (`rename`): a recorder that is running carries on, and
+so does a recording of its stream, in the folder it was started in.
+
 What the loop saw of each channel on its last round - whether its platform
 said it was live, and since when, or why it could not be looked at - is kept
 for the Health page, together with when the loop last finished a round: a
@@ -36,6 +41,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import stream_recording, streams
 from .platforms import StreamUrlError
@@ -176,10 +182,14 @@ async def _rest(wake_up: asyncio.Event) -> None:
 # -- streams kept whole ------------------------------------------------------
 
 
-def start_stream_recording(channel_slug: str, broadcaster_user_id: int, recording_id: int) -> StreamRecording:
+def start_stream_recording(
+    channel_slug: str, broadcaster_user_id: int, recording_id: int, folder: Path | None = None
+) -> StreamRecording:
     """Starts keeping a channel's stream whole. Footage arrives once the
-    channel is live and its recorder running, which the loop sees to."""
-    writer = StreamWriter(stream_recording.parts_folder(channel_slug, recording_id))
+    channel is live and its recorder running, which the loop sees to. It is
+    kept in `folder` - by default, where a recording of the channel under
+    this name is (see stream_recording.parts_folder)."""
+    writer = StreamWriter(folder or stream_recording.parts_folder(channel_slug, recording_id))
     kept = StreamRecording(recording_id, channel_slug, broadcaster_user_id, writer)
     _stream_recordings[channel_slug] = kept
     _get_recorder(channel_slug).whole_stream = writer
@@ -232,6 +242,29 @@ def stop_holding_off(channel_slug: str) -> None:
 
 def is_held_off(channel_slug: str) -> bool:
     return channel_slug in _held_off
+
+
+def rename(old: str, new: str) -> None:
+    """Has what is kept here of a channel go by the name it renamed itself
+    to. A recorder that is running carries on, finding the stream by its new
+    name from now on, with its buffer where it was; a stream that is being
+    kept whole goes on being kept, in the folder it was started in. What the
+    loop saw of the channel under its old name is forgotten."""
+    _looks.pop(old, None)
+    if old in _held_off:
+        _held_off.discard(old)
+        _held_off.add(new)
+    recorder = _recorders.pop(old, None)
+    waiting = _recorders.get(new)
+    if recorder is not None and recorder.is_active and (waiting is None or not waiting.is_active):
+        recorder.channel_slug = new
+        _recorders[new] = recorder
+    kept = _stream_recordings.pop(old, None)
+    if kept is not None:
+        kept.channel_slug = new
+        _stream_recordings[new] = kept
+        _get_recorder(new).whole_stream = kept.writer
+    wake()
 
 
 async def forget(channel_slug: str) -> None:
@@ -292,6 +325,7 @@ async def _report_over(stream_recording_over: StreamRecordingOver) -> None:
 
 
 StreamIsOn = Callable[[str], Awaitable[None]]
+LookFailed = Callable[[str, Exception], Awaitable[None]]
 
 
 def _always_recorded(always_recorded: Callable[[], Iterable[str]]) -> set[str]:
@@ -339,6 +373,7 @@ async def run_forever(
     stream_recording_over: StreamRecordingOver | None = None,
     always_recorded: Callable[[], Iterable[str]] = lambda: (),
     stream_is_on: StreamIsOn | None = None,
+    look_failed: LookFailed | None = None,
 ) -> None:
     """Drives the recorders until cancelled. `stream_recording_over` is
     told, with the channel and why, when a stream recording should be ended;
@@ -346,7 +381,9 @@ async def run_forever(
     whoever that is. `always_recorded` is the channels whose every stream is
     to be kept whole, and `stream_is_on` is told when one of them is live
     with no recording of it running; starting one (`start_stream_recording`)
-    is up to whoever that is, too."""
+    is up to whoever that is, too. `look_failed` is told, with the channel
+    and what was raised, when a look at a channel fails - for one whose
+    platform no longer knows it by that name, which it may have changed."""
     global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:
@@ -384,6 +421,11 @@ async def run_forever(
                 except Exception as error:
                     logger.exception("[%s] recording tick failed", slug)
                     _could_not_see(slug, type(error).__name__)
+                    if look_failed is not None:
+                        try:
+                            await look_failed(slug, error)
+                        except Exception:
+                            logger.exception("[%s] could not see to a failed look", slug)
             if stream_recording_over is not None:
                 try:
                     await _report_over(stream_recording_over)

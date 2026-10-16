@@ -269,6 +269,32 @@ def read_drops(stored: list) -> tuple[Drop, ...]:
 
 
 @dataclass(frozen=True)
+class Rename:
+    """A watched channel that renamed itself on its platform, and which the
+    watchlist followed to its new name."""
+
+    at: datetime
+    old: str
+    new: str
+
+    def stored(self) -> dict[str, Any]:
+        """As it is kept in the database (see db.add_channel_rename)."""
+        return {"at": self.at.isoformat(), "old": self.old, "new": self.new}
+
+
+def read_renames(stored: list) -> tuple[Rename, ...]:
+    """The renames kept in the database, as they were stored. One that can't
+    be read is left out."""
+    renames = []
+    for entry in stored:
+        try:
+            renames.append(Rename(datetime.fromisoformat(entry["at"]), str(entry["old"]), str(entry["new"])))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return tuple(renames)
+
+
+@dataclass(frozen=True)
 class Facts:
     """Everything the page is made from, as it stood at `now`."""
 
@@ -290,6 +316,8 @@ class Facts:
     # rests between rounds.
     round_finished_at: datetime | None = None
     round_seconds: float = 30.0
+    # The channels that renamed themselves and were followed, newest first.
+    renames: tuple[Rename, ...] = ()
     # The disk recordings are kept on: what is free, what would be once the
     # recordings that run were saved (both None if it could not be looked
     # at), and how little that may be. `use` is what takes the room, as
@@ -811,7 +839,14 @@ def recorders(facts: Facts, today: date) -> dict[str, Any]:
             )
     if not facts.watching:
         more.append("Watching is off, so only channels whose streams are recorded whole are looked at.")
-    return {"trouble": loop_late or bool(troubled), "said": said, "more": more, "rows": rows}
+    # Followed, so no trouble: listed because the watchlist's name changed
+    # without anyone changing it, and what was kept under the old name
+    # (past moments, recordings) stays under that.
+    renames = [
+        {"when": when_words(rename.at.astimezone(), today), "old": rename.old, "new": rename.new}
+        for rename in facts.renames
+    ]
+    return {"trouble": loop_late or bool(troubled), "said": said, "more": more, "rows": rows, "renames": renames}
 
 
 # -- the disk -----------------------------------------------------------------

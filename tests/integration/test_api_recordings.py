@@ -742,7 +742,13 @@ class TestAChannelRecordedAlways:
         async with service.main.lifespan(service.main.app):
             await async_wait_until(lambda: given, "the loop to start")
 
-        assert given[4:] == [service.main._always_recorded_slugs, service.main._record_stream_by_itself]
+        assert given[4:] == [
+            service.main._always_recorded_slugs,
+            service.main._record_stream_by_itself,
+            # ...and whom to tell that a channel could not be looked at, which
+            # may have renamed itself (see test_channel_rename.py).
+            service.main._look_failed,
+        ]
 
 
 class TestShuttingDown:

@@ -223,7 +223,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   arrived and when each channel's chat last spoke, what the last check of Kick's chat
   subscriptions found - with a button that checks now, and the list of the times Kick was found to
   have dropped some - as whom the bot writes in which channels' chat and whether it can (with
-  the button that signs its Kick account in), what each recorder is doing, how much room the
+  the button that signs its Kick account in), what each recorder is doing (and which channels
+  renamed themselves on Kick and were followed), how much room the
   disk has and what takes it, and where the tunnel stands. Each part says it in a sentence, in bold when it is trouble, and
   how many of them are trouble stands beside "Health" in the bar of every page. Its script fetches
   the page again every few seconds and swaps in what each part says now. No page reloads on its own; the
@@ -308,7 +309,9 @@ Module map (`src/kick_clip_hunter/`):
   `twitch_chat.chat_message` of a Twitch event, `youtube_chat.chat_message` of a YouTube
   chat item; what a chatter typed that would read as a token is kept so that it does not
   (`typed`)
-- `kick_client.py` — app access token + channel lookup + event subscription; and, with
+- `kick_client.py` — app access token + channel lookup (by slug, or by broadcaster id -
+  `get_channel_by_id`, what a renamed channel is called now; `NoSuchChannel` when Kick has
+  none) + event subscription; and, with
   the user access token of the account the bot writes as, who that account is
   (`get_user`) and a message written in a channel's chat (`send_chat_message`,
   `POST /public/v1/chat`, as type "user": the bot writes in other channels' chat as an
@@ -607,7 +610,8 @@ Module map (`src/kick_clip_hunter/`):
   the page and, without what takes the database or a walk over the disk to know, for the count
   in every page's bar. A check that found subscriptions missing is also kept in the database
   (`app_settings`, key `subscription_drops`, the newest 20), so that a restart does not forget
-  it. Trouble is kept rare on purpose: one quiet chat among talking ones is said in its row and
+  it, and so is a Kick channel the watchlist followed to a new name (`channel_renames`, listed
+  under the recorders, no trouble). Trouble is kept rare on purpose: one quiet chat among talking ones is said in its row and
   no more, silence counts only while a channel has been live for `CHAT_SILENT_SECONDS` and the
   service up to hear it, a drop that was mended is listed but is no trouble. Twitch's,
   YouTube's and TikTok's chat have a part each, shown only while the service has anything to
@@ -1161,6 +1165,24 @@ service is a visitor that is not signed in), and a stream whose encoding changes
   that starts from a watchlist name (a stream recording does) finds the channel's chat by
   `broadcaster_user_id`, never by comparing names (`get_channel_chat_between`,
   `get_chat_name`).
+- A Kick channel can rename itself. It keeps its user id, so its chat, settings, emotes
+  and switches carry on, and its chat comes under the new name at once - but Kick no
+  longer finds it by the watchlist's old name, so its recorder (and every clip) would
+  fail. The service follows it (`main._follow_rename`): chat arriving under a name that
+  differs from the watchlist's other than in capitals (`_notice_chat_name`), or Kick
+  knowing no channel by the watchlist's name when the recording loop asks
+  (`recording_manager.run_forever`'s `look_failed`, at most every `RENAME_ASK_SECONDS`
+  per channel), has Kick asked by id what it is called now, and `streamers.slug` set to
+  that (`db.rename_streamer`; refused, with an error in the log, if another watched
+  channel has that name). `recording_manager.rename` moves what it keeps by name: a
+  running recorder carries on (its buffer stays in the old name's folder until the next
+  restart), a stream recording that runs goes on in the folder it was started in (its row
+  keeps the old name, which is what its folder is found by; after a restart it goes on
+  under the channel's current name), what the loop saw is forgotten. The chat delay set
+  under the old name is copied to the new one. Past moments, chat and finished
+  recordings stay under the old name - the review page's channel filter lists both. A
+  rename is logged as a warning and listed on the Health page. Twitch, YouTube and TikTok
+  renames are not followed.
 - Kick's webhook config UI occasionally fails to persist a URL change silently. If a
   channel is confirmed live/chatting but no webhooks are arriving, the fix is: toggle
   **Enable Webhooks** off, re-enter the URL, re-enable, save, then refresh the page to
