@@ -26,12 +26,16 @@ def _moment(text: str | None) -> datetime | None:
     return datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
 
 
-async def live_status(channel: str) -> LiveStatus:
+async def live_status(channel: str, broadcaster_user_id: int | None = None) -> LiveStatus:
     """Asks the channel's platform whether it is live. The cheap question:
-    a plain API call, no browser."""
+    a plain API call, no browser.
+
+    A Kick channel whose user id is given is asked for by that rather than
+    by its name, which it can change: a channel that renamed itself is then
+    found whichever of its names the caller had."""
     platform, login = platforms.split(channel)
     if platform == platforms.KICK:
-        return await _kick_live_status(login)
+        return await _kick_live_status(login, broadcaster_user_id)
     if platform == platforms.TWITCH:
         return await _twitch_live_status(login)
     if platform == platforms.YOUTUBE:
@@ -41,10 +45,14 @@ async def live_status(channel: str) -> LiveStatus:
     raise ValueError(f"there is no way to tell whether {channel!r} is live")
 
 
-async def _kick_live_status(slug: str) -> LiveStatus:
+async def _kick_live_status(slug: str, broadcaster_user_id: int | None) -> LiveStatus:
     settings = load_settings()
     token = await kick_client.get_app_access_token(settings.kick_client_id, settings.kick_client_secret)
-    stream = (await kick_client.get_channel_by_slug(slug, token)).get("stream") or {}
+    if broadcaster_user_id is not None:
+        channel = await kick_client.get_channel_by_id(broadcaster_user_id, token)
+    else:
+        channel = await kick_client.get_channel_by_slug(slug, token)
+    stream = channel.get("stream") or {}
     if not stream.get("is_live"):
         return LiveStatus(live=False)
     return LiveStatus(live=True, started_at=_moment(stream.get("start_time")))

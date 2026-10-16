@@ -128,20 +128,20 @@ class TestDetection:
         assert second["stream_elapsed_seconds"] == pytest.approx(1200, abs=5)
 
     async def test_the_stream_start_is_looked_up_once_and_cached(self, service):
-        service.watch(CHANNEL)
+        owner = service.watch(CHANNEL)
 
-        first = await service.main._stream_elapsed_seconds(CHANNEL)
-        second = await service.main._stream_elapsed_seconds(CHANNEL)
+        first = await service.main._stream_elapsed_seconds(CHANNEL, owner)
+        second = await service.main._stream_elapsed_seconds(CHANNEL, owner)
 
         assert first == pytest.approx(3600, abs=5) and second == pytest.approx(3600, abs=5)
         assert len(service.api.calls("GET", "/channels")) == 1
 
     async def test_the_cached_stream_start_expires(self, service, monkeypatch):
-        service.watch(CHANNEL)
-        await service.main._stream_elapsed_seconds(CHANNEL)
+        owner = service.watch(CHANNEL)
+        await service.main._stream_elapsed_seconds(CHANNEL, owner)
 
         monkeypatch.setattr(service.main, "STREAM_INFO_CACHE_SECONDS", -1)
-        await service.main._stream_elapsed_seconds(CHANNEL)
+        await service.main._stream_elapsed_seconds(CHANNEL, owner)
 
         assert len(service.api.calls("GET", "/channels")) == 2
 
