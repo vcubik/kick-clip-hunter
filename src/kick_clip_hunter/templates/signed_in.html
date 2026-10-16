@@ -1,0 +1,27 @@
+{#- What came of signing in the account the bot writes in Kick's chat as
+    (see kick_auth.py): Kick sends the browser back here once the account
+    has signed in - or has not. -#}
+{% extends "base.html" %}
+{% block title %}Kick sign-in{% endblock %}
+{% block main %}
+<main class="channels">
+<div class="channels-in">
+  <section aria-labelledby="signed-in-title">
+    {% if account %}
+    <h1 class="title" id="signed-in-title">Signed in on Kick as {{ account }}</h1>
+    <p class="section-lead">The bot writes in Kick's chat as {{ account }}, in the channels whose settings have it write in chat.</p>
+    <div class="ch-line">
+      <a class="ch-btn" href="/dashboard/health">Go to Health</a>
+    </div>
+    {% else %}
+    <h1 class="title" id="signed-in-title">Not signed in on Kick</h1>
+    <p class="section-lead">{{ why }}</p>
+    <div class="ch-line">
+      <a class="ch-btn ch-btn-primary" href="{{ sign_in_url }}">Sign in again</a>
+      <a class="ch-btn ch-btn-quiet" href="/dashboard/health">Go to Health</a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+</main>
+{% endblock %}

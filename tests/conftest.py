@@ -69,6 +69,8 @@ def pytest_configure(config: pytest.Config) -> None:
     # empty, they are there for python-dotenv not to fill them in either.
     os.environ["TWITCH_CLIENT_ID"] = ""
     os.environ["TWITCH_CLIENT_SECRET"] = ""
+    # Kick sends the bot's sign-in back where it does by default.
+    os.environ["KICK_REDIRECT_URI"] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the
     # trust store is pointed at an empty directory. Every httpx client the
@@ -223,6 +225,11 @@ def _reset_module_state() -> None:
         main._disk_use = None
         main._twitch_reader = None
         main._youtube_reader = None
+        main._kick_tokens = None
+        main._twitch_tokens = None
+        main._chat_bot = None
+        main._bot_commands = main.chat_bot.Recent()
+        main._kick_sign_ins.clear()
 
 
 @pytest.fixture(autouse=True)

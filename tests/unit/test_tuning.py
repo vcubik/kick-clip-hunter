@@ -252,6 +252,25 @@ class TestValuesThatContradictEachOther:
         for lower, upper, _strictly in tuning.RULES:
             assert lower in tuning.BY_NAME and upper in tuning.BY_NAME
 
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("record_commands", "stop_commands"),
+            ("clip_commands", "status_commands"),
+            ("stop_commands", "status_commands"),
+        ],
+    )
+    def test_a_message_that_would_be_two_commands(self, first, second):
+        with pytest.raises(ValueError) as refused:
+            tuning.check(self.every(**{first: ("!rec", "!go"), second: ("!rec",)}))
+
+        assert str(refused.value) == (
+            f'\'!rec\' cannot be in both "{setting(first).label}" and "{setting(second).label}".'
+        )
+
+    def test_every_list_of_commands_is_a_list_of_messages(self):
+        assert {setting(name).kind for name in tuning.COMMAND_LISTS} == {tuning.PHRASES}
+
 
 class TestLayingValuesOverEachOther:
     def test_nothing_set_is_what_is_recommended(self):
@@ -325,12 +344,37 @@ class TestLayingValuesOverEachOther:
         assert tuned.clip_commands == frozenset({"!clip", "clip that"})
         assert tuned.clip_command_from_anyone is True
 
+    def test_what_the_bot_does_in_chat_and_is_asked_there(self):
+        tuned = tuning.tuned(
+            {},
+            {
+                "bot_writes": True,
+                "bot_tells_clips": True,
+                "record_commands": ("!record start", "!rec"),
+                "stop_commands": ("!record stop",),
+                "status_commands": ("!status",),
+            },
+        )
+
+        assert (tuned.bot_writes, tuned.bot_tells_clips) == (True, True)
+        assert tuned.record_commands == frozenset({"!record start", "!rec"})
+        assert tuned.stop_commands == frozenset({"!record stop"})
+        assert tuned.status_commands == frozenset({"!status"})
+
 
 class TestWhatIsAChannelsAlone:
     COMMANDS: ClassVar = {"clip_commands": ("!clip",), "clip_command_from_anyone": True}
 
-    def test_the_clip_commands_are_and_nothing_else_is(self):
-        assert tuning.PER_CHANNEL == {"clip_commands", "clip_command_from_anyone"}
+    def test_the_clip_commands_and_the_bot_are_and_nothing_else_is(self):
+        assert tuning.PER_CHANNEL == {
+            "clip_commands",
+            "clip_command_from_anyone",
+            "bot_writes",
+            "bot_tells_clips",
+            "record_commands",
+            "stop_commands",
+            "status_commands",
+        }
         assert {item.name for item in tuning.SETTINGS if item.per_channel} == tuning.PER_CHANNEL
 
     def test_given_values_are_told_apart(self):
@@ -372,6 +416,38 @@ class TestClipCommands:
         assert tuned.is_clip_command("Clip That")
         assert not tuned.is_clip_command("type !clip to get a clip")
         assert not tuned.is_clip_command("!clips")
+
+
+class TestTheBot:
+    def test_it_writes_nothing_and_takes_no_command_until_it_is_set_to(self):
+        recommended = tuning.recommended()
+
+        assert (recommended.bot_writes, recommended.bot_tells_clips) == (False, False)
+        assert recommended.record_commands == recommended.stop_commands == recommended.status_commands == frozenset()
+        assert [recommended.bot_command(said) for said in ("!record", "!stop", "!status", "")] == [None] * 4
+
+    def test_a_command_is_the_whole_message_whatever_its_case_and_says_which_it_is(self):
+        tuned = tuning.tuned(
+            {},
+            {
+                "record_commands": tuning.clean("record_commands", "!Record Start, !rec"),
+                "stop_commands": tuning.clean("stop_commands", "!record stop"),
+                "status_commands": tuning.clean("status_commands", "!status"),
+            },
+        )
+
+        assert tuned.bot_command("!record start") == tuning.RECORD
+        assert tuned.bot_command("  !REC ") == tuning.RECORD
+        assert tuned.bot_command("!Record Stop") == tuning.STOP
+        assert tuned.bot_command("!status") == tuning.STATUS
+        assert tuned.bot_command("type !status to see") is None
+        assert tuned.bot_command("!statuses") is None
+
+    def test_a_clip_command_is_not_one_of_the_bots(self):
+        tuned = tuning.tuned({}, {"clip_commands": ("!clip",), "status_commands": ("!status",)})
+
+        assert tuned.bot_command("!clip") is None
+        assert not tuned.is_clip_command("!status")
 
 
 class TestWhatIsStored:
@@ -447,18 +523,26 @@ class TestOnThePage:
             item.name for group, *_ in tuning.GROUPS for item in tuning.SETTINGS if item.group == group
         ]
 
-    def test_what_is_a_channels_alone_comes_first_in_it_as_a_section_of_its_own(self):
-        first, *others = self.form(own={})
+    def test_what_is_a_channels_alone_comes_first_in_it_as_sections_of_their_own(self):
+        commands, bot, *others = self.form(own={})
 
-        assert first["title"] == "A clip on command"
-        assert [field["name"] for field in first["fields"]] == ["clip_commands", "clip_command_from_anyone"]
-        assert first["per_channel"] is True
+        assert (commands["key"], commands["title"]) == (tuning.COMMANDS, "A clip on command")
+        assert [field["name"] for field in commands["fields"]] == ["clip_commands", "clip_command_from_anyone"]
+        assert (bot["key"], bot["title"]) == (tuning.BOT, "The bot in chat")
+        assert [field["name"] for field in bot["fields"]] == [
+            "bot_writes",
+            "bot_tells_clips",
+            "record_commands",
+            "stop_commands",
+            "status_commands",
+        ]
+        assert commands["per_channel"] is bot["per_channel"] is True
         assert [section["per_channel"] for section in others] == [False] * len(others)
 
     def test_and_is_not_in_the_form_for_all_channels_at_all(self):
         form = self.form()
 
-        assert [section["title"] for section in form] == [title for _key, title, _lead in tuning.GROUPS[1:]]
+        assert [section["title"] for section in form] == [title for _key, title, _lead in tuning.GROUPS[2:]]
         assert not tuning.PER_CHANNEL & self.fields(form).keys()
         assert self.fields(form).keys() == {item.name for item in tuning.SETTINGS if not item.per_channel}
 

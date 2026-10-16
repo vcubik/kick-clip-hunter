@@ -6,15 +6,29 @@ key), the channel lookup of kick.com's own API (for subscriber badges) and
 7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
 real client code runs unmodified - request building, auth headers, status
 handling and JSON parsing are all exercised; only the network is replaced.
+
+It is also the account the bot writes in Kick's chat as: Kick's OAuth 2.1
+flow with PKCE - the consent page a browser is sent to (`consent`, which a
+test calls with the address the service sent the browser to), the code
+exchanged for an account's tokens, their renewal - who a user token is of,
+and the chat a message is written in (`chat_written`).
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
 import httpx
+
+# What the service is set up with in the test run (see conftest.py).
+CLIENT_ID = "test-client-id"
+CLIENT_SECRET = "test-client-secret"
+# What a sign-in of the bot's account is asked for, and given.
+BOT_SCOPES = ("chat:write", "user:read")
 
 
 def seventv_emote_id(name: str) -> str:
@@ -62,6 +76,30 @@ class FakeChannel:
         }
 
 
+@dataclass(frozen=True)
+class FakeKickAccount:
+    """A Kick account that can sign in for the bot to write as."""
+
+    name: str = "clip_bot"
+    user_id: int = 555
+
+
+@dataclass(frozen=True)
+class _Consent:
+    """A code the consent page handed out: whose, for which challenge and
+    redirect URL, and with what it lets the application do."""
+
+    account: FakeKickAccount
+    challenge: str
+    redirect_uri: str
+    scopes: tuple[str, ...]
+
+
+def pkce_challenge(verifier: str) -> str:
+    """PKCE's S256 challenge of a verifier, as Kick checks it."""
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
 class OtherFake(Protocol):
     """A fake of another service, whose requests go the same way as Kick's."""
 
@@ -93,6 +131,22 @@ class FakeKickApi:
     # Fakes of other platforms a test has as well (Twitch's, YouTube's): a
     # request one of them owns is answered by it.
     others: list[OtherFake] = field(default_factory=list)
+    # Accounts signing in for the bot: the codes the consent page handed
+    # out, the user tokens that work (access tokens, and refresh tokens,
+    # each of which works once) and what each lets the application do.
+    user_token_lifetime_seconds: int = 7200
+    consents: dict[str, _Consent] = field(default_factory=dict)
+    user_tokens: dict[str, FakeKickAccount] = field(default_factory=dict)
+    user_refresh_tokens: dict[str, tuple[FakeKickAccount, tuple[str, ...]]] = field(default_factory=dict)
+    user_token_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    user_tokens_issued: int = 0
+    codes_issued: int = 0
+    # Every chat message written, in order: the channel, what was written,
+    # and as whom. A channel listed in `chat_refusals` turns messages down
+    # with that status; one in `chat_unsent` takes them and sends none.
+    chat_written: list[dict] = field(default_factory=list)
+    chat_refusals: dict[int, int] = field(default_factory=dict)
+    chat_unsent: set[int] = field(default_factory=set)
 
     def add_channel(self, slug: str, broadcaster_user_id: int, **kwargs) -> FakeChannel:
         channel = FakeChannel(slug=slug, broadcaster_user_id=broadcaster_user_id, **kwargs)
@@ -102,6 +156,106 @@ class FakeKickApi:
     def calls(self, method: str, path_fragment: str) -> list[object]:
         """Bodies/queries of the recorded requests matching a method and path."""
         return [body for m, path, body in self.requests if m == method and path_fragment in path]
+
+    def written_in(self, broadcaster_user_id: int) -> list[str]:
+        """What was written in a channel's chat, in order."""
+        return [sent["content"] for sent in self.chat_written if sent["broadcaster_user_id"] == broadcaster_user_id]
+
+    def user_tokens_for(self, account: FakeKickAccount | None = None, scopes: tuple[str, ...] = BOT_SCOPES) -> dict:
+        """A working pair of an account's tokens, as the token endpoint hands
+        them out."""
+        account = account or FakeKickAccount()
+        self.user_tokens_issued += 1
+        access, refresh = f"kick-user-token-{self.user_tokens_issued}", f"kick-refresh-token-{self.user_tokens_issued}"
+        self.user_tokens[access] = account
+        self.user_token_scopes[access] = tuple(scopes)
+        self.user_refresh_tokens[refresh] = (account, tuple(scopes))
+        return {
+            "access_token": access,
+            "token_type": "Bearer",
+            "refresh_token": refresh,
+            "expires_in": self.user_token_lifetime_seconds,
+            "scope": " ".join(scopes),
+        }
+
+    def consent(
+        self, authorize_url: str, account: FakeKickAccount | None = None, *, scopes: tuple[str, ...] | None = None
+    ) -> httpx.URL:
+        """Where Kick's consent page sends the browser back to once `account`
+        has signed in there - sent there with `authorize_url`, which is
+        checked as Kick checks it: the redirect URL, with a code for the
+        account's tokens. It is given what it asked for unless `scopes`
+        says less."""
+        url = httpx.URL(authorize_url)
+        asked = url.params
+        assert (url.host, url.path) == ("id.kick.com", "/oauth/authorize"), authorize_url
+        assert asked["response_type"] == "code"
+        assert asked["client_id"] == CLIENT_ID
+        assert asked["code_challenge_method"] == "S256"
+        assert asked["state"] and asked["code_challenge"]
+        self.codes_issued += 1
+        code = f"code-{self.codes_issued}"
+        granted = tuple(asked["scope"].split()) if scopes is None else scopes
+        self.consents[code] = _Consent(
+            account or FakeKickAccount(), asked["code_challenge"], asked["redirect_uri"], granted
+        )
+        return httpx.URL(asked["redirect_uri"], params={"code": code, "state": asked["state"]})
+
+    def turn_down(self, authorize_url: str) -> httpx.URL:
+        """Where the consent page sends the browser back to when the account
+        does not let the application in."""
+        asked = httpx.URL(authorize_url).params
+        return httpx.URL(
+            asked["redirect_uri"],
+            params={"error": "access_denied", "error_description": "The user denied access", "state": asked["state"]},
+        )
+
+    def _user_token(self, body: dict) -> httpx.Response:
+        """The token endpoint, for a code from the consent page or a refresh
+        token."""
+        if (body.get("client_id"), body.get("client_secret")) != (CLIENT_ID, CLIENT_SECRET):
+            return httpx.Response(401, json={"error": "invalid_client", "error_description": "Client unknown"})
+        if body.get("grant_type") == "refresh_token":
+            found = self.user_refresh_tokens.pop(body.get("refresh_token", ""), None)
+            if found is None:
+                return httpx.Response(
+                    400, json={"error": "invalid_grant", "error_description": "Invalid refresh token"}
+                )
+            return httpx.Response(200, json=self.user_tokens_for(*found))
+        consent = self.consents.pop(body.get("code", ""), None)
+        if consent is None:
+            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid code"})
+        if body.get("redirect_uri") != consent.redirect_uri:
+            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Redirect URI mismatch"})
+        if pkce_challenge(body.get("code_verifier", "")) != consent.challenge:
+            return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Code verifier mismatch"})
+        return httpx.Response(200, json=self.user_tokens_for(consent.account, consent.scopes))
+
+    def _as_user(self, request: httpx.Request, token: str, account: FakeKickAccount, body: object) -> httpx.Response:
+        """What a user token asks of the public API: who it is of, or a
+        message written in a channel's chat."""
+        scopes = self.user_token_scopes.get(token, ())
+        if request.url.path == "/public/v1/users":
+            if "user:read" not in scopes:
+                return httpx.Response(403, json={"message": "Forbidden", "data": None})
+            user = {"user_id": account.user_id, "name": account.name, "email": "", "profile_picture": ""}
+            return httpx.Response(200, json={"data": [user], "message": "OK"})
+        if request.url.path == "/public/v1/chat" and request.method == "POST":
+            if "chat:write" not in scopes:
+                return httpx.Response(403, json={"message": "Forbidden", "data": None})
+            assert isinstance(body, dict) and body.get("type") == "user", body
+            broadcaster, content = body.get("broadcaster_user_id"), body.get("content")
+            if not isinstance(broadcaster, int) or not content or len(content) > 500:
+                return httpx.Response(400, json={"message": "Invalid request", "data": None})
+            if broadcaster in self.chat_refusals:
+                status = self.chat_refusals[broadcaster]
+                return httpx.Response(status, json={"message": "You cannot chat here", "data": None})
+            if broadcaster in self.chat_unsent:
+                return httpx.Response(200, json={"data": {"is_sent": False, "message_id": ""}, "message": "OK"})
+            self.chat_written.append({"broadcaster_user_id": broadcaster, "content": content, "sender": account.name})
+            sent = {"is_sent": True, "message_id": f"written-{len(self.chat_written)}"}
+            return httpx.Response(200, json={"data": sent, "message": "OK"})
+        return httpx.Response(401, json={"message": "Unauthorized", "data": None})
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -128,6 +282,12 @@ class FakeKickApi:
             if fragment in url:
                 return httpx.Response(status, json={"message": "forced failure"})
 
+        if (
+            request.url.host == "id.kick.com"
+            and path == "/oauth/token"
+            and body.get("grant_type") != "client_credentials"
+        ):
+            return self._user_token(body)  # type: ignore[arg-type]
         if request.url.host == "id.kick.com" and path == "/oauth/token":
             self.tokens_issued += 1
             return httpx.Response(
@@ -142,6 +302,11 @@ class FakeKickApi:
         if request.url.host == "api.kick.com":
             if path == "/public/v1/public-key":
                 return httpx.Response(200, json={"data": {"public_key": self.public_key_pem}})
+            token = request.headers.get("authorization", "").removeprefix("Bearer ")
+            if token in self.user_tokens:
+                return self._as_user(request, token, self.user_tokens[token], body)
+            if path == "/public/v1/chat":
+                return httpx.Response(401, json={"message": "Unauthorized", "data": None})
             if not request.headers.get("authorization", "").startswith("Bearer app-token-"):
                 return httpx.Response(401, json={"message": "Unauthorized"})
             if path == "/public/v1/channels":

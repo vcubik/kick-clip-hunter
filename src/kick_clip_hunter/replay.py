@@ -13,7 +13,8 @@ it was first used it matched the live run 102 to 103), so it answers "how
 many" and "how long". It says nothing about whether the moments that remain
 are the good ones - that needs ratings. Nor does it count clips made on
 command (see tuning.py): who posted a stored message, with what badges, is
-not kept with it. A command is left out of the detector here as it is live.
+not kept with it. A command is left out of the detector here as it is live
+- a clip command, and as much the commands the bot takes (chat_bot.py).
 
 Used by scripts/replay_chat.py, by the Settings page's trial and by the
 Recordings page, which looks for moments in a stream that was kept whole
@@ -239,7 +240,7 @@ def replay(
             if progress is not None and fed % PROGRESS_EVERY == 0:
                 progress(fed)
             run_session_until(message.time)
-            if tuning.is_clip_command(message.content):
+            if tuning.is_clip_command(message.content) or tuning.bot_command(message.content) is not None:
                 continue
             laugh_weight, mention_weight = detector.classify_message(message.content, weights, settings)
             spike = detector.record_message(

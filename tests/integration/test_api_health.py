@@ -113,10 +113,12 @@ class TestThePage:
         # Nothing to list of channels there are none of.
         assert part(page, "webhooks").find("table") == [] and part(page, "recorders").find("table") == []
         # Twitch's and YouTube's chat are no part of a service that has
-        # nothing to do with them.
+        # nothing to do with them, nor is a bot that writes nowhere as nobody.
         assert page.find("div", data_health_part="twitch") == []
         assert page.find("div", data_health_part="youtube") == []
-        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in ("twitch", "youtube"))
+        assert page.find("div", data_health_part="bot") == []
+        apart = ("twitch", "youtube", "bot")
+        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in apart)
 
     async def test_every_part_is_marked_for_the_script_that_keeps_it_current(self, service):
         page = await page_at(service)

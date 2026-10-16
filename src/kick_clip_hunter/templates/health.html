@@ -1,9 +1,9 @@
 {#- Whether what the service depends on is there: webhooks arriving from
     Kick, Kick's chat subscriptions, Twitch's and YouTube's chat where there
-    is any, the recorders, room on the disk and the tunnel (see health.py). Each part
-    says where it stands in a
-    sentence - in bold when that is trouble - and what there is to know
-    beyond it under that. The script fetches the page again every few
+    is any, the bot that writes in chat where it does, the recorders, room
+    on the disk and the tunnel (see health.py). Each part says where it
+    stands in a sentence - in bold when that is trouble - and what there is
+    to know beyond it under that. The script fetches the page again every few
     seconds and swaps in each part as it reads now, so nothing but a
     part's words is inside `data-health-part`. -#}
 {% extends "base.html" %}
@@ -116,6 +116,36 @@
         </tbody>
       </table>
       {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if health.bot.shown %}
+  <section aria-labelledby="bot-title">
+    <h2 class="title" id="bot-title">Chat bot</h2>
+    <div data-health-part="bot">
+      {{ statement(health.bot) }}
+      {% if health.bot.rows %}
+      <table class="an-table health-table">
+        <caption class="health-caption">Channels it writes in the chat of</caption>
+        <thead>
+          <tr><th scope="col">Channel</th><th scope="col">On</th><th scope="col">Last wrote</th><th scope="col"></th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.bot.rows %}
+          <tr>
+            <th scope="row">{{ row.slug }}</th>
+            <td>{{ row.platform }}</td>
+            <td title="{{ row.sent_title }}">{{ row.sent }}</td>
+            <td class="health-note">{{ row.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+    <div class="ch-line health-act">
+      <a class="ch-btn" href="{{ health.bot.sign_in.url }}">{{ health.bot.sign_in.words }}</a>
     </div>
   </section>
   {% endif %}

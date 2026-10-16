@@ -14,7 +14,9 @@ Twitch's chat comes another way, over a connection the service keeps open
 stands is a part of its own, there for as long as the service is set up for
 Twitch or watches a Twitch channel. YouTube's chat is read while a channel
 is live, by looking at it every few seconds (youtube_chat.py), and has a
-part of its own while a YouTube channel is watched.
+part of its own while a YouTube channel is watched. The bot that writes in
+chat (chat_bot.py) has one while it writes in a channel's chat or an account
+is signed in for it on Kick: as whom it writes, and whether it can.
 
 So what the service notices as it runs is kept - in memory, by main.py and
 recording_manager.py, and the subscriptions Kick dropped in the database as
@@ -139,6 +141,49 @@ class YouTubeChat:
 
 
 @dataclass(frozen=True)
+class BotChannel:
+    """A channel the bot writes in the chat of (see chat_bot.ChatBot)."""
+
+    slug: str
+    platform: str = "kick"
+    # When the last message went out there, and why the last one did not,
+    # if it did not - until the next goes out.
+    sent_at: datetime | None = None
+    trouble: str | None = None
+
+
+@dataclass(frozen=True)
+class BotAccount:
+    """The account the bot writes as on a platform."""
+
+    platform: str
+    # Whether the service is set up for the platform at all (Twitch's
+    # application, see config.py).
+    set_up: bool = True
+    # Who it writes as, if an account has signed in, and whether that let
+    # it write in chat - None where that is not known.
+    login: str | None = None
+    may_write: bool | None = None
+    # Why an account has to sign in (again) before it can write, if one has.
+    sign_in: str | None = None
+
+
+@dataclass(frozen=True)
+class ChatBot:
+    """Where the bot in chat stands: the channels it writes in the chat of,
+    the accounts it writes as, where its Kick account signs in, and where
+    Kick sends the browser back to then - the Kick app's redirect URL."""
+
+    channels: tuple[BotChannel, ...] = ()
+    accounts: tuple[BotAccount, ...] = ()
+    sign_in_url: str = ""
+    redirect_uri: str = ""
+
+    def account(self, platform: str) -> BotAccount | None:
+        return next((account for account in self.accounts if account.platform == platform), None)
+
+
+@dataclass(frozen=True)
 class SubscriptionCheck:
     """What a check of Kick's chat subscriptions found."""
 
@@ -239,6 +284,8 @@ class Facts:
     twitch: TwitchChat | None = None
     # YouTube's chat, while a YouTube channel is watched; None otherwise.
     youtube: YouTubeChat | None = None
+    # The bot in chat.
+    bot: ChatBot | None = None
 
 
 # -- words ------------------------------------------------------------------
@@ -504,6 +551,108 @@ def youtube_part(facts: Facts, today: date) -> dict[str, Any]:
     return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
 
 
+# -- the bot in chat -----------------------------------------------------------
+
+# How each platform is called in a sentence, and how its account signs in.
+PLATFORM_WORDS = {"kick": "Kick", "twitch": "Twitch", "youtube": "YouTube"}
+TWITCH_SIGN_IN_WORDS = "scripts/twitch_login.py signs one in"
+YOUTUBE_WORDS = (
+    "The bot cannot write in YouTube's chat - the service reads it as a visitor who is not signed in - so "
+    "there its commands are carried out without an answer."
+)
+
+
+def bot_account_words(account: BotAccount | None, platform: str) -> str:
+    """As whom the bot writes on a platform, or why it cannot - in a
+    sentence, for the Health page and a channel's Settings."""
+    name = PLATFORM_WORDS.get(platform, platform)
+    if platform == "youtube":
+        return YOUTUBE_WORDS
+    if account is None or not account.set_up:
+        return f"The service is not set up for {name}, so the bot cannot write there."
+    if account.sign_in:
+        return account.sign_in
+    if account.login is None:
+        if platform == "twitch":
+            return f"No Twitch account has signed in for the bot to write as: {TWITCH_SIGN_IN_WORDS}."
+        return f"No {name} account has signed in for the bot to write as."
+    if account.may_write is False:
+        again = "Sign it in again with scripts/twitch_login.py." if platform == "twitch" else "Sign it in again."
+        return f"{account.login} did not let the bot write in {name}'s chat when it signed in. {again}"
+    if platform == "twitch":
+        return f"On Twitch the bot writes as {account.login}, the account chat is read as."
+    return f"On {name} the bot writes as {account.login}."
+
+
+def _cannot_write(channel: BotChannel, bot: ChatBot) -> str | None:
+    """Why the bot cannot write in a Kick or Twitch channel's chat, where it
+    cannot: no account to write as, or the last message did not go out."""
+    account = bot.account(channel.platform)
+    if account is None or not account.set_up or account.sign_in or not account.login or account.may_write is False:
+        return bot_account_words(account, channel.platform)
+    return channel.trouble
+
+
+def bot_part(facts: Facts, today: date) -> dict[str, Any]:
+    """Where the bot in chat stands. Shown while it writes in a channel's
+    chat, or an account has signed in for it on Kick. A channel it cannot
+    write in is trouble: whoever runs the channel is waiting for answers."""
+    bot = facts.bot
+    nothing: dict[str, Any] = {"shown": False, "trouble": False, "said": "", "more": [], "rows": [], "sign_in": None}
+    if bot is None:
+        return nothing
+    kick = bot.account("kick")
+    if not bot.channels and not (kick and kick.login):
+        return nothing
+    now = facts.now
+    rows = []
+    writing = []
+    failing = []
+    for channel in bot.channels:
+        if channel.platform == "youtube":
+            # Never written in, and said once below - no trouble.
+            note = "Cannot write in YouTube's chat"
+        else:
+            writing.append(channel.slug)
+            note = _cannot_write(channel, bot) or ""
+            if note:
+                failing.append(channel.slug)
+        last = channel.sent_at
+        rows.append(
+            {
+                "slug": channel.slug,
+                "platform": PLATFORM_WORDS.get(channel.platform, channel.platform),
+                "sent": sentence_case(ago_words(last, now, today)) if last else "Nothing yet",
+                "sent_title": _title(last, today),
+                "note": note,
+            }
+        )
+    if failing:
+        said = f"The bot cannot write in the chat of {list_words(failing)}."
+    elif writing:
+        said = f"The bot writes in the chat of {count_words(len(writing), 'channel')}."
+    elif bot.channels:
+        said = "The bot writes in no channel's chat: it cannot write in YouTube's."
+    else:
+        said = "The bot writes in no channel's chat. A channel's settings switch it on."
+    # Kick's account always, Twitch's where it can write or is meant to,
+    # YouTube where it is meant to and cannot.
+    named = ["kick"]
+    twitch = bot.account("twitch")
+    if (twitch is not None and twitch.set_up) or any(channel.platform == "twitch" for channel in bot.channels):
+        named.append("twitch")
+    if any(channel.platform == "youtube" for channel in bot.channels):
+        named.append("youtube")
+    more = [bot_account_words(bot.account(platform), platform) for platform in named]
+    if kick is None or kick.login is None or kick.sign_in or kick.may_write is False:
+        more.append(
+            f"The Kick app has to have {bot.redirect_uri} as its redirect URL, and the scopes chat:write and "
+            "user:read, for an account to sign in."
+        )
+    sign_in = {"url": bot.sign_in_url, "words": "Sign in another account" if kick and kick.login else "Sign in on Kick"}
+    return {"shown": True, "trouble": bool(failing), "said": said, "more": more, "rows": rows, "sign_in": sign_in}
+
+
 # -- recorders ----------------------------------------------------------------
 
 
@@ -664,6 +813,7 @@ PARTS = (
     ("subscriptions", "subscriptions", True),
     ("twitch", "Twitch chat", False),
     ("youtube", "YouTube chat", False),
+    ("bot", "the chat bot", False),
     ("recorders", "the recorders", True),
     ("disk", "the disk", False),
     ("tunnel", "the tunnel", False),
@@ -678,6 +828,7 @@ def report(facts: Facts, today: date) -> dict[str, Any]:
         "subscriptions": subscriptions(facts, today),
         "twitch": twitch_part(facts, today),
         "youtube": youtube_part(facts, today),
+        "bot": bot_part(facts, today),
         "recorders": recorders(facts, today),
         "disk": disk(facts),
         "tunnel": tunnel_part(facts, today),

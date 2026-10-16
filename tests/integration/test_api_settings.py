@@ -706,19 +706,27 @@ class TestTheSettingsPage:
         assert page.find("button", data_trial_go=True) == []
         assert form.find("button", data_rest_all=True) == []
 
-    async def test_all_but_what_asks_for_a_clip_which_comes_first_and_is_the_channels_alone(self, service):
+    async def test_all_but_what_is_the_channels_alone_which_comes_first(self, service):
         service.watch(CHANNEL)
         await save(service, CHANNEL, clip_commands="!clip")
 
         page = await settings_page(service, CHANNEL)
 
         form = page.one("form", data_tuning=True)
-        assert locked(form) == [False] + [True] * (len(form.find("fieldset")) - 1)
-        first = form.find("fieldset")[0]
+        assert locked(form) == [False, False] + [True] * (len(form.find("fieldset")) - 2)
+        first, second, *_ = form.find("fieldset")
         assert first.one("h2").text == "A clip on command"
         assert [control.attrs["data-setting"] for control in first.find(data_setting=True)] == [
             "clip_commands",
             "clip_command_from_anyone",
+        ]
+        assert second.one("h2").text == "The bot in chat"
+        assert [control.attrs["data-setting"] for control in second.find(data_setting=True)] == [
+            "bot_writes",
+            "bot_tells_clips",
+            "record_commands",
+            "stop_commands",
+            "status_commands",
         ]
         assert (shown(page, "clip_commands"), "is-set" in row_of(page, "clip_commands").classes) == ("!clip", True)
         assert rest_button(page, "clip_commands").text == "Recommended: none"
