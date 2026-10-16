@@ -5,6 +5,7 @@
     up. Everything on it is a link or a form, so it needs no script. -#}
 {% extends "base.html" %}
 {% from "_chat_line.html" import chat_name, chat_text with context %}
+{% from "_macros.html" import pages %}
 {% block title %}Analyze{% endblock %}
 
 {% macro emote(part) -%}
@@ -321,7 +322,7 @@
     </section>
     {% endif %}
 
-    <section aria-labelledby="an-found">
+    <section id="messages" aria-labelledby="an-found">
       <div class="ch-line an-found">
         <h2 class="an-title" id="an-found">{{ messages.found_words }}</h2>
         <nav class="ch-tabs" aria-label="Order">
@@ -330,18 +331,14 @@
           {% endfor %}
         </nav>
       </div>
+      {#- On top as well: a page of them is long, and the chatter's card above it longer. -#}
+      {% if messages.paging %}{{ pages(messages.paging, "Pages of the messages", "Back", "On", "an-pages an-pages-top") }}{% endif %}
       <div class="an-lines">
         {% for line in messages.lines %}
         {{ message(line) }}
         {% endfor %}
       </div>
-      {% if messages.paging %}
-      <nav class="queue-pages an-pages" aria-label="Pages of the messages">
-        <span>{{ messages.paging.words }}</span>
-        {% if messages.paging.back_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ messages.paging.back_href }}" rel="prev">Back</a>{% endif %}
-        {% if messages.paging.on_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ messages.paging.on_href }}" rel="next">On</a>{% endif %}
-      </nav>
-      {% endif %}
+      {% if messages.paging %}{{ pages(messages.paging, "Pages of the messages", "Back", "On", "an-pages") }}{% endif %}
     </section>
 
     {% else %}

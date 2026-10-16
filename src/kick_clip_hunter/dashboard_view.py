@@ -14,7 +14,7 @@ the reviewer would use rather than the detector's ("laughing", not "laugh").
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -456,6 +456,61 @@ def review_url(
     if moment is not None:
         query["moment"] = moment
     return "/dashboard" + (f"?{urlencode(query)}" if query else "")
+
+
+def recordings_url(recording: int | None = None, *, offset: int = 0) -> str:
+    """The Recordings page for one page of the list and open recording."""
+    query: dict[str, Any] = {}
+    if recording is not None:
+        query["recording"] = recording
+    if offset:
+        query["offset"] = offset
+    return "/dashboard/recordings" + (f"?{urlencode(query)}" if query else "")
+
+
+# How many pages on either side of the one that is open are numbered in a
+# list's paging; the first and the last always are.
+PAGES_AROUND = 2
+
+
+def page_offset(offset: int, size: int, total: int) -> int:
+    """Where the page that holds `offset` begins - the first page for one
+    before it, the last for one past the end (a list shrinks as it is worked
+    through, and the page that was there must not turn into an empty one)."""
+    last = max(total - 1, 0) // size * size
+    return min(max(offset, 0) // size * size, last)
+
+
+def pages(offset: int, size: int, total: int, href: Callable[[int], str]) -> dict[str, Any] | None:
+    """The paging of a list `size` to a page, open at the page that begins at
+    `offset` (see page_offset), or None when all of it fits on one: what it
+    says ("51 to 100 of 340"), the pages on either side, and the pages to go
+    to by their number - the first, the last and a few around the open one,
+    with None where some are left out. `href` is the address of the page
+    that begins at an offset."""
+    if total <= size:
+        return None
+    shown = min(size, total - offset)
+    current, last = offset // size, (total - 1) // size
+    numbered = sorted({0, last, *range(max(current - PAGES_AROUND, 0), min(current + PAGES_AROUND, last) + 1)})
+
+    def numbered_page(number: int) -> dict[str, Any]:
+        return {"label": f"{number + 1:,}", "href": href(number * size), "current": number == current}
+
+    numbers: list[dict[str, Any] | None] = []
+    for before, number in zip([None, *numbered], numbered, strict=False):
+        if before is not None and number - before == 2:
+            # A gap of one page would take as much room as the page itself.
+            numbers.append(numbered_page(before + 1))
+        elif before is not None and number - before > 2:
+            numbers.append(None)
+        numbers.append(numbered_page(number))
+    return {
+        "words": f"{offset + 1:,} to {offset + shown:,} of {total:,}",
+        "back_href": href(offset - size) if offset > 0 else None,
+        "on_href": href(offset + size) if offset + shown < total else None,
+        "numbers": numbers,
+    }
 
 
 def _same_stream(group: dict[str, Any], started: datetime | None, day: date) -> bool:

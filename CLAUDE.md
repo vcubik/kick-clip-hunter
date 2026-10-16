@@ -179,7 +179,7 @@ set from the dashboard's Settings page (see `tuning.py` below).
   remembered (`removed_channel:<platform>:<id>` in `app_settings`) and never given to a new
   channel. `GET
   /dashboard/recordings` lists those recordings,
-  the newest first, and plays the open one with its chat replayed beside it - fetched a
+  the newest first and 50 to a page, and plays the open one with its chat replayed beside it - fetched a
   stretch at a time as the video plays on or is moved in, since a recording runs for hours -
   and has the buttons that delete one or retry one that could not be saved. Under the video
   is the chat trace over the whole recording (see `chat_trace.py` below): hours on one
@@ -206,7 +206,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   newest of which is what the page opens on. Beside it is either the period's overview
   (figures, messages over time with the laughing and the detected moments marked, the
   busiest minutes, the most active chatters, the most used emotes, what was said and who
-  was addressed most) or its messages, a page at a time, which is where a chatter or a
+  was addressed most) or its messages, a page at a time (numbered pages above and under them, as under the review
+  queue and the list of recordings - `dashboard_view.pages`), which is where a chatter or a
   text is searched for: a chatter that is found gets figures of their own, and every
   message leads to the chat around it. The page is links and forms and needs no script.
   `GET /dashboard/settings` is where

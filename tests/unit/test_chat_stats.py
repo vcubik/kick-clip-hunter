@@ -221,9 +221,6 @@ class TestWords:
         assert chat_stats.stored_words(long, TODAY) == "Chat is stored from 3 January to yesterday."
         assert chat_stats.stored_words(Period(local(20, 9), local(20, 10)), TODAY) == "Chat is stored from today."
 
-    def test_a_page_of_messages_says_which_it_is(self):
-        assert chat_stats.paging_words(1200, 100, 5614) == "1,201 to 1,300 of 5,614"
-
     def test_the_tabs_are_the_presets_and_all(self):
         assert chat_stats.preset_labels() == [
             ("day", "24 hours"),

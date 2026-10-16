@@ -1490,13 +1490,23 @@ def get_stream_recording(conn: sqlite3.Connection, recording_id: int) -> sqlite3
     return conn.execute("SELECT * FROM stream_recordings WHERE id = ?", (recording_id,)).fetchone()
 
 
-def get_stream_recordings(conn: sqlite3.Connection, states: Iterable[str] | None = None) -> list[sqlite3.Row]:
+def get_stream_recordings(
+    conn: sqlite3.Connection, states: Iterable[str] | None = None, *, limit: int = -1, offset: int = 0
+) -> list[sqlite3.Row]:
     """Stream recordings, the newest first - all of them, or the ones that
-    stand in one of the given states."""
+    stand in one of the given states; `limit` of them from `offset` on."""
     conn.row_factory = sqlite3.Row
     states = None if states is None else list(states)
     where = "" if states is None else f"WHERE state IN ({', '.join('?' * len(states))})"
-    return conn.execute(f"SELECT * FROM stream_recordings {where} ORDER BY id DESC", states or []).fetchall()
+    return conn.execute(
+        f"SELECT * FROM stream_recordings {where} ORDER BY id DESC LIMIT ? OFFSET ?", [*(states or []), limit, offset]
+    ).fetchall()
+
+
+def get_stream_recording_offset(conn: sqlite3.Connection, recording_id: int) -> int:
+    """How many recordings come before this one in the list, the newest
+    first."""
+    return conn.execute("SELECT COUNT(*) FROM stream_recordings WHERE id > ?", (recording_id,)).fetchone()[0]
 
 
 def count_stream_recordings(conn: sqlite3.Connection) -> int:

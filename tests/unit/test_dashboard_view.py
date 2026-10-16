@@ -522,6 +522,71 @@ class TestReviewUrl:
         assert view.review_url(channel='a&b="c"') == "/dashboard?channel=a%26b%3D%22c%22"
 
 
+class TestRecordingsUrl:
+    def test_the_plain_address_is_the_first_page(self):
+        assert view.recordings_url() == "/dashboard/recordings"
+        assert view.recordings_url(None, offset=0) == "/dashboard/recordings"
+
+    def test_a_recording_and_a_page_are_spelled_out(self):
+        assert view.recordings_url(7) == "/dashboard/recordings?recording=7"
+        assert view.recordings_url(7, offset=50) == "/dashboard/recordings?recording=7&offset=50"
+
+
+def offset_href(offset: int) -> str:
+    return f"/list?offset={offset}"
+
+
+class TestPages:
+    def numbers(self, paging) -> list[str]:
+        """The pages by their number as a line of labels, the open one in
+        brackets and a gap as an ellipsis."""
+        return [
+            "..." if page is None else f"[{page['label']}]" if page["current"] else page["label"]
+            for page in paging["numbers"]
+        ]
+
+    @pytest.mark.parametrize(("offset", "total", "expected"), [(0, 0, 0), (-5, 30, 0), (25, 30, 20), (99, 30, 20)])
+    def test_an_offset_is_where_its_page_begins_within_the_list(self, offset, total, expected):
+        assert view.page_offset(offset, 10, total) == expected
+
+    def test_a_list_that_fits_one_page_has_none(self):
+        assert view.pages(0, 10, 10, offset_href) is None
+        assert view.pages(0, 10, 0, offset_href) is None
+
+    def test_it_says_what_it_shows_of_how_many(self):
+        assert view.pages(1200, 100, 5614, offset_href)["words"] == "1,201 to 1,300 of 5,614"
+        assert view.pages(20, 10, 25, offset_href)["words"] == "21 to 25 of 25"
+
+    def test_the_way_back_and_on_is_there_only_where_the_list_goes_on(self):
+        first, middle, last = (view.pages(offset, 10, 25, offset_href) for offset in (0, 10, 20))
+
+        assert (first["back_href"], first["on_href"]) == (None, "/list?offset=10")
+        assert (middle["back_href"], middle["on_href"]) == ("/list?offset=0", "/list?offset=20")
+        assert (last["back_href"], last["on_href"]) == ("/list?offset=10", None)
+
+    def test_each_number_leads_to_where_its_page_begins(self):
+        paging = view.pages(10, 10, 25, offset_href)
+
+        assert [page["href"] for page in paging["numbers"]] == ["/list?offset=0", "/list?offset=10", "/list?offset=20"]
+        assert self.numbers(paging) == ["1", "[2]", "3"]
+
+    @pytest.mark.parametrize(
+        ("page", "expected"),
+        [
+            (1, ["[1]", "2", "3", "...", "20"]),
+            (4, ["1", "2", "3", "[4]", "5", "6", "...", "20"]),
+            (10, ["1", "...", "8", "9", "[10]", "11", "12", "...", "20"]),
+            (20, ["1", "...", "18", "19", "[20]"]),
+        ],
+    )
+    def test_a_long_list_numbers_the_ends_and_the_pages_around_the_open_one(self, page, expected, monkeypatch):
+        monkeypatch.setattr(view, "PAGES_AROUND", 2)
+        assert self.numbers(view.pages((page - 1) * 10, 10, 200, offset_href)) == expected
+
+    def test_a_number_is_written_as_it_is_read(self):
+        assert self.numbers(view.pages(0, 1, 1500, offset_href))[-1] == "1,500"
+
+
 class TestAnEmptyList:
     def test_before_the_first_moment_there_is_nothing_yet(self):
         for show in view.SHOWS:

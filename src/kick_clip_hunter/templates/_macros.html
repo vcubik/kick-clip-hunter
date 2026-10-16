@@ -29,3 +29,21 @@
   </span>
 </span>
 {%- endmacro %}
+
+{#- The paging of a list (see dashboard_view.pages): what it shows of how
+    many, the pages on either side - `back` and `on` say which way they go -
+    and the pages by their number, the open one marked and a gap where some
+    are left out. -#}
+{% macro pages(paging, label, back, on, class="") -%}
+<nav class="queue-pages{% if class %} {{ class }}{% endif %}" aria-label="{{ label }}">
+  <span class="page-words">{{ paging.words }}</span>
+  {% if paging.back_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.back_href }}" rel="prev">{{ back }}</a>{% endif %}
+  {% if paging.on_href %}<a class="ch-btn ch-btn-quiet ch-btn-compact" href="{{ paging.on_href }}" rel="next">{{ on }}</a>{% endif %}
+  <span class="page-numbers">
+    {%- for page in paging.numbers %}
+    {% if page is none %}<span class="page-gap">…</span>
+    {%- else %}<a class="ch-tab page-number" href="{{ page.href }}"{% if page.current %} aria-current="true"{% endif %}>{{ page.label }}</a>{% endif %}
+    {%- endfor %}
+  </span>
+</nav>
+{%- endmacro %}
