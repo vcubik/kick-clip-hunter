@@ -68,7 +68,15 @@ class TestNativeEmotes:
     def test_laugh_emotes_weigh_the_most(self, name):
         assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
 
-    @pytest.mark.parametrize("name", ["asmonSmash", "resttD", "shoulderRoll", "collectiblesGoldenLOOT"])
+    @pytest.mark.parametrize("name", ["POGGERS", "PogChamp", "peepoPog"])
+    def test_pog_anywhere_in_the_name_is_laughing(self, name):
+        assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+
+    @pytest.mark.parametrize("name", ["lo", "LO", "Lo"])
+    def test_an_emote_called_just_lo_is_laughing_in_any_case(self, name):
+        assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+
+    @pytest.mark.parametrize("name", ["asmonSmash", "resttD", "shoulderRoll", "collectiblesGoldenLOOT", "Glow", "Love"])
     def test_unrelated_emotes_weigh_little(self, name):
         assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_OTHER_WEIGHT
 
@@ -93,19 +101,32 @@ class TestNativeEmotes:
 
 class TestChannelEmoteNames:
     def test_laugh_names_get_the_laugh_weight_and_the_rest_the_default(self):
-        weights = detector.classify_emote_names(["KEKW", "OMEGALUL", "Sadge", "PogChamp"])
+        weights = detector.classify_emote_names(["KEKW", "OMEGALUL", "PogChamp", "Sadge", "monkaS"])
         assert weights == {
             "kekw": detector.EMOTE_MENTION_LAUGH_WEIGHT,
             "omegalul": detector.EMOTE_MENTION_LAUGH_WEIGHT,
+            "pogchamp": detector.EMOTE_MENTION_LAUGH_WEIGHT,
             "sadge": detector.EMOTE_MENTION_OTHER_WEIGHT,
-            "pogchamp": detector.EMOTE_MENTION_OTHER_WEIGHT,
+            "monkas": detector.EMOTE_MENTION_OTHER_WEIGHT,
         }
 
-    @pytest.mark.parametrize("name", ["lo", "re", "xd", "bla", "LUL"])
+    @pytest.mark.parametrize("name", ["re", "xd", "bla", "LUL"])
     def test_names_too_short_to_be_meaningful_substrings_are_dropped(self, name):
-        # "lo" would match inside "clovek", "re" inside "treba", ...
+        # "re" would match inside "treba", "bla" inside "blazen", ...
         assert len(name) < detector.MIN_EMOTE_NAME_LENGTH
         assert detector.classify_emote_names([name]) == {}
+
+    @pytest.mark.parametrize("name", ["lo", "LO", "Lo"])
+    def test_a_short_laughing_name_is_kept_and_found_as_a_word_of_its_own(self, name):
+        assert name.lower() in detector.LAUGH_EMOTE_WHOLE_NAMES
+        weights = detector.classify_emote_names([name])
+        assert weights == {"lo": detector.EMOTE_MENTION_LAUGH_WEIGHT}
+        assert detector.classify_message("LO LO LO", weights)[1] == detector.EMOTE_MENTION_LAUGH_WEIGHT
+        assert detector.classify_message("to je lo!", weights)[1] == detector.EMOTE_MENTION_LAUGH_WEIGHT
+
+    @pytest.mark.parametrize("content", ["clovek", "napadlo", "lol", "slow"])
+    def test_a_short_laughing_name_is_not_found_inside_other_words(self, content):
+        assert detector.classify_message(content, detector.classify_emote_names(["lo"]))[1] == 0.0
 
     @pytest.mark.parametrize("name", ["catJAM", "headBang", "beeBobble", "pepeDance"])
     def test_dance_names_are_dropped(self, name):
@@ -161,6 +182,8 @@ class TestIsLaughing:
     def test_one_of_the_channels_laugh_emotes_named_in_the_text(self):
         assert detector.is_laughing("KEKW", ["kekw"])
         assert detector.is_laughing("on spadl OMEGALUL", ["kekw", "omegalul"])
+        assert detector.is_laughing("LO LO", ["lo"])
+        assert not detector.is_laughing("clovek napadlo", ["lo"])
 
     def test_the_same_word_means_nothing_on_a_channel_that_has_no_such_emote(self):
         assert not detector.is_laughing("KEKW")

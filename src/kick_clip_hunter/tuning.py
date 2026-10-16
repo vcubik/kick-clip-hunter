@@ -259,7 +259,9 @@ _WINDOW = detector.SHORT_WINDOW_SECONDS
 # a cooldown no longer than it would let them fire a second moment of their
 # own once it ran out.
 LULL_MIN_SECONDS = _WINDOW + 5
-_BUILT_IN_LAUGHING = ", ".join(detector.LAUGH_EMOTE_NAME_PATTERNS)
+_BUILT_IN_LAUGHING = ", ".join(detector.LAUGH_EMOTE_NAME_PATTERNS) + "".join(
+    f", and an emote called just {name}" for name in detector.LAUGH_EMOTE_WHOLE_NAMES
+)
 _BUILT_IN_DANCING = ", ".join(detector.DANCE_EMOTE_NAME_PATTERNS)
 
 SETTINGS: tuple[Setting, ...] = (
