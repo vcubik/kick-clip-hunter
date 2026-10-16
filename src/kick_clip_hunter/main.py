@@ -880,8 +880,10 @@ _channel_keywords_cache: dict[int, dict[str, float]] = {}
 
 # Stream start times don't need to be looked up on every message - only when
 # a moment fires - and barely change within a single stream, so a short
-# cache keeps us from hammering the channels endpoint.
-_stream_start_cache: dict[str, tuple[datetime | None, float]] = {}
+# cache keeps us from hammering the channels endpoint. Kept by the channel's
+# id, as a Kick channel is asked for by it: the name its chat comes under
+# need not be one Kick's API finds it by just after it renamed itself.
+_stream_start_cache: dict[int, tuple[datetime | None, float]] = {}
 STREAM_INFO_CACHE_SECONDS = 120
 
 
@@ -964,13 +966,15 @@ def _channel_keywords(conn, broadcaster_user_id: int) -> dict[str, float]:
     return _channel_keywords_cache[broadcaster_user_id]
 
 
-async def _stream_elapsed_seconds(channel_slug: str) -> int | None:
-    cached = _stream_start_cache.get(channel_slug)
+async def _stream_elapsed_seconds(channel_slug: str, broadcaster_user_id: int) -> int | None:
+    """How far into its stream a channel is now; None while it is not live."""
+    cached = _stream_start_cache.get(broadcaster_user_id)
     now = time.monotonic()
     if cached is None or now - cached[1] > STREAM_INFO_CACHE_SECONDS:
-        _stream_start_cache[channel_slug] = ((await streams.live_status(channel_slug)).started_at, now)
+        status = await streams.live_status(channel_slug, broadcaster_user_id)
+        _stream_start_cache[broadcaster_user_id] = (status.started_at, now)
 
-    start_time, _ = _stream_start_cache[channel_slug]
+    start_time, _ = _stream_start_cache[broadcaster_user_id]
     if start_time is None:
         return None
     return int((datetime.now(timezone.utc) - start_time).total_seconds())
@@ -1065,8 +1069,6 @@ async def _follow_rename(broadcaster_user_id: int) -> str | None:
     finally:
         conn.close()
     recording_manager.rename(old, new)
-    for name in {old, old.lower()}:
-        _stream_start_cache.pop(name, None)
     logger.warning("[%s] renamed itself on Kick to %s - the watchlist follows it", old, new)
     return new
 
@@ -4872,7 +4874,7 @@ async def remove_channel(slug: str, everything: int = 0):
     finally:
         conn.close()
     _forget_tuning()
-    _stream_start_cache.pop(slug, None)
+    _stream_start_cache.pop(broadcaster_user_id, None)
     await recording_manager.forget(slug)
     if row["platform"] == platforms.KICK:
         await _unsubscribe_kick_chat(broadcaster_user_id, slug)
@@ -5705,7 +5707,7 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
     window_start = window_end - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
     reason = ",".join(spike.reasons)
     try:
-        stream_elapsed = await _stream_elapsed_seconds(channel)
+        stream_elapsed = await _stream_elapsed_seconds(channel, message.broadcaster_user_id)
     except Exception:
         # Stream time is a label on the dashboard. The detector has already
         # started its cooldown, so a moment dropped here because the

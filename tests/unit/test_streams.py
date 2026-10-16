@@ -38,6 +38,16 @@ class TestKickLiveStatus:
 
         assert kick_api.calls("GET", "/public/v1/channels") == [{"slug": "Some_Channel"}]
 
+    async def test_a_kick_channel_whose_id_is_given_is_asked_for_by_it(self, kick_api):
+        # A channel that renamed itself is found by its id whichever of its
+        # names the caller had.
+        kick_api.add_channel("new_name", 7, is_live=True, start_time="2026-03-01T20:00:00Z")
+
+        status = await streams.live_status("old_name", 7)
+
+        assert status == LiveStatus(live=True, started_at=datetime(2026, 3, 1, 20, 0, tzinfo=timezone.utc))
+        assert kick_api.calls("GET", "/public/v1/channels") == [{"broadcaster_user_id": "7"}]
+
 
 class TestKickStream:
     def test_a_kick_channels_stream_is_found_on_kick(self, monkeypatch):

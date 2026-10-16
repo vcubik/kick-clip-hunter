@@ -1180,7 +1180,9 @@ service is a visitor that is not signed in), and a stream whose encoding changes
   restart), a stream recording that runs goes on in the folder it was started in (its row
   keeps the old name, which is what its folder is found by; after a restart it goes on
   under the channel's current name), what the loop saw is forgotten. The chat delay set
-  under the old name is copied to the new one. Past moments, chat and finished
+  under the old name is copied to the new one. How far into its stream a moment was is
+  asked of Kick by the channel's id (`main._stream_elapsed_seconds`), whichever name its
+  chat came under. Past moments, chat and finished
   recordings stay under the old name - the review page's channel filter lists both. A
   rename is logged as a warning and listed on the Health page. Twitch, YouTube and TikTok
   renames are not followed.

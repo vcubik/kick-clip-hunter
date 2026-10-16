@@ -247,6 +247,34 @@ class TestChatUnderANewName:
         assert noticed
 
 
+class TestStreamTimeOfItsMoments:
+    """A moment is labelled with how far into its stream it was, which Kick
+    is asked for by the channel's id: by name it would not find a channel
+    that has just renamed itself."""
+
+    async def test_moments_under_the_new_name_have_it(self, service):
+        owner = service.watch(OLD, live_for_seconds=5400)
+        renamed_on_kick(service, owner)
+        service.warm_up(NEW)
+
+        await service.crowd_laughs(NEW)
+        await service.settle()
+
+        (moment,) = service.moments()
+        assert moment["channel_slug"] == NEW
+        assert moment["stream_elapsed_seconds"] == pytest.approx(5400, abs=5)
+
+    async def test_moments_whose_chat_still_comes_under_the_old_name_have_it(self, service):
+        service.watch(OLD, live_for_seconds=5400)
+        service.api.rename_channel(OLD, NEW)
+        service.warm_up(OLD)
+
+        await service.crowd_laughs(OLD)
+
+        (moment,) = service.moments()
+        assert moment["stream_elapsed_seconds"] == pytest.approx(5400, abs=5)
+
+
 class TestAChannelKickNoLongerFindsByName:
     async def test_is_looked_up_by_its_id_and_followed(self, service, recorders):
         service.api.unknown_slug_status = None  # Kick's answer: no such channel
