@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -32,13 +34,13 @@ SECOND = Channel(broadcaster_user_id=-2, channel="second@youtube")
 class Rig:
     """A reader and what it hands on."""
 
-    def __init__(self, channels: list[Channel]) -> None:
+    def __init__(self, channels: list[Channel], now: Callable[[], datetime] | None = None) -> None:
         self.channels = channels
         self.batches: list[list[ChatMessage]] = []
         self.refuse_next_batch = False
         # How often the reader has looked at the watchlist.
         self.rounds = 0
-        self.reader = ChatReader(self.watched, self.take)
+        self.reader = ChatReader(self.watched, self.take, now)
 
     def watched(self) -> list[Channel]:
         self.rounds += 1
@@ -137,6 +139,61 @@ class TestReadingAChat:
 
         assert rig.taken == [("first@youtube", "m-2")]
         assert any("could not be taken in" in record.getMessage() for record in caplog.records)
+
+
+START = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
+
+
+def at(seconds: float) -> datetime:
+    return START + timedelta(seconds=seconds)
+
+
+def sent(seconds: float) -> int:
+    """A message's timestampUsec, so many seconds after START."""
+    return int(at(seconds).timestamp() * 1_000_000)
+
+
+def every_four_seconds(chat) -> Callable[[], datetime]:
+    """A clock on which the first look at the chat - what was written before
+    the reader came - is at START, and each one after it four seconds later."""
+    return lambda: at(4 * max(len(chat.looks) - 1, 0))
+
+
+class TestWhenMessagesArrived:
+    """A look brings what was written since the one before, all at once; each
+    message is taken to have arrived when YouTube says it was sent."""
+
+    async def test_the_messages_of_a_look_arrived_when_each_was_sent(self, youtube, quick):
+        chat = live(youtube)
+        chat.say(
+            message("m-1", "alice", "one", sent_usec=sent(0.5)),
+            message("m-2", "bob", "two", sent_usec=sent(1.75)),
+            message("m-3", "carol", "three", sent_usec=sent(3.25)),
+        )
+        chat.say(
+            # Sent before the last one of the look before, brought only now.
+            message("m-4", "dave", "four", sent_usec=sent(3)),
+            message("m-5", "erin", "five", sent_usec=sent(6)),
+            # YouTube's clock ahead of this machine's.
+            message("m-6", "frank", "six", sent_usec=sent(30)),
+        )
+
+        async with running(Rig([FIRST], every_four_seconds(chat))) as rig:
+            await async_wait_until(lambda: len(rig.taken) == 6, "the messages")
+
+        assert [[(m.message_id, m.received_at) for m in batch] for batch in rig.batches] == [
+            [("m-1", at(0.5)), ("m-2", at(1.75)), ("m-3", at(3.25))],
+            [("m-4", at(3.25)), ("m-5", at(6)), ("m-6", at(8))],
+        ]
+
+    async def test_nothing_arrived_before_the_reader_came(self, youtube, quick):
+        chat = live(youtube)
+        chat.say(message("m-1", "alice", "late", sent_usec=sent(-2)))
+
+        async with running(Rig([FIRST], every_four_seconds(chat))) as rig:
+            await async_wait_until(lambda: rig.taken, "the message")
+
+        assert [m.received_at for m in rig.batches[0]] == [at(0)]
 
 
 class TestWhileAChannelIsNotLive:

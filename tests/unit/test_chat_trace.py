@@ -90,6 +90,18 @@ class TestWhereAClipSitsAgainstChat:
         least, most = chat_trace.CHAT_DELAY_MIN_SECONDS, chat_trace.CHAT_DELAY_MAX_SECONDS
 
         assert least <= chat_trace.CHAT_DELAY_SECONDS <= most
+        assert least <= chat_trace.YOUTUBE_CHAT_DELAY_SECONDS <= most
+
+    @pytest.mark.parametrize(
+        ("channel", "delay"),
+        [
+            ("some_channel", chat_trace.CHAT_DELAY_SECONDS),
+            ("some_channel@twitch", chat_trace.CHAT_DELAY_SECONDS),
+            ("some_channel@youtube", chat_trace.YOUTUBE_CHAT_DELAY_SECONDS),
+        ],
+    )
+    def test_a_channel_starts_out_with_the_delay_of_its_platform(self, channel, delay):
+        assert chat_trace.default_chat_delay(channel) == delay
 
     def test_a_delay_below_zero_puts_a_message_after_the_frame_it_arrived_with(self):
         row = moment_row(clip_start=CLIP_START.isoformat(), clip_duration=38.0)

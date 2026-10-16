@@ -316,7 +316,11 @@ Module map (`src/kick_clip_hunter/`):
   whether it is live, reads its chat until the chat is over, and looks again. A chat is
   looked at again `POLL_SECONDS` after a look - the shortest after one that brought
   messages, longer and longer after ones that brought none - and the messages of a look
-  are handed on as one batch. The first look at a chat (what was written before the reader
+  are handed on as one batch. Each of them is taken to have arrived (`received_at`) when
+  YouTube says it was sent (`timestampUsec`), not when the look was made - else a look's
+  messages would sit against the picture all at one instant: never after the look, never
+  before what was handed on already, in the order they came (`arrived`). The detector
+  still counts them on the wall clock as they are handed on. The first look at a chat (what was written before the reader
   came) is left out, and so is what is written while it cannot look (a chat opened again
   after failed looks, `RETRY_SECONDS`). A chat turned off is said and tried again after
   `UNAVAILABLE_SECONDS`. YouTube's emoji stand in the text as tokens - a channel's own
@@ -408,7 +412,9 @@ Module map (`src/kick_clip_hunter/`):
   the review page (`POST /channels/{slug}/chat_delay`, kept in `app_settings`). It is not
   the recorder's `PLAYBACK_DELAY_SECONDS`, which frames clips and is on the long side. It
   starts at 3s - about what Kick's player reports for its latency, with a little room -
-  and can go below 0, which is where a streamer's own on-screen chat lines up. Clips cut before those
+  for a YouTube channel at 6s (`YOUTUBE_CHAT_DELAY_SECONDS`, `default_chat_delay`: its
+  player runs further behind, under 10s for a stream of low latency by YouTube's account;
+  not measured yet) - and can go below 0, which is where a streamer's own on-screen chat lines up. Clips cut before those
   columns existed have their length measured (ffprobe) the first time one is opened and
   are placed by estimate: centred on the window they were cut for. The same trace is
   drawn over a stream that was kept whole, or any stretch of one (`stretch_step`,

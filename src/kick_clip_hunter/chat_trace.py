@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import channel_badges, chat_identity
+from . import channel_badges, chat_identity, platforms
 from .dashboard_view import (
     IMPORT_REASON,
     chat_parts,
@@ -80,8 +80,22 @@ MOMENT_PADDING_SECONDS = 2
 # Not recorder.PLAYBACK_DELAY_SECONDS on purpose: that one frames the clip,
 # where reaching back too far costs nothing, and is on the long side.
 CHAT_DELAY_SECONDS = 3
+# Where a YouTube channel starts out instead. YouTube's player runs further
+# behind the broadcast: under ten seconds for a stream set to low latency
+# (what most streams use), under five for ultra-low, more for normal latency,
+# by YouTube's own account. Not measured here yet - a channel's own is set on
+# the review page. A YouTube message is placed by when it was sent, not by
+# when it was read (see youtube_chat.arrived), so the time the chat takes to
+# be looked at is not part of it.
+YOUTUBE_CHAT_DELAY_SECONDS = 6
 CHAT_DELAY_MIN_SECONDS = -10
 CHAT_DELAY_MAX_SECONDS = 60
+
+
+def default_chat_delay(channel: str) -> int:
+    """Where a channel's chat delay starts out, by its platform."""
+    return YOUTUBE_CHAT_DELAY_SECONDS if platforms.platform_of(channel) == platforms.YOUTUBE else CHAT_DELAY_SECONDS
+
 
 # The small trace in a queue row: this many steps of this many seconds,
 # starting this long before the moment's window does - so the eruption rises

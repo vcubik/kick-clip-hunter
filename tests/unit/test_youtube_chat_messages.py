@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from kick_clip_hunter import chat_identity, detector
-from kick_clip_hunter.youtube_chat import Channel, chat_message, messages
+from kick_clip_hunter.youtube_chat import Channel, arrived, chat_message, messages
 from tests.support.youtube import (
     MODERATOR,
     OWNER,
@@ -200,7 +200,11 @@ class TestALookAtTheChat:
         got = messages(actions, CHANNEL, RECEIVED)
 
         assert [(m.message_id, m.content) for m in got] == [("m-1", "first"), ("m-2", "second"), ("m-3", "third")]
-        assert {m.received_at for m in got} == {RECEIVED}
+
+    def test_without_the_time_of_the_look_they_arrived_just_now(self):
+        got = messages([message("m-1", "alice", "x"), message("m-2", "bob", "y")], CHANNEL)
+
+        assert [m.received_at for m in got] == [None, None]
 
     def test_one_that_cannot_be_read_is_left_out_and_said(self, caplog, monkeypatch):
         from kick_clip_hunter import youtube_chat
@@ -219,3 +223,63 @@ class TestALookAtTheChat:
 
         assert [m.message_id for m in got] == ["m-2"]
         assert any("could not be read" in record.getMessage() for record in caplog.records)
+
+
+SENT = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
+
+
+def sent(seconds: float) -> int:
+    """A message's timestampUsec, so many seconds after SENT."""
+    return int((SENT + timedelta(seconds=seconds)).timestamp() * 1_000_000)
+
+
+def at(seconds: float) -> datetime:
+    return SENT + timedelta(seconds=seconds)
+
+
+class TestWhenTheMessagesOfALookArrived:
+    """A look brings a few seconds of chat at once; each message is taken to
+    have arrived when it was sent, so they do not land on the picture all at
+    one instant."""
+
+    def test_each_arrived_when_it_was_sent(self):
+        actions = [message("m-1", "alice", "a", sent_usec=sent(0.5)), message("m-2", "bob", "b", sent_usec=sent(2.25))]
+
+        got = messages(actions, CHANNEL, at(3))
+
+        assert [m.received_at for m in got] == [at(0.5), at(2.25)]
+
+    def test_none_arrived_after_the_look(self):
+        actions = [message("m-1", "alice", "a", sent_usec=sent(1)), message("m-2", "bob", "b", sent_usec=sent(9))]
+
+        got = messages(actions, CHANNEL, at(3))
+
+        assert [m.received_at for m in got] == [at(1), at(3)]
+
+    def test_they_stay_in_the_order_they_came(self):
+        actions = [message("m-1", "alice", "a", sent_usec=sent(2)), message("m-2", "bob", "b", sent_usec=sent(1))]
+
+        got = messages(actions, CHANNEL, at(3))
+
+        assert [(m.message_id, m.received_at) for m in got] == [("m-1", at(2)), ("m-2", at(2))]
+
+    def test_none_arrived_before_what_was_handed_on_already(self):
+        actions = [message("m-1", "alice", "a", sent_usec=sent(1)), message("m-2", "bob", "b", sent_usec=sent(2.5))]
+
+        got = messages(actions, CHANNEL, at(3), not_before=at(2))
+
+        assert [m.received_at for m in got] == [at(2), at(2.5)]
+
+    def test_one_that_does_not_say_when_it_was_sent_arrived_with_the_look(self):
+        action = message("m-1", "alice", "hi")
+        del action["addChatItemAction"]["item"]["liveChatTextMessageRenderer"]["timestampUsec"]
+
+        assert [m.received_at for m in messages([action], CHANNEL, at(3))] == [at(3)]
+
+    def test_nothing_to_place_is_nothing(self):
+        assert arrived([], at(3), at(1)) == []
+
+    def test_what_was_sent_is_kept_as_it_was_said(self):
+        (got,) = messages([message("m-1", "alice", "a", sent_usec=sent(9))], CHANNEL, at(3))
+
+        assert datetime.fromisoformat(got.created_at) == at(9)

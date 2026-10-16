@@ -1801,10 +1801,10 @@ async def _with_clip_length(conn, row):
 
 def _chat_delay(conn, channel_slug: str) -> int:
     """How far behind its broadcast a channel's chat is taken to run: what
-    was set for the channel on the review page, or what every channel starts
-    out with."""
+    was set for the channel on the review page, or what a channel of its
+    platform starts out with."""
     stored = get_chat_delay(conn, channel_slug)
-    return chat_trace.CHAT_DELAY_SECONDS if stored is None else stored
+    return chat_trace.default_chat_delay(channel_slug) if stored is None else stored
 
 
 def _chat_against_clip(conn, row, chat_delay: int) -> tuple[dict | None, list[dict]]:
