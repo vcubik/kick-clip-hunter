@@ -14,7 +14,9 @@ Twitch's chat comes another way, over a connection the service keeps open
 stands is a part of its own, there for as long as the service is set up for
 Twitch or watches a Twitch channel. YouTube's chat is read while a channel
 is live, by looking at it every few seconds (youtube_chat.py), and has a
-part of its own while a YouTube channel is watched.
+part of its own while a YouTube channel is watched. TikTok's chat is read
+while a TikTok channel's stream is recorded (tiktok_chat.py), and has a part
+of its own while a TikTok channel is watched.
 
 So what the service notices as it runs is kept - in memory, by main.py and
 recording_manager.py, and the subscriptions Kick dropped in the database as
@@ -71,6 +73,10 @@ TWITCH_LOST_SECONDS = 120
 # answer; one that has had no answer about a channel for this long is not
 # getting one.
 YOUTUBE_LOST_SECONDS = 120
+# TikTok's chat reader tries a connection that failed again within a minute
+# at first, and less often the longer it keeps failing: a chat it has not
+# been able to read for this long is not going to be read by itself.
+TIKTOK_LOST_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,24 @@ class YouTubeChat:
     # The channels YouTube could not be asked about: why, and since when.
     failing: tuple[tuple[str, str, datetime], ...] = ()
     # When YouTube last answered.
+    last_heard_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class TikTokChat:
+    """Where reading TikTok's chat stands (see tiktok_chat.ChatReader)."""
+
+    # How many TikTok channels are on the watchlist, and how many of them
+    # are being recorded - whose chat is wanted.
+    channels: int = 0
+    recorded: int = 0
+    # The channels whose chat is being read, and since when.
+    reading: tuple[tuple[str, datetime], ...] = ()
+    # The recorded channels that are not live yet.
+    waiting: tuple[str, ...] = ()
+    # The channels whose chat could not be read: why, and since when.
+    failing: tuple[tuple[str, str, datetime], ...] = ()
+    # When the last word of TikTok's came.
     last_heard_at: datetime | None = None
 
 
@@ -239,6 +263,8 @@ class Facts:
     twitch: TwitchChat | None = None
     # YouTube's chat, while a YouTube channel is watched; None otherwise.
     youtube: YouTubeChat | None = None
+    # TikTok's chat, while a TikTok channel is watched; None otherwise.
+    tiktok: TikTokChat | None = None
 
 
 # -- words ------------------------------------------------------------------
@@ -504,6 +530,58 @@ def youtube_part(facts: Facts, today: date) -> dict[str, Any]:
     return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
 
 
+# -- TikTok's chat -------------------------------------------------------------
+
+
+def tiktok_part(facts: Facts, today: date) -> dict[str, Any]:
+    """Where reading TikTok's chat stands. Shown only while a TikTok channel
+    is on the watchlist; its chat is read only while its stream is being
+    recorded. A chat that has not been read for long, while its stream is
+    recorded and live, is trouble."""
+    chat = facts.tiktok
+    if chat is None or chat.channels == 0:
+        return {"shown": False, "trouble": False, "said": "", "more": [], "rows": []}
+    now = facts.now
+    lost = [(slug, why, since) for slug, why, since in chat.failing if _seconds(now, since) >= TIKTOK_LOST_SECONDS]
+    rows = [
+        {"slug": slug, "why": f"Not read for {span_words(_seconds(now, since))}: {why}"} for slug, why, since in lost
+    ]
+    more: list[str] = []
+    reading = len(chat.reading)
+    if lost:
+        _, why, since = min(lost, key=lambda failing: failing[2])
+        names = list_words([slug for slug, _, _ in lost])
+        said = f"The chat of {names} has not been read for {span_words(_seconds(now, since))}: {why}."
+        more.append("The service keeps trying, less often the longer it fails. The server log says more.")
+    elif chat.recorded == 0:
+        said = (
+            "The TikTok channel is not being recorded, so its chat is not read."
+            if chat.channels == 1
+            else "No TikTok channel is being recorded, so no TikTok chat is read."
+        )
+        more.append("A TikTok channel's chat is read while its stream is recorded, and kept with the recording.")
+    elif reading:
+        if reading == chat.recorded:
+            whose = "the recorded TikTok channel" if reading == 1 else f"all {reading} recorded TikTok channels"
+        else:
+            whose = f"{reading} of the {chat.recorded} recorded TikTok channels"
+        said = f"The chat of {whose} comes in."
+    elif chat.failing:
+        slug, why, _ = chat.failing[0]
+        said = f"Connecting to the chat of {slug} again ({why})."
+    elif chat.waiting:
+        said = "No TikTok chat comes in: the recorded channels are not live yet."
+    else:
+        said = "Connecting to TikTok's chat."
+    if chat.waiting and (reading or lost or chat.failing):
+        more.append(f"Recorded but not live yet: {list_words(list(chat.waiting))}.")
+    if chat.recorded:
+        more.append("It is read through Euler Stream, which signs the requests TikTok asks for.")
+    if chat.last_heard_at is not None:
+        more.append(f"The last word from TikTok came {ago_words(chat.last_heard_at, now, today)}.")
+    return {"shown": True, "trouble": bool(lost), "said": said, "more": more, "rows": rows}
+
+
 # -- recorders ----------------------------------------------------------------
 
 
@@ -664,6 +742,7 @@ PARTS = (
     ("subscriptions", "subscriptions", True),
     ("twitch", "Twitch chat", False),
     ("youtube", "YouTube chat", False),
+    ("tiktok", "TikTok chat", False),
     ("recorders", "the recorders", True),
     ("disk", "the disk", False),
     ("tunnel", "the tunnel", False),
@@ -678,6 +757,7 @@ def report(facts: Facts, today: date) -> dict[str, Any]:
         "subscriptions": subscriptions(facts, today),
         "twitch": twitch_part(facts, today),
         "youtube": youtube_part(facts, today),
+        "tiktok": tiktok_part(facts, today),
         "recorders": recorders(facts, today),
         "disk": disk(facts),
         "tunnel": tunnel_part(facts, today),

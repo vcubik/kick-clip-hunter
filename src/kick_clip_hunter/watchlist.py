@@ -9,7 +9,10 @@ A Twitch channel is looked up on Twitch and recorded with its emotes; its
 chat is subscribed by the connection that reads it (twitch_chat.py), not
 here. A YouTube channel is looked up on YouTube and recorded; it has no
 emote set of its own anywhere - its chat's emoji come with every message -
-and its chat is read by the service while it is live (youtube_chat.py).
+and its chat is read by the service while it is live (youtube_chat.py). A
+TikTok channel is looked up on TikTok and recorded with its tracking off,
+for good: it is watched to be recorded and for nothing else, and its chat is
+read while it is (see platforms.RECORDED_ONLY, tiktok_chat.py).
 
 Shared by scripts/subscribe.py (CLI) and the dashboard's "add channel" form
 in main.py, so the two stay in lockstep instead of drifting apart.
@@ -17,7 +20,7 @@ in main.py, so the two stay in lockstep instead of drifting apart.
 
 import logging
 
-from . import channel_badges, platforms, twitch_client, twitch_emotes, youtube_client
+from . import channel_badges, platforms, tiktok_client, twitch_client, twitch_emotes, youtube_client
 from .config import load_settings
 from .db import (
     GLOBAL_EMOTES_OWNER,
@@ -27,6 +30,7 @@ from .db import (
     replace_channel_badges,
     replace_channel_emotes,
     replace_channel_keywords,
+    set_streamer_tracking,
 )
 from .detector import EMOTE_MENTION_LAUGH_WEIGHT, classify_emote_names
 from .kick_client import (
@@ -204,13 +208,31 @@ async def add_youtube_channel(where: str) -> dict:
     return {"slug": slug, "broadcaster_user_id": broadcaster_id, "emote_count": 0, "laugh_emote_count": 0}
 
 
+async def add_tiktok_channel(handle: str) -> dict:
+    """Puts a TikTok channel on the watchlist, under its handle with
+    TikTok's (see platforms.py), to be recorded and never tracked for clips.
+    Raises ValueError if TikTok has no such account."""
+    room = await tiktok_client.room(handle)
+    slug = platforms.channel_name(platforms.TIKTOK, room.handle.lower())
+    conn = get_connection()
+    try:
+        broadcaster_id = add_platform_streamer(conn, platforms.TIKTOK, room.user_id, slug)
+        set_streamer_tracking(conn, broadcaster_id, False)
+    finally:
+        conn.close()
+
+    return {"slug": slug, "broadcaster_user_id": broadcaster_id, "emote_count": 0, "laugh_emote_count": 0}
+
+
 async def add_to_watchlist(text: str) -> dict:
     """Puts on the watchlist the channel someone typed: a link to its page,
-    `login@twitch`, `handle@youtube`, or a Kick channel's name (see
-    platforms.parse)."""
+    `login@twitch`, `handle@youtube`, `handle@tiktok`, or a Kick channel's
+    name (see platforms.parse)."""
     platform, name = platforms.parse(text)
     if platform == platforms.TWITCH:
         return await add_twitch_channel(name)
     if platform == platforms.YOUTUBE:
         return await add_youtube_channel(name)
+    if platform == platforms.TIKTOK:
+        return await add_tiktok_channel(name)
     return await add_channel_to_watchlist(name)

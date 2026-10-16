@@ -25,6 +25,7 @@ from kick_clip_hunter import (
     recorder,
     recording_manager,
     stream_recording,
+    tiktok_chat,
     tunnel,
     twitch_chat,
     youtube_chat,
@@ -112,11 +113,11 @@ class TestThePage:
         assert said(page, "recorders") == "No channels are on the watchlist."
         # Nothing to list of channels there are none of.
         assert part(page, "webhooks").find("table") == [] and part(page, "recorders").find("table") == []
-        # Twitch's and YouTube's chat are no part of a service that has
-        # nothing to do with them.
-        assert page.find("div", data_health_part="twitch") == []
-        assert page.find("div", data_health_part="youtube") == []
-        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in ("twitch", "youtube"))
+        # Twitch's, YouTube's and TikTok's chat are no part of a service that
+        # has nothing to do with them.
+        chats = ("twitch", "youtube", "tiktok")
+        assert all(page.find("div", data_health_part=name) == [] for name in chats)
+        assert not any(in_trouble(page, name) for name, _, _ in health.PARTS if name not in chats)
 
     async def test_every_part_is_marked_for_the_script_that_keeps_it_current(self, service):
         page = await page_at(service)
@@ -746,6 +747,77 @@ class TestYouTubeChat:
         page = await page_at(service)
 
         assert said(page, "youtube") == "The YouTube channel is not live, so no YouTube chat comes in."
+
+
+class TestTikTokChat:
+    """TikTok's chat, where the service watches a TikTok channel: what the
+    reader of it found, on the page."""
+
+    def watch_on_tiktok(self, handle: str = "some_channel") -> None:
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "tiktok", "6800000000123", f"{handle}@tiktok")
+        finally:
+            conn.close()
+
+    def a_reader(self, service, monkeypatch) -> tiktok_chat.ChatReader:
+        reader = tiktok_chat.ChatReader(service.main._tiktok_channels, service.main._take_chats)
+        monkeypatch.setattr(service.main, "_tiktok_reader", reader)
+        return reader
+
+    async def test_without_a_tiktok_channel_there_is_no_such_part(self, service, monkeypatch):
+        self.a_reader(service, monkeypatch)
+
+        page = await page_at(service)
+
+        assert page.find("div", data_health_part="tiktok") == []
+
+    async def test_a_channel_that_is_not_recorded_has_no_chat_read(self, service, monkeypatch):
+        self.watch_on_tiktok()
+        self.a_reader(service, monkeypatch)
+
+        page = await page_at(service)
+
+        assert said(page, "tiktok") == "The TikTok channel is not being recorded, so its chat is not read."
+        assert not in_trouble(page, "tiktok")
+
+    async def test_the_reader_says_whose_chat_comes_in(self, service, monkeypatch):
+        self.watch_on_tiktok()
+        reader = self.a_reader(service, monkeypatch)
+        reader.wanted = 1
+        reader.reading["some_channel@tiktok"] = ago(minutes=5)
+        reader.last_heard_at = ago(seconds=3)
+
+        page = await page_at(service)
+
+        assert said(page, "tiktok") == "The chat of the recorded TikTok channel comes in."
+        assert more(page, "tiktok") == [
+            "It is read through Euler Stream, which signs the requests TikTok asks for.",
+            "The last word from TikTok came 3 seconds ago.",
+        ]
+
+    async def test_a_chat_not_read_for_long_is_trouble_counted_in_the_bar(self, service, monkeypatch):
+        self.watch_on_tiktok()
+        reader = self.a_reader(service, monkeypatch)
+        reader.wanted = 1
+        reader.failing["some_channel@tiktok"] = ("SignAPIError: [RATE_LIMIT]", ago(minutes=10))
+
+        page = await page_at(service)
+        response = await service.client.get("/dashboard/channels")
+
+        assert in_trouble(page, "tiktok")
+        assert page.one("h1").text == "TikTok chat needs a look."
+        (row,) = part(page, "tiktok").one("tbody").find("tr")
+        assert row.one("th").text == "some_channel@tiktok"
+        assert row.one("td").text == "Not read for 10 minutes: SignAPIError: [RATE_LIMIT]"
+        assert "1 problem" in response.text
+
+    async def test_before_the_reader_has_started_no_channel_is_recorded(self, service):
+        self.watch_on_tiktok()
+
+        page = await page_at(service)
+
+        assert said(page, "tiktok") == "The TikTok channel is not being recorded, so its chat is not read."
 
 
 class TestTwitchChat:

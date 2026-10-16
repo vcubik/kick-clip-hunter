@@ -14,7 +14,7 @@ import pytest
 
 from kick_clip_hunter import health, tunnel
 from kick_clip_hunter.dashboard_view import since_words, when_words
-from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TwitchChat, YouTubeChat
+from kick_clip_hunter.health import Channel, Drop, Facts, SubscriptionCheck, TikTokChat, TwitchChat, YouTubeChat
 
 NOW = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 TODAY = NOW.astimezone().date()
@@ -672,6 +672,7 @@ class TestThePageAsAWhole:
             "subscriptions",
             "twitch",
             "youtube",
+            "tiktok",
             "recorders",
             "disk",
             "tunnel",
@@ -876,6 +877,94 @@ class TestYouTubeChat:
         )
         report = health.report(facts(last_webhook_at=ago(2), youtube=wrong), TODAY)
         assert (report["troubles"], report["lead"]) == (1, "YouTube chat needs a look.")
+
+
+class TestTikTokChat:
+    """Where reading TikTok's chat stands: a part of the page only while a
+    TikTok channel is watched. Its chat is read only while it is recorded."""
+
+    def part(self, chat: TikTokChat) -> dict:
+        return health.tiktok_part(facts(tiktok=chat), TODAY)
+
+    def test_without_a_tiktok_channel_there_is_no_such_part(self):
+        report = health.report(facts(last_webhook_at=ago(2), tiktok=TikTokChat(channels=0)), TODAY)
+
+        assert report["tiktok"]["shown"] is False
+        assert "TikTok" not in report["lead"]
+
+    def test_a_channel_that_is_not_recorded_has_no_chat_read(self):
+        one = self.part(TikTokChat(channels=1))
+        several = self.part(TikTokChat(channels=3))
+
+        assert (one["shown"], one["trouble"]) == (True, False)
+        assert one["said"] == "The TikTok channel is not being recorded, so its chat is not read."
+        assert several["said"] == "No TikTok channel is being recorded, so no TikTok chat is read."
+        assert one["more"] == [
+            "A TikTok channel's chat is read while its stream is recorded, and kept with the recording."
+        ]
+
+    def test_chat_coming_in_says_whose_and_through_what(self):
+        all_of_them = self.part(
+            TikTokChat(channels=3, recorded=2, reading=(("a@tiktok", ago(60)), ("b@tiktok", ago(30))))
+        )
+        the_one = self.part(TikTokChat(channels=1, recorded=1, reading=(("a@tiktok", ago(60)),), last_heard_at=ago(3)))
+        some = self.part(TikTokChat(channels=3, recorded=2, reading=(("a@tiktok", ago(60)),), waiting=("b@tiktok",)))
+
+        assert all_of_them["said"] == "The chat of all 2 recorded TikTok channels comes in."
+        assert the_one["said"] == "The chat of the recorded TikTok channel comes in."
+        assert the_one["more"] == [
+            "It is read through Euler Stream, which signs the requests TikTok asks for.",
+            "The last word from TikTok came 3 seconds ago.",
+        ]
+        assert some["said"] == "The chat of 1 of the 2 recorded TikTok channels comes in."
+        assert some["more"][0] == "Recorded but not live yet: b@tiktok."
+        assert not any(part["trouble"] for part in (all_of_them, the_one, some))
+
+    def test_a_recorded_channel_that_is_not_live_yet_is_waited_for(self):
+        part = self.part(TikTokChat(channels=1, recorded=1, waiting=("a@tiktok",)))
+
+        assert not part["trouble"]
+        assert part["said"] == "No TikTok chat comes in: the recorded channels are not live yet."
+
+    def test_the_first_connection_being_made_is_said_so(self):
+        assert self.part(TikTokChat(channels=1, recorded=1))["said"] == "Connecting to TikTok's chat."
+
+    def test_a_connection_that_failed_a_moment_ago_is_no_trouble_yet(self):
+        part = self.part(
+            TikTokChat(channels=1, recorded=1, failing=(("a@tiktok", "SignAPIError: rate limit", ago(30)),))
+        )
+
+        assert not part["trouble"]
+        assert part["said"] == "Connecting to the chat of a@tiktok again (SignAPIError: rate limit)."
+        assert part["rows"] == []
+
+    def test_a_chat_that_has_not_been_read_for_long_is_trouble(self):
+        since = ago(health.TIKTOK_LOST_SECONDS + 60)
+        part = self.part(
+            TikTokChat(
+                channels=2,
+                recorded=2,
+                reading=(("b@tiktok", ago(600)),),
+                failing=(("a@tiktok", "TikTok answered 403", since),),
+            )
+        )
+
+        assert part["trouble"]
+        assert part["said"] == "The chat of a@tiktok has not been read for 6 minutes: TikTok answered 403."
+        assert part["rows"] == [{"slug": "a@tiktok", "why": "Not read for 6 minutes: TikTok answered 403"}]
+        assert part["more"][0] == "The service keeps trying, less often the longer it fails. The server log says more."
+
+    def test_it_is_named_in_the_lead_where_it_is_trouble_and_where_all_is_fine(self):
+        fine = TikTokChat(channels=1, recorded=1, reading=(("a@tiktok", ago(5)),))
+        wrong = TikTokChat(
+            channels=1, recorded=1, failing=(("a@tiktok", "ConnectError", ago(health.TIKTOK_LOST_SECONDS)),)
+        )
+
+        assert health.report(facts(last_webhook_at=ago(2), tiktok=fine), TODAY)["lead"] == (
+            "Webhooks, subscriptions, TikTok chat, the recorders, the disk and the tunnel all look fine."
+        )
+        report = health.report(facts(last_webhook_at=ago(2), tiktok=wrong), TODAY)
+        assert (report["troubles"], report["lead"]) == (1, "TikTok chat needs a look.")
 
 
 class TestWebhooksAreKicks:

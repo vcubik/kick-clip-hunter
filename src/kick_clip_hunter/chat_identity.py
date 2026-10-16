@@ -3,8 +3,9 @@ in front of it.
 
 Kick sends both with every chat message (`sender.identity`), and so does
 Twitch (`color`, `badges`), whose badges are put in the form Kick's are
-kept in - as are YouTube's (`authorBadges`), whose names have no colour of
-their own. They belong to the person in that channel, not to the message, so
+kept in - as are YouTube's (`authorBadges`) and TikTok's (who is the
+streamer, a moderator, a subscriber), whose names have no colour of their
+own. They belong to the person in that channel, not to the message, so
 they are kept once per chatter (db.chat_identities) and only written when
 they change - the dashboard looks them up by name when it draws chat. What
 is shown is therefore the latest known state, also beside an older moment.
@@ -163,6 +164,19 @@ def from_youtube(badges: Any) -> Identity:
     them (`authorBadges`)."""
     kept = [badge for badge in map(_youtube_badge, badges if isinstance(badges, list) else []) if badge]
     return (None, json.dumps(kept[:MAX_BADGES], separators=(",", ":"), sort_keys=True))
+
+
+def from_tiktok(*, streamer: bool, moderator: bool, subscriber: bool) -> Identity:
+    """A TikTok chatter's identity as it is stored: TikTok gives names no
+    colour of their own, and says with every comment whether its writer is
+    the streamer, one of their moderators or a subscriber of theirs - which
+    are kept as Kick's same badges."""
+    kept = [
+        {"type": badge, "text": ""}
+        for badge, has in (("broadcaster", streamer), ("moderator", moderator), ("subscriber", subscriber))
+        if has
+    ]
+    return (None, json.dumps(kept, separators=(",", ":"), sort_keys=True))
 
 
 # The badges of those who run a channel: its streamer and its moderators.

@@ -8,7 +8,8 @@ kick-clip-hunter watches a list of Kick.com, Twitch and YouTube streamers and de
 viral/funny moments from chat activity (message-rate spikes, emote/keyword frequency). Detected
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
-whole stream can also be recorded on request, with its chat. See
+whole stream can also be recorded on request, with its chat - and a TikTok channel is
+watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). See
 [README.md](README.md) for the roadmap.
 
 ## Current status
@@ -46,6 +47,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
 - YouTube needs nothing set up: a channel is looked up, and its chat read while it is
   live, through YouTube's own web API (InnerTube), as a visitor who is not signed in -
   see `youtube_client.py` below for why not the official API
+- TikTok needs nothing set up either: a channel, whether it is live and where its stream
+  is are asked of TikTok's own web API (`tiktok_client.py`), and the chat of a TikTok
+  stream that is being recorded is read through TikTokLive and the Euler Stream sign
+  server (`tiktok_chat.py`) - a few thousand signed connections a day without a key; an
+  optional `EULER_STREAM_API_KEY` in `.env` raises that. TikTokLive came with the
+  user's explicit consent to it and to Euler Stream (2026-10-15)
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
@@ -66,14 +73,15 @@ set from the dashboard's Settings page (see `tuning.py` below).
   its URL changes every restart and has to be re-entered in the Kick app each time.
 - Scripts (run with `PYTHONPATH=src python scripts/<name>.py`):
   - `subscribe.py <channel>` — add a channel to the watchlist: a Kick channel's name, a link
-    to a Kick, Twitch or YouTube channel (or to a YouTube video of one), `name@twitch`, or
-    `handle@youtube` (`platforms.parse`). Fetches and stores its
+    to a Kick, Twitch, YouTube or TikTok channel (or to a YouTube video of one),
+    `name@twitch`, `handle@youtube` or `handle@tiktok` (`platforms.parse`). Fetches and stores its
     emotes - the keywords the detector listens for and the pictures the dashboard draws -
     and for a Kick channel subscribes to `chat.message.sent` on Kick's side unless a
     subscription is already there - so re-running it is safe and repairs a dropped
     subscription. A Twitch channel's chat is subscribed by the running service, and a
     YouTube channel's read by it while the channel is live; a YouTube channel has no emote
-    set anywhere (7TV, BetterTTV and FrankerFaceZ know none)
+    set anywhere (7TV, BetterTTV and FrankerFaceZ know none). A TikTok channel is added
+    with its tracking off for good - it is only ever recorded - and its chat read while it is
   - `refresh_emotes.py <channel>` — re-fetch and re-classify an already-watched channel's
     emotes (keywords and pictures: 7TV's, and on Twitch BetterTTV's and FrankerFaceZ's)
     and its subscriber badges, without talking to Kick's subscription API at all
@@ -133,7 +141,8 @@ set from the dashboard's Settings page (see `tuning.py` below).
   moment's file, or beside the cut in the Trim dialog. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
-  Tracking switch, which is about looking for clips and nothing else, and the button that
+  Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
+  "Recorded only"; `POST /channels/{slug}/tracking` refuses to switch it on), and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
   how much has been recorded so far - and its "Always record" switch, with which a
   recording is started by itself whenever the channel goes live. `GET
@@ -210,13 +219,16 @@ Watchlist (streamers, each on its platform - see platforms.py)
        WebSocket the service holds open, every Twitch channel's chat subscribed on it
     -> YouTube: the site's own web API (InnerTube), no account -> the chat of the stream
        a YouTube channel is streaming, looked at every few seconds while it is live
+    -> TikTok (recorded only): TikTokLive + the Euler Stream sign server -> the chat of a
+       TikTok channel's room while its stream is being recorded, kept and judged by nothing
     -> each message as a ChatMessage -> _take_chats (stored a batch at a time)
     -> Detection engine (rolling window per channel; see detector.py)
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
        channel_badges, chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
        the stream's own HLS segments into a rolling buffer - found by a browser on Kick,
-       by streamlink on Twitch and YouTube) -> a detected moment cuts a clip from that buffer, path
+       by streamlink on Twitch and YouTube; on TikTok one FLV download, cut into segments of
+       its own as it arrives) -> a detected moment cuts a clip from that buffer, path
        stored back on the moment
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
@@ -225,10 +237,11 @@ Watchlist (streamers, each on its platform - see platforms.py)
 ```
 
 Module map (`src/kick_clip_hunter/`):
-- `platforms.py` — the platforms (Kick, Twitch, YouTube) and how a channel's name says
+- `platforms.py` — the platforms (Kick, Twitch, YouTube, TikTok) and how a channel's name says
   which one it is on. Pure. A Kick channel is known by its slug, as it always was; a
   channel anywhere else by its name there and the platform's, `login@twitch`,
-  `handle@youtube` (the handle in small letters, without its "@") - so the same name on two
+  `handle@youtube`, `handle@tiktok` (the handle in small letters, without its "@") - so the
+  same name on two
   platforms is two channels, and everything kept by name (chat, moments, recorders,
   folders, the chat delay) stays apart without a migration. In the database a channel is
   kept by `streamers.broadcaster_user_id`: a Kick channel's is its Kick user id, any other
@@ -237,12 +250,16 @@ Module map (`src/kick_clip_hunter/`):
   and its platform in `streamers.platform`. `parse` is what someone typed (a link, a name)
   as a platform and a name - for a link to YouTube that names no handle (a channel's id, an
   older kind of address, a video), the link itself, for YouTube to say whose it is;
-  `LiveStatus`, `StreamUrls` (with `expires_at` for addresses that run out),
-  `StreamUrlError` are the shapes in which a platform's answers come back
+  `LiveStatus`, `StreamUrls` (with `expires_at` for addresses that run out, `flv` for a
+  stream that is one FLV download rather than a playlist),
+  `StreamUrlError` are the shapes in which a platform's answers come back. `RECORDED_ONLY`
+  is the platforms whose channels are only ever recorded whole - TikTok's: never tracked
+  for clips (`main._is_channel_tracked`, the tracking switch refused, `_take_chats` judging
+  none of their chat, whatever is stored)
 - `streams.py` — what is asked of a channel's platform, sent to the one its name says:
-  whether it is live and since when (`live_status` - Kick's API, Helix, or YouTube's own),
-  where its stream is (`stream_urls` - `kick_stream.py`, `twitch_stream.py` or
-  `youtube_stream.py`)
+  whether it is live and since when (`live_status` - Kick's API, Helix, YouTube's own or
+  TikTok's own), where its stream is (`stream_urls` - `kick_stream.py`, `twitch_stream.py`,
+  `youtube_stream.py` or `tiktok_stream.py`)
 - `chat_message.py` — one chat message as the service takes it in, whichever platform it
   came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
   `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id, YouTube's emoji
@@ -333,6 +350,48 @@ Module map (`src/kick_clip_hunter/`):
   `youtube_stream.py`: the service starts without it (only those streams then fail, saying
   what to install), and the standard log levels it renames in small letters for the whole
   process are named back
+- `tiktok_client.py` — TikTok, asked the way its own web pages ask: `api-live/user/room`
+  (by handle, no signature, no sign-in - what streamlink's own TikTok plugin asks) says the
+  account (its id, its handle as TikTok writes it, the room its streams are in) and its live
+  room: whether it is live (`status` 2), since when, and where its stream is in every
+  quality TikTok serves - as FLV for every stream (HLS answers 403 to anyone but TikTok's
+  players; DASH only for some). `room` raises ValueError for no such account
+  (`statusCode` 19881007) and `TikTokChanged` for an answer without what is read of it;
+  `best_stream` is the quality the streamer sends ("origin" - H.264 or HEVC, as they send
+  it, mostly 1080x1920 upright) where TikTok serves it, else the best it makes of it. The
+  addresses carry `expire` (weeks ahead) and `sign`
+- `tiktok_stream.py` — where a live TikTok stream is, for the recorder: the FLV address of
+  `tiktok_client.best_stream`, as `StreamUrls(flv=True)`
+- `tiktok_chat.py` — TikTok's chat, read only while a TikTok channel's stream is being kept
+  whole (`ChatReader`, started by the lifespan; its channels are `main._tiktok_channels`,
+  the TikTok recordings that run, looked at every `CHANNELS_SECONDS`). TikTok refuses an
+  unsigned request for a room's chat (an empty answer), so it goes through TikTokLive
+  (`tiktoklive_chat`, the reader's `connect`), which has Euler Stream sign the request that
+  opens the WebSocket - one signed request per connection, a free tier of a few thousand a
+  day, `EULER_STREAM_API_KEY` for more (`use_sign_key`) - and does the protobuf itself.
+  TikTokLive takes seconds to import, so it is imported in a worker thread the first time a
+  chat is read. A recorded channel that is not live is looked at every `LOOK_SECONDS`
+  (`tiktok_client.room`, which also gives the room id: TikTokLive is asked nothing else);
+  a connection that ended is made again after `AGAIN_SECONDS`, one that failed or lasted
+  less than `STEADY_SECONDS` after `RETRY_SECONDS`, growing; what was written before a
+  connection is left out. A comment is a ChatMessage under its writer's nickname (as
+  TikTok's chat shows them; the handle where there is none) with broadcaster, moderator and
+  subscriber badges (`chat_identity.from_tiktok`); emoji as typed; a subscriber's picture
+  emotes, gifts, likes and the rest are not taken in. TikTokLive builds on websockets'
+  legacy client, whose deprecation warnings the test suite lets through (pyproject.toml)
+- `flv.py` — a live FLV stream (TikTok's) read as it arrives and cut into pieces a
+  recorder can keep. Pure. `FlvReader` hands back whole tags however the bytes come;
+  `Cutter` makes a piece of every stretch from a keyframe to the first keyframe at least
+  `PIECE_MS` later, as a small FLV file of its own with the sequence headers in front,
+  timed on the stream's clock: onMetaData's `start_time` (epoch ms, TikTok's) plus the
+  tag's time, or the arrival of the first frame where there is none; times are counted
+  from zero again in each run. A sequence header that changes, or a time that goes back or
+  jumps more than `MAX_STEP_MS`, starts a new run; the seconds after the last keyframe
+  before a break or the end make no piece. ffmpeg copies each piece into MPEG-TS
+  (`recorder._flv_piece_as_ts`, dropping SEI units - `SEI_UNITS`: TikTok's H.264 has one
+  after every keyframe's picture, which made the MPEG-TS reader lose the time of the frame
+  after every keyframe), and `TsCounters` numbers the copies' continuity counters on so
+  that joined they read as one stream
 - `db.py` — SQLite schema and queries; schema changes are applied as idempotent
   `ALTER TABLE`s in `get_connection()`, not a migration framework. Chat is stored a batch
   at a time (`insert_chat_messages`, `set_chat_identities`: one commit each, however many
@@ -379,8 +438,9 @@ Module map (`src/kick_clip_hunter/`):
   `_take_chats`: dropped while watching or the channel's tracking is off (unless its
   stream is being recorded whole), stored with its sender's identity, then counted by the
   detector one by one (`_detect`), which may open a moment session. Kick's webhook hands
-  it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`) and
-  YouTube's (`_youtube_reader`, see `youtube_chat.py`) a batch. A stream recording is started and stopped through `POST
+  it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`),
+  YouTube's (`_youtube_reader`, see `youtube_chat.py`) and TikTok's (`_tiktok_reader`, see
+  `tiktok_chat.py`; only while a TikTok stream is recorded, and judged by nothing) a batch. A stream recording is started and stopped through `POST
   /channels/{slug}/recording/start` and `/stop`, made into its file by a tracked
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
@@ -445,7 +505,10 @@ Module map (`src/kick_clip_hunter/`):
   (`app_settings`, key `subscription_drops`, the newest 20), so that a restart does not forget
   it. Trouble is kept rare on purpose: one quiet chat among talking ones is said in its row and
   no more, silence counts only while a channel has been live for `CHAT_SILENT_SECONDS` and the
-  service up to hear it, a drop that was mended is listed but is no trouble.
+  service up to hear it, a drop that was mended is listed but is no trouble. Twitch's,
+  YouTube's and TikTok's chat have a part each, shown only while the service has anything to
+  do with them; TikTok's is trouble only when a recorded channel's chat has not been read for
+  `TIKTOK_LOST_SECONDS`.
 - `tunnel.py` — where the Tailscale Funnel in front of the webhook receiver stands, as the
   machine's own Tailscale client says (`tailscale status --json`, `tailscale funnel status
   --json`): not installed, not connected, nothing forwarding `/webhooks/kick`, served inside
@@ -457,7 +520,9 @@ Module map (`src/kick_clip_hunter/`):
 - `chat_identity.py` — who a chatter is in a channel: name colour and badges, which Kick
   sends with every chat message (`sender.identity`), as does Twitch (`color`, `badges`,
   put in Kick's form by `from_twitch`) and YouTube (`authorBadges` - owner, moderator,
-  verified, member and for how long - by `from_youtube`; YouTube gives names no colour).
+  verified, member and for how long - by `from_youtube`; YouTube gives names no colour), and
+  TikTok (whether the writer is the streamer, a moderator, a subscriber - by `from_tiktok`;
+  no colour either).
   Kept once per chatter per channel
   (`chat_identities`), not per message: the webhook receiver remembers what it last stored
   and writes only when that changes, so what the dashboard shows is the latest known
@@ -640,7 +705,13 @@ Module map (`src/kick_clip_hunter/`):
   stretch of a file out as a file of its own (see `clip_trim.py`). A stream whose
   addresses run out (YouTube's, `StreamUrls.expires_at`) has them asked for anew
   `RENEW_BEFORE_SECONDS` before, and the run goes on at the new address without starting
-  over - same numbering, same group unless the variant changed.
+  over - same numbering, same group unless the variant changed. A stream that is one FLV
+  download (TikTok's, `StreamUrls.flv`) is read by `_follow_flv` instead of a playlist:
+  cut into pieces as it arrives (`flv.py`), each copied into MPEG-TS by an ffmpeg of its
+  own (`_flv_piece_as_ts`, a few hundredths of a second) and saved and handed on like any
+  segment - so the buffer, clips and stream recordings need nothing of their own for it. A
+  break the cutter sees, or a piece that could not be copied, starts a new group; an FLV
+  address about to run out ends the run, and the next tick starts one at a new address.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips
@@ -789,9 +860,13 @@ run what, the manual live checklist). What matters when changing code:
   fixture), `FakeYouTube` (InnerTube: a channel's addresses, its page, a video's player, a
   live chat's page and every look at it - the `youtube` fixture; the other platforms'
   fakes answer through the fake Kick's transport, so a test can have several),
-  `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an initialization segment),
-  `WebhookSigner`, `ChatSim`, the `service` fixture) rather than patching the service's own
-  functions, and never `sleep` - pass the clock in or use `wait_until`.
+  `FakeTikTok` (`api-live/user/room` - the `tiktok` fixture), `FakeTikTokChats` (the
+  connection TikTokLive makes to a room's chat; the comments are TikTokLive's own
+  CommentEvent, `tiktok.comment`), `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an
+  initialization segment), `FakeFlvServer` (an FLV download, made TikTok-like by
+  `as_tiktok_sends_it`), `WebhookSigner`, `ChatSim`, the `service` fixture) rather than
+  patching the service's own functions, and never `sleep` - pass the clock in or use
+  `wait_until`.
 - Detector tests are written against `detector.py`'s constants, not their current values, so
   retuning a threshold doesn't break them. If a tuning change does fail a test, it changed a
   rule, not a number - check that was intended.
@@ -871,6 +946,22 @@ viewer's player - and there is no VOD. Their addresses (master, variants, segmen
 IP; the recorder renews them ten minutes before (see `recorder.py`). Unverified on a
 real stream: how a stream with its own server-side ads, if YouTube serves any, looks.
 
+**TikTok (`tiktok_stream.py`, recording only)** - the same recorder, no browser, no
+streamlink: TikTok's own `api-live/user/room` says where a live stream is, in every
+quality, as FLV (seen October 2026: H.264 only as `hd` 720x1280; "origin", what the
+streamer sends, H.264 or HEVC at up to 1080x1920 upright, at a few Mbps; HLS 403 from
+outside TikTok's players; DASH for some streams only, audio and video apart). An FLV
+download is the stream itself, so the recorder cuts it into segments of its own (see
+`flv.py`): pieces from keyframe to keyframe (TikTok sends one every 2s), timed by
+onMetaData's `start_time` (epoch ms when the stream began; the tags' times count from it),
+copied into MPEG-TS. TikTok's H.264 carries SEI units (JSON for its own player) before the
+picture of every keyframe and one after it; the one after made ffmpeg's MPEG-TS reader
+lose the time of the next frame (one untimed frame every 2s, then duplicate timestamps in
+the MP4), which is why SEI units are dropped in the copy. No ads, no VOD; an address works
+for about two weeks (`expire`). Unverified: streams for adults or subscribers only (the
+service is a visitor that is not signed in), and a stream whose encoding changes part-way
+(a new run, so a break in the recording).
+
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`
   (body `{"duration": 180}`, cuts a 180s source buffer *server-side* — not a client-side
@@ -902,6 +993,20 @@ real stream: how a stream with its own server-side ads, if YouTube serves any, l
   Health page's YouTube part, and `YouTubeChanged`/`Refused` in the log, are where that
   shows. A machine YouTube takes for a robot gets `LOGIN_REQUIRED` from the player
   ("Sign in to confirm you're not a bot") and HTTP 429s.
+- A TikTok channel is `handle@tiktok` (its handle in small letters) and asked about by its
+  handle, so a renamed handle is not followed until the channel is added again; its
+  TikTok user id is kept as its `platform_user_id`. It is never tracked for clips - added
+  with tracking off, the switch refused - only recorded: by hand or with "Always record".
+  Its chat is read only while a recording of it runs, a few seconds after the recording
+  starts, through TikTokLive and Euler Stream; a connection Euler Stream will not sign
+  (TikTokLive's `SignAPIError`, e.g. `RATE_LIMIT`) is tried again later and later, and
+  shows on the Health page's TikTok part. TikTokLive and Euler Stream change with TikTok:
+  when TikTok's chat stops coming in, a newer TikTokLive is the first thing to try.
+  Everything else TikTok is asked goes through `api-live/user/room`, unsigned -
+  `TikTokChanged` in the log is where a change of it shows.
+- A TikTok recording is kept in the quality the streamer sends - HEVC as a rule, which the
+  browser playing it on the Recordings page has to be able to decode (Chrome and Edge on
+  Windows do with a graphics card that decodes HEVC, as this host's RX 480 does).
 
 - A recording of a whole stream is big: at Kick's usual bitrates a few gigabytes an hour,
   and as much again for the minutes its file takes to make (the footage is copied once,
