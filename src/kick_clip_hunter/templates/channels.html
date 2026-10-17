@@ -1,6 +1,7 @@
 {#- The watchlist and the controls of the service itself: which channels are
     watched and which have their whole stream recorded, what is done with
-    each new clip, and shutting the service down. -#}
+    each new clip, what notifications tell of, and shutting the service
+    down. -#}
 {% extends "base.html" %}
 {% from "_macros.html" import switch %}
 {% block title %}Channels{% endblock %}
@@ -76,6 +77,21 @@
       {% endfor %}
     </div>
     <p class="status-line" role="status" data-status></p>
+  </section>
+
+  <section aria-labelledby="notify-title" data-status-scope>
+    <h2 class="title" id="notify-title">Notifications</h2>
+    <p class="section-lead">{{ notify_lead }}</p>
+    {% if notify_settings %}
+    <div class="settings">
+      {% for setting in notify_settings %}
+      <span aria-hidden="true">{{ setting.label }}</span>
+      {{ switch("Notify of " ~ setting.label | lower, "/settings/" ~ setting.name, setting.enabled) }}
+      <span class="ch-cap">{{ setting.caption }}</span>
+      {% endfor %}
+    </div>
+    <p class="status-line" role="status" data-status></p>
+    {% endif %}
   </section>
 
 </div>

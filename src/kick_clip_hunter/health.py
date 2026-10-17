@@ -18,7 +18,9 @@ part of its own while a YouTube channel is watched. TikTok's chat is read
 while a TikTok channel's stream is recorded (tiktok_chat.py), and has a part
 of its own while a TikTok channel is watched. The bot that writes in chat
 (chat_bot.py) has one while it writes in a channel's chat or an account is
-signed in for it on Kick: as whom it writes, and whether it can.
+signed in for it on Kick: as whom it writes, and whether it can. And the
+notifications (notify.py) have one while they go anywhere: where, and
+whether the last one went out.
 
 So what the service notices as it runs is kept - in memory, by main.py and
 recording_manager.py, and the subscriptions Kick dropped in the database as
@@ -190,6 +192,31 @@ class ChatBot:
 
 
 @dataclass(frozen=True)
+class NoteDestination:
+    """Where notifications go (see notify.Notifier): what it is called, where
+    in it they go, when the last one went out there, and why the last one
+    did not, if it did not."""
+
+    name: str
+    where: str = ""
+    sent_at: datetime | None = None
+    trouble: str | None = None
+
+
+@dataclass(frozen=True)
+class Notifications:
+    """Where notifications go, what they tell of - as the Channels page's
+    switches have it - and where their links lead ("" for nowhere)."""
+
+    destinations: tuple[NoteDestination, ...] = ()
+    clips: bool = True
+    clip_videos: bool = True
+    recordings: bool = True
+    problems: bool = True
+    dashboard_url: str = ""
+
+
+@dataclass(frozen=True)
 class TikTokChat:
     """Where reading TikTok's chat stands (see tiktok_chat.ChatReader)."""
 
@@ -340,6 +367,8 @@ class Facts:
     tiktok: TikTokChat | None = None
     # The bot in chat.
     bot: ChatBot | None = None
+    # Notifications, while they go anywhere; None otherwise.
+    notifications: Notifications | None = None
 
 
 # -- words ------------------------------------------------------------------
@@ -769,6 +798,54 @@ def bot_part(facts: Facts, today: date) -> dict[str, Any]:
     return {"shown": True, "trouble": bool(failing), "said": said, "more": more, "rows": rows, "sign_in": sign_in}
 
 
+# -- notifications ------------------------------------------------------------
+
+
+def _telling_words(notes: Notifications) -> str:
+    told = []
+    if notes.clips:
+        told.append("clips, with the clip itself where it fits" if notes.clip_videos else "clips")
+    if notes.recordings:
+        told.append("recordings of whole streams")
+    if notes.problems:
+        told.append("what on this page needs a look")
+    if not told:
+        return "They tell of nothing: the Channels page has every kind switched off."
+    return f"They tell of {list_words(told)}. The Channels page switches each kind on and off."
+
+
+def notifications_part(facts: Facts, today: date) -> dict[str, Any]:
+    """Where notifications go, and whether the last one went out everywhere.
+    Shown while they go anywhere. A destination that turned the last one
+    down is trouble: what it was told of, nobody heard."""
+    notes = facts.notifications
+    if notes is None or not notes.destinations:
+        return {"shown": False, "trouble": False, "said": "", "more": [], "rows": []}
+    failing = [destination.name for destination in notes.destinations if destination.trouble]
+    if failing:
+        said = f"The last notification could not be sent to {list_words(failing)}."
+    else:
+        said = f"Notifications go to {list_words([destination.name for destination in notes.destinations])}."
+    more = [_telling_words(notes)]
+    if notes.dashboard_url:
+        more.append(f"Their links lead to the dashboard at {notes.dashboard_url}.")
+    else:
+        more.append("They have no links to the dashboard: DASHBOARD_URL in .env says where it is reached from.")
+    rows = []
+    for destination in notes.destinations:
+        last = destination.sent_at
+        rows.append(
+            {
+                "name": destination.name,
+                "where": destination.where,
+                "sent": sentence_case(ago_words(last, facts.now, today)) if last else "Nothing yet",
+                "sent_title": _title(last, today),
+                "note": destination.trouble or "",
+            }
+        )
+    return {"shown": True, "trouble": bool(failing), "said": said, "more": more, "rows": rows}
+
+
 # -- recorders ----------------------------------------------------------------
 
 
@@ -938,6 +1015,7 @@ PARTS = (
     ("youtube", "YouTube chat", False),
     ("tiktok", "TikTok chat", False),
     ("bot", "the chat bot", False),
+    ("notifications", "notifications", True),
     ("recorders", "the recorders", True),
     ("disk", "the disk", False),
     ("tunnel", "the tunnel", False),
@@ -954,6 +1032,7 @@ def report(facts: Facts, today: date) -> dict[str, Any]:
         "youtube": youtube_part(facts, today),
         "tiktok": tiktok_part(facts, today),
         "bot": bot_part(facts, today),
+        "notifications": notifications_part(facts, today),
         "recorders": recorders(facts, today),
         "disk": disk(facts),
         "tunnel": tunnel_part(facts, today),

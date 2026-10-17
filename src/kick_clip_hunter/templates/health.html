@@ -1,7 +1,8 @@
 {#- Whether what the service depends on is there: webhooks arriving from
     Kick, Kick's chat subscriptions, Twitch's and YouTube's chat where there
-    is any, the bot that writes in chat where it does, the recorders, room
-    on the disk and the tunnel (see health.py). Each part says where it
+    is any, the bot that writes in chat where it does, notifications where
+    they go anywhere, the recorders, room on the disk and the tunnel (see
+    health.py). Each part says where it
     stands in a sentence - in bold when that is trouble - and what there is
     to know beyond it under that. The script fetches the page again every few
     seconds and swaps in each part as it reads now, so nothing but a
@@ -168,6 +169,34 @@
     </div>
     <div class="ch-line health-act">
       <a class="ch-btn" href="{{ health.bot.sign_in.url }}">{{ health.bot.sign_in.words }}</a>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if health.notifications.shown %}
+  <section aria-labelledby="notifications-title" data-status-scope>
+    <h2 class="title" id="notifications-title">Notifications</h2>
+    <div data-health-part="notifications">
+      {{ statement(health.notifications) }}
+      <table class="an-table health-table">
+        <thead>
+          <tr><th scope="col">To</th><th scope="col">Where</th><th scope="col">Last sent</th><th scope="col"></th></tr>
+        </thead>
+        <tbody>
+          {% for row in health.notifications.rows %}
+          <tr>
+            <th scope="row">{{ row.name }}</th>
+            <td>{{ row.where }}</td>
+            <td title="{{ row.sent_title }}">{{ row.sent }}</td>
+            <td class="health-note">{{ row.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="ch-line health-act">
+      <button type="button" class="ch-btn" data-notify-test>Send a test</button>
+      <span class="status-line" role="status" data-status></span>
     </div>
   </section>
   {% endif %}

@@ -37,6 +37,7 @@ import pytest
 # Shared fixtures live in tests/support/fixtures.py; importing them here is
 # what registers them for every test directory (the `x as x` form marks each
 # one as a deliberate re-export rather than an unused import).
+from tests.support.fixtures import discord as discord
 from tests.support.fixtures import eventsub as eventsub
 from tests.support.fixtures import hls as hls
 from tests.support.fixtures import kick_api as kick_api
@@ -44,6 +45,7 @@ from tests.support.fixtures import recording as recording
 from tests.support.fixtures import service as service
 from tests.support.fixtures import signer as signer
 from tests.support.fixtures import tailscale as tailscale
+from tests.support.fixtures import telegram as telegram
 from tests.support.fixtures import tiktok as tiktok
 from tests.support.fixtures import ts_segments as ts_segments
 from tests.support.fixtures import twitch_api as twitch_api
@@ -72,6 +74,10 @@ def pytest_configure(config: pytest.Config) -> None:
     os.environ["TWITCH_CLIENT_SECRET"] = ""
     # Kick sends the bot's sign-in back where it does by default.
     os.environ["KICK_REDIRECT_URI"] = ""
+    # No notifications go anywhere unless a test says where (the `telegram`
+    # and `discord` fixtures), and their links lead nowhere.
+    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_API_URL", "DISCORD_WEBHOOK_URL", "DASHBOARD_URL"):
+        os.environ[name] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the
     # trust store is pointed at an empty directory. Every httpx client the
@@ -236,6 +242,8 @@ def _reset_module_state() -> None:
         main._bot_commands = main.chat_bot.Recent()
         main._kick_sign_ins.clear()
         main._tiktok_reader = None
+        main._notifier = None
+        main._health_watch.forget()
 
 
 @pytest.fixture(autouse=True)

@@ -2315,6 +2315,24 @@
     say(button, "");
   }
 
+  async function testNotifications(button) {
+    button.disabled = true;
+    say(button, "Sending.");
+    const response = await post("/notifications/test");
+    button.disabled = false;
+    if (!response) {
+      say(button, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(button, await problem(response, "Could not send a test."));
+      return;
+    }
+    const { sent, of } = await response.json();
+    await refreshHealth();
+    say(button, sent === of ? "Sent. It should be there now." : `Sent to ${sent} of ${of}. The table says why not.`);
+  }
+
   // ---- Wiring -----------------------------------------------------------
 
   const onClick = [
@@ -2353,6 +2371,7 @@
     ["[data-remove-channel-cancel]", (button) => button.closest("dialog").close()],
     ["[data-save-again]", saveRecordingAgain],
     ["[data-subscriptions-check]", checkSubscriptions],
+    ["[data-notify-test]", testNotifications],
     ["[data-find-moments]", findMoments],
     ["[data-make-clips]", makeClips],
     ["[data-make-chat-file]", makeChatFile],
