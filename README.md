@@ -95,7 +95,8 @@ YouTube stream
   page says beside its name when one of them needs a look.
 - **Tells you what happens, wherever you are.** Where `.env` names a Telegram bot or a Discord
   channel's webhook - or both - a short note goes there when a clip is saved (whose, how long, how
-  far into the stream, what chat said most, and the clip itself if you want it and it fits), when a
+  far into the stream, what chat said most, and the clip itself - half a minute of it, without the
+  footage around it - where it fits), when a
   recording of a whole stream starts and when it is saved or could not be, and when something on
   the Health page has needed a look for a couple of minutes, and again once it looks fine. Each
   kind is switched on the Channels page; the Health page says where they go and sends a test. With
@@ -162,7 +163,10 @@ run on Windows; the test suite also runs on Linux.
    webhook in a channel's settings (Integrations, Webhooks) and put its address in `.env` as
    `DISCORD_WEBHOOK_URL`. For the notes to link to the dashboard from a phone, put the address it is
    reached at on the tailnet in `.env` as `DASHBOARD_URL` (e.g.
-   `http://<machine>.<tailnet>.ts.net:8000`).
+   `http://<machine>.<tailnet>.ts.net:8000`). Telegram takes a video of up to 50 MB from a bot;
+   with a [Bot API server of your own](https://github.com/tdlib/telegram-bot-api) running in its
+   `--local` mode, put its address in `.env` as `TELEGRAM_API_URL` (e.g. `http://localhost:8081`)
+   and it takes up to 2000 MB.
 
 YouTube needs nothing set up: its channels are looked up, and their chat read, the way the site's
 own pages do it, as a visitor who is not signed in.

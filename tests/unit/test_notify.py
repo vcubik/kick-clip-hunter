@@ -527,6 +527,37 @@ class TestTheChatsABotCanWriteIn:
         assert refused.value.words == "Telegram did not answer (401 Unauthorized)."
 
 
+class TestABotApiServerOfOnesOwn:
+    async def test_telegram_is_asked_there_and_takes_files_of_up_to_2000_mb(self, telegram, sleeps):
+        telegram.hosts = {"bots.example"}
+        (found,) = notify.destinations(TELEGRAM_TOKEN, TELEGRAM_CHAT, telegram_api_url="http://bots.example:8081/")
+
+        await found.send(NOTE)
+
+        assert len(telegram.sent) == 1
+        assert found.video_max_bytes == notify.TELEGRAM_LOCAL_VIDEO_MAX_BYTES == 2000 * 1024**2
+        assert found.where() == f"chat {TELEGRAM_CHAT} through http://bots.example:8081"
+
+    def test_without_one_telegrams_own_is_asked(self):
+        (found,) = notify.destinations(TELEGRAM_TOKEN, TELEGRAM_CHAT, telegram_api_url="  ")
+
+        assert found.api_url == notify.TELEGRAM_API
+        assert found.video_max_bytes == notify.TELEGRAM_VIDEO_MAX_BYTES
+
+    @pytest.mark.parametrize("url", ["localhost:8081", "ftp://bots.example", "http://"])
+    def test_one_that_is_no_web_address_is_said(self, url):
+        assert notify.setup_trouble("t", "1", "", url) == ["TELEGRAM_API_URL is not an http:// or https:// address"]
+        assert notify.setup_trouble("t", "1", "", "http://localhost:8081") == []
+
+    async def test_the_chats_are_asked_of_it_too(self, telegram, capsys, monkeypatch):
+        telegram.hosts = {"localhost"}
+        monkeypatch.setenv("TELEGRAM_API_URL", "http://localhost:8081")
+
+        await telegram_chats.main()
+
+        assert "Nobody has written to @clip_hunter_bot lately." in capsys.readouterr().out
+
+
 class TestTheChatsScript:
     async def test_it_lists_the_chats_with_their_ids(self, telegram, capsys):
         telegram.updates = [{"update_id": 1, "message": {"chat": {"id": 4242, "type": "private", "first_name": "V"}}}]

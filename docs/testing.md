@@ -666,8 +666,8 @@ Run this on a live channel after changing any of the above, or the code right ne
    Health page from a phone on the tailnet. Start and stop a recording of a live channel from the
    Channels page: "Recording started" arrives at once, "Recording saved" once its file is made,
    with how long it is and how big. Let a clip be made: "Clip saved" arrives a minute and a half
-   after the reaction, with what chat said most; with "Clip videos" switched on, the clip itself
-   comes with it on Telegram, playable there (and on Discord where it is under the server's
+   after the reaction, with what chat said most, and the clip itself (half a minute of it, without
+   the footage around it) on Telegram, playable there (and on Discord where it is under the server's
    limit, otherwise the note says it was too big). Take the Discord webhook away in Discord, send
    a test again: the Health page says the last one could not be sent to Discord, with "1 problem"
    beside "Health", and a couple of minutes later Telegram is told that notifications need a look.

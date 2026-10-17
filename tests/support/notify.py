@@ -89,6 +89,9 @@ def read_telegram_html(text: str) -> tuple[str, list[str], str | None]:
 @dataclass
 class FakeTelegram:
     token: str = TELEGRAM_TOKEN
+    # Where it answers: Telegram's own Bot API, or a server of one's own
+    # (one more host, which TELEGRAM_API_URL would name).
+    hosts: set[str] = field(default_factory=lambda: {TELEGRAM_HOST})
     username: str = "clip_hunter_bot"
     # The chats the bot may write in.
     chats: set[str] = field(default_factory=lambda: {TELEGRAM_CHAT})
@@ -106,7 +109,7 @@ class FakeTelegram:
     requests: int = 0
 
     def owns(self, request: httpx.Request) -> bool:
-        return request.url.host == TELEGRAM_HOST
+        return request.url.host in self.hosts
 
     def shown(self) -> list[str]:
         """What each message showed, in order."""

@@ -210,7 +210,7 @@ class Notifications:
 
     destinations: tuple[NoteDestination, ...] = ()
     clips: bool = True
-    clip_videos: bool = False
+    clip_videos: bool = True
     recordings: bool = True
     problems: bool = True
     dashboard_url: str = ""

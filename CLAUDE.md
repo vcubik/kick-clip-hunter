@@ -76,7 +76,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
   links lead to the dashboard where `DASHBOARD_URL` says where it is reached from - from a
   phone, the machine's MagicDNS name on the tailnet with the port, e.g.
   `http://<machine>.<tailnet>.ts.net:8000` (the Funnel exposes only the webhook route, so the
-  dashboard is reached inside the tailnet). Without any of them nothing is sent anywhere
+  dashboard is reached inside the tailnet). Without any of them nothing is sent anywhere.
+  `TELEGRAM_API_URL` points the service at a Bot API server of one's own instead of
+  Telegram's ([telegram-bot-api](https://github.com/tdlib/telegram-bot-api) run with
+  `--local`, e.g. `http://localhost:8081`), which takes videos of up to 2000 MB instead of
+  50 MB - it needs an `api_id`/`api_hash` from my.telegram.org, is built from source, and the
+  bot is moved to it with `logOut` on Telegram's (see its README); left empty, Telegram's own is asked
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
@@ -174,7 +179,7 @@ set from the dashboard's Settings page (see `tuning.py` below).
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
   watchlist, the per-clip analysis switches, and - while notifications go anywhere - a switch
   for each kind of them (clips, the clips themselves as videos, recordings, problems;
-  `app_settings` like the analysis ones; all on but the videos to begin with), or how to set
+  `app_settings` like the analysis ones; all on to begin with, the videos too), or how to set
   them up where they go nowhere; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
@@ -586,7 +591,8 @@ Module map (`src/kick_clip_hunter/`):
   `recording_saved_note`, `recording_failed_note`, `recording_empty_note`, `health_note`,
   `test_note`), a `Note` (a title, a few lines, the channel, a link to the dashboard by
   `DASHBOARD_URL`, whether it is trouble), and how it is sent: `Telegram` (Bot API, as the
-  bot: `sendMessage` in its HTML, `sendVideo` for a clip - 50 MB at most), `Discord` (the
+  bot: `sendMessage` in its HTML, `sendVideo` for a clip - 50 MB at most, 2000 MB through a
+  Bot API server of one's own that `TELEGRAM_API_URL` names, `api_url`), `Discord` (the
   channel's webhook, `?wait=true`: an embed - author the channel, the title its link, red
   for trouble - and a clip as `files[0]` beside `payload_json`, 20 MB at most on a server
   without boosts). What chat wrote is escaped for each (Telegram's HTML, Discord's markdown)
@@ -604,8 +610,9 @@ Module map (`src/kick_clip_hunter/`):
   (`telegram_bot`, `telegram_chats` - getMe, getUpdates). main.py wires it: `_notes()` (from
   `.env`, built when first asked), `_notify` (in the background, where a kind's switch is on),
   `_notify_of_clip` (after a clip's file is saved, from `_create_clip_background`; with the
-  clip alone cut out by `recorder.clip_alone` into a temporary folder where "Clip videos" is
-  on - not for clips made from a recording by hand), the recording notes from
+  clip alone - about half a minute - cut out by `recorder.clip_alone` into a temporary folder
+  where "Clip videos" is on, as it is to begin with; not for clips made from a recording by
+  hand), the recording notes from
   `_start_stream_recording` (who started it: `notify.DASHBOARD`, `CHAT` and by whom, `ALWAYS`),
   `_end_stream_recording` and `_save_stream_recording`, and `_keep_telling_of_health`, which
   looks at the Health page's judgement every `HEALTH_NOTE_SECONDS` (`_tell_of_health`) and
@@ -1197,8 +1204,10 @@ service is a visitor that is not signed in), and a stream whose encoding changes
 
 - Notifications are only as good as where they go. Telegram takes a video of up to 50 MB from
   a bot and Discord a file of up to 20 MB on a server without boosts (raised from 10 MB in
-  August 2026), so with "Clip videos" on a clip of half a minute at 1080p60 (25-35 MB) goes to
-  Telegram and not, as a rule, to Discord - its note says so. A Telegram bot writes only in a
+  August 2026), so a clip of half a minute at 1080p60 (25-35 MB; "Clip videos" is on to begin
+  with) goes to Telegram and not, as a rule, to Discord - its note says so; one that runs on
+  for a minute or more can be over Telegram's 50 MB too, unless `TELEGRAM_API_URL` names a
+  Bot API server of one's own (2000 MB). A Telegram bot writes only in a
   chat that has written to it first (or a group it is in): "chat not found" or a 403 on the
   Health page means `TELEGRAM_CHAT_ID` is not such a chat. A Discord webhook deleted in Discord
   answers "Unknown Webhook" (404). Changes to `.env` take a restart. A part of the Health page

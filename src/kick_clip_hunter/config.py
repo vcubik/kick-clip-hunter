@@ -30,6 +30,9 @@ class Settings:
     # them: none without it.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # A Bot API server of one's own (telegram-bot-api --local), which takes
+    # files of up to 2000 MB; Telegram's own where empty.
+    telegram_api_url: str = ""
     discord_webhook_url: str = ""
     dashboard_url: str = ""
 
@@ -51,6 +54,7 @@ def load_settings() -> Settings:
         euler_stream_api_key=os.environ.get("EULER_STREAM_API_KEY", "").strip(),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        telegram_api_url=os.environ.get("TELEGRAM_API_URL", "").strip(),
         discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", "").strip(),
         dashboard_url=os.environ.get("DASHBOARD_URL", "").strip(),
     )

@@ -76,7 +76,7 @@ def pytest_configure(config: pytest.Config) -> None:
     os.environ["KICK_REDIRECT_URI"] = ""
     # No notifications go anywhere unless a test says where (the `telegram`
     # and `discord` fixtures), and their links lead nowhere.
-    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK_URL", "DASHBOARD_URL"):
+    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_API_URL", "DISCORD_WEBHOOK_URL", "DASHBOARD_URL"):
         os.environ[name] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the

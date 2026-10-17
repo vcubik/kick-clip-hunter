@@ -76,7 +76,7 @@ class TestSwitches:
             "frames_enabled": False,
             "sound_events_enabled": False,
             "notify_clips_enabled": True,
-            "notify_clip_videos_enabled": False,
+            "notify_clip_videos_enabled": True,
             "notify_recordings_enabled": True,
             "notify_health_enabled": True,
         }
@@ -89,12 +89,12 @@ class TestSwitches:
         analysis = [service.main.SETTING_KEYS[name] for name, _label in service.main.ANALYSIS_SETTINGS]
         assert not any(service.main.SETTING_DEFAULTS[key] for key in analysis)
 
-    async def test_notifications_tell_of_everything_but_the_clips_themselves_to_begin_with(self, service):
+    async def test_notifications_tell_of_everything_to_begin_with_the_clips_themselves_too(self, service):
         main = service.main
 
         assert {name: main.SETTING_DEFAULTS[main.SETTING_KEYS[name]] for name, _label in main.NOTIFY_SETTINGS} == {
             "notify_clips": True,
-            "notify_clip_videos": False,
+            "notify_clip_videos": True,
             "notify_recordings": True,
             "notify_health": True,
         }

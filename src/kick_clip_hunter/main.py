@@ -277,9 +277,9 @@ ANALYSIS_SETTINGS = [
     ("frames", "Frame embeddings"),
 ]
 # What notifications tell of (see notify.py), each switched on its own on
-# the Channels page - and all of it on to begin with but the clips
-# themselves, which can be tens of megabytes each. (dashboard name, button
-# label) in display order.
+# the Channels page - all of it on to begin with, the clips themselves too:
+# the clip alone, half a minute or so, goes where it fits. (dashboard name,
+# button label) in display order.
 NOTIFY_SETTINGS = [
     ("notify_clips", "Clips"),
     ("notify_clip_videos", "Clip videos"),
@@ -294,7 +294,7 @@ SETTING_DEFAULTS = {
     "frames_enabled": False,
     "sound_events_enabled": False,
     "notify_clips_enabled": True,
-    "notify_clip_videos_enabled": False,
+    "notify_clip_videos_enabled": True,
     "notify_recordings_enabled": True,
     "notify_health_enabled": True,
 }
@@ -847,6 +847,7 @@ def _notes() -> notify.Notifier:
             settings.telegram_bot_token,
             settings.telegram_chat_id,
             settings.discord_webhook_url,
+            telegram_api_url=settings.telegram_api_url,
             sleep=asyncio.sleep,
         )
         _notifier = notify.Notifier(found, sleep=asyncio.sleep)
@@ -951,7 +952,7 @@ def _say_where_notes_go() -> None:
     """Logs where notifications go, and what in .env keeps them from going
     where it was meant to."""
     for trouble in notify.setup_trouble(
-        settings.telegram_bot_token, settings.telegram_chat_id, settings.discord_webhook_url
+        settings.telegram_bot_token, settings.telegram_chat_id, settings.discord_webhook_url, settings.telegram_api_url
     ):
         logger.warning("notifications: %s", trouble)
     names = [destination.name for destination in _notes().destinations]

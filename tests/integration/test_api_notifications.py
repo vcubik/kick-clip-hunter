@@ -20,6 +20,7 @@ from kick_clip_hunter.config import load_settings
 from tests.support.data import add_chat
 from tests.support.html import Element, parse
 from tests.support.media import make_video, probe
+from tests.support.notify import TELEGRAM_CHAT
 
 pytestmark = pytest.mark.anyio
 
@@ -120,6 +121,8 @@ class TestAClipSaved:
 
         link = f"{DASHBOARD}/dashboard?moment={moment_id}"
         (message,) = telegram.sent
+        # The clip goes with it to begin with: this one's file is the clip alone.
+        assert message["method"] == "sendVideo" and message["video"][1] == b"clip"
         assert message["shown"] == (
             "some_channel · Clip saved\n35 seconds, 1:23:45 into the stream.\n"
             f"Chat: KEKW {TIMES}3\nOpen on the dashboard"
@@ -155,13 +158,20 @@ class TestAClipSaved:
         assert service.main._notes().destinations == ()
         assert telegram.requests == 0
 
+    async def test_without_the_clip_itself_where_that_is_switched_off(self, notified, telegram, discord, cut):
+        await switch(notified, "notify_clip_videos", False)
+
+        await cut()
+
+        assert [message["method"] for message in telegram.sent] == ["sendMessage"]
+        assert [message["file"] for message in discord.posted] == [None]
+
     @pytest.mark.ffmpeg
-    async def test_with_the_clip_itself_where_that_is_switched_on_and_it_fits(
+    async def test_with_the_clip_itself_without_the_footage_around_it_where_it_fits(
         self, notified, telegram, discord, cut, tmp_path
     ):
         footage = make_video(tmp_path / "footage.mp4", 14, keyframe_every=1.0)
         discord.file_max_bytes = 100
-        await switch(notified, "notify_clip_videos", True)
 
         await cut(footage, seconds=6, before=4, after=4)
 
@@ -180,14 +190,74 @@ class TestAClipSaved:
         assert sorted(path.name for path in (recorder.CLIPS_DIR / CHANNEL).iterdir()) == [f"{name}"]
 
     async def test_a_clip_that_cannot_be_cut_out_goes_as_words(self, notified, telegram, cut, monkeypatch):
-        await switch(notified, "notify_clip_videos", True)
-
         # Not a video ffmpeg can cut anything out of.
         await cut(None, seconds=6, before=4, after=4)
 
         (message,) = telegram.sent
         assert message["method"] == "sendMessage"
         assert message["shown"].split("\n")[-2] == "The clip could not be cut out to be sent."
+
+
+class TestABotApiServerOfOnesOwn:
+    async def test_telegram_is_asked_there_and_it_takes_a_clip_too_big_for_telegrams_own(
+        self, service, telegram, cut_with_room, monkeypatch, tmp_path
+    ):
+        telegram.hosts = {"localhost"}
+        telegram.video_max_bytes = notify.TELEGRAM_LOCAL_VIDEO_MAX_BYTES
+        monkeypatch.setenv("TELEGRAM_API_URL", "http://localhost:8081/")
+        monkeypatch.setattr(service.main, "settings", load_settings())
+        service.watch(CHANNEL, broadcaster_user_id=USER_ID)
+
+        await cut_with_room(60 * 1024**2)
+
+        (message,) = telegram.sent
+        assert message["method"] == "sendVideo" and len(message["video"][1]) == 60 * 1024**2
+        assert service.main._notes().destinations[0].where() == f"chat {TELEGRAM_CHAT} through http://localhost:8081"
+
+    @pytest.fixture
+    def cut_with_room(self, service, monkeypatch):
+        """Saves the clip of a moment, the file of which is the clip alone,
+        `size` bytes of it."""
+
+        async def cut(size: int) -> None:
+            async def create_clip(channel, start, end, name, **framing):
+                path = recorder.CLIPS_DIR / channel / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"v" * size)
+                return recorder.CutClip(path, BEGAN, BEGAN + timedelta(seconds=35))
+
+            monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
+            conn = db.get_connection()
+            try:
+                moment_id = db.insert_moment(
+                    conn,
+                    broadcaster_user_id=USER_ID,
+                    channel_slug=CHANNEL,
+                    window_start=BEGAN.isoformat(),
+                    window_end=BEGAN.isoformat(),
+                    reason="laugh",
+                    score=1.0,
+                    message_count=1,
+                    baseline_message_rate=1.0,
+                    current_message_rate=1.0,
+                    emote_count=0,
+                    keyword_hits=0,
+                    stream_elapsed_seconds=5025,
+                )
+            finally:
+                conn.close()
+            await service.main._create_clip_background(
+                moment_id, CHANNEL, BEGAN, BEGAN, service.main._tuning_now(USER_ID)
+            )
+            await service.settle()
+
+        return cut
+
+    async def test_without_it_telegrams_own_is_asked_and_takes_50_mb(self, notified, telegram):
+        (destination, _discord) = notified.main._notes().destinations
+
+        assert destination.where() == f"chat {TELEGRAM_CHAT}"
+        assert destination.video_max_bytes == notify.TELEGRAM_VIDEO_MAX_BYTES
 
 
 class TestARecording:
@@ -364,7 +434,8 @@ class TestTheHealthPage:
         part = page.one("div", data_health_part="notifications")
         assert part.one("p", class_="health-said").text == "Notifications go to Telegram and Discord."
         assert [sentence.text for sentence in part.find("p", class_="health-more")] == [
-            "They tell of clips, recordings of whole streams and what on this page needs a look. "
+            "They tell of clips, with the clip itself where it fits, recordings of whole streams and "
+            "what on this page needs a look. "
             "The Channels page switches each kind on and off.",
             f"Their links lead to the dashboard at {DASHBOARD}.",
         ]

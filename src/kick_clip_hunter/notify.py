@@ -24,7 +24,9 @@ dashboard where DASHBOARD_URL says where that is reached from (from a phone:
 the machine's name on the tailnet).
 
 Telegram is asked through its Bot API, as the bot (sendMessage, and
-sendVideo for a clip - a bot sends files of up to 50 MB); Discord through
+sendVideo for a clip - a bot sends files of up to 50 MB, or of up to 2000
+MB through a Bot API server of one's own that TELEGRAM_API_URL names);
+Discord through
 the channel's webhook, as an embed (with a file of up to 20 MB on a server
 without boosts - 10 MB until August 2026). A clip too big for a destination
 goes there as words alone, which say so. Both answer a note sent too soon
@@ -64,10 +66,13 @@ logger = logging.getLogger("kick_clip_hunter")
 
 TELEGRAM_API = "https://api.telegram.org"
 # What Telegram takes: a message of 4096 characters, a caption under a
-# video of 1024, a video a bot uploads of 50 MB.
+# video of 1024, a video a bot uploads of 50 MB - or of 2000 MB through a
+# Bot API server of one's own (telegram-bot-api in its --local mode), which
+# TELEGRAM_API_URL in .env points the service at instead of Telegram's.
 TELEGRAM_TEXT_MAX = 4096
 TELEGRAM_CAPTION_MAX = 1024
 TELEGRAM_VIDEO_MAX_BYTES = 50 * 1024**2
+TELEGRAM_LOCAL_VIDEO_MAX_BYTES = 2000 * 1024**2
 # What a Discord webhook takes: an embed's title of 256 characters, its
 # description of 4096, and a file of 20 MB on a server without boosts.
 DISCORD_TITLE_MAX = 256
@@ -327,6 +332,12 @@ async def _post(url: str, timeout: float, **request: Any) -> httpx.Response:
         return await client.post(url, **request)
 
 
+def telegram_api(api_url: str) -> str:
+    """Where the Bot API is asked: TELEGRAM_API_URL without a slash at its
+    end, or Telegram's own where that is empty."""
+    return api_url.strip().rstrip("/") or TELEGRAM_API
+
+
 def telegram_text(note: Note) -> str:
     """A note as Telegram's HTML: the channel and the title in bold, the
     lines under them, and the link."""
@@ -342,17 +353,28 @@ class Telegram:
     """Sends notes to a Telegram chat, as a bot."""
 
     name = "Telegram"
-    video_max_bytes = TELEGRAM_VIDEO_MAX_BYTES
 
     def __init__(
-        self, token: str, chat_id: str, *, sleep: Callable[[float], Awaitable[object]] = asyncio.sleep
+        self,
+        token: str,
+        chat_id: str,
+        *,
+        api_url: str = TELEGRAM_API,
+        sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     ) -> None:
         self._token = token
         self.chat_id = chat_id
+        # Telegram's own Bot API, or a server of one's own, which takes
+        # larger files.
+        self.api_url = telegram_api(api_url)
+        self.video_max_bytes = (
+            TELEGRAM_VIDEO_MAX_BYTES if self.api_url == TELEGRAM_API else TELEGRAM_LOCAL_VIDEO_MAX_BYTES
+        )
         self._sleep = sleep
 
     def where(self) -> str:
-        return f"chat {self.chat_id}"
+        through = f" through {self.api_url}" if self.api_url != TELEGRAM_API else ""
+        return f"chat {self.chat_id}{through}"
 
     async def send(self, note: Note, video: Path | None = None) -> None:
         text = telegram_text(note)
@@ -386,7 +408,7 @@ class Telegram:
         wait it asks for where it says the note came too soon."""
         for first in (True, False):
             try:
-                response = await _post(f"{TELEGRAM_API}/bot{self._token}/{method}", timeout, **request)
+                response = await _post(f"{self.api_url}/bot{self._token}/{method}", timeout, **request)
             except (httpx.HTTPError, httpx.InvalidURL) as error:
                 raise _unreached(self.name, error) from None
             answer = _answer(response)
@@ -484,22 +506,29 @@ def destinations(
     telegram_chat_id: str = "",
     discord_webhook_url: str = "",
     *,
+    telegram_api_url: str = "",
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
 ) -> tuple[Destination, ...]:
     """Where notes go, by what .env says: Telegram where it names a bot and a
-    chat, Discord where it names a webhook."""
+    chat (through the Bot API server it names, if it does), Discord where it
+    names a webhook."""
     found: list[Destination] = []
     if telegram_token and telegram_chat_id:
-        found.append(Telegram(telegram_token, telegram_chat_id, sleep=sleep))
+        found.append(Telegram(telegram_token, telegram_chat_id, api_url=telegram_api_url, sleep=sleep))
     if discord_webhook_url:
         found.append(Discord(discord_webhook_url, sleep=sleep))
     return tuple(found)
 
 
-def setup_trouble(telegram_token: str, telegram_chat_id: str, discord_webhook_url: str) -> list[str]:
+def setup_trouble(
+    telegram_token: str, telegram_chat_id: str, discord_webhook_url: str, telegram_api_url: str = ""
+) -> list[str]:
     """What is wrong with how .env sets notifications up, in words for the
-    log: half of Telegram's, or an address that is not a Discord webhook."""
+    log: half of Telegram's, a Bot API server that is no web address, or an
+    address that is not a Discord webhook."""
     trouble = []
+    if telegram_api_url.strip() and not re.match(r"https?://[^/\s]+", telegram_api_url.strip()):
+        trouble.append("TELEGRAM_API_URL is not an http:// or https:// address")
     if telegram_token and not telegram_chat_id:
         trouble.append("TELEGRAM_BOT_TOKEN is set but TELEGRAM_CHAT_ID is not - scripts/telegram_chats.py finds it")
     if telegram_chat_id and not telegram_token:
@@ -522,16 +551,16 @@ class TelegramChat:
     name: str
 
 
-async def telegram_bot(token: str) -> str:
+async def telegram_bot(token: str, api_url: str = TELEGRAM_API) -> str:
     """The bot's username: who to write to, for its chat to be found."""
-    response = await _telegram_get(token, "getMe")
+    response = await _telegram_get(token, "getMe", api_url)
     return str(response.get("username") or "")
 
 
-async def telegram_chats(token: str) -> list[TelegramChat]:
+async def telegram_chats(token: str, api_url: str = TELEGRAM_API) -> list[TelegramChat]:
     """The chats that have written to the bot lately - what Telegram keeps of
     them, for a day - each once, in the order they last wrote."""
-    updates = await _telegram_get(token, "getUpdates")
+    updates = await _telegram_get(token, "getUpdates", api_url)
     chats: dict[int, TelegramChat] = {}
     for update in updates if isinstance(updates, list) else ():
         if not isinstance(update, dict):
@@ -550,10 +579,10 @@ async def telegram_chats(token: str) -> list[TelegramChat]:
     return list(chats.values())
 
 
-async def _telegram_get(token: str, method: str) -> Any:
+async def _telegram_get(token: str, method: str, api_url: str) -> Any:
     try:
         async with httpx.AsyncClient(timeout=SEND_TIMEOUT_SECONDS) as client:
-            response = await client.get(f"{TELEGRAM_API}/bot{token}/{method}")
+            response = await client.get(f"{telegram_api(api_url)}/bot{token}/{method}")
     except (httpx.HTTPError, httpx.InvalidURL) as error:
         raise _unreached("Telegram", error) from None
     answer = _answer(response)

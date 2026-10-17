@@ -27,12 +27,13 @@ from kick_clip_hunter.config import load_settings
 
 
 async def main() -> None:
-    token = load_settings().telegram_bot_token
+    settings = load_settings()
+    token = settings.telegram_bot_token
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN in .env is empty: put the token @BotFather gave the bot there first.")
     try:
-        bot = await notify.telegram_bot(token)
-        chats = await notify.telegram_chats(token)
+        bot = await notify.telegram_bot(token, settings.telegram_api_url)
+        chats = await notify.telegram_chats(token, settings.telegram_api_url)
     except notify.CannotSend as refused:
         raise SystemExit(refused.words) from None
     if not chats:

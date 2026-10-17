@@ -1219,13 +1219,12 @@ class TestNotifications:
         [
             (
                 {},
-                "They tell of clips, recordings of whole streams and what on this page needs a look. "
-                "The Channels page switches each kind on and off.",
+                "They tell of clips, with the clip itself where it fits, recordings of whole streams and "
+                "what on this page needs a look. The Channels page switches each kind on and off.",
             ),
             (
-                {"clip_videos": True, "recordings": False, "problems": False},
-                "They tell of clips, with the clip itself where it fits. "
-                "The Channels page switches each kind on and off.",
+                {"clip_videos": False, "recordings": False, "problems": False},
+                "They tell of clips. The Channels page switches each kind on and off.",
             ),
             (
                 {"clips": False, "recordings": False, "problems": False},

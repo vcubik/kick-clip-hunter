@@ -962,7 +962,7 @@ NOTIFY_CAPTIONS = {
     "notify_clips": "Each new clip: whose, how long, how far into the stream, what chat said most.",
     "notify_clip_videos": (
         "The clip itself goes with it, without the footage around it, where it fits: "
-        "Telegram takes up to 50 MB, Discord 20 MB."
+        "Telegram takes up to 50 MB (2000 MB through a Bot API server of your own), Discord 20 MB."
     ),
     "notify_recordings": "A recording of a whole stream started, was saved, or could not be.",
     "notify_health": "Something on the Health page needs a look, and when it looks fine again.",
