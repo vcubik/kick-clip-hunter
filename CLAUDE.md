@@ -1289,3 +1289,5 @@ service is a visitor that is not signed in), and a stream whose encoding changes
 - Squash-merge, then delete the branch (local and remote) and sync `master`.
 - Don't hardcode the current watchlist's specific streamer names in PR descriptions or
   test plans — the watchlist changes constantly, so describe test coverage generically.
+- No link to the Claude Code session in PR descriptions, PR comments or commit messages
+  (no `Claude-Session:` trailer, no claude.ai/code/session_... URL).
