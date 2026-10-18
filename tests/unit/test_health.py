@@ -1220,15 +1220,15 @@ class TestNotifications:
             (
                 {},
                 "They tell of clips, with the clip itself where it fits, recordings of whole streams and "
-                "what on this page needs a look. The Channels page switches each kind on and off.",
+                "what on this page needs a look. The Settings page switches each kind on and off.",
             ),
             (
                 {"clip_videos": False, "recordings": False, "problems": False},
-                "They tell of clips. The Channels page switches each kind on and off.",
+                "They tell of clips. The Settings page switches each kind on and off.",
             ),
             (
                 {"clips": False, "recordings": False, "problems": False},
-                "They tell of nothing: the Channels page has every kind switched off.",
+                "They tell of nothing: the Settings page has every kind switched off.",
             ),
         ],
     )
@@ -1237,7 +1237,7 @@ class TestNotifications:
 
     def test_without_an_address_for_the_dashboard_it_says_where_one_is_set(self):
         assert self.part(health.Notifications((self.TELEGRAM,)))["more"][1] == (
-            "They have no links to the dashboard: DASHBOARD_URL in .env says where it is reached from."
+            "They have no links to the dashboard: the Settings page says where it is reached from."
         )
 
 

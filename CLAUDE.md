@@ -69,9 +69,12 @@ set from the dashboard's Settings page (see `tuning.py` below).
   server (`tiktok_chat.py`) - a few thousand signed connections a day without a key; an
   optional `EULER_STREAM_API_KEY` in `.env` raises that. TikTokLive came with the
   user's explicit consent to it and to Euler Stream (2026-10-15)
-- Notifications (optional, see `notify.py` below) go where `.env` says: `TELEGRAM_BOT_TOKEN`
+- Notifications (optional, see `notify.py` below) are set up on the dashboard's Settings page,
+  under "All channels", tab Notifications (saved there, they hold at once, no restart) - or in
+  `.env`, which holds for whatever the page never set: `TELEGRAM_BOT_TOKEN`
   (a bot made with @BotFather) and `TELEGRAM_CHAT_ID` (a chat that has written to the bot -
-  `PYTHONPATH=src python scripts/telegram_chats.py` lists them, with their ids), and/or
+  the page's "Find chats", or `PYTHONPATH=src python scripts/telegram_chats.py`, lists them,
+  with their ids), and/or
   `DISCORD_WEBHOOK_URL` (a channel's webhook: its settings, Integrations, Webhooks). Their
   links lead to the dashboard where `DASHBOARD_URL` says where it is reached from - from a
   phone, the machine's MagicDNS name on the tailnet with the port, e.g.
@@ -177,10 +180,7 @@ set from the dashboard's Settings page (see `tuning.py` below).
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut or it is being transcribed; one whose clip is still being cut has
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
-  watchlist, the per-clip analysis switches, and - while notifications go anywhere - a switch
-  for each kind of them (clips, the clips themselves as videos, recordings, problems;
-  `app_settings` like the analysis ones; all on to begin with, the videos too), or how to set
-  them up where they go nowhere; shutting the service down is the button
+  watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
   "Recorded only"; `POST /channels/{slug}/tracking` refuses to switch it on), and the button that
@@ -243,7 +243,14 @@ set from the dashboard's Settings page (see `tuning.py` below).
   field beside it (Add, or Enter; checked there as the service would) and taken out by its
   cross, and what is typed but not added goes in with the save. The last tab, "Try on stored
   chat", replays a channel's newest chat under the saved settings and under the form's,
-  without saving anything. A channel's page begins with what is its own whatever it goes by:
+  without saving anything. The page for all channels has, before it, a tab for what is the
+  service's: Notifications - where they go (a Telegram bot and its chat, with "Find chats" to
+  pick it among those that wrote to the bot; a Discord webhook; the dashboard's address for
+  their links), which kinds go out (clips, the clips themselves as videos, recordings,
+  problems; all on to begin with), and a test - saved by a button of its own, not the form's
+  (`POST /notifications/setup`), holding at once, `.env` holding for what was never set there;
+  the token and the webhook are never put on the page. A channel's page begins with what is
+  its own whatever it goes by:
   its clips on command, and "The bot in chat" - whether the bot writes in its chat, and the
   messages that ask it for something - with a sentence on as whom the bot writes on the
   channel's platform. `GET /dashboard/health` says
@@ -615,9 +622,14 @@ Module map (`src/kick_clip_hunter/`):
   error is said by its type alone - and httpx's own request log stays at WARNING (main.py).
   `HealthWatch` decides what of the Health page is told of: a part that has been trouble for
   `after_seconds` on end, once, and again once it is fine; switched off, it forgets. Also the
-  set-up's words for the log (`setup_trouble`), and what `scripts/telegram_chats.py` asks
-  (`telegram_bot`, `telegram_chats` - getMe, getUpdates). main.py wires it: `_notes()` (from
-  `.env`, built when first asked), `_notify` (in the background, where a kind's switch is on),
+  set-up's words for the log (`setup_trouble`), what the Settings page sets up (`Setup`: what
+  was saved there - kept in `app_settings` as `notify_setup:<field>`, an empty value saying
+  there is none - laid over `.env` by `in_force`, checked by `check_setup`; the token and the
+  webhook are `SECRETS`, never put on the page), and what the page's "Find chats" and
+  `scripts/telegram_chats.py` ask (`telegram_bot`, `telegram_chats` - getMe, getUpdates).
+  main.py wires it: `_notes()` (from the setup in force, built when first asked and again
+  once `POST /notifications/setup` saves another; `POST /notifications/telegram/chats` is
+  Find chats), `_notify` (in the background, where a kind's switch is on),
   `_notify_of_clip` (after a clip's file is saved, from `_create_clip_background`; with the
   clip alone - about half a minute - cut out by `recorder.clip_alone` into a temporary folder
   where "Clip videos" is on, as it is to begin with; not for clips made from a recording by

@@ -2220,6 +2220,7 @@
     for (const pane of all("[data-section-pane]")) pane.hidden = pane.dataset.sectionPane !== key;
     const panes = one(".set-panes");
     if (panes) panes.scrollTop = 0;
+    one("[data-settings]").dataset.shown = key;
     const kept = one("[data-section-kept]");
     if (kept) kept.value = key;
     const address = new URL(location.href);
@@ -2433,6 +2434,111 @@
     say(button, "");
   }
 
+  // ---- Notifications, on the Settings page ------------------------------
+  //
+  // Where notifications go and which kinds go out are the service's, not
+  // detection's: saved together by the tab's own button, and never sent
+  // with the form they stand in. A secret - the bot's token, the webhook -
+  // is never shown: its field stays empty, and left empty what is set stays
+  // set. Find chats asks Telegram which chats wrote to the bot, to pick the
+  // one notes go to.
+
+  const notifyPane = (inside) => inside.closest("[data-notify-setup]");
+  const notifyField = (pane, name) => one(`[data-notify-field="${name}"]`, pane);
+
+  function notifyValues(pane) {
+    const setup = {};
+    for (const field of all("[data-notify-field]", pane)) {
+      const value = field.value.trim();
+      if (!("secret" in field.dataset)) setup[field.dataset.notifyField] = value;
+      else if (value) setup[field.dataset.notifyField] = value;
+      else if (field.dataset.remove === "1") setup[field.dataset.notifyField] = "";
+    }
+    const kinds = Object.fromEntries(
+      all("[data-notify-kind]", pane).map((kind) => [kind.dataset.notifyKind, one('[aria-pressed="true"]', kind).dataset.enabled === "1"]),
+    );
+    return { setup, kinds };
+  }
+
+  async function saveNotifications(control) {
+    const pane = notifyPane(control);
+    say(pane, "Saving.");
+    const response = await post("/notifications/setup", notifyValues(pane));
+    if (!response) {
+      say(pane, "Could not reach the service. Nothing was saved.");
+      return;
+    }
+    if (!response.ok) {
+      say(pane, await problem(response, "Could not save where notifications go."));
+      return;
+    }
+    await reloadSettings();
+    const fresh = one("[data-notify-setup]");
+    if (fresh) say(fresh, "Saved. The next notification goes by these.");
+  }
+
+  function chooseKind(half) {
+    for (const other of all("button", half.closest("[data-notify-kind]"))) other.setAttribute("aria-pressed", String(other === half));
+    say(notifyPane(half), "Not saved yet.");
+  }
+
+  // A secret that is set is taken away once the tab is saved.
+  function removeSecret(button) {
+    const field = one("[data-notify-field]", button.closest(".set-row"));
+    field.value = "";
+    field.dataset.remove = "1";
+    field.placeholder = "Removed once saved";
+    button.disabled = true;
+    say(notifyPane(button), "Not saved yet.");
+  }
+
+  // The bot is the one whose token is typed in, or else the one that is set.
+  async function findChats(button) {
+    const pane = notifyPane(button);
+    const list = one("[data-found-chats]", button.closest(".set-row"));
+    button.disabled = true;
+    say(button, "Asking Telegram.");
+    const response = await post("/notifications/telegram/chats", {
+      token: notifyField(pane, "telegram_bot_token").value.trim(),
+      api_url: notifyField(pane, "telegram_api_url").value.trim(),
+    });
+    button.disabled = false;
+    if (!response) {
+      say(button, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(button, await problem(response, "Could not ask Telegram."));
+      return;
+    }
+    const { bot, chats } = await response.json();
+    list.replaceChildren(
+      ...chats.map((chat) => {
+        const item = document.createElement("li");
+        const pick = document.createElement("button");
+        pick.type = "button";
+        pick.className = "set-chip set-pick";
+        pick.dataset.chatPick = chat.id;
+        pick.textContent = `${chat.name || "A chat"} (${chat.kind}, ${chat.id})`;
+        item.append(pick);
+        return item;
+      }),
+    );
+    say(
+      button,
+      chats.length
+        ? `These wrote to @${bot} lately. Pick the one notes go to.`
+        : `No chat wrote to @${bot} lately. Write to it from the chat notes are to go to, or add it to a group, and look again.`,
+    );
+  }
+
+  function pickChat(button) {
+    const pane = notifyPane(button);
+    notifyField(pane, "telegram_chat_id").value = button.dataset.chatPick;
+    say(button, "");
+    say(pane, "Not saved yet.");
+  }
+
   // ---- Health ----------------------------------------------------------
   //
   // The Health page says how long ago things happened, so what it says is
@@ -2497,7 +2603,8 @@
     }
     const { sent, of } = await response.json();
     await refreshHealth();
-    say(button, sent === of ? "Sent. It should be there now." : `Sent to ${sent} of ${of}. The table says why not.`);
+    const why = one("[data-health]") ? "The table says why not." : "The Health page says why not.";
+    say(button, sent === of ? "Sent. It should be there now." : `Sent to ${sent} of ${of}. ${why}`);
   }
 
   // ---- Wiring -----------------------------------------------------------
@@ -2521,6 +2628,11 @@
     ["[data-chip-add]", addFromButton],
     ["[data-chip-remove]", removeItem],
     ["[data-section]", (tab) => showSection(tab)],
+    ["[data-notify-kind] button", chooseKind],
+    ["[data-notify-save]", saveNotifications],
+    ["[data-notify-remove]", removeSecret],
+    ["[data-find-chats]", findChats],
+    ["[data-chat-pick]", pickChat],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
     [
       "[data-rest-all]",
@@ -2728,6 +2840,13 @@
       addTyped(target);
       return;
     }
+    // Enter in where notifications go saves that, rather than the form of
+    // detection it stands in.
+    if (target.matches("[data-notify-field]") && event.key === "Enter") {
+      event.preventDefault();
+      saveNotifications(target);
+      return;
+    }
     if (target.matches("[data-section]") && sectionKey(target, event)) return;
     if (target.matches("[data-strip]") && stripKey(target, event)) return;
     if (target.matches("[data-rec-strip]") && recordingKey(target, event)) return;
@@ -2761,6 +2880,9 @@
       settingsEdited(settingsOf(target));
     } else if (target.matches("[data-chip-input]")) {
       say(target, "");
+    } else if (target.matches("[data-notify-field]")) {
+      delete target.dataset.remove;
+      say(notifyPane(target), "Not saved yet.");
     }
   });
 

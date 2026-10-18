@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from kick_clip_hunter import dashboard_view as view
+from kick_clip_hunter import notify
 
 TODAY = date(2026, 10, 9)  # a Friday
 
@@ -1130,4 +1131,34 @@ class TestRecordingAlwaysInWords:
         )
         assert view.ALWAYS_RECORD_WORDS[False].format(channel="some_channel") == (
             "Streams of some_channel are recorded only when you start a recording."
+        )
+
+
+class TestWhereNotificationsGoInWords:
+    def test_the_tab_says_where_they_go_and_how_it_stands_to_dotenv(self):
+        assert view.notify_lead_words(["Telegram", "Discord"]) == (
+            "Notifications go to Telegram and Discord. What is saved here holds from the next one on; "
+            "what was never set here comes from .env."
+        )
+        assert view.notify_lead_words([]).startswith("Notifications go nowhere yet: give a Telegram bot")
+
+    def test_every_field_is_in_one_part_of_the_tab_and_says_what_it_is(self):
+        fields = [name for _title, names in view.NOTIFY_SETUP_GROUPS for name in names]
+
+        assert sorted(fields) == sorted(view.NOTIFY_SETUP_CAPTIONS) == sorted(notify.SETUP_LABELS)
+
+    def test_a_secret_field_says_whether_one_is_set_and_never_what_it_is(self):
+        assert view.setup_placeholder("telegram_bot_token", False, False) == "123456789:AAH..."
+        assert view.setup_placeholder("telegram_bot_token", True, False) == "Set in .env - type to replace"
+        assert view.setup_placeholder("discord_webhook_url", True, True) == "Set here - type to replace"
+        # The rest are shown as they are.
+        assert view.setup_placeholder("telegram_chat_id", True, False) == ""
+
+    def test_a_field_dotenv_has_a_value_for_says_which_holds(self):
+        caption = view.NOTIFY_SETUP_CAPTIONS["telegram_chat_id"]
+
+        assert view.setup_caption("telegram_chat_id", False, False) == caption
+        assert view.setup_caption("telegram_chat_id", True, False) == f"{caption} It comes from .env."
+        assert view.setup_caption("telegram_chat_id", True, True) == (
+            f"{caption} Saved here, it takes the place of what .env has."
         )

@@ -100,6 +100,7 @@ from .db import (
     get_moment_channels,
     get_moment_names,
     get_moment_times,
+    get_notify_setup,
     get_recent_moments,
     get_stream_recording,
     get_stream_recording_offset,
@@ -118,6 +119,7 @@ from .db import (
     remove_channel_chat,
     remove_streamer,
     rename_streamer,
+    replace_notify_setup,
     replace_tuning,
     search_channel_chat,
     set_chat_delay,
@@ -277,7 +279,7 @@ ANALYSIS_SETTINGS = [
     ("frames", "Frame embeddings"),
 ]
 # What notifications tell of (see notify.py), each switched on its own on
-# the Channels page - all of it on to begin with, the clips themselves too:
+# the Settings page - all of it on to begin with, the clips themselves too:
 # the clip alone, half a minute or so, goes where it fits. (dashboard name,
 # button label) in display order.
 NOTIFY_SETTINGS = [
@@ -826,28 +828,51 @@ def _carry_out(message: ChatMessage, command: str) -> None:
 # -- notifications -------------------------------------------------------------
 #
 # What the service tells whoever runs it, on Telegram and Discord (see
-# notify.py): where to is .env's to say, which kinds the switches on the
-# Channels page.
+# notify.py): where to, and which kinds, is set on the Settings page - and
+# where to, for whatever the page never set, in .env.
 
 # How often the Health page's judgement is looked at for what to tell of,
 # and how long a part has to have been trouble on end before it is.
 HEALTH_NOTE_SECONDS = 60
 HEALTH_NOTE_AFTER_SECONDS = 120
 
-# What sends the notes, and what has become of them.
+# What sends the notes, and what has become of them - and the setup it was
+# made by. Both are made again once the Settings page saves another.
 _notifier: notify.Notifier | None = None
+_note_setup = notify.Setup()
 # The parts of the Health page that were told of as trouble.
 _health_watch = notify.HealthWatch(HEALTH_NOTE_AFTER_SECONDS)
 
 
+def _env_setup() -> notify.Setup:
+    """Where .env says notes go."""
+    return notify.Setup(
+        telegram_bot_token=settings.telegram_bot_token,
+        telegram_chat_id=settings.telegram_chat_id,
+        telegram_api_url=settings.telegram_api_url,
+        discord_webhook_url=settings.discord_webhook_url,
+        dashboard_url=settings.dashboard_url,
+    )
+
+
+def _saved_setup() -> dict[str, str]:
+    """What of where notes go was saved on the Settings page."""
+    conn = get_connection()
+    try:
+        return get_notify_setup(conn)
+    finally:
+        conn.close()
+
+
 def _notes() -> notify.Notifier:
-    global _notifier
+    global _notifier, _note_setup
     if _notifier is None:
+        _note_setup = notify.in_force(_env_setup(), _saved_setup())
         found = notify.destinations(
-            settings.telegram_bot_token,
-            settings.telegram_chat_id,
-            settings.discord_webhook_url,
-            telegram_api_url=settings.telegram_api_url,
+            _note_setup.telegram_bot_token,
+            _note_setup.telegram_chat_id,
+            _note_setup.discord_webhook_url,
+            telegram_api_url=_note_setup.telegram_api_url,
             sleep=asyncio.sleep,
         )
         _notifier = notify.Notifier(found, sleep=asyncio.sleep)
@@ -870,7 +895,8 @@ def _notify(name: str, note: notify.Note) -> None:
 
 def _link(path: str) -> str | None:
     """Where a page of the dashboard is, for a note to lead to."""
-    return notify.dashboard_link(settings.dashboard_url, path)
+    _notes()
+    return notify.dashboard_link(_note_setup.dashboard_url, path)
 
 
 def _clip_to_send(clip_path: Path, extent: "ClipExtent", folder: Path) -> Path:
@@ -950,12 +976,14 @@ def _tell_of_health(now: datetime | None = None) -> None:
 
 def _say_where_notes_go() -> None:
     """Logs where notifications go, and what in .env keeps them from going
-    where it was meant to."""
+    where it was meant to. What the Settings page saved was checked as it
+    was, so whatever is wrong is .env's."""
+    names = [destination.name for destination in _notes().destinations]
+    setup = _note_setup
     for trouble in notify.setup_trouble(
-        settings.telegram_bot_token, settings.telegram_chat_id, settings.discord_webhook_url, settings.telegram_api_url
+        setup.telegram_bot_token, setup.telegram_chat_id, setup.discord_webhook_url, setup.telegram_api_url
     ):
         logger.warning("notifications: %s", trouble)
-    names = [destination.name for destination in _notes().destinations]
     if names:
         logger.info("notifications go to %s", dashboard_view.list_words(names))
 
@@ -2642,7 +2670,7 @@ def _notification_facts() -> health.Notifications | None:
         clip_videos=_notifying("notify_clip_videos"),
         recordings=_notifying("notify_recordings"),
         problems=_notifying("notify_health"),
-        dashboard_url=settings.dashboard_url,
+        dashboard_url=_note_setup.dashboard_url,
     )
 
 
@@ -2932,22 +2960,6 @@ async def dashboard_channels(request: Request):
                     }
                     for name, label in ANALYSIS_SETTINGS
                 ],
-                "notify_lead": dashboard_view.notify_lead_words(
-                    [destination.name for destination in _notes().destinations]
-                ),
-                "notify_settings": (
-                    [
-                        {
-                            "name": name,
-                            "label": label,
-                            "caption": dashboard_view.NOTIFY_CAPTIONS[name],
-                            "enabled": _flags.get(SETTING_KEYS[name], SETTING_DEFAULTS[SETTING_KEYS[name]]),
-                        }
-                        for name, label in NOTIFY_SETTINGS
-                    ]
-                    if _notes().destinations
-                    else []
-                ),
             }
         )
     finally:
@@ -3056,8 +3068,10 @@ async def dashboard_health(request: Request):
     return templates.TemplateResponse(request, "health.html", context)
 
 
-# The tab of the Settings page that tries what is in its form on stored chat,
-# after the ones of its sections (tuning.GROUPS).
+# The tabs of the Settings page after the ones of its sections
+# (tuning.GROUPS): where notifications go - on the page for all channels, as
+# they are the service's - and trying what is in the form on stored chat.
+SETTINGS_NOTIFICATIONS = "notifications"
 SETTINGS_TRIAL = "trial"
 
 
@@ -3093,7 +3107,12 @@ async def dashboard_settings(request: Request, channel: str | None = None, secti
         editable = row is None or own
         # There is chat to try them on once there is a channel to have it.
         trial = editable and bool(streamers)
-        tabs = [item["key"] for item in sections] + ([SETTINGS_TRIAL] if trial else [])
+        notifications = _notification_form() if row is None else None
+        tabs = [
+            *(item["key"] for item in sections),
+            *([SETTINGS_NOTIFICATIONS] if notifications else []),
+            *([SETTINGS_TRIAL] if trial else []),
+        ]
 
         context = _page_context(conn, "settings")
         context.update(
@@ -3106,6 +3125,7 @@ async def dashboard_settings(request: Request, channel: str | None = None, secti
                 "editable": editable,
                 "sections": sections,
                 "trial": trial,
+                "notifications": notifications,
                 "shown": section if section in tabs else tabs[0],
                 "save_url": address,
                 "trial_url": f"{address}/trial",
@@ -3125,6 +3145,47 @@ async def dashboard_settings(request: Request, channel: str | None = None, secti
         conn.close()
 
     return templates.TemplateResponse(request, "settings.html", context)
+
+
+def _notification_form() -> dict:
+    """The Settings page's Notifications tab: where notes go - each value
+    and whether it was saved here or comes from .env, a secret only as
+    whether one is set - and which kinds go out."""
+    notes, saved, env = _notes(), _saved_setup(), _env_setup()
+    groups = []
+    for title, names in dashboard_view.NOTIFY_SETUP_GROUPS:
+        fields = []
+        for name in names:
+            value = getattr(_note_setup, name)
+            secret = name in notify.SECRETS
+            fields.append(
+                {
+                    "name": name,
+                    "label": notify.SETUP_LABELS[name],
+                    "value": "" if secret else value,
+                    "secret": secret,
+                    "set": bool(value),
+                    "saved": name in saved,
+                    "placeholder": dashboard_view.setup_placeholder(name, bool(value), name in saved),
+                    "caption": dashboard_view.setup_caption(name, bool(getattr(env, name)), name in saved),
+                }
+            )
+        groups.append({"title": title, "fields": fields})
+    going = [destination.name for destination in notes.destinations]
+    return {
+        "lead": dashboard_view.notify_lead_words(going),
+        "going": bool(going),
+        "groups": groups,
+        "kinds": [
+            {
+                "name": name,
+                "label": label,
+                "caption": dashboard_view.NOTIFY_CAPTIONS[name],
+                "enabled": _flags.get(SETTING_KEYS[name], SETTING_DEFAULTS[SETTING_KEYS[name]]),
+            }
+            for name, label in NOTIFY_SETTINGS
+        ],
+    }
 
 
 def _bot_settings_words(row) -> dict:
@@ -4875,10 +4936,93 @@ async def test_notifications():
     The Health page says why not, where it did not."""
     notes = _notes()
     if not notes.destinations:
-        raise HTTPException(status_code=409, detail="Notifications go nowhere: .env sets up none.")
+        raise HTTPException(status_code=409, detail="Notifications go nowhere: the Settings page sets up none.")
     logger.info("a test notification was asked for from the dashboard")
     sent = await notes.notify(notify.test_note(link=_link("/dashboard/health")))
     return {"sent": sent, "of": len(notes.destinations)}
+
+
+async def _json_object(request: Request) -> dict:
+    """A request's JSON, where it is an object; an empty one otherwise."""
+    try:
+        asked = await request.json()
+    except ValueError:
+        return {}
+    return asked if isinstance(asked, dict) else {}
+
+
+@app.post("/notifications/setup")
+async def set_notifications(request: Request):
+    """Saves where notifications go and which kinds go out - the Settings
+    page's Notifications tab: `setup`, the fields of notify.Setup by name (a
+    secret left out stays as it is; an empty value says there is none), and
+    `kinds`, each kind's switch by name (NOTIFY_SETTINGS). A value that is
+    what .env has goes back to following .env. It holds at once: the next
+    note goes by it."""
+    global _notifier
+    asked = await _json_object(request)
+    setup, kinds = asked.get("setup", {}), asked.get("kinds", {})
+    names = {name for name, _label in NOTIFY_SETTINGS}
+    if (
+        not isinstance(setup, dict)
+        or not isinstance(kinds, dict)
+        or not all(name in notify.SETUP_LABELS and isinstance(value, str) for name, value in setup.items())
+        or not all(name in names and isinstance(value, bool) for name, value in kinds.items())
+    ):
+        raise HTTPException(status_code=400, detail="expected where notifications go and which kinds, as JSON")
+
+    env = _env_setup()
+    conn = get_connection()
+    try:
+        saved = get_notify_setup(conn)
+        for name, value in setup.items():
+            if value.strip() == getattr(env, name):
+                saved.pop(name, None)
+            else:
+                saved[name] = value.strip()
+        try:
+            notify.check_setup(notify.in_force(env, saved))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        replace_notify_setup(conn, saved)
+        for name, value in kinds.items():
+            set_flag(conn, SETTING_KEYS[name], value)
+            _flags[SETTING_KEYS[name]] = value
+    finally:
+        conn.close()
+    _notifier = None
+    going = [destination.name for destination in _notes().destinations]
+    logger.info(
+        "notifications set up from the dashboard -> %s", dashboard_view.list_words(going) if going else "nowhere"
+    )
+    return {"destinations": going}
+
+
+@app.post("/notifications/telegram/chats")
+async def find_telegram_chats(request: Request):
+    """The chats that wrote to a Telegram bot lately, for the Settings page
+    to pick the one notes go to (see notify.telegram_chats): the bot of the
+    token given (`token`), or of the one in force, asked through the Bot API
+    server given (`api_url`) or the one in force."""
+    asked = await _json_object(request)
+    _notes()
+    token = asked.get("token") if isinstance(asked.get("token"), str) else ""
+    token = token.strip() or _note_setup.telegram_bot_token
+    api_url = asked.get("api_url")
+    api_url = api_url.strip() if isinstance(api_url, str) else _note_setup.telegram_api_url
+    token_label, server_label = notify.SETUP_LABELS["telegram_bot_token"], notify.SETUP_LABELS["telegram_api_url"]
+    if not token:
+        raise HTTPException(status_code=400, detail=f'"{token_label}" is needed first: @BotFather has it.')
+    if not notify.TELEGRAM_TOKEN_SHAPE.fullmatch(token):
+        raise HTTPException(status_code=400, detail=f"\"{token_label}\" is not a bot's token.")
+    if api_url and not notify.WEB_ADDRESS.fullmatch(api_url):
+        raise HTTPException(status_code=400, detail=f'"{server_label}" is not a web address.')
+    try:
+        bot = await notify.telegram_bot(token, api_url)
+        chats = await notify.telegram_chats(token, api_url)
+    except notify.CannotSend as e:
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    return {"bot": bot, "chats": [{"id": str(chat.id), "kind": chat.kind, "name": chat.name} for chat in chats]}
 
 
 @app.post("/shutdown")

@@ -93,14 +93,14 @@ YouTube stream
   account it reads, whose YouTube and TikTok chat comes in, as whom the bot writes and where it
   cannot, what each recorder is doing, how much room the disk has, where the tunnel stands. Every
   page says beside its name when one of them needs a look.
-- **Tells you what happens, wherever you are.** Where `.env` names a Telegram bot or a Discord
-  channel's webhook - or both - a short note goes there when a clip is saved (whose, how long, how
+- **Tells you what happens, wherever you are.** Where the Settings page (or `.env`) names a
+  Telegram bot or a Discord channel's webhook - or both - a short note goes there when a clip is saved (whose, how long, how
   far into the stream, what chat said most, and the clip itself - half a minute of it, without the
   footage around it - where it fits), when a
   recording of a whole stream starts and when it is saved or could not be, and when something on
   the Health page has needed a look for a couple of minutes, and again once it looks fine. Each
-  kind is switched on the Channels page; the Health page says where they go and sends a test. With
-  the dashboard's address on the tailnet in `.env`, every note links to what it is about.
+  kind is switched on the same page; the Health page says where they go and sends a test. With
+  the dashboard's address on the tailnet set there, every note links to what it is about.
 - **Optionally analyses clips locally.** Speech-to-text, audio events, sound events and frame
   embeddings can be switched on per step, to collect features for a future learned model. All of
   it runs on CPU, nothing leaves the machine, and nothing is loaded unless a step is switched on.
@@ -154,7 +154,10 @@ run on Windows; the test suite also runs on Linux.
    or on the Health page - in a browser on the same machine (a private window, if it is signed in
    to Kick as someone else). Kick shows its own consent page; the service never sees a password.
 
-8. Optional, for notifications: make a Telegram bot with [@BotFather](https://t.me/BotFather), put
+8. Optional, for notifications: everything below can be set on the dashboard instead, with the
+   service running - Settings, All channels, tab Notifications, where "Find chats" lists the chats
+   that wrote to the bot - and holds from the next notification on. In `.env`: make a Telegram
+   bot with [@BotFather](https://t.me/BotFather), put
    its token in `.env` as `TELEGRAM_BOT_TOKEN`, write anything to the bot, then run
    ```
    PYTHONPATH=src python scripts/telegram_chats.py

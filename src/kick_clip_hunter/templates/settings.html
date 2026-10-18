@@ -11,7 +11,9 @@
     cross. A channel that goes by the settings for all channels is shown
     those, locked - all but the sections that are a channel's alone, which
     come first and can be set either way: a clip on command, and the bot in
-    chat. Beside the bot's is as whom it writes on the channel's platform. -#}
+    chat. Beside the bot's is as whom it writes on the channel's platform.
+    The page for all channels has one tab more, for what is the service's:
+    where notifications go and what they tell of. -#}
 {% extends "base.html" %}
 {% from "_macros.html" import switch %}
 {% block title %}Settings{% endblock %}
@@ -72,7 +74,7 @@
 {%- endmacro %}
 
 {% block main %}
-<main class="set-page" data-settings>
+<main class="set-page" data-settings data-shown="{{ shown }}">
   <h1 class="visually-hidden">Settings</h1>
 
   <aside class="queue set-side" aria-labelledby="whose-title">
@@ -110,6 +112,9 @@
       {% for section in sections %}
       {{ tab(section.key, section.title, section.set_count, shown) }}
       {% endfor %}
+      {% if notifications %}
+      {{ tab("notifications", "Notifications", 0, shown) }}
+      {% endif %}
       {% if trial %}
       {{ tab("trial", "Try on stored chat", 0, shown) }}
       {% endif %}
@@ -144,6 +149,60 @@
         </section>
       </fieldset>
       {% endfor %}
+
+      {% if notifications %}
+      {#- Where notifications go and which kinds go out: the service's, not
+          detection's, so saved by a button of their own - the form's foot
+          is not shown under them. Inside the form only for where it stands
+          on the page: the script sends neither of the two the other's. -#}
+      <section class="set-notify" role="tabpanel" id="set-pane-notifications" aria-labelledby="set-tab-notifications" data-section-pane="notifications" data-notify-setup data-status-scope{% if shown != "notifications" %} hidden{% endif %}>
+        <h2 class="title">Notifications</h2>
+        <p class="section-lead">{{ notifications.lead }}</p>
+        {% for group in notifications.groups %}
+        <h3 class="set-sub">{{ group.title }}</h3>
+        {% for field in group.fields %}
+        {%- set chat = field.name == "telegram_chat_id" %}
+        <div class="set-row{% if field.saved %} is-set{% endif %}"{% if chat %} data-status-scope{% endif %}>
+          <label class="set-name" for="note-{{ field.name }}">{{ field.label }}</label>
+          <span class="set-value">
+            <input type="{{ 'password' if field.secret else 'text' }}" class="ch-input set-add" id="note-{{ field.name }}" value="{{ field.value }}" placeholder="{{ field.placeholder }}" autocomplete="{{ 'new-password' if field.secret else 'off' }}" spellcheck="false" data-notify-field="{{ field.name }}"{% if field.secret %} data-secret{% endif %}>
+            <span></span>
+            {% if chat -%}
+            <button type="button" class="set-rest" data-find-chats>Find chats</button>
+            {%- elif field.secret and field.set -%}
+            <button type="button" class="set-rest" data-notify-remove>Remove</button>
+            {%- else -%}
+            <span></span>
+            {%- endif %}
+          </span>
+          {% if chat %}
+          <ul class="set-chips" aria-label="Chats that wrote to the bot" data-found-chats></ul>
+          <p class="status-line" role="status" data-status></p>
+          {% endif %}
+          <p class="ch-cap">{{ field.caption }}</p>
+        </div>
+        {% endfor %}
+        {% endfor %}
+        <h3 class="set-sub">What they tell of</h3>
+        {% for kind in notifications.kinds %}
+        <div class="set-row">
+          <span class="set-name" id="note-{{ kind.name }}">{{ kind.label }}</span>
+          <span class="set-value">
+            <span class="ch-switch" role="group" aria-labelledby="note-{{ kind.name }}" data-notify-kind="{{ kind.name }}">
+              <button type="button" aria-pressed="{{ 'false' if kind.enabled else 'true' }}" data-enabled="0">Off</button>
+              <button type="button" aria-pressed="{{ 'true' if kind.enabled else 'false' }}" data-enabled="1">On</button>
+            </span>
+          </span>
+          <p class="ch-cap">{{ kind.caption }}</p>
+        </div>
+        {% endfor %}
+        <div class="ch-line set-notify-foot">
+          <button type="button" class="ch-btn ch-btn-primary" data-notify-save>Save</button>
+          <button type="button" class="ch-btn" data-notify-test{% if not notifications.going %} disabled title="Once they go somewhere"{% endif %}>Send a test</button>
+          <p class="status-line" role="status" data-status></p>
+        </div>
+      </section>
+      {% endif %}
 
       {% if trial %}
       <section class="set-trial" role="tabpanel" id="set-pane-trial" aria-labelledby="set-tab-trial" data-section-pane="trial" data-status-scope{% if shown != "trial" %} hidden{% endif %}>

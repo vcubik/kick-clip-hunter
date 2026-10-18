@@ -16,12 +16,14 @@ both (`Telegram`, `Discord` - each a `Destination`):
 - a part of the Health page needs a look, and when it looks fine again
   (`HealthWatch`, which keeps a part that only flickers from being told of).
 
-Nothing is sent until a destination is set up in .env (see config.py): a
-Telegram bot, made with @BotFather, and the chat it writes in - which
-scripts/telegram_chats.py finds - or a Discord channel's webhook. Each kind
-of note can then be switched off on the Channels page. A note links to the
-dashboard where DASHBOARD_URL says where that is reached from (from a phone:
-the machine's name on the tailnet).
+Nothing is sent until a destination is set up - on the dashboard's Settings
+page, or in .env (see config.py) for whatever the page never set (`Setup`,
+`in_force`): a Telegram bot, made with @BotFather, and the chat it writes in
+- which the page, or scripts/telegram_chats.py, finds among the chats that
+wrote to the bot - or a Discord channel's webhook. Each kind of note can be
+switched off on the same page. A note links to the dashboard where the setup
+says where that is reached from (from a phone: the machine's name on the
+tailnet).
 
 Telegram is asked through its Bot API, as the bot (sendMessage, and
 sendVideo for a clip - a bot sends files of up to 50 MB, or of up to 2000
@@ -497,7 +499,7 @@ class Discord:
         if response.status_code == 413:
             raise TooBig(words)
         if response.status_code in (401, 404):
-            words += " DISCORD_WEBHOOK_URL in .env has to be a webhook the channel still has."
+            words += " The webhook notifications go to has to be one the channel still has."
         raise CannotSend(words)
 
 
@@ -509,9 +511,9 @@ def destinations(
     telegram_api_url: str = "",
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
 ) -> tuple[Destination, ...]:
-    """Where notes go, by what .env says: Telegram where it names a bot and a
-    chat (through the Bot API server it names, if it does), Discord where it
-    names a webhook."""
+    """Where notes go, by the setup in force (see `in_force`): Telegram where
+    it names a bot and a chat (through the Bot API server it names, if it
+    does), Discord where it names a webhook."""
     found: list[Destination] = []
     if telegram_token and telegram_chat_id:
         found.append(Telegram(telegram_token, telegram_chat_id, api_url=telegram_api_url, sleep=sleep))
@@ -536,6 +538,78 @@ def setup_trouble(
     if discord_webhook_url and not DISCORD_WEBHOOK.fullmatch(discord_webhook_url.split("?")[0]):
         trouble.append("DISCORD_WEBHOOK_URL does not look like a Discord webhook's address")
     return trouble
+
+
+# -- where notes go, as set on the dashboard ----------------------------------
+
+# What can be set of where notes go, in the order the Settings page has it,
+# with what the page calls each. .env has the same, by these names in
+# capitals, for whatever the page never set. The bot's token and the
+# webhook are secrets - anyone who has either can send in your name - so the
+# page never shows them, only whether one is set.
+SETUP_LABELS = {
+    "telegram_bot_token": "Bot token",
+    "telegram_chat_id": "Chat",
+    "telegram_api_url": "Bot API server",
+    "discord_webhook_url": "Webhook",
+    "dashboard_url": "Dashboard address",
+}
+SECRETS = frozenset({"telegram_bot_token", "discord_webhook_url"})
+
+# What a bot's token looks like (its id, a colon, its secret), a chat a bot
+# writes in (its id, or a public channel's @name) and a web address.
+TELEGRAM_TOKEN_SHAPE = re.compile(r"\d+:[\w-]+")
+TELEGRAM_CHAT_SHAPE = re.compile(r"-?\d+|@\w{5,}")
+WEB_ADDRESS = re.compile(r"https?://[^/\s?#]+[^\s]*")
+
+
+@dataclass(frozen=True)
+class Setup:
+    """Where notes go: a Telegram bot and the chat it writes in (through a
+    Bot API server of one's own where one is named), a Discord channel's
+    webhook, and where the dashboard is reached from, for their links. An
+    empty value is none."""
+
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_api_url: str = ""
+    discord_webhook_url: str = ""
+    dashboard_url: str = ""
+
+
+def in_force(env: Setup, saved: Mapping[str, str]) -> Setup:
+    """Where notes go: what was saved on the dashboard - an empty value as
+    much as any other, which says there is none - and for the rest what .env
+    says."""
+    return replace(env, **{name: value for name, value in saved.items() if name in SETUP_LABELS})
+
+
+def check_setup(setup: Setup) -> None:
+    """Raises a ValueError, in words for the Settings page, where notes
+    could not go where the setup says: half of Telegram's, or a value of the
+    wrong shape."""
+
+    def wrong(name: str, what: str) -> ValueError:
+        return ValueError(f'"{SETUP_LABELS[name]}" {what}.')
+
+    if setup.telegram_bot_token and not TELEGRAM_TOKEN_SHAPE.fullmatch(setup.telegram_bot_token):
+        raise wrong("telegram_bot_token", "is not a bot's token: @BotFather gives one like 123456789:AAH...")
+    if setup.telegram_chat_id and not TELEGRAM_CHAT_SHAPE.fullmatch(setup.telegram_chat_id):
+        raise wrong("telegram_chat_id", "has to be a chat's id, a number, or a public channel's @name")
+    if setup.telegram_bot_token and not setup.telegram_chat_id:
+        raise wrong(
+            "telegram_chat_id", "is needed as well as the bot's token: Find chats lists the ones that wrote to the bot"
+        )
+    if setup.telegram_chat_id and not setup.telegram_bot_token:
+        raise wrong("telegram_bot_token", "is needed as well as the chat")
+    if setup.telegram_api_url and not WEB_ADDRESS.fullmatch(setup.telegram_api_url):
+        raise wrong("telegram_api_url", "has to be an http:// or https:// address")
+    if setup.discord_webhook_url and not DISCORD_WEBHOOK.fullmatch(setup.discord_webhook_url.split("?")[0]):
+        raise wrong(
+            "discord_webhook_url", "is not a Discord webhook's address: a channel's settings, Integrations, Webhooks"
+        )
+    if setup.dashboard_url and not WEB_ADDRESS.fullmatch(setup.dashboard_url):
+        raise wrong("dashboard_url", "has to be an http:// or https:// address")
 
 
 # -- the chats a Telegram bot can write in --------------------------------------

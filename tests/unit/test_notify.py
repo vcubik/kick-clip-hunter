@@ -192,6 +192,54 @@ class TestSetUp:
         assert notify.setup_trouble("", "42", "") == ["TELEGRAM_CHAT_ID is set but TELEGRAM_BOT_TOKEN is not"]
 
 
+class TestSetUpOnTheDashboard:
+    ENV = notify.Setup(
+        telegram_bot_token=TELEGRAM_TOKEN, telegram_chat_id=TELEGRAM_CHAT, dashboard_url="http://pc:8000"
+    )
+
+    def test_what_was_saved_holds_and_dotenv_has_the_rest(self):
+        assert notify.in_force(self.ENV, {}) == self.ENV
+        assert notify.in_force(self.ENV, {"telegram_chat_id": "77", "discord_webhook_url": DISCORD_WEBHOOK_URL}) == (
+            notify.Setup(TELEGRAM_TOKEN, "77", "", DISCORD_WEBHOOK_URL, "http://pc:8000")
+        )
+
+    def test_an_empty_value_saved_says_there_is_none(self):
+        assert notify.in_force(self.ENV, {"dashboard_url": ""}).dashboard_url == ""
+
+    def test_what_is_kept_of_a_field_there_is_no_longer_is_left_alone(self):
+        assert notify.in_force(self.ENV, {"gone_since": "x"}) == self.ENV
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            notify.Setup(),
+            notify.Setup(TELEGRAM_TOKEN, TELEGRAM_CHAT),
+            notify.Setup(TELEGRAM_TOKEN, "-1001234567890"),
+            notify.Setup(TELEGRAM_TOKEN, "@clip_channel", "http://localhost:8081"),
+            notify.Setup(discord_webhook_url=f"{DISCORD_WEBHOOK_URL}?thread_id=5"),
+            notify.Setup(dashboard_url="http://pc.tail1234.ts.net:8000/"),
+        ],
+    )
+    def test_a_setup_that_works_is_taken(self, setup):
+        notify.check_setup(setup)
+
+    @pytest.mark.parametrize(
+        ("setup", "about"),
+        [
+            (notify.Setup(TELEGRAM_TOKEN), '"Chat" is needed as well'),
+            (notify.Setup(telegram_chat_id=TELEGRAM_CHAT), '"Bot token" is needed as well'),
+            (notify.Setup("abc", TELEGRAM_CHAT), '"Bot token" is not a bot'),
+            (notify.Setup(TELEGRAM_TOKEN, "@ab"), '"Chat" has to be'),
+            (notify.Setup(TELEGRAM_TOKEN, TELEGRAM_CHAT, "ftp://server"), '"Bot API server" has to be'),
+            (notify.Setup(discord_webhook_url="https://discord.com/channels/1/2"), '"Webhook" is not'),
+            (notify.Setup(dashboard_url="pc:8000"), '"Dashboard address" has to be'),
+        ],
+    )
+    def test_one_that_could_not_work_is_refused_in_words_that_name_the_field(self, setup, about):
+        with pytest.raises(ValueError, match=about):
+            notify.check_setup(setup)
+
+
 class TestOnTelegram:
     def telegram(self, sleeps: Sleeps, chat: str = TELEGRAM_CHAT, token: str = TELEGRAM_TOKEN) -> Telegram:
         return Telegram(token, chat, sleep=sleeps)
@@ -345,7 +393,7 @@ class TestOnDiscord:
 
         assert refused.value.words == (
             "Discord did not take it (404 Unknown Webhook). "
-            "DISCORD_WEBHOOK_URL in .env has to be a webhook the channel still has."
+            "The webhook notifications go to has to be one the channel still has."
         )
 
     async def test_a_file_too_big_for_the_server_is_told_apart(self, discord, sleeps, tmp_path):

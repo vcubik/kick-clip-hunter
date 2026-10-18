@@ -243,6 +243,7 @@ def _reset_module_state() -> None:
         main._kick_sign_ins.clear()
         main._tiktok_reader = None
         main._notifier = None
+        main._note_setup = main.notify.Setup()
         main._health_watch.forget()
 
 

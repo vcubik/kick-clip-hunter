@@ -970,12 +970,66 @@ NOTIFY_CAPTIONS = {
 
 
 def notify_lead_words(destinations: list[str]) -> str:
-    """What the Channels page says of notifications: where they go, or how
-    they are set up."""
-    if not destinations:
-        return (
-            "None are set up. TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env send them to a Telegram chat, "
-            "DISCORD_WEBHOOK_URL to a Discord channel - the README says how."
-        )
-    return f"They go to {list_words(destinations)}. Each kind is sent until it is switched off here."
+    """What the Settings page says of notifications above them: where they
+    go, or that they go nowhere yet - and how what is set there stands to
+    .env."""
+    where = (
+        f"Notifications go to {list_words(destinations)}."
+        if destinations
+        else "Notifications go nowhere yet: give a Telegram bot and the chat it writes in, a Discord channel's "
+        "webhook, or both."
+    )
+    return f"{where} What is saved here holds from the next one on; what was never set here comes from .env."
+
+
+# The Notifications tab's parts, and which of notify.Setup's fields each has.
+NOTIFY_SETUP_GROUPS = (
+    ("Telegram", ("telegram_bot_token", "telegram_chat_id", "telegram_api_url")),
+    ("Discord", ("discord_webhook_url",)),
+    ("Links", ("dashboard_url",)),
+)
+
+# What each of them is, and where to find it.
+NOTIFY_SETUP_CAPTIONS = {
+    "telegram_bot_token": "The bot that writes the notes, made with @BotFather in Telegram, which gives its token.",
+    "telegram_chat_id": (
+        "The chat the bot writes in, which has to have written to the bot first - or a group the bot is in. "
+        "Find chats lists those that did lately."
+    ),
+    "telegram_api_url": (
+        "Only for a Bot API server of your own, which takes clips of up to 2000 MB instead of 50 - its address, "
+        "such as http://localhost:8081. Empty for Telegram's own."
+    ),
+    "discord_webhook_url": "A Discord channel's webhook: the channel's settings, Integrations, Webhooks, Copy URL.",
+    "dashboard_url": (
+        "Where the dashboard is reached from, for the links in the notes - from a phone, the machine's name on the "
+        "tailnet with the port, such as http://pc.tail1234.ts.net:8000. Empty for no links."
+    ),
+}
+
+# What a secret's field says while nothing is typed into it, by what it is.
+SECRET_PROMPTS = {
+    "telegram_bot_token": "123456789:AAH...",
+    "discord_webhook_url": "https://discord.com/api/webhooks/...",
+}
+
+
+def setup_placeholder(name: str, is_set: bool, saved: bool) -> str:
+    """What a field of where notifications go says while it is empty: a
+    secret that is set says so - the page never shows it - and how it is
+    replaced."""
+    if name not in SECRET_PROMPTS:
+        return ""
+    if is_set:
+        return "Set here - type to replace" if saved else "Set in .env - type to replace"
+    return SECRET_PROMPTS[name]
+
+
+def setup_caption(name: str, in_env: bool, saved: bool) -> str:
+    """What a field of where notifications go is, and - where .env has a
+    value of its own for it - which of the two holds."""
+    caption = NOTIFY_SETUP_CAPTIONS[name]
+    if in_env:
+        caption += " Saved here, it takes the place of what .env has." if saved else " It comes from .env."
+    return caption
 

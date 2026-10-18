@@ -205,7 +205,7 @@ class NoteDestination:
 
 @dataclass(frozen=True)
 class Notifications:
-    """Where notifications go, what they tell of - as the Channels page's
+    """Where notifications go, what they tell of - as the Settings page's
     switches have it - and where their links lead ("" for nowhere)."""
 
     destinations: tuple[NoteDestination, ...] = ()
@@ -810,8 +810,8 @@ def _telling_words(notes: Notifications) -> str:
     if notes.problems:
         told.append("what on this page needs a look")
     if not told:
-        return "They tell of nothing: the Channels page has every kind switched off."
-    return f"They tell of {list_words(told)}. The Channels page switches each kind on and off."
+        return "They tell of nothing: the Settings page has every kind switched off."
+    return f"They tell of {list_words(told)}. The Settings page switches each kind on and off."
 
 
 def notifications_part(facts: Facts, today: date) -> dict[str, Any]:
@@ -830,7 +830,7 @@ def notifications_part(facts: Facts, today: date) -> dict[str, Any]:
     if notes.dashboard_url:
         more.append(f"Their links lead to the dashboard at {notes.dashboard_url}.")
     else:
-        more.append("They have no links to the dashboard: DASHBOARD_URL in .env says where it is reached from.")
+        more.append("They have no links to the dashboard: the Settings page says where it is reached from.")
     rows = []
     for destination in notes.destinations:
         last = destination.sent_at

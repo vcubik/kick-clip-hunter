@@ -2,7 +2,8 @@
 saved, a recording started, saved or not, a part of the Health page that
 needs a look and looks fine again - where it goes (the fake Telegram and
 Discord, through the real clients), the switches that keep each kind from
-going, and what the Health and Channels pages say of it all.
+going, what the Health page says of it all, and setting it all up on the
+Settings page.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from kick_clip_hunter.config import load_settings
 from tests.support.data import add_chat
 from tests.support.html import Element, parse
 from tests.support.media import make_video, probe
-from tests.support.notify import TELEGRAM_CHAT
+from tests.support.notify import TELEGRAM_CHAT, FakeDiscord, FakeTelegram
 
 pytestmark = pytest.mark.anyio
 
@@ -436,7 +437,7 @@ class TestTheHealthPage:
         assert [sentence.text for sentence in part.find("p", class_="health-more")] == [
             "They tell of clips, with the clip itself where it fits, recordings of whole streams and "
             "what on this page needs a look. "
-            "The Channels page switches each kind on and off.",
+            "The Settings page switches each kind on and off.",
             f"Their links lead to the dashboard at {DASHBOARD}.",
         ]
         rows = [[cell.text for cell in row.find("th") + row.find("td")] for row in part.one("tbody").find("tr")]
@@ -474,47 +475,257 @@ class TestTheHealthPage:
         page = await page_at(notified, "/dashboard/health")
 
         assert [sentence.text for sentence in page.one("div", data_health_part="notifications").find("p")][1:] == [
-            "They tell of nothing: the Channels page has every kind switched off.",
-            "They have no links to the dashboard: DASHBOARD_URL in .env says where it is reached from.",
+            "They tell of nothing: the Settings page has every kind switched off.",
+            "They have no links to the dashboard: the Settings page says where it is reached from.",
         ]
 
     async def test_with_nowhere_to_send_one_there_is_no_test_to_send(self, service):
         response = await service.client.post("/notifications/test")
 
         assert response.status_code == 409
-        assert response.json()["detail"] == "Notifications go nowhere: .env sets up none."
+        assert response.json()["detail"] == "Notifications go nowhere: the Settings page sets up none."
         page = await page_at(service, "/dashboard/health")
         assert page.find("div", data_health_part="notifications") == []
 
 
-class TestTheChannelsPage:
-    async def test_each_kind_has_a_switch(self, notified):
-        page = await page_at(notified, "/dashboard/channels")
+class TestTheSettingsPage:
+    async def test_has_a_tab_for_them_on_the_page_for_all_channels_only(self, notified):
+        everyone = await page_at(notified, "/dashboard/settings")
+        one_channel = await page_at(notified, f"/dashboard/settings?channel={CHANNEL}")
+        channels = await page_at(notified, "/dashboard/channels")
 
-        section = page.one("section", aria_labelledby="notify-title")
-        assert section.one("p", class_="section-lead").text == (
-            "They go to Telegram and Discord. Each kind is sent until it is switched off here."
+        assert [tab.attrs["data-section"] for tab in everyone.find(role="tab")][-2:] == ["notifications", "trial"]
+        assert "notifications" not in [tab.attrs["data-section"] for tab in one_channel.find(role="tab")]
+        assert one_channel.find(data_notify_setup=True) == []
+        # ...which is where they were before.
+        assert channels.find("section", aria_labelledby="notify-title") == []
+
+    async def test_says_where_they_go_and_has_each_kind_switched_with_it(self, notified):
+        await switch(notified, "notify_recordings", False)
+
+        page = await page_at(notified, "/dashboard/settings?section=notifications")
+
+        pane = page.one(data_notify_setup=True)
+        assert "hidden" not in pane.attrs
+        assert pane.one("p", class_="section-lead").text == (
+            "Notifications go to Telegram and Discord. What is saved here holds from the next one on; what was "
+            "never set here comes from .env."
         )
-        switches = section.find("span", data_switch=True)
-        assert [group.attrs["aria-label"] for group in switches] == [
-            "Notify of clips",
-            "Notify of clip videos",
-            "Notify of recordings",
-            "Notify of problems",
+        assert [heading.text for heading in pane.find("h3")] == ["Telegram", "Discord", "Links", "What they tell of"]
+        kinds = pane.find(data_notify_kind=True)
+        assert [kind.attrs["data-notify-kind"] for kind in kinds] == [
+            "notify_clips",
+            "notify_clip_videos",
+            "notify_recordings",
+            "notify_health",
         ]
-        assert [group.attrs["data-switch"] for group in switches] == [
-            "/settings/notify_clips",
-            "/settings/notify_clip_videos",
-            "/settings/notify_recordings",
-            "/settings/notify_health",
-        ]
+        lit = [[half.text for half in kind.find("button") if half.attrs["aria-pressed"] == "true"] for kind in kinds]
+        assert lit == [["On"], ["On"], ["Off"], ["On"]]
+        assert "disabled" not in pane.one("button", data_notify_test=True).attrs
+        assert page.one("main", data_settings=True).attrs["data-shown"] == "notifications"
 
-    async def test_without_anywhere_to_send_them_it_says_how_they_are_set_up(self, service):
-        page = await page_at(service, "/dashboard/channels")
+    async def test_shows_what_comes_from_dotenv_but_never_a_secret(self, notified, telegram, discord):
+        response = await notified.client.get("/dashboard/settings?section=notifications")
+        page = parse(response.text)
 
-        section = page.one("section", aria_labelledby="notify-title")
-        assert section.one("p", class_="section-lead").text.startswith("None are set up. TELEGRAM_BOT_TOKEN")
-        assert section.find("span", data_switch=True) == []
+        assert telegram.token not in response.text
+        assert discord.url not in response.text
+        token = page.one("input", data_notify_field="telegram_bot_token")
+        assert (token.attrs["type"], token.attrs["value"]) == ("password", "")
+        assert token.attrs["placeholder"] == "Set in .env - type to replace"
+        assert page.one("input", data_notify_field="discord_webhook_url").attrs["value"] == ""
+        assert page.one("input", data_notify_field="telegram_chat_id").attrs["value"] == TELEGRAM_CHAT
+        assert page.one("input", data_notify_field="dashboard_url").attrs["value"] == DASHBOARD
+        assert page.one("input", data_notify_field="telegram_chat_id").attrs["type"] == "text"
+        assert len(page.find("button", data_notify_remove=True)) == 2
+        assert page.find("button", data_find_chats=True)
+        captions = [caption.text for caption in page.one(data_notify_setup=True).find("p", class_="ch-cap")]
+        assert all(caption.endswith("It comes from .env.") for caption in captions[:2])
+
+    async def test_without_anywhere_to_send_them_it_says_so(self, service):
+        page = await page_at(service, "/dashboard/settings?section=notifications")
+
+        pane = page.one(data_notify_setup=True)
+        assert pane.one("p", class_="section-lead").text.startswith("Notifications go nowhere yet")
+        assert "disabled" in pane.one("button", data_notify_test=True).attrs
+        assert pane.one("input", data_notify_field="telegram_bot_token").attrs["placeholder"] == "123456789:AAH..."
+        assert pane.find("button", data_notify_remove=True) == []
+
+
+def saved_setup() -> dict[str, str]:
+    conn = db.get_connection()
+    try:
+        return db.get_notify_setup(conn)
+    finally:
+        conn.close()
+
+
+async def set_up(service, **setup):
+    return await service.client.post("/notifications/setup", json={"setup": setup})
+
+
+class TestSettingThemUpOnThePage:
+    @pytest.fixture
+    def fakes(self, service):
+        """A fake Telegram and Discord, with nothing about them in .env."""
+        fakes = FakeTelegram(), FakeDiscord()
+        service.api.others.extend(fakes)
+        return fakes
+
+    async def test_what_is_saved_holds_at_once(self, service, fakes, caplog):
+        telegram, discord = fakes
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            response = await set_up(
+                service,
+                telegram_bot_token=telegram.token,
+                telegram_chat_id=TELEGRAM_CHAT,
+                discord_webhook_url=discord.url,
+                dashboard_url=DASHBOARD,
+            )
+            tested = await service.client.post("/notifications/test")
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"destinations": ["Telegram", "Discord"]}
+        assert tested.json() == {"sent": 2, "of": 2}
+        assert telegram.sent[0]["links"] == [f"{DASHBOARD}/dashboard/health"]
+        assert discord.embeds()[0]["title"] == "Test"
+        assert "notifications set up from the dashboard -> Telegram and Discord" in caplog.text
+        assert saved_setup() == {
+            "telegram_bot_token": telegram.token,
+            "telegram_chat_id": TELEGRAM_CHAT,
+            "discord_webhook_url": discord.url,
+            "dashboard_url": DASHBOARD,
+        }
+
+    async def test_a_secret_left_out_stays_as_it_is(self, service, fakes):
+        telegram, _discord = fakes
+        await set_up(service, telegram_bot_token=telegram.token, telegram_chat_id="1")
+        telegram.chats.add("1")
+
+        response = await set_up(service, telegram_chat_id=TELEGRAM_CHAT)
+
+        assert response.json() == {"destinations": ["Telegram"]}
+        await service.client.post("/notifications/test")
+        assert [message["chat_id"] for message in telegram.sent] == [TELEGRAM_CHAT]
+
+    async def test_saved_it_takes_the_place_of_dotenv_and_empty_it_says_none(self, notified, telegram, discord):
+        telegram.chats.add("-1001234")
+
+        response = await set_up(notified, telegram_chat_id="-1001234", discord_webhook_url="")
+        await notified.client.post("/notifications/test")
+
+        assert response.json() == {"destinations": ["Telegram"]}
+        assert [message["chat_id"] for message in telegram.sent] == ["-1001234"]
+        assert discord.posted == []
+        page = await page_at(notified, "/dashboard/settings?section=notifications")
+        assert page.one("input", data_notify_field="telegram_chat_id").attrs["value"] == "-1001234"
+        (row,) = [row for row in page.find("div", class_="set-row") if row.find(data_notify_field="telegram_chat_id")]
+        assert "is-set" in row.classes
+
+    async def test_what_dotenv_has_anyway_goes_back_to_following_it(self, notified):
+        await set_up(notified, telegram_chat_id="77", dashboard_url="http://elsewhere:8000")
+
+        await set_up(notified, telegram_chat_id=f" {TELEGRAM_CHAT} ", dashboard_url=DASHBOARD)
+
+        assert saved_setup() == {}
+
+    async def test_the_kinds_are_saved_with_it(self, notified):
+        response = await notified.client.post(
+            "/notifications/setup", json={"setup": {}, "kinds": {"notify_clips": False, "notify_health": False}}
+        )
+
+        assert response.status_code == 200
+        assert (notified.main._notifying("notify_clips"), notified.main._notifying("notify_health")) == (False, False)
+        assert notified.main._notifying("notify_recordings") is True
+        conn = db.get_connection()
+        try:
+            assert db.get_flag(conn, "notify_clips_enabled") is False
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize(
+        ("setup", "about"),
+        [
+            ({"telegram_bot_token": "123456789:abc"}, '"Chat" is needed as well'),
+            ({"telegram_chat_id": "4242"}, '"Bot token" is needed as well'),
+            ({"telegram_bot_token": "not a token", "telegram_chat_id": "4242"}, '"Bot token" is not a bot'),
+            ({"telegram_bot_token": "123:abc", "telegram_chat_id": "my chat"}, '"Chat" has to be'),
+            (
+                {"telegram_bot_token": "123:abc", "telegram_chat_id": "1", "telegram_api_url": "localhost:8081"},
+                "Bot API",
+            ),
+            ({"discord_webhook_url": "https://example.com/hook"}, '"Webhook" is not a Discord webhook'),
+            ({"dashboard_url": "pc.tailnet:8000"}, '"Dashboard address" has to be'),
+        ],
+    )
+    async def test_what_could_not_work_is_refused_and_nothing_is_saved(self, service, setup, about):
+        response = await set_up(service, **setup)
+
+        assert response.status_code == 400
+        assert about in response.json()["detail"]
+        assert saved_setup() == {}
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"setup": {"telegram_bot_token": 7}},
+            {"setup": {"password": "x"}},
+            {"setup": [], "kinds": {}},
+            {"kinds": {"notify_clips": "off"}},
+            {"kinds": {"watching": False}},
+        ],
+    )
+    async def test_a_request_that_is_not_the_setup_is_refused(self, service, body):
+        response = await service.client.post("/notifications/setup", json=body)
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "expected where notifications go and which kinds, as JSON"
+
+
+class TestFindingTheChat:
+    @pytest.fixture
+    def telegram_alone(self, service):
+        fake = FakeTelegram(
+            updates=[
+                {"update_id": 1, "message": {"chat": {"id": 4242, "type": "private", "first_name": "Alice"}}},
+                {"update_id": 2, "message": {"chat": {"id": -100, "type": "group", "title": "Clips"}}},
+            ]
+        )
+        service.api.others.append(fake)
+        return fake
+
+    async def test_lists_the_chats_that_wrote_to_the_bot_of_the_token_typed(self, service, telegram_alone):
+        response = await service.client.post("/notifications/telegram/chats", json={"token": telegram_alone.token})
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "bot": "clip_hunter_bot",
+            "chats": [
+                {"id": "4242", "kind": "private", "name": "Alice"},
+                {"id": "-100", "kind": "group", "name": "Clips"},
+            ],
+        }
+
+    async def test_or_of_the_token_that_is_set(self, notified, telegram):
+        telegram.updates = [{"update_id": 1, "message": {"chat": {"id": 4242, "type": "private", "first_name": "A"}}}]
+
+        response = await notified.client.post("/notifications/telegram/chats", json={"token": ""})
+
+        assert [chat["id"] for chat in response.json()["chats"]] == ["4242"]
+
+    async def test_without_a_token_it_says_what_is_needed(self, service):
+        response = await service.client.post("/notifications/telegram/chats", json={})
+
+        assert response.status_code == 400
+        assert response.json()["detail"].startswith('"Bot token" is needed first')
+
+    async def test_a_token_telegram_turns_down_is_said_without_it(self, service, telegram_alone):
+        response = await service.client.post("/notifications/telegram/chats", json={"token": "1:wrong-token"})
+
+        assert response.status_code == 502
+        assert response.json()["detail"].startswith("Telegram did not answer")
+        assert "wrong-token" not in response.text
 
 
 class TestStarting:
