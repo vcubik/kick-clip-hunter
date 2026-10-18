@@ -327,7 +327,10 @@ soon sent again after the wait asked for (and no longer than the longest), one t
 that could not be reached tried once more, and one turned down kept - for the Health page, which
 calls it trouble until the next goes out, and never with the bot's token in it? Do the notes reach
 a destination in the order they were made, and does the Health page's test button say to how many
-of them one went? Does `scripts/telegram_chats.py` list the chats that wrote to the bot?
+of them one went? Does `scripts/telegram_chats.py` list the chats that wrote to the bot? Is where
+notes go set up on the Settings page - checked as it is saved, laid over `.env`, holding from the
+next note on, a value that is `.env`'s going back to following it - and the kinds switched with
+it; are the bot's token and the webhook never on the page; does Find chats list a bot's chats?
 
 **13. Startup, watchlist and scripts** - `integration/test_startup.py`, `unit/test_api_clients.py`,
 `unit/test_scripts.py`, `unit/test_replay_chat.py`
@@ -662,12 +665,13 @@ Run this on a live channel after changing any of the above, or the code right ne
    write in chat as well now - and do the same on a Twitch channel; the bot answers as the
    account chat is read as. On a YouTube channel, `!record start` starts a recording and nothing
    is written.
-19. **Get notified.** Make a Telegram bot with @BotFather, put its token in `.env` as
-   `TELEGRAM_BOT_TOKEN`, write anything to the bot, and run `scripts/telegram_chats.py`: it lists
-   that chat with its id - put it in `.env` as `TELEGRAM_CHAT_ID`. Make a webhook in a Discord
-   channel's settings (Integrations, Webhooks) and put its address in `.env` as
-   `DISCORD_WEBHOOK_URL`, and the dashboard's address on the tailnet as `DASHBOARD_URL`. Restart:
-   the log says `notifications go to Telegram and Discord`, and the Health page has a
+19. **Get notified.** Make a Telegram bot with @BotFather and write anything to it. On the
+   Settings page (All channels, tab Notifications) type its token and press "Find chats": that
+   chat is listed with its id - pick it. Make a webhook in a Discord channel's settings
+   (Integrations, Webhooks) and paste its address, and the dashboard's address on the tailnet
+   under Links. Save: the page says so, the token and the webhook are not on it ("Set here"),
+   the log says `notifications set up from the dashboard -> Telegram and Discord`, and the
+   Health page has a
    Notifications part - press "Send a test", and a note arrives in both, its link opening the
    Health page from a phone on the tailnet. Start and stop a recording of a live channel from the
    Channels page: "Recording started" arrives at once, "Recording saved" once its file is made,

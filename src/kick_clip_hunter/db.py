@@ -1597,6 +1597,33 @@ def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) ->
     conn.commit()
 
 
+# Where notifications go, as it was set on the Settings page (see
+# notify.Setup): each value under its field's name with this in front - an
+# empty one too, which says there is none. What is not kept here comes from
+# .env.
+NOTIFY_SETUP_PREFIX = "notify_setup:"
+
+
+def get_notify_setup(conn: sqlite3.Connection) -> dict[str, str]:
+    rows = conn.execute(
+        "SELECT key, value FROM app_settings WHERE substr(key, 1, ?) = ?",
+        (len(NOTIFY_SETUP_PREFIX), NOTIFY_SETUP_PREFIX),
+    )
+    return {key.removeprefix(NOTIFY_SETUP_PREFIX): value for key, value in rows}
+
+
+def replace_notify_setup(conn: sqlite3.Connection, saved: dict[str, str]) -> None:
+    """Keeps `saved` in place of whatever was kept before, in one commit."""
+    conn.execute(
+        "DELETE FROM app_settings WHERE substr(key, 1, ?) = ?", (len(NOTIFY_SETUP_PREFIX), NOTIFY_SETUP_PREFIX)
+    )
+    conn.executemany(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+        [(NOTIFY_SETUP_PREFIX + name, value) for name, value in saved.items()],
+    )
+    conn.commit()
+
+
 # The checks that found Kick without a chat subscription for a watched
 # channel (see health.Drop), newest first, as one JSON list: there are a few
 # a month at most, and only the Health page reads them.

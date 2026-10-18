@@ -850,11 +850,12 @@ class TestItsSections:
         assert side.one(role="tablist").attrs["aria-orientation"] == "vertical"
         assert [tab.text for tab in tabs(page)] == [
             *(title for _key, title, _lead in tuning.GROUPS[2:]),
+            "Notifications",
             "Try on stored chat",
         ]
         assert [(tab.attrs["aria-selected"], tab.attrs["tabindex"]) for tab in tabs(page)] == [
             ("true", "0"),
-            *[("false", "-1")] * 3,
+            *[("false", "-1")] * 4,
         ]
         for tab in tabs(page):
             pane = page.one(id=tab.attrs["aria-controls"])
@@ -920,6 +921,7 @@ class TestItsSections:
             tuning.MOMENTS: "2 set",
             tuning.SIGNALS: "1 set",
             tuning.CLIPS: "",
+            "notifications": "",
         }
 
 

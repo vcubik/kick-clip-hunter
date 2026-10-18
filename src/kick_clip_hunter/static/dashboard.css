@@ -700,6 +700,15 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
    has been scrolled. */
 .set-foot { flex: none; padding: var(--space-12) var(--space-36); border-top: 1px solid var(--line); background: var(--field); }
 .set-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
+/* Where notifications go is saved by a button of its own, not the form's:
+   the foot is not under it. Its parts have headings of their own, and the
+   chats a Telegram bot was written from are picked like a list's items. */
+.set-page[data-shown="notifications"] .set-foot { display: none; }
+.set-sub { margin: var(--space-24) 0 var(--space-8); font-size: 16px; line-height: 20px; font-weight: 700; }
+.set-notify-foot { margin-top: var(--space-24); padding-top: var(--space-12); border-top: 1px solid var(--line); }
+.set-notify-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
+.set-pick { padding-right: 10px; border: 0; color: var(--text); cursor: pointer; }
+.set-pick:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 /* Where the open section is too narrow for a setting's name beside what it
    is set to - the window, or the pane beside the tabs - the name goes above
    it. What a list is added from is the widest of them. */
