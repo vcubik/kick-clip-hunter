@@ -210,6 +210,8 @@ the instants the live detector would, under whatever settings it is given, witho
 state of a channel that is live - and does the page's trial say what the saved settings and the
 form's would each have made, saving nothing? Does the page show every setting with what it would be
 if left alone, mark the ones that were set, and keep a channel's form closed until it goes by its own?
+Are its sections tabs of one form, the one asked for shown and each counting what is set in it - and
+is a list drawn as its items, taken as the items it is given and never as text to split?
 
 **10. Stream recordings** - `unit/test_stream_recording.py`, `integration/test_api_recordings.py`,
 `integration/test_api_recordings_page.py`, `integration/test_api_recording_trim.py`, and in
@@ -512,14 +514,18 @@ Run this on a live channel after changing any of the above, or the code right ne
    place. Closed and opened again, the dialog still has the stretch, the downloads and where chat
    went.
 10. **Change a setting.** On the Settings page, pick a channel that has chat stored and switch
-   its own settings on. Raise "At least this many people" and press "Try on stored chat": after a
-   few seconds a table says how many moments the saved settings and the form's would each have
-   made, and the second row has fewer. Save: the page says so, the setting is marked as set with a
-   button that would put back what all channels have, and the log has `settings of <channel> ->
+   its own settings on. Raise "At least this many people", then open the "Try on stored chat" tab
+   and press its button: after a few seconds a table says how many moments the saved settings and
+   the form's would each have made, and the second row has fewer. Save: the page says so and stays
+   on that tab, the setting's tab says "1 set", the setting is marked as set with a button that
+   would put back what all channels have, and the log has `settings of <channel> ->
    reacting_least=...`. A value outside its range, or a floor above its ceiling, is refused in a
-   sentence and what was typed stays in the form. With the channel live, the next moments follow
-   the new values without a restart. Put the value back and save, or switch the channel's own
-   settings off, when done.
+   sentence, the tab it is on is opened, and what was typed stays in the form. Under "What counts as
+   a reaction", add a part of an emote's name to "Emotes to ignore" with Add and another with Enter:
+   each is a rectangle with a cross, in order; a word with a space in it, or one of two letters, is
+   refused beside the field. Take one out with its cross, and save. With the channel live, the next
+   moments follow the new values without a restart. Put the values back and save, or switch the
+   channel's own settings off, when done.
 11. **Record a stream.** On the Channels page press "Start recording" beside a live channel -
    one with tracking off shows that the two are independent. Within a few seconds (a browser
    window first, if the channel was not being recorded already) the row counts up what has been

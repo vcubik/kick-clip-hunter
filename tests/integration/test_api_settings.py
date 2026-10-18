@@ -11,6 +11,7 @@ the moment that fires, the clip that is cut for it, the pages.
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -89,10 +90,21 @@ class TestSavingForAllChannels:
 
         assert stored() == {"reacting_share": 0.2, "lull_seconds": 40}
 
-    async def test_lists_are_taken_as_they_are_typed(self, service):
-        await save(service, laugh_emote_words="Smich HAHA2", ignored_messages="!join, GG wp")
+    async def test_a_list_is_taken_as_the_items_it_was_given(self, service):
+        await save(service, laugh_emote_words=["Smich", "HAHA2"], ignored_messages=["!join", "GG wp", "ok, go"])
 
-        assert stored() == {"laugh_emote_words": ("haha2", "smich"), "ignored_messages": ("!join", "gg wp")}
+        assert stored() == {
+            "laugh_emote_words": ("haha2", "smich"),
+            "ignored_messages": ("!join", "gg wp", "ok, go"),
+        }
+
+    async def test_a_list_typed_out_as_text_is_refused(self, service):
+        # As the page once sent them, with a separator of each list's own.
+        response = await save(service, ignored_messages="!join, gg wp")
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == '"Messages to ignore" has to be a list of words.'
+        assert stored() == {}
 
     async def test_the_service_goes_by_it_at_once_and_after_a_restart(self, service):
         user_id = service.watch(CHANNEL)
@@ -132,7 +144,8 @@ class TestSavingForAllChannels:
             ({"reacting_share": 7}, "Share of chat that has to react"),
             ({"reacting_least": 2.5}, "At least this many people"),
             ({"laugh_signal": "off"}, "Typed laughs"),
-            ({"laugh_emote_words": "ab"}, "More laughing emotes"),
+            ({"laugh_emote_words": ["ab"]}, "More laughing emotes"),
+            ({"laugh_emote_words": ["smich haha"]}, "More laughing emotes"),
             ({"self_destruct": 1}, "self_destruct"),
             ({"reacting_share": None}, "Share of chat that has to react"),
         ],
@@ -191,7 +204,7 @@ class TestSavingForAllChannels:
     @pytest.mark.parametrize(
         ("values", "label"),
         [
-            ({"clip_commands": "!clip"}, "Messages that ask for a clip"),
+            ({"clip_commands": ["!clip"]}, "Messages that ask for a clip"),
             ({"clip_command_from_anyone": True}, "Anyone in chat may ask"),
         ],
     )
@@ -259,7 +272,7 @@ class TestAChannelsOwnSettings:
     async def test_what_is_the_channels_alone_holds_without_it_going_by_its_own(self, service):
         user_id, other_id = service.watch(CHANNEL), service.watch(OTHER)
 
-        response = await save(service, CHANNEL, clip_commands="!Clip, clip that", reacting_share=0.3)
+        response = await save(service, CHANNEL, clip_commands=["!Clip", "clip that"], reacting_share=0.3)
 
         assert response.json()["set"] == ["clip_commands", "reacting_share"]
         mine = in_force(service, user_id)
@@ -337,7 +350,7 @@ class TestKeywordsUnderTheSettings:
         service.watch(CHANNEL, keywords={"sadge": detector.EMOTE_MENTION_OTHER_WEIGHT})
         service.warm_up(CHANNEL)
         await service.chat(CHANNEL, "viewer1", "Sadge")
-        await save(service, ignored_emote_words="sadge")
+        await save(service, ignored_emote_words=["sadge"])
 
         for number in range(naming_crowd()):
             await service.chat(CHANNEL, f"fan{number}", "Sadge")
@@ -537,25 +550,46 @@ class TestTryingOnStoredChat:
 # -- the page -----------------------------------------------------------------
 
 
-async def settings_page(service, channel: str | None = None) -> Element:
-    response = await service.client.get("/dashboard/settings", params={"channel": channel} if channel else {})
+async def settings_page(service, channel: str | None = None, section: str | None = None) -> Element:
+    asked = {name: value for name, value in (("channel", channel), ("section", section)) if value}
+    response = await service.client.get("/dashboard/settings", params=asked)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     return parse(response.text)
 
 
 def field(page: Element, name: str) -> Element:
-    """The control a setting is set with: an input, or a switch's two halves."""
+    """What holds a setting's value: an input, a switch's two halves, or
+    the items of a list."""
     return page.one(data_setting=name)
 
 
+def items(page: Element, name: str) -> list[str]:
+    """What a list among the settings holds, as the page draws it."""
+    return [item.attrs["data-item"] for item in field(page, name).find("li")]
+
+
 def shown(page: Element, name: str) -> str:
-    """What the page has a setting at."""
+    """What the page has a setting at - a list as the service writes one out."""
     control = field(page, name)
     if control.tag == "input":
         return control.attrs["value"]
+    if control.tag == "ul":
+        return ", ".join(items(page, name))
     (lit,) = [half.text for half in control.find("button") if half.attrs["aria-pressed"] == "true"]
     return lit
+
+
+def tabs(page: Element) -> list[Element]:
+    return page.one(role="tablist").find(role="tab")
+
+
+def open_section(page: Element) -> str:
+    """Which section the page shows: its tab, and the one pane not hidden."""
+    (chosen,) = [tab.attrs["data-section"] for tab in tabs(page) if tab.attrs["aria-selected"] == "true"]
+    (pane,) = [pane for pane in page.find(data_section_pane=True) if "hidden" not in pane.attrs]
+    assert pane.attrs["data-section-pane"] == chosen
+    return chosen
 
 
 def row_of(page: Element, name: str) -> Element:
@@ -628,7 +662,7 @@ class TestTheSettingsPage:
         assert row_of(page, "reacting_share").one("span", class_="ch-cap").text == ""
 
     async def test_a_saved_value_is_shown_marked_and_can_be_put_back(self, service):
-        await save(service, reacting_share=0.2, mention_signal=False, ignored_messages="!join, gg wp")
+        await save(service, reacting_share=0.2, mention_signal=False, ignored_messages=["!join", "gg wp"])
 
         page = await settings_page(service)
 
@@ -708,7 +742,7 @@ class TestTheSettingsPage:
 
     async def test_all_but_what_is_the_channels_alone_which_comes_first(self, service):
         service.watch(CHANNEL)
-        await save(service, CHANNEL, clip_commands="!clip")
+        await save(service, CHANNEL, clip_commands=["!clip"])
 
         page = await settings_page(service, CHANNEL)
 
@@ -773,7 +807,7 @@ class TestTheSettingsPage:
         assert rest_button(page, "reacting_least").text == f"All channels: {RECOMMENDED['reacting_least']}"
         assert (shown(page, "reacting_share"), "is-set" in row_of(page, "reacting_share").classes) == ("0.2", False)
         assert rest_button(page, "reacting_share").text == "All channels: 0.2"
-        assert f"{CHANNEL} goes by the settings below" in page.one("p", class_="set-whose").text
+        assert f"{CHANNEL} goes by these settings" in page.one("p", class_="set-whose").text
 
     async def test_a_channel_that_is_not_on_the_watchlist_has_no_page(self, service):
         response = await service.client.get("/dashboard/settings", params={"channel": "nobody"})
@@ -806,6 +840,165 @@ class TestTheSettingsPage:
         assert len(page.find("button", data_trial_go=True)) == 1
 
 
+class TestItsSections:
+    async def test_are_tabs_on_the_left_of_which_the_first_is_shown(self, service):
+        service.watch(CHANNEL)
+
+        page = await settings_page(service)
+
+        side = page.one("aside", class_="set-side")
+        assert side.one(role="tablist").attrs["aria-orientation"] == "vertical"
+        assert [tab.text for tab in tabs(page)] == [
+            *(title for _key, title, _lead in tuning.GROUPS[2:]),
+            "Try on stored chat",
+        ]
+        assert [(tab.attrs["aria-selected"], tab.attrs["tabindex"]) for tab in tabs(page)] == [
+            ("true", "0"),
+            *[("false", "-1")] * 3,
+        ]
+        for tab in tabs(page):
+            pane = page.one(id=tab.attrs["aria-controls"])
+            assert (pane.attrs["role"], pane.attrs["aria-labelledby"]) == ("tabpanel", tab.attrs["id"])
+        assert open_section(page) == tuning.MOMENTS
+
+    async def test_the_ones_not_shown_are_still_in_the_form_which_is_saved_whole(self, service):
+        page = await settings_page(service)
+
+        form = page.one("form", data_tuning=True)
+        assert {control.attrs["data-setting"] for control in form.find(data_setting=True)} == SHARED.keys()
+        # The foot that saves is under every one of them.
+        foot = form.one("div", class_="set-foot")
+        assert foot.find(data_section_pane=True) == []
+        assert foot.one("button", type="submit").text == "Save"
+
+    async def test_the_one_asked_for_is_shown_and_kept_for_another_channels_settings(self, service):
+        page = await settings_page(service, section=tuning.CLIPS)
+
+        assert open_section(page) == tuning.CLIPS
+        kept = page.one("form", method="get").one("input", type="hidden")
+        assert (kept.attrs["name"], kept.attrs["value"]) == ("section", tuning.CLIPS)
+
+    @pytest.mark.parametrize("section", ["nonsense", tuning.COMMANDS, "trial"])
+    async def test_one_the_page_does_not_have_is_the_first_instead(self, service, section):
+        # All channels have no clip commands, and nothing to be tried on
+        # while no channel is watched.
+        page = await settings_page(service, section=section)
+
+        assert open_section(page) == tuning.MOMENTS
+
+    async def test_a_channels_own_come_first_and_a_locked_one_says_why(self, service):
+        service.watch(CHANNEL)
+
+        page = await settings_page(service, CHANNEL, section=tuning.SIGNALS)
+
+        assert [tab.attrs["data-section"] for tab in tabs(page)] == [key for key, _title, _lead in tuning.GROUPS]
+        assert open_section(page) == tuning.SIGNALS
+        form = page.one("form", data_tuning=True)
+        said = [[note.text for note in fieldset.find("p", class_="set-locked")] for fieldset in form.find("fieldset")]
+        assert [bool(notes) for notes in said] == locked(form) == [False, False, True, True, True]
+        assert said[2] == [
+            f"These are the settings for all channels, which {CHANNEL} goes by. To change them for {CHANNEL} "
+            "alone, switch its own settings on."
+        ]
+
+    async def test_a_channel_with_its_own_has_them_to_try_last(self, service):
+        service.watch(CHANNEL)
+        await use_own(service, CHANNEL)
+
+        page = await settings_page(service, CHANNEL, section="trial")
+
+        assert [tab.attrs["data-section"] for tab in tabs(page)][-1] == "trial"
+        assert open_section(page) == "trial"
+        assert page.one(id="set-pane-trial").one("button", data_trial_go=True)
+
+    async def test_a_tab_says_how_many_of_its_settings_are_set(self, service):
+        await save(service, reacting_share=0.2, sustain_fraction=0.5, ignored_messages=["!join"])
+
+        page = await settings_page(service)
+
+        assert {tab.attrs["data-section"]: tab.one(data_set_count=True).text for tab in tabs(page)} == {
+            tuning.MOMENTS: "2 set",
+            tuning.SIGNALS: "1 set",
+            tuning.CLIPS: "",
+        }
+
+
+class TestItsLists:
+    async def test_a_list_is_what_it_holds_each_item_with_a_cross_that_takes_it_out(self, service):
+        await save(service, ignored_messages=["gg wp", "!join"])
+
+        page = await settings_page(service)
+
+        assert items(page, "ignored_messages") == ["!join", "gg wp"]
+        crosses = [item.one("button", data_chip_remove=True) for item in field(page, "ignored_messages").find("li")]
+        assert [cross.attrs["aria-label"] for cross in crosses] == ["Remove !join", "Remove gg wp"]
+        assert field(page, "ignored_messages").attrs["aria-label"] == "Messages to ignore"
+        assert items(page, "laugh_emote_words") == []
+
+    async def test_an_item_is_added_from_a_field_and_a_button_of_its_own(self, service):
+        page = await settings_page(service)
+
+        row = row_of(page, "laugh_emote_words")
+        typed = row.one("input", data_chip_input=True)
+        # What is typed is no value of the setting until it is added.
+        assert "data-setting" not in typed.attrs
+        assert row.one("label").attrs["for"] == typed.attrs["id"]
+        assert (typed.attrs["maxlength"], typed.attrs["placeholder"]) == (
+            str(tuning.WORD_MAX_LENGTH),
+            "Part of an emote's name",
+        )
+        add = row.one("button", data_chip_add=True)
+        assert (add.text, add.attrs["aria-label"]) == ("Add", "Add to More laughing emotes")
+        # ...and the script checks it the way the service will.
+        listed = field(page, "laugh_emote_words")
+        assert (listed.attrs["data-kind"], listed.attrs["data-shortest"], listed.attrs["data-most-items"]) == (
+            "words",
+            str(tuning.WORD_MIN_LENGTH),
+            str(tuning.LIST_MAX_ITEMS),
+        )
+        messages = row_of(page, "ignored_messages")
+        assert messages.one("input", data_chip_input=True).attrs["maxlength"] == str(tuning.PHRASE_MAX_LENGTH)
+        assert field(page, "ignored_messages").attrs["data-shortest"] == "1"
+
+    async def test_no_caption_says_how_to_part_its_items(self, service):
+        service.watch(CHANNEL)
+
+        page = await settings_page(service, CHANNEL)
+
+        for item in tuning.SETTINGS:
+            if item.kind in tuning.LISTS:
+                caption = row_of(page, item.name).one("p", class_="ch-cap").text
+                assert "commas" not in caption and "spaces" not in caption, item.name
+
+    async def test_what_it_would_hold_if_left_alone_is_its_items_too(self, service):
+        service.watch(CHANNEL)
+        await save(service, ignored_messages=["!join", "it's <b>on</b>, go"])
+        await use_own(service, CHANNEL)
+
+        page = await settings_page(service, CHANNEL)
+
+        button = rest_button(page, "ignored_messages")
+        assert json.loads(button.attrs["data-rest"]) == ["!join", "it's <b>on</b>, go"]
+        assert button.text == "All channels: !join, it's <b>on</b>, go"
+        assert items(page, "ignored_messages") == ["!join", "it's <b>on</b>, go"]
+
+    async def test_an_item_is_drawn_as_the_text_it_is(self, service):
+        await save(service, ignored_messages=['<img src=x onerror="alert(1)">'])
+
+        page = await settings_page(service)
+
+        (item,) = field(page, "ignored_messages").find("li")
+        assert item.one("span").text == '<img src=x onerror="alert(1)">'
+        assert item.find("img") == []
+
+    async def test_the_page_has_an_item_to_copy_for_one_that_is_added(self, service):
+        page = await settings_page(service)
+
+        (copy,) = page.one("template", data_chip_template=True).find("li")
+        assert copy.attrs["data-item"] == ""
+        assert copy.one("button", data_chip_remove=True)
+
+
 class TestOtherPagesUnderTheSettings:
     async def moment_article(self, service) -> Element:
         response = await service.client.get("/dashboard")
@@ -830,7 +1023,7 @@ class TestOtherPagesUnderTheSettings:
             return sum(map(int, strip.attrs["data-laugh"].split(",")))
 
         before = laughing(await self.moment_article(service))
-        await save(service, laugh_emote_words="smich")
+        await save(service, laugh_emote_words=["smich"])
         after = laughing(await self.moment_article(service))
 
         assert (before, after) == (0, 1)

@@ -232,14 +232,21 @@ set from the dashboard's Settings page (see `tuning.py` below).
   message leads to the chat around it. The page is links and forms and needs no script.
   `GET /dashboard/settings` is where
   detection and clips are tuned: one form of settings (see `tuning.py`), for all channels
-  or - chosen at the top - for one of the watchlist's, which goes by its own values once
-  its "Own settings" switch is on. Each setting has a button that puts back what it would
-  be if left alone (what is recommended, or for a channel what all channels have), the form
-  is saved as a whole, and "Try on stored chat" replays a channel's newest chat under the
-  saved settings and under the form's, without saving anything. A channel's page begins with
-  what is its own whatever it goes by: its clips on command, and "The bot in chat" - whether
-  the bot writes in its chat, and the messages that ask it for something - with a sentence on
-  as whom the bot writes on the channel's platform. `GET /dashboard/health` says
+  or - chosen in the pane on the left - for one of the watchlist's, which goes by its own
+  values once its "Own settings" switch is on. Under that pane its sections are tabs, each
+  saying how many of its settings are set to something else; one is shown at a time beside
+  them (`?section=`, which the script keeps in the address, and which choosing another
+  channel keeps), but the form is saved as a whole, from the foot under every one of them.
+  Each setting has a button that puts back what it would be if left alone (what is
+  recommended, or for a channel what all channels have). A list - laughing emotes, emotes and
+  messages to ignore, the commands - is its items, a rectangle each: one is added from the
+  field beside it (Add, or Enter; checked there as the service would) and taken out by its
+  cross, and what is typed but not added goes in with the save. The last tab, "Try on stored
+  chat", replays a channel's newest chat under the saved settings and under the form's,
+  without saving anything. A channel's page begins with what is its own whatever it goes by:
+  its clips on command, and "The bot in chat" - whether the bot writes in its chat, and the
+  messages that ask it for something - with a sentence on as whom the bot writes on the
+  channel's platform. `GET /dashboard/health` says
   whether what the service depends on is there (see `health.py` below): when the last webhook
   arrived and when each channel's chat last spoke, what the last check of Kick's chat
   subscriptions found - with a button that checks now, and the list of the times Kick was found to
@@ -502,7 +509,9 @@ Module map (`src/kick_clip_hunter/`):
   long a moment stays open, how its clip is framed. `SETTINGS` is the list on offer - what
   each is called on the page, what it may be, which fields of a `Tuning` it sets (one
   setting can set two: the lull that ends a moment is also the detector's cooldown) - and
-  the rest is values on their way in and out: checked as posted, read back from the
+  the rest is values on their way in and out: checked as posted (a list as the items it
+  holds, never as text to split - so a message can have a comma in it - and a part of an
+  emote's name as one word), read back from the
   `tuning` table (JSON by name; owner 0 for all channels, a channel's id for its own), laid
   over each other. Only what differs from what it would be anyway is stored, so an
   untouched setting keeps following the code, and a channel keeps following all channels.
@@ -849,7 +858,9 @@ Module map (`src/kick_clip_hunter/`):
   shows of a recording, a moment's transcript - the tab beside the clip, asking for it and
   following it while it is made, the line being said, saving what is put right in a line - the
   Settings form, which it posts as a
-  whole and then fetches again, and stream recordings: the buttons, the words that follow
+  whole and then fetches again (its tabs, which only show and hide its sections, the items of
+  its lists, and the section a setting the service refused is in, shown), and stream
+  recordings: the buttons, the words that follow
   a recording while there is one, a recording's chat and the trace under it, and the moments
   found in a recording - which it also marks on that trace) and the bundled typeface,
   Archivo, with its licence;

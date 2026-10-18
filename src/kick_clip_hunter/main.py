@@ -3056,11 +3056,19 @@ async def dashboard_health(request: Request):
     return templates.TemplateResponse(request, "health.html", context)
 
 
+# The tab of the Settings page that tries what is in its form on stored chat,
+# after the ones of its sections (tuning.GROUPS).
+SETTINGS_TRIAL = "trial"
+
+
 @app.get("/dashboard/settings", response_class=HTMLResponse)
-async def dashboard_settings(request: Request, channel: str | None = None):
+async def dashboard_settings(request: Request, channel: str | None = None, section: str | None = None):
     """The Settings page: what of detection and of clips can be set (see
     tuning.py) - for all channels, or with `channel` for one of the
-    watchlist's, which then shows what it has of its own."""
+    watchlist's, which then shows what it has of its own. Its sections are
+    tabs, of which `section` is the one shown (the first, unless it names
+    one the page has); the script keeps it in the address as they are
+    switched, so the page fetched again after a save shows the same one."""
     channel = channel or None
     conn = get_connection()
     try:
@@ -3081,6 +3089,12 @@ async def dashboard_settings(request: Request, channel: str | None = None):
             every, rest, rest_label = tuning.values(for_all, mine), tuning.values(for_all), "All channels"
             address = f"/channels/{quote(channel)}/tuning"
 
+        sections = tuning.form(every, rest, rest_label, for_channel=row is not None)
+        editable = row is None or own
+        # There is chat to try them on once there is a channel to have it.
+        trial = editable and bool(streamers)
+        tabs = [item["key"] for item in sections] + ([SETTINGS_TRIAL] if trial else [])
+
         context = _page_context(conn, "settings")
         context.update(
             {
@@ -3089,8 +3103,10 @@ async def dashboard_settings(request: Request, channel: str | None = None):
                     {"slug": streamer["slug"], "own": bool(streamer["own_tuning"])} for streamer in streamers
                 ],
                 "own": own,
-                "editable": row is None or own,
-                "sections": tuning.form(every, rest, rest_label, for_channel=row is not None),
+                "editable": editable,
+                "sections": sections,
+                "trial": trial,
+                "shown": section if section in tabs else tabs[0],
                 "save_url": address,
                 "trial_url": f"{address}/trial",
                 "own_url": f"/channels/{quote(channel)}/own_tuning" if channel else None,

@@ -278,7 +278,7 @@ class TestARecording:
 
     async def test_one_asked_for_in_chat_says_who_asked(self, notified, telegram):
         response = await notified.client.post(
-            f"/channels/{CHANNEL}/tuning", json={"values": {"record_commands": "!rec"}}
+            f"/channels/{CHANNEL}/tuning", json={"values": {"record_commands": ["!rec"]}}
         )
         assert response.status_code == 200
 

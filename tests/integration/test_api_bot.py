@@ -47,7 +47,7 @@ USER_ID = 41
 STREAMER = {"username_color": "#00ff00", "badges": [{"type": "broadcaster", "text": "Broadcaster"}]}
 MODERATOR = {"username_color": "#00ff00", "badges": [{"type": "moderator", "text": "Moderator"}]}
 # The commands, as a channel's settings take them.
-COMMANDS = {"record_commands": "!record start", "stop_commands": "!record stop", "status_commands": "!status"}
+COMMANDS = {"record_commands": ["!record start"], "stop_commands": ["!record stop"], "status_commands": ["!status"]}
 # When the footage a test hands over was on air.
 BEGAN = datetime(2026, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
 
@@ -312,7 +312,7 @@ class TestHowThingsStand:
 class TestTheDetector:
     async def test_the_bots_commands_are_no_reaction_whoever_posts_them(self, service, channel):
         service.warm_up(CHANNEL)
-        await set_up(service, status_commands="xDDD")
+        await set_up(service, status_commands=["xDDD"])
 
         await service.crowd_laughs(CHANNEL, people=12)
         await service.settle()
@@ -686,7 +686,7 @@ class TestItsSettings:
 
     async def test_a_message_cannot_be_two_commands(self, service, channel):
         response = await service.client.post(
-            f"/channels/{CHANNEL}/tuning", json={"values": {"clip_commands": "!rec", "record_commands": "!rec"}}
+            f"/channels/{CHANNEL}/tuning", json={"values": {"clip_commands": ["!rec"], "record_commands": ["!rec"]}}
         )
 
         assert response.status_code == 400

@@ -180,31 +180,48 @@ class TestTakingAValue:
             with pytest.raises(ValueError, match="on or off"):
                 tuning.clean("laugh_signal", almost)
 
-    def test_words_are_split_lowercased_and_put_in_order(self):
-        assert tuning.clean("laugh_emote_words", "Smich, HAHA2  smich\tomegA") == ("haha2", "omega", "smich")
-        assert tuning.clean("laugh_emote_words", ["Smich", "haha2"]) == ("haha2", "smich")
+    def test_a_list_is_its_items_lowercased_and_put_in_order(self):
+        assert tuning.clean("laugh_emote_words", ["Smich", " HAHA2 ", "smich", "omegA"]) == ("haha2", "omega", "smich")
+        assert tuning.clean("laugh_emote_words", ("smich",)) == ("smich",)
 
-    def test_a_message_to_ignore_keeps_its_spaces(self):
-        assert tuning.clean("ignored_messages", "!join, GG wp\n !ENTER ,") == ("!enter", "!join", "gg wp")
+    def test_a_message_to_ignore_is_kept_whole_commas_and_all(self):
+        assert tuning.clean("ignored_messages", ["!join", " GG wp ", "!ENTER", "ok, go"]) == (
+            "!enter",
+            "!join",
+            "gg wp",
+            "ok, go",
+        )
 
     def test_an_empty_list_is_a_list(self):
-        assert tuning.clean("laugh_emote_words", "  ") == ()
-        assert tuning.clean("ignored_messages", []) == ()
+        assert tuning.clean("laugh_emote_words", []) == ()
+        assert tuning.clean("ignored_messages", ["  ", ""]) == ()
+
+    @pytest.mark.parametrize("name", ["laugh_emote_words", "ignored_messages", "clip_commands"])
+    def test_a_list_is_posted_as_its_items_not_as_text_to_split(self, name):
+        # Each list once had a way of its own of being typed - spaces between
+        # parts of emote names, commas between messages.
+        with pytest.raises(ValueError, match="list of words"):
+            tuning.clean(name, "kekw, lul")
+
+    def test_a_part_of_an_emote_name_is_one_word(self):
+        # No emote's name has a space in it, so such a part would never be in one.
+        with pytest.raises(ValueError, match="'smich haha' has to be one word"):
+            tuning.clean("laugh_emote_words", ["kekw", "smich haha"])
 
     def test_a_part_of_an_emote_name_too_short_to_tell_emotes_apart_is_refused(self):
         # "a" is in most emote names there are.
         with pytest.raises(ValueError, match="'ab' has to be"):
-            tuning.clean("ignored_emote_words", "kekw ab")
+            tuning.clean("ignored_emote_words", ["kekw", "ab"])
 
     def test_the_patterns_built_in_would_all_be_taken(self):
         for pattern in (*detector.LAUGH_EMOTE_NAME_PATTERNS, *detector.DANCE_EMOTE_NAME_PATTERNS):
-            assert tuning.clean("laugh_emote_words", pattern) == (pattern,)
+            assert tuning.clean("laugh_emote_words", [pattern]) == (pattern,)
 
     def test_a_list_has_its_limits(self):
         with pytest.raises(ValueError, match="at the most"):
-            tuning.clean("laugh_emote_words", " ".join(f"emote{number}" for number in range(tuning.LIST_MAX_ITEMS + 1)))
+            tuning.clean("laugh_emote_words", [f"emote{number}" for number in range(tuning.LIST_MAX_ITEMS + 1)])
         with pytest.raises(ValueError, match="characters long"):
-            tuning.clean("ignored_messages", "x" * (tuning.PHRASE_MAX_LENGTH + 1))
+            tuning.clean("ignored_messages", ["x" * (tuning.PHRASE_MAX_LENGTH + 1)])
         with pytest.raises(ValueError, match="list of words"):
             tuning.clean("laugh_emote_words", 7)
         with pytest.raises(ValueError, match="list of words"):
@@ -409,7 +426,7 @@ class TestClipCommands:
         assert not recommended.is_clip_command("")
 
     def test_a_command_is_the_whole_message_whatever_its_case(self):
-        tuned = tuning.tuned({}, {"clip_commands": tuning.clean("clip_commands", "!Clip, clip that")})
+        tuned = tuning.tuned({}, {"clip_commands": tuning.clean("clip_commands", ["!Clip", "clip that"])})
 
         assert tuned.is_clip_command("!clip")
         assert tuned.is_clip_command("  !CLIP ")
@@ -430,9 +447,9 @@ class TestTheBot:
         tuned = tuning.tuned(
             {},
             {
-                "record_commands": tuning.clean("record_commands", "!Record Start, !rec"),
-                "stop_commands": tuning.clean("stop_commands", "!record stop"),
-                "status_commands": tuning.clean("status_commands", "!status"),
+                "record_commands": tuning.clean("record_commands", ["!Record Start", "!rec"]),
+                "stop_commands": tuning.clean("stop_commands", ["!record stop"]),
+                "status_commands": tuning.clean("status_commands", ["!status"]),
             },
         )
 
@@ -497,14 +514,9 @@ class TestOnThePage:
         assert tuning.words(setting("lull_seconds"), 30) == "30"
         assert tuning.words(setting("laugh_signal"), True) == "On"
         assert tuning.words(setting("laugh_signal"), False) == "Off"
-        assert tuning.words(setting("laugh_emote_words"), ("haha2", "smich")) == "haha2 smich"
+        # Every list the same way, whatever it holds.
+        assert tuning.words(setting("laugh_emote_words"), ("haha2", "smich")) == "haha2, smich"
         assert tuning.words(setting("ignored_messages"), ("!join", "gg wp")) == "!join, gg wp"
-
-    def test_what_is_written_is_taken_back_as_the_same_value(self):
-        given = {"laugh_emote_words": ("haha2", "smich"), "ignored_messages": ("!join", "gg wp")}
-
-        for name, value in given.items():
-            assert tuning.clean(name, tuning.words(setting(name), value)) == value
 
     def form(self, for_all: dict | None = None, own: dict | None = None) -> list[dict]:
         if own is None:
@@ -549,7 +561,7 @@ class TestOnThePage:
     def test_left_alone_it_is_what_is_recommended_whatever_all_channels_were_given(self):
         fields = self.fields(self.form({"clip_commands": ("!old",)}, own={"clip_command_from_anyone": True}))
 
-        assert (fields["clip_commands"]["value"], fields["clip_commands"]["at_rest"]) == ("", True)
+        assert (fields["clip_commands"]["entries"], fields["clip_commands"]["at_rest"]) == ([], True)
         assert fields["clip_commands"]["rest_words"] == "Recommended: none"
         assert (fields["clip_command_from_anyone"]["on"], fields["clip_command_from_anyone"]["at_rest"]) == (
             True,
@@ -605,9 +617,28 @@ class TestOnThePage:
     def test_an_empty_list_is_said_in_a_word(self):
         fields = self.fields(self.form({"ignored_messages": ("!join",)}))
 
-        assert fields["ignored_messages"]["value"] == "!join"
+        assert fields["ignored_messages"]["entries"] == ["!join"]
         assert fields["ignored_messages"]["rest_words"] == "Recommended: none"
-        assert fields["laugh_emote_words"]["value"] == ""
+        assert fields["laugh_emote_words"]["entries"] == []
+
+    def test_a_list_is_drawn_as_its_items_with_what_it_would_hold_if_left_alone(self):
+        fields = self.fields(self.form({"ignored_messages": ("!join", "gg wp")}, own={"ignored_messages": ("!enter",)}))
+
+        field = fields["ignored_messages"]
+        assert (field["entries"], field["rest_entries"], field["at_rest"]) == (["!enter"], ["!join", "gg wp"], False)
+        assert field["rest_words"] == "All channels: !join, gg wp"
+
+    def test_a_list_says_what_may_be_added_to_it(self):
+        fields = self.fields(self.form())
+
+        words, messages = fields["laugh_emote_words"], fields["ignored_messages"]
+        assert (words["shortest"], words["longest"]) == (tuning.WORD_MIN_LENGTH, tuning.WORD_MAX_LENGTH)
+        assert (messages["shortest"], messages["longest"]) == (1, tuning.PHRASE_MAX_LENGTH)
+        assert words["most_items"] == messages["most_items"] == tuning.LIST_MAX_ITEMS
+        assert (words["prompt"], messages["prompt"]) == ("Part of an emote's name", "A whole message")
+        # ...and nothing else is a list.
+        assert "entries" not in fields["reacting_share"]
+        assert "entries" not in fields["laugh_signal"]
 
     def test_a_section_says_when_one_of_its_folded_away_settings_is_set(self):
         untouched = self.form({"reacting_share": 0.25})
@@ -615,3 +646,12 @@ class TestOnThePage:
 
         assert [section["advanced_set"] for section in untouched] == [False] * len(untouched)
         assert [section["advanced_set"] for section in touched] == [True] + [False] * (len(touched) - 1)
+
+    def test_a_section_counts_its_settings_that_are_set_folded_away_or_not(self):
+        form = self.form({"reacting_share": 0.25, "sustain_fraction": 0.5, "ignored_messages": ("!join",)})
+
+        assert {section["key"]: section["set_count"] for section in form} == {
+            tuning.MOMENTS: 2,
+            tuning.SIGNALS: 1,
+            tuning.CLIPS: 0,
+        }
