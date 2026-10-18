@@ -550,7 +550,7 @@ async def set_up(service, **values) -> None:
 class TestAClipOnCommand:
     async def test_the_streamer_asking_makes_a_moment_in_a_chat_with_no_history_at_all(self, service):
         user_id = service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
         before = datetime.now(timezone.utc)
 
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
@@ -564,7 +564,7 @@ class TestAClipOnCommand:
 
     async def test_a_moderator_may_ask_and_so_may_the_broadcasters_account_without_a_badge(self, service):
         user_id = service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
 
         await service.chat(CHANNEL, "a_mod", " !CLIP ", identity=MODERATOR)
         await service.settle()
@@ -576,7 +576,7 @@ class TestAClipOnCommand:
 
     async def test_a_viewer_asking_gets_nothing(self, service):
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
 
         await service.chat(CHANNEL, "viewer", "!clip", identity=SUBSCRIBER)
         await service.chat(CHANNEL, "another", "!clip")
@@ -586,7 +586,7 @@ class TestAClipOnCommand:
 
     async def test_unless_anyone_may_ask(self, service):
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip", clip_command_from_anyone=True)
+        await set_up(service, clip_commands=["!clip"], clip_command_from_anyone=True)
 
         await service.chat(CHANNEL, "viewer", "!clip")
 
@@ -596,7 +596,7 @@ class TestAClipOnCommand:
         # Without the channel going by settings of its own in anything else.
         service.watch(CHANNEL)
         service.watch("another_channel")
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
 
         await service.chat("another_channel", "its_streamer", "!clip", identity=STREAMER)
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
@@ -606,7 +606,7 @@ class TestAClipOnCommand:
     @pytest.mark.parametrize("own", [True, False])
     async def test_it_holds_whichever_way_the_channels_own_settings_are_switched(self, service, own):
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
         await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled=1")
         await service.client.post(f"/channels/{CHANNEL}/own_tuning?enabled={int(own)}")
 
@@ -623,7 +623,7 @@ class TestAClipOnCommand:
 
     async def test_talking_about_the_command_is_not_asking(self, service):
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
 
         await service.chat(CHANNEL, "the_streamer", "type !clip and I get a clip", identity=STREAMER)
 
@@ -631,7 +631,7 @@ class TestAClipOnCommand:
 
     async def test_a_channel_that_is_not_tracked_gets_no_clip(self, service):
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
         await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
 
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
@@ -641,7 +641,7 @@ class TestAClipOnCommand:
     async def test_asking_while_a_moment_is_open_extends_that_one(self, service):
         service.quiet_seconds = 0.5
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip")
+        await set_up(service, clip_commands=["!clip"])
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
         opened = service.main._moment_sessions[CHANNEL].window_end
         await service.clock_tick()
@@ -657,7 +657,7 @@ class TestAClipOnCommand:
         # A crowd of viewers posting it is neither a clip nor a reaction.
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
-        await set_up(service, clip_commands="xDDD")
+        await set_up(service, clip_commands=["xDDD"])
 
         await service.crowd_laughs(CHANNEL, people=8)
 
@@ -672,7 +672,7 @@ class TestAClipOnCommand:
 
         monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
         service.watch(CHANNEL)
-        await set_up(service, clip_commands="!clip", pre_roll_seconds=40)
+        await set_up(service, clip_commands=["!clip"], pre_roll_seconds=40)
 
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
         await service.settle()

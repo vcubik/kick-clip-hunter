@@ -8,10 +8,12 @@
 // deletes), has the dialog a stretch of footage is cut out for an editor in
 // - a moment's or a recording's - has a moment's transcript made, follows it
 // as the clip plays and saves what is put right in it, saves the Settings
-// page's form, starts and stops the recording of a whole stream, replays a
-// recording's chat beside it, puts what chat did over all of it under it,
-// looks for moments in it, deletes moments and recordings and takes channels
-// off the watchlist, and keeps the Health page saying what holds now.
+// page's form - whose sections are tabs, and whose lists are added to an
+// item at a time - starts and stops the recording of a whole stream,
+// replays a recording's chat beside it, puts what chat did over all of it
+// under it, looks for moments in it, deletes moments and recordings and
+// takes channels off the watchlist, and keeps the Health page saying what
+// holds now.
 //
 // Everything is wired up by delegation from the document, because the open
 // moment's markup is replaced every time another one is opened.
@@ -38,9 +40,14 @@
 
   // Says something in the status line of whatever part of the page `from`
   // belongs to. Failures are stated there in words; an empty string clears it.
+  // A part can hold smaller parts with status lines of their own - a list
+  // among the settings, the chat video under a recording - and its own line
+  // is the one outside them.
   function say(from, words) {
     const scope = from.closest("[data-status-scope]");
-    const line = scope && one("[data-status]", scope);
+    if (!scope) return;
+    const lines = all("[data-status]", scope);
+    const line = lines.find((status) => status.closest("[data-status-scope]") === scope) || lines[0];
     if (line) line.textContent = words;
   }
 
@@ -2121,20 +2128,27 @@
 
   // ---- Settings ---------------------------------------------------------
 
-  // The Settings page is one form, saved as a whole. Each setting has a
-  // button beside it that puts back what it would be if it were left alone
-  // (what is recommended, or for a channel what all channels have), and
-  // what is in the form can be tried on stored chat before it is saved.
+  // The Settings page is one form, saved as a whole, whose sections are
+  // tabs: one is shown at a time, and the others stay in the form as they
+  // were left, so that what was set in each is saved together. Each setting
+  // has a button beside it that puts back what it would be if it were left
+  // alone (what is recommended, or for a channel what all channels have),
+  // and what is in the form can be tried on stored chat before it is saved.
+  // A list is what it holds, a rectangle an item: an item is added from the
+  // field beside it, one at a time, and taken out by its cross.
 
   const settingsOf = (control) => control.closest("[data-tuning]");
   const isList = (field) => field.dataset.kind === "words" || field.dataset.kind === "phrases";
+  // What a list holds, in the order the service keeps it in.
+  const listed = (list) => all("[data-item]", list).map((item) => item.dataset.item);
+  const sectionTab = (inside) => one(`[data-section="${inside.closest("[data-section-pane]").dataset.sectionPane}"]`);
 
   // What a setting's field says, the way the service takes it. A number
   // typed with a comma is the same number; one that is no number at all is
   // sent as nothing, and the service says what the field takes.
   function settingValue(field) {
     if (field.dataset.kind === "switch") return one('[aria-pressed="true"]', field).dataset.enabled === "1";
-    if (isList(field)) return field.value;
+    if (isList(field)) return listed(field);
     const typed = field.value.trim().replace(",", ".");
     return typed === "" || Number.isNaN(Number(typed)) ? null : Number(typed);
   }
@@ -2149,8 +2163,9 @@
         .map((field) => [field.dataset.setting, settingValue(field)]),
     );
 
-  // Marks the settings that are not what they would be if left alone, and
-  // lets those be put back.
+  // Marks the settings that are not what they would be if left alone, lets
+  // those be put back, and has the tab of each section say how many of its
+  // own there are - the sections that are not shown included.
   function markSettings(form) {
     for (const field of all("[data-setting]", form)) {
       const row = field.closest(".set-row");
@@ -2158,10 +2173,15 @@
       const value = settingValue(field);
       let atRest;
       if (field.dataset.kind === "switch") atRest = value === (rest.dataset.rest === "1");
-      else if (isList(field)) atRest = value.trim() === rest.dataset.rest;
+      else if (isList(field)) atRest = JSON.stringify([...value].sort()) === JSON.stringify(JSON.parse(rest.dataset.rest).sort());
       else atRest = value === Number(rest.dataset.rest);
       row.classList.toggle("is-set", !atRest);
       rest.disabled = atRest;
+    }
+    for (const pane of all("fieldset[data-section-pane]", form)) {
+      const count = all(".set-row.is-set", pane).length;
+      const words = one("[data-set-count]", sectionTab(pane));
+      if (words) words.textContent = count ? `${count} set` : "";
     }
   }
 
@@ -2174,6 +2194,8 @@
     const field = one("[data-setting]", rest.closest(".set-row"));
     if (field.dataset.kind === "switch") {
       for (const half of all("button", field)) half.setAttribute("aria-pressed", String(half.dataset.enabled === rest.dataset.rest));
+    } else if (isList(field)) {
+      holdItems(field, JSON.parse(rest.dataset.rest));
     } else {
       field.value = rest.dataset.rest;
     }
@@ -2184,6 +2206,140 @@
   function chooseSetting(half) {
     for (const other of all("button", half.closest("[data-setting]"))) other.setAttribute("aria-pressed", String(other === half));
     settingsEdited(settingsOf(half));
+  }
+
+  // Shows one section of the settings, its tab marked as where you are. The
+  // address says which, so the page fetched again after a save opens on it
+  // too - and so do another channel's settings, chosen on the left.
+  function showSection(tab, { focus = false } = {}) {
+    const key = tab.dataset.section;
+    for (const other of all("[data-section]")) {
+      other.setAttribute("aria-selected", String(other === tab));
+      other.tabIndex = other === tab ? 0 : -1;
+    }
+    for (const pane of all("[data-section-pane]")) pane.hidden = pane.dataset.sectionPane !== key;
+    const panes = one(".set-panes");
+    if (panes) panes.scrollTop = 0;
+    const kept = one("[data-section-kept]");
+    if (kept) kept.value = key;
+    const address = new URL(location.href);
+    address.searchParams.set("section", key);
+    history.replaceState(null, "", address);
+    if (focus) tab.focus();
+  }
+
+  // On the keyboard the tabs are one stop: the arrows go from one to the
+  // next, Home and End to the first and the last.
+  function sectionKey(tab, event) {
+    const tabs = all("[data-section]");
+    const at = tabs.indexOf(tab);
+    const steps = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 };
+    if (!(event.key in steps)) return false;
+    event.preventDefault();
+    showSection(tabs[(steps[event.key] + tabs.length) % tabs.length], { focus: true });
+    return true;
+  }
+
+  // A list's rectangles, made anew for what it is to hold and in the order
+  // the service keeps it in - so an item added is where it will stay.
+  function holdItems(list, items) {
+    const copy = one("[data-chip-template]").content.firstElementChild;
+    list.replaceChildren(
+      ...[...items].sort().map((item) => {
+        const made = copy.cloneNode(true);
+        made.dataset.item = item;
+        one("span", made).textContent = item;
+        one("[data-chip-remove]", made).setAttribute("aria-label", `Remove ${item}`);
+        return made;
+      }),
+    );
+  }
+
+  // Adds what was typed beside a list to it, the way the service will keep
+  // it, and empties the field. What the service would not take is said
+  // beside the field instead, and stays in it to be put right. Whether the
+  // field is empty now.
+  function addTyped(input) {
+    const row = input.closest(".set-row");
+    const list = one("[data-setting]", row);
+    const item = input.value.trim().toLowerCase();
+    if (!item) return true;
+    const items = listed(list);
+    const shortest = Number(list.dataset.shortest);
+    const most = Number(list.dataset.mostItems);
+    let wrong = "";
+    if (list.dataset.kind === "words" && /\s/.test(item)) {
+      wrong = `'${item}' has to be one word - no emote's name has a space in it.`;
+    } else if ([...item].length < shortest) {
+      wrong = `'${item}' is too short: it has to be ${shortest} characters long at the least.`;
+    } else if (!items.includes(item) && items.length >= most) {
+      wrong = `"${one(".set-name", row).textContent.trim()}" can hold ${most} at the most.`;
+    }
+    if (wrong) {
+      say(input, wrong);
+      return false;
+    }
+    input.value = "";
+    if (items.includes(item)) {
+      say(input, `'${item}' is in the list already.`);
+      return true;
+    }
+    holdItems(list, [...items, item]);
+    say(input, "");
+    settingsEdited(settingsOf(input));
+    return true;
+  }
+
+  function addFromButton(button) {
+    const input = one("[data-chip-input]", button.closest(".set-row"));
+    addTyped(input);
+    input.focus();
+  }
+
+  // Takes an item out of its list. From the keyboard the focus goes on to
+  // the cross of the item that takes its place, or back to the field once
+  // there is none.
+  function removeItem(cross, event) {
+    const item = cross.closest("[data-item]");
+    const row = item.closest(".set-row");
+    const form = settingsOf(item);
+    const next = item.nextElementSibling || item.previousElementSibling;
+    item.remove();
+    if (event.detail === 0) (next ? one("[data-chip-remove]", next) : one("[data-chip-input]", row)).focus();
+    settingsEdited(form);
+  }
+
+  // What was typed beside a list and not added is added before the form is
+  // saved or tried: it is what was meant. Whether all of it could be; where
+  // something could not, its section is shown with the field in focus, and
+  // beside it it says why.
+  function addAllTyped(form) {
+    let fine = true;
+    for (const input of all("[data-chip-input]", form)) {
+      if (input.closest("fieldset:disabled") || addTyped(input)) continue;
+      if (fine) {
+        showSection(sectionTab(input));
+        input.focus();
+      }
+      fine = false;
+    }
+    return fine;
+  }
+
+  // The service names a setting it refuses by what the page calls it, in
+  // quotes - one that may be in a section that is not shown, or folded
+  // away. The first it names is shown.
+  function showRefused(form, words) {
+    let first = null;
+    for (const name of all(".set-name", form)) {
+      const at = words.indexOf(`"${name.textContent.trim()}"`);
+      if (at >= 0 && (first === null || at < first.at)) first = { at, name };
+    }
+    if (!first) return;
+    const more = first.name.closest("details");
+    if (more) more.open = true;
+    if (first.name.closest("[hidden]")) showSection(sectionTab(first.name));
+    first.name.scrollIntoView({ block: "nearest" });
   }
 
   // What the service said was wrong, in its own words where it gave any.
@@ -2209,12 +2365,17 @@
       return; // what is on screen stays, and still says what was typed
     }
     if (!fresh) return;
-    const scrolled = page.scrollTop;
+    const scrolled = one(".set-panes", page)?.scrollTop ?? 0;
     page.replaceWith(fresh);
-    fresh.scrollTop = scrolled;
+    const panes = one(".set-panes", fresh);
+    if (panes) panes.scrollTop = scrolled;
   }
 
   async function saveSettings(form) {
+    if (!addAllTyped(form)) {
+      say(form, "Not saved: something typed beside a list could not be added to it.");
+      return;
+    }
     say(form, "Saving.");
     const response = await post(form.dataset.tuning, { values: settingValues(form) });
     if (!response) {
@@ -2222,7 +2383,9 @@
       return;
     }
     if (!response.ok) {
-      say(form, await problem(response, "Could not save the settings."));
+      const words = await problem(response, "Could not save the settings.");
+      say(form, words);
+      showRefused(form, words);
       return;
     }
     await reloadSettings();
@@ -2233,6 +2396,10 @@
   // form has them, and puts what each came to in the table.
   async function trySettings(button) {
     const form = one("[data-tuning]");
+    if (!addAllTyped(form)) {
+      say(form, "Not tried: something typed beside a list could not be added to it.");
+      return;
+    }
     const chat = one("[data-trial-chat]");
     const url = chat ? `${form.dataset.trial}?chat=${encodeURIComponent(chat.value)}` : form.dataset.trial;
     button.disabled = true;
@@ -2350,7 +2517,10 @@
     ["[data-transcribe]", transcribe],
     ["[data-transcript-go]", playLine],
     ["[data-switch] button", flip],
-    ["[data-setting] button", chooseSetting],
+    ['[data-setting][data-kind="switch"] button', chooseSetting],
+    ["[data-chip-add]", addFromButton],
+    ["[data-chip-remove]", removeItem],
+    ["[data-section]", (tab) => showSection(tab)],
     ["[data-rest]", (rest) => (putBack(rest), settingsEdited(settingsOf(rest)))],
     [
       "[data-rest-all]",
@@ -2551,6 +2721,14 @@
       transcriptKey(target, event);
       return;
     }
+    // Enter beside a list adds what was typed to it, rather than save the
+    // form the field is in.
+    if (target.matches("[data-chip-input]") && event.key === "Enter") {
+      event.preventDefault();
+      addTyped(target);
+      return;
+    }
+    if (target.matches("[data-section]") && sectionKey(target, event)) return;
     if (target.matches("[data-strip]") && stripKey(target, event)) return;
     if (target.matches("[data-rec-strip]") && recordingKey(target, event)) return;
     if (event.repeat || target.matches("input, textarea, select") || !one(".review")) return;
@@ -2581,6 +2759,8 @@
       paintTrimBackground(trimOf(target));
     } else if (target.matches("[data-setting]")) {
       settingsEdited(settingsOf(target));
+    } else if (target.matches("[data-chip-input]")) {
+      say(target, "");
     }
   });
 

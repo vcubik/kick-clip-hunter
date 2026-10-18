@@ -596,7 +596,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .statement .ch-btn, .statement > .ch-line { margin-top: var(--space-24); }
 .statement .ch-line .ch-btn { margin-top: 0; }
 
-/* ---- Channels and Settings: a page of sections --------------------- */
+/* ---- Channels and Health: a page of sections ----------------------- */
 
 .channels { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--space-36) var(--space-48); }
 .channels-in { display: flex; flex-direction: column; gap: var(--space-36); max-width: 760px; }
@@ -634,11 +634,33 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .health-act { margin-top: var(--space-12); }
 .health-act .status-line { margin-top: 0; }
 
-/* ---- Settings ------------------------------------------------------ */
+/* ---- Settings: whose, which section of them, and that section ------ */
 
-.set-form, .set-fields { display: flex; flex-direction: column; gap: var(--space-36); }
+/* Like the review and Analyze pages: on the left whose settings they are,
+   and their sections as tabs - the open one is where you are, `sunk` with a
+   `lit` edge, like a row of a list; beside them the open section, which
+   scrolls above the foot that saves the form, which stays where it is. */
+.set-page { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
+.set-side { overflow-y: auto; }
+.set-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); padding: var(--space-16) var(--space-12) var(--space-12); }
+.set-head .queue-filter { align-self: stretch; }
+.set-head .status-line { margin-top: 0; }
+.set-whose { font-size: 13px; color: var(--text-2); }
+.set-tabs { display: flex; flex-direction: column; border-top: 1px solid var(--quiet); }
+.set-tab { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: var(--h-row); padding: var(--space-8) var(--space-12) var(--space-8) 10px; border: 0; border-bottom: 1px solid var(--quiet); border-left: 2px solid transparent; background: none; color: var(--text); font-size: 14px; font-weight: 500; text-align: left; }
+.set-tab:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.set-tab:focus-visible { outline-offset: -2px; }
+.set-tab[aria-selected="true"] { background-color: var(--sunk); border-left-color: var(--lit); font-weight: 700; }
+/* How many of the section's settings are set to something else. */
+.set-count { flex: none; font-size: 13px; font-weight: 400; font-stretch: var(--width-compact); color: var(--text-2); }
+/* Trying the form on stored chat is no section of it, and stands apart. */
+.set-tab.is-trial { margin-top: var(--space-24); border-top: 1px solid var(--quiet); }
+
+.set-form { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.set-panes { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--space-24) var(--space-36) var(--space-36); container-type: inline-size; }
+.set-panes > * { max-width: 760px; }
+.set-panes .title { margin-bottom: var(--space-12); }
 .set-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
-.set-whose { margin: var(--space-12) 0 0; }
 
 /* A setting: its name, what it is set to with the button that puts back
    what it would be if it were left alone, and under them what it does. One
@@ -649,10 +671,24 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* What it is set with, its unit and the button, in columns that line up
    from one setting to the next. */
 .set-value { display: grid; grid-template-columns: max-content 56px 168px; align-items: center; justify-items: end; column-gap: var(--space-8); }
-.set-value > .ch-cap { justify-self: start; }
+.set-value > .ch-cap, .set-value > [data-chip-add] { justify-self: start; }
 .set-row > .ch-cap { grid-column: 1 / -1; max-width: 76ch; }
 .set-number { width: 96px; font-variant-numeric: tabular-nums; }
-.set-list { width: 260px; }
+.set-add { width: 260px; }
+/* A list: what it holds, a rectangle an item, each with the cross that
+   takes it out - on a line of their own under the setting's name, and
+   nothing at all while it holds nothing. Locked, an item has no cross. */
+.set-chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.set-chips:not(:has(li)) { display: none; }
+.set-chip { display: inline-flex; align-items: center; max-width: 100%; min-height: var(--h-compact); padding: 0 var(--space-2) 0 10px; border-radius: var(--radius-control); background: var(--quiet); font-size: 13px; font-stretch: var(--width-compact); }
+.set-chip span { overflow-wrap: anywhere; }
+.set-chip-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: var(--space-4); padding: 0; border: 0; border-radius: var(--radius-control); background: none; color: var(--text-2); }
+.set-chip-x:hover { background-image: linear-gradient(var(--veil), var(--veil)); color: var(--text); }
+.set-fields:disabled .set-chip { padding-right: 10px; }
+.set-fields:disabled .set-chip-x { display: none; }
+/* What was wrong with an item that could not be added. */
+.set-row > .status-line { grid-column: 1 / -1; margin: 0; }
+.set-row > .status-line:empty { display: none; }
 .set-rest { width: 100%; height: var(--h-compact); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 12px; font-stretch: var(--width-compact); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .set-rest:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .set-rest:disabled { background: none; color: var(--text-2); cursor: default; }
@@ -660,10 +696,18 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .set-more { border-top: 1px solid var(--quiet); }
 .set-more summary { padding: 10px var(--space-12); font-size: 13px; font-weight: 600; font-stretch: var(--width-compact); cursor: pointer; }
 .set-more summary:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
-/* Saving stays in reach however far down the form has been scrolled: the
-   foot keeps to the bottom edge of the page, over its padding. */
-.set-foot { position: sticky; bottom: calc(-1 * var(--space-36)); padding: var(--space-12) 0; border-top: 1px solid var(--line); background: var(--field); }
+/* Saving stays in reach whichever section is open, and however far down it
+   has been scrolled. */
+.set-foot { flex: none; padding: var(--space-12) var(--space-36); border-top: 1px solid var(--line); background: var(--field); }
 .set-foot .status-line { flex: 1 1 0; min-width: 0; margin: 0; }
+/* Where the open section is too narrow for a setting's name beside what it
+   is set to - the window, or the pane beside the tabs - the name goes above
+   it. What a list is added from is the widest of them. */
+@container (max-width: 720px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); }
+  .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
+  .set-add { width: 100%; }
+}
 
 /* What a trial on stored chat came to: one row for the settings as they
    are saved, one for what is in the form. */
@@ -771,10 +815,10 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
   .watchlist { display: block; overflow-x: auto; }
   .health-table { display: block; overflow-x: auto; }
-  .set-row { grid-template-columns: minmax(0, 1fr); }
-  .set-value { grid-template-columns: minmax(0, max-content) 56px minmax(0, 168px); justify-content: start; }
-  .set-list { width: 100%; }
-  .set-foot { bottom: 0; }
+  .set-page, .set-form { display: block; }
+  .set-side { overflow: visible; }
+  .set-panes { overflow: visible; padding: var(--space-16); }
+  .set-foot { position: sticky; bottom: 0; padding: var(--space-12) var(--space-16); }
   .an-page { overflow: visible; padding: var(--space-16); }
   .an-head { flex-wrap: wrap; align-items: flex-start; }
   .an-pair { grid-template-columns: minmax(0, 1fr); }

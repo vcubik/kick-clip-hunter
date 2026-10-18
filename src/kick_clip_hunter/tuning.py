@@ -168,7 +168,10 @@ def recommended() -> Tuning:
 
 # What a setting's value is: a whole number, a number, on or off, or a list -
 # of parts of emote names, or of whole messages. A list is kept lowercased
-# and in alphabetical order, so two that hold the same things are equal.
+# and in alphabetical order, so two that hold the same things are equal. It
+# is posted as what it holds, item by item - the page adds them one at a
+# time - never as text for the service to split: then a message can have a
+# comma in it, and no list has a way of its own of being typed.
 WHOLE = "whole"
 NUMBER = "number"
 SWITCH = "switch"
@@ -182,11 +185,14 @@ Value = bool | int | float | tuple[str, ...]
 DETECTOR = "detector."
 
 # What a list may hold. A part of an emote name shorter than this is in most
-# names there are - the ones built in are this long at the least.
+# names there are - the ones built in are this long at the least. No emote's
+# name has a space in it, so neither may a part of one.
 WORD_MIN_LENGTH = 3
 WORD_MAX_LENGTH = 40
 PHRASE_MAX_LENGTH = 100
 LIST_MAX_ITEMS = 50
+# What the field an item is added from says while it is empty.
+LIST_PROMPTS = {WORDS: "Part of an emote's name", PHRASES: "A whole message"}
 
 # The sections of the page, in the order they come: key, heading, and what is
 # said under it. The first two are on a channel's page only (see
@@ -400,22 +406,22 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "laugh_emote_words", SIGNALS, WORDS,
         "More laughing emotes",
-        "Parts of emote names, with spaces between them. An emote whose name has one in it counts as "
-        f"laughing, as do the ones built in: {_BUILT_IN_LAUGHING}.",
+        "Parts of emote names. An emote whose name has one of them in it counts as laughing, as do the ones "
+        f"built in: {_BUILT_IN_LAUGHING}.",
         (DETECTOR + "added_laugh_emote_patterns",),
     ),
     Setting(
         "ignored_emote_words", SIGNALS, WORDS,
         "Emotes to ignore",
-        "Parts of emote names, with spaces between them. An emote whose name has one in it is no reaction at "
-        f"all, like the dancing ones built in: {_BUILT_IN_DANCING}.",
+        "Parts of emote names. An emote whose name has one of them in it is no reaction at all, like the "
+        f"dancing ones built in: {_BUILT_IN_DANCING}.",
         (DETECTOR + "added_ignored_emote_patterns",),
     ),
     Setting(
         "ignored_messages", SIGNALS, PHRASES,
         "Messages to ignore",
-        "Whole messages, with commas between them, that the detector leaves out the way it does a bare 1 or 2 "
-        "answering a poll: a giveaway's keyword, a bot's command.",
+        "Whole messages that the detector leaves out the way it does a bare 1 or 2 answering a poll: a "
+        "giveaway's keyword, a bot's command.",
         (DETECTOR + "added_ignored_messages",),
     ),
     Setting(
@@ -465,9 +471,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "clip_commands", COMMANDS, PHRASES,
         "Messages that ask for a clip",
-        "Whole messages, with commas between them: !clip, for one. Posted by the channel's streamer or one of its "
-        "moderators, any of them makes a moment. The channel has to be tracked, and the detector leaves these "
-        "messages out.",
+        "Whole messages: !clip, for one. Posted by the channel's streamer or one of its moderators, any of them "
+        "makes a moment. The channel has to be tracked, and the detector leaves these messages out.",
         ("clip_commands",),
         per_channel=True,
     ),
@@ -498,8 +503,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "record_commands", BOT, PHRASES,
         "Messages that start a recording",
-        "Whole messages, with commas between them: !record start, for one. Any of them starts a recording of the "
-        "whole stream, as the button on the Channels page does - whether or not the channel is tracked.",
+        "Whole messages: !record start, for one. Any of them starts a recording of the whole stream, as the button "
+        "on the Channels page does - whether or not the channel is tracked.",
         ("record_commands",),
         per_channel=True,
     ),
@@ -608,14 +613,11 @@ def _range_words(setting: Setting) -> str:
 
 
 def _items(setting: Setting, raw: object) -> list[str]:
-    """A list as it was typed, or as it was stored, in pieces."""
-    if isinstance(raw, str):
-        pieces = raw.replace("\n", ",").split(",") if setting.kind == PHRASES else raw.replace(",", " ").split()
-    elif isinstance(raw, (list, tuple)) and all(isinstance(item, str) for item in raw):
-        pieces = list(raw)
-    else:
+    """What a list holds, as it was posted or stored: each of its items,
+    lowercased and without the spaces around it, an empty one left out."""
+    if not isinstance(raw, (list, tuple)) or not all(isinstance(item, str) for item in raw):
         raise ValueError(f'"{setting.label}" has to be a list of words.')
-    return [piece.strip().lower() for piece in pieces if piece.strip()]
+    return [item.strip().lower() for item in raw if item.strip()]
 
 
 def clean(name: str, raw: object) -> Value:
@@ -636,6 +638,9 @@ def clean(name: str, raw: object) -> Value:
         if len(items) > LIST_MAX_ITEMS:
             raise ValueError(f"{label} can hold {LIST_MAX_ITEMS} at the most.")
         if setting.kind == WORDS:
+            spaced = [item for item in items if any(character.isspace() for character in item)]
+            if spaced:
+                raise ValueError(f"{label}: {spaced[0]!r} has to be one word - no emote's name has a space in it.")
             wrong = [item for item in items if not WORD_MIN_LENGTH <= len(item) <= WORD_MAX_LENGTH]
             if wrong:
                 raise ValueError(
@@ -707,19 +712,18 @@ def stored(texts: Mapping[str, str]) -> dict[str, Value]:
 
 def words(setting: Setting, value: Value) -> str:
     """A value as the page writes it: in a field, and where it names what a
-    field would be if it were left alone."""
+    field would be if it were left alone - a list as what it holds, one
+    item after another."""
     if setting.kind == SWITCH:
         return "On" if value else "Off"
-    if setting.kind == WORDS:
-        return " ".join(value)
-    if setting.kind == PHRASES:
+    if setting.kind in LISTS:
         return ", ".join(value)
     return _number_words(value)
 
 
 def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) -> dict[str, Any]:
     numeric = setting.kind in (WHOLE, NUMBER)
-    return {
+    field = {
         "name": setting.name,
         "kind": setting.kind,
         "label": setting.label,
@@ -734,6 +738,20 @@ def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) ->
         "unit": setting.unit,
         "advanced": setting.advanced,
     }
+    if setting.kind in LISTS:
+        # A list is drawn as what it holds, an item at a time, and added to
+        # from a field of its own - an item at a time, which the page checks
+        # the way `clean` would before it takes it.
+        of_words = setting.kind == WORDS
+        field.update(
+            entries=list(value),
+            rest_entries=list(rest),
+            shortest=WORD_MIN_LENGTH if of_words else 1,
+            longest=WORD_MAX_LENGTH if of_words else PHRASE_MAX_LENGTH,
+            most_items=LIST_MAX_ITEMS,
+            prompt=LIST_PROMPTS[setting.kind],
+        )
+    return field
 
 
 def form(
@@ -744,7 +762,9 @@ def form(
     be if it were left alone (`rest`: what is recommended, or for a channel
     what all channels have), which a button beside it puts back. The
     advanced ones are listed apart; the page folds them away unless one of
-    them is set to something.
+    them is set to something. The page shows one section at a time, so each
+    counts how many of its settings are set to something else (`set_count`),
+    for its tab to say.
 
     The settings that are a channel's alone are in a channel's form only
     (`for_channel`), where what they would be if left alone is what is
@@ -773,6 +793,7 @@ def form(
                 "fields": [field for field in fields if not field["advanced"]],
                 "advanced": advanced,
                 "advanced_set": any(not field["at_rest"] for field in advanced),
+                "set_count": sum(not field["at_rest"] for field in fields),
                 "per_channel": all(setting.per_channel for setting in offered),
             }
         )
