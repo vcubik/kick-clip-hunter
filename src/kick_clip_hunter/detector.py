@@ -649,12 +649,13 @@ def reaction_active(
         (4, settings.emotes_enabled, settings.emote_spike_multiplier),
         (6, settings.emote_mention_enabled, settings.emote_mention_multiplier),
     )
+    reacting = [e for e in baseline if e[4] > 0 or e[5] > 0 or e[6] > 0]
     for index, enabled, multiplier in signals:
         if not enabled or len({e[1] for e in short if e[index] > 0}) < min_unique:
             continue
         ratio = _spike_ratio(
             _short_reaction_weight(short, index),
-            _reaction_weight(baseline, index),
+            _reaction_weight(reacting, index),
             baseline_seconds,
             MIN_ABSOLUTE_LAUGHS,
         )
@@ -699,6 +700,27 @@ def record_message(
 
     short_cutoff = now - SHORT_WINDOW_SECONDS
     short = [e for e in entries if e[0] >= short_cutoff]
+
+    short_emote_unique_senders = len({e[1] for e in short if e[4] > 0})
+    short_laugh_unique_senders = len({e[1] for e in short if e[5] > 0})
+    short_mention_unique_senders = len({e[1] for e in short if e[6] > 0})
+    # A signal fires only with at least _dynamic_min_reaction_unique people
+    # behind it in the short window, and that is never below this however
+    # big or small the baseline is. Most messages arrive with fewer people
+    # reacting than that, and for them nothing below can fire: the minutes
+    # of baseline are not gone through at all. What comes out is the same -
+    # this only spares the work - and it is most of a replay's time.
+    fewest = min(settings.min_absolute_unique, settings.min_reaction_unique_ceiling)
+    if not any(
+        enabled and senders >= fewest
+        for enabled, senders in (
+            (settings.emotes_enabled, short_emote_unique_senders),
+            (settings.laugh_enabled, short_laugh_unique_senders),
+            (settings.emote_mention_enabled, short_mention_unique_senders),
+        )
+    ):
+        return None
+
     baseline = [e for e in entries if e[0] < short_cutoff]
     baseline_seconds = history_seconds - SHORT_WINDOW_SECONDS
 
@@ -707,23 +729,24 @@ def record_message(
     short_unique_contents = len({e[2] for e in short if e[2]})
     short_emote_count = sum(e[3] for e in short)
     short_emote_weight = _short_reaction_weight(short, 4)
-    short_emote_unique_senders = len({e[1] for e in short if e[4] > 0})
     short_laugh_weight = _short_reaction_weight(short, 5)
     short_laugh_count = sum(1 for e in short if e[5] > 0)
-    short_laugh_unique_senders = len({e[1] for e in short if e[5] > 0})
     short_mention_weight = _short_reaction_weight(short, 6)
     short_mention_count = sum(1 for e in short if e[6] > 0)
-    short_mention_unique_senders = len({e[1] for e in short if e[6] > 0})
 
     baseline_message_count = len(baseline)
     baseline_unique_senders = len({e[1] for e in baseline})
     baseline_unique_contents = len({e[2] for e in baseline if e[2]})
-    baseline_emote_weight = _reaction_weight(baseline, 4)
-    baseline_emote_unique_senders = len({e[1] for e in baseline if e[4] > 0})
-    baseline_laugh_weight = _reaction_weight(baseline, 5)
-    baseline_laugh_unique_senders = len({e[1] for e in baseline if e[5] > 0})
-    baseline_mention_weight = _reaction_weight(baseline, 6)
-    baseline_mention_unique_senders = len({e[1] for e in baseline if e[6] > 0})
+    # Each signal's figures only look at the messages that carry one, in
+    # the same order: a few of the minutes' worth, gone through once each
+    # instead of all of them.
+    reacting = [e for e in baseline if e[4] > 0 or e[5] > 0 or e[6] > 0]
+    baseline_emote_weight = _reaction_weight(reacting, 4)
+    baseline_emote_unique_senders = len({e[1] for e in reacting if e[4] > 0})
+    baseline_laugh_weight = _reaction_weight(reacting, 5)
+    baseline_laugh_unique_senders = len({e[1] for e in reacting if e[5] > 0})
+    baseline_mention_weight = _reaction_weight(reacting, 6)
+    baseline_mention_unique_senders = len({e[1] for e in reacting if e[6] > 0})
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
