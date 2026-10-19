@@ -192,6 +192,7 @@ def _reset_module_state() -> None:
     twitch_client._token_cache.clear()
     youtube_client._client_version = youtube_client.CLIENT_VERSION
     webhook_security._public_key_cache = None
+    webhook_security._kept_copy_until = None
     for recorder in recording_manager._recorders.values():
         recorder.stop()
     recording_manager._recorders.clear()

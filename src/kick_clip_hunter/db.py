@@ -1597,6 +1597,24 @@ def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) ->
     conn.commit()
 
 
+# Kick's public key for webhook signatures, as PEM, the last time it was
+# fetched (see webhook_security).
+KICK_PUBLIC_KEY_KEY = "kick_public_key"
+
+
+def get_kick_public_key_pem(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (KICK_PUBLIC_KEY_KEY,)).fetchone()
+    return row[0] if row else None
+
+
+def set_kick_public_key_pem(conn: sqlite3.Connection, pem: str) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (KICK_PUBLIC_KEY_KEY, pem),
+    )
+    conn.commit()
+
+
 # Where notifications go, as it was set on the Settings page (see
 # notify.Setup): each value under its field's name with this in front - an
 # empty one too, which says there is none. What is not kept here comes from

@@ -5917,7 +5917,13 @@ async def kick_webhook(
 ):
     body = await request.body()
 
-    public_key = await get_kick_public_key()
+    try:
+        public_key = await get_kick_public_key()
+    except httpx.HTTPError as error:
+        # Never fetched, and Kick cannot be reached for it now: a refusal
+        # Kick can see, rather than a traceback.
+        logger.warning("a webhook could not be verified: Kick's public key could not be fetched (%r)", error)
+        raise HTTPException(status_code=503, detail="Kick's public key could not be fetched") from None
     if not verify_signature(
         public_key, kick_event_message_id, kick_event_message_timestamp, body, kick_event_signature
     ):

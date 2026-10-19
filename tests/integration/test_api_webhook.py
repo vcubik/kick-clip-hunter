@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, detector
+from kick_clip_hunter import db, detector, webhook_security
 from kick_clip_hunter.chat_message import ChatMessage
 from tests.support.webhook import WebhookSigner, chat_payload
 
@@ -82,6 +82,25 @@ class TestSignatureCheck:
             await service.chat(CHANNEL, "alice", f"message {number}")
 
         assert len(service.api.calls("GET", "/public-key")) == 1
+
+    async def test_after_a_restart_with_kick_out_of_reach_the_key_kept_from_before_verifies(self, service):
+        await service.chat(CHANNEL, "alice", "before the restart")
+        webhook_security._public_key_cache = None
+        webhook_security._kept_copy_until = None
+        service.api.failures["/public-key"] = 503
+
+        response = await service.chat(CHANNEL, "alice", "after the restart")
+
+        assert response.status_code == 200
+        assert [content for _, _, content in service.chat_log()] == ["before the restart", "after the restart"]
+
+    async def test_a_key_that_was_never_fetched_and_cannot_be_is_a_refusal_not_a_crash(self, service):
+        service.api.failures["/public-key"] = 503
+
+        response = await service.chat(CHANNEL, "alice", "hello")
+
+        assert response.status_code == 503
+        assert service.chat_log() == []
 
 
 class TestChatMessages:

@@ -100,7 +100,8 @@ Module map (`src/kick_clip_hunter/`):
   another channel) and is also refreshed in the background on every start, together with
   7TV's global emotes (the ones every channel has; a channel's own emote of the same name
   wins over them)
-- `webhook_security.py` — verifies Kick's RSA-signed webhook payloads
+- `webhook_security.py` — verifies Kick's RSA-signed webhook payloads; Kick's public key is fetched once a
+  run and a copy kept in `app_settings`, which stands in while Kick cannot be reached
 - `twitch_client.py` — Twitch's API (Helix) with an app access token (client
   credentials, like Kick's): a channel by its name, whether it is live, its recordings;
   and, with the signed-in account's token, an EventSub subscription and a message written
