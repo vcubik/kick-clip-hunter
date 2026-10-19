@@ -23,6 +23,7 @@
     <dt>{{ figure.label }}</dt>
     <dd class="an-value">{{ figure.value }}</dd>
     <dd class="ch-cap">{% if figure.href %}<a href="{{ figure.href }}">{{ figure.caption }}</a>{% else %}{{ figure.caption }}{% endif %}</dd>
+    {% if figure.change %}<dd class="an-change">{{ figure.change }}</dd>{% endif %}
   </div>
   {% endfor %}
 </dl>
@@ -263,6 +264,42 @@
         </table>
         {% else %}
         <p class="ch-meta">Nobody was addressed in this period.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="an-pair">
+      <section aria-labelledby="an-groups">
+        <h2 class="an-title" id="an-groups">Who wrote</h2>
+        <p class="ch-cap">Chatters by the badges they have in the channel now.</p>
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Chatters</th><th scope="col" class="an-number">People</th><th scope="col" class="an-number">Messages</th><th scope="col" class="an-number">Of all</th><th scope="col" class="an-number">Each</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.groups %}
+            <tr><th scope="row">{{ row.group }}</th><td class="an-number">{{ row.chatters }}</td><td class="an-number">{{ row.messages }}</td><td class="an-number">{{ row.share }}</td><td class="an-number">{{ row.each }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="an-words">
+        <h2 class="an-title" id="an-words">Words used most</h2>
+        <p class="ch-cap">By the messages they are in, leaving out emotes, laughs and the little words every sentence has.</p>
+        {% if overview.words %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Word</th><th scope="col" class="an-number">Messages</th><th scope="col" class="an-number">Of all</th></tr>
+          </thead>
+          <tbody>
+            {% for row in overview.words %}
+            <tr><th scope="row">{{ row.word }}</th><td class="an-number">{{ row.messages }}</td><td class="an-number">{{ row.share }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="ch-meta">No word was used twice in this period.</p>
         {% endif %}
       </section>
     </div>

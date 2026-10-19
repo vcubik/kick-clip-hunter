@@ -72,9 +72,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   below). Whose chat and of which period is set in the pane on the left: a tab (24 hours,
   7 days, 30 days, all), any two times, or one of the sessions the chat came in - the
   newest of which is what the page opens on. Beside it is either the period's overview
-  (figures, messages over time with the laughing and the detected moments marked, the
-  busiest minutes, the most active chatters, the most used emotes, what was said and who
-  was addressed most) or its messages, a page at a time (numbered pages above and under them, as under the review
+  (figures - messages and chatters set against the period before: the same stretch of time
+  before, or for a session the session before - messages over time with the laughing and
+  the detected moments marked, the busiest minutes, the most active chatters, the most used
+  emotes, what was said and who was addressed most, chat by the badges its chatters have
+  now, and the words used most, the little words of Czech, Slovak and English left out) or its messages, a page at a time (numbered pages above and under them, as under the review
   queue and the list of recordings - `dashboard_view.pages`), which is where a chatter or a
   text is searched for: a chatter that is found gets figures of their own, and every
   message leads to the chat around it. The page is links and forms and needs no script.

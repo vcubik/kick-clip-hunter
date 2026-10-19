@@ -622,6 +622,108 @@ class TestTheFiguresOfAPeriod:
             "half of them wrote 2 messages or fewer"
         )
 
+    def test_messages_and_chatters_are_set_against_the_period_before(self):
+        before = chat_stats.Before("the 24 hours before", messages=4, chatters=3)
+
+        figures = by_label(chat_stats.overview_figures(self.kept(), TODAY, before=before))
+
+        assert figures["Messages"]["change"] == "25% more than the 24 hours before"
+        assert figures["Chatters"]["change"] == "as many as the 24 hours before"
+        assert by_label(chat_stats.overview_figures(self.kept(), TODAY))["Messages"]["change"] is None
+
+
+class TestComparedWithThePeriodBefore:
+    @pytest.mark.parametrize(
+        ("now", "before", "said"),
+        [
+            (118, 100, "18% more than then"),
+            (100, 100, "as many as then"),
+            (60, 100, "40% fewer than then"),
+            (1, 100, "99% fewer than then"),
+            (200, 100, "2 times as many as then"),
+            (2345, 1000, "2.3 times as many as then"),
+            (0, 100, "100% fewer than then"),
+        ],
+    )
+    def test_says_how_a_count_compares(self, now, before, said):
+        assert chat_stats.change_words(now, before, "then") == said
+
+    def test_with_nothing_before_there_is_nothing_to_say(self):
+        assert chat_stats.change_words(5, 0, "then") is None
+
+
+class TestTheWordsUsed:
+    def test_are_words_lowercased_once_a_message(self):
+        assert chat_stats.words_of(["Gambit gambit GAMBIT", "úžasný"]) == {"gambit", "úžasný"}
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "a to je ale",  # little words
+            "the and you",
+            "xD xDDDD XD",  # laughs
+            "ok no 42 2026",  # too short, numbers
+            "@someone_long",  # an address
+            "https://kick.com/channel www.example.com",  # links
+        ],
+    )
+    def test_leave_out_what_says_nothing_of_the_chat(self, text):
+        assert chat_stats.words_of([text]) == set()
+
+    def test_keep_an_apostrophe_or_a_hyphen_inside_a_word(self):
+        assert chat_stats.words_of(["e-mail rock'n'roll -dash-"]) == {"e-mail", "rock'n'roll", "dash"}
+
+    def test_a_word_used_in_more_than_one_message_is_listed_by_those_messages(self):
+        kept = collected(
+            [
+                message(local(12, 20, 0, 1), "gambit gambit gambit", "alice"),
+                message(local(12, 20, 0, 2), "Gambit KEKW", "bob"),
+                message(local(12, 20, 0, 3), "lonely word", "bob"),
+                message(local(12, 20, 0, 4), "KEKW", "carol"),
+            ]
+        )
+
+        assert chat_stats.top_words(kept, 10) == [{"word": "gambit", "messages": "2", "share": "50%"}]
+
+
+# Stored badges of a chatter of each kind, by who they are.
+BADGES = {
+    "streamer": '[{"type": "broadcaster", "text": "Broadcaster"}, {"type": "subscriber", "text": "Sub"}]',
+    "mod": '[{"type": "subscriber", "text": "Sub"}, {"type": "moderator", "text": "Moderator"}]',
+    "vip": '[{"type": "vip", "text": "VIP"}]',
+    "founder": '[{"type": "founder", "text": "Founder"}]',
+    "sub": '[{"type": "subscriber", "text": "Sub", "count": 3}]',
+    "og": '[{"type": "og", "text": "OG"}]',
+}
+
+
+class TestWhoWrote:
+    def test_a_chatter_is_in_the_group_of_the_highest_badge_they_have(self):
+        groups = {name: chat_stats.badge_group(badges) for name, badges in BADGES.items()}
+
+        assert groups == {
+            "streamer": "The streamer",
+            "mod": "Moderators",
+            "vip": "VIPs",
+            "founder": "Subscribers",
+            "sub": "Subscribers",
+            "og": "Everyone else",
+        }
+        assert chat_stats.badge_group("[]") == "Everyone else"
+
+    def test_each_group_says_how_many_wrote_how_much(self):
+        senders = ["sub", "sub", "sub", "founder", "mod", "nobody_known", "nobody_known", "og"]
+        kept = collected([message(local(12, 20, 0, n), "hi", sender) for n, sender in enumerate(senders)])
+        identities = {name: ("#ffffff", badges) for name, badges in BADGES.items()}
+
+        rows = chat_stats.badge_groups(kept, identities)
+
+        assert [(row["group"], row["chatters"], row["messages"], row["share"], row["each"]) for row in rows] == [
+            ("Moderators", "1", "1", "12%", "1"),
+            ("Subscribers", "2", "4", "50%", "2"),
+            ("Everyone else", "2", "3", "38%", "1.5"),
+        ]
+
 
 class TestTheFiguresOfAChatter:
     def figures(self, **overrides) -> dict[str, dict]:

@@ -750,6 +750,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .an-figures { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-16) var(--space-24); }
 .an-figures dt { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
 .an-value { font-size: 28px; line-height: 32px; font-weight: 700; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; }
+/* How the figure compares with the period before: a caption, a line of its own. */
+.an-change { font-size: 12px; line-height: 16px; color: var(--text-2); }
 
 /* Messages as columns on paper: ink for all of them, the pen for the
    laughing ones at the foot of each, the highlighter behind a column a

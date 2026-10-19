@@ -13,6 +13,12 @@ date come in as arguments, so all of it is tested with lists of messages.
 Times are told as the rest of the dashboard tells them, in the machine's own
 time zone.
 
+A period is set against the one before it - the same stretch of time
+before, or for a session the session before - in how many messages and
+chatters it had (`change_words`). Chatters are told apart by the badges
+they have in the channel now (`badge_groups`), and the words chat used are
+counted apart from the little words every sentence has (`STOP_WORDS`).
+
 Emotes are counted as the dashboard draws them (dashboard_view.chat_parts):
 Kick's own are in the message itself, a 7TV emote is a word spelled exactly
 like an emote the channel has *now* - one it has since removed is a word
@@ -21,6 +27,7 @@ again. Laughing is what the detector takes for it (detector.is_laughing).
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import statistics
@@ -340,6 +347,32 @@ def columns_for(period: Period) -> Columns:
 
 # -- one pass over the chat -----------------------------------------------------
 
+# A word, for the words chat used most: letters, with an apostrophe or a
+# hyphen inside. Numbers, links and names after an "@" are not words here.
+_WORD = re.compile(r"(?<![@\w])[^\W\d_](?:[\w'-]*[^\W\d_])?")
+_LINK = re.compile(r"\S+://\S*|www\.\S+")
+WORD_MIN_LENGTH = 3
+# What every sentence has, in the languages the watched chats are in -
+# Czech and Slovak, with and without their accents, and English - and
+# which would otherwise be the words used most in any period.
+STOP_WORDS = frozenset(
+    """
+    ten ale ani ano asi az až bez bude budu by byl byla bylo byt být co jak jako je jen jeho jej
+    její jejich jemu jeste ještě jsem jses jseš jsi jsme jsou jste kam kde kdo kdy když
+    kdyz ktera která ktere které kteri kteří ktery který mam mám mas máš mate máte me mě mi mit
+    mít mne mně moc muj můj muze může na nad nam nám nas náš nebo nej neni není nez než nic nich
+    nim ním no od po pod pro proc proč protoze protože pri při s se si sme sem som ta tak take
+    také tam te té tem tím tento teto tim to toho tom tomu tu ty tyto uz už vam vám vas váš ve
+    vic víc vsak však vse vše vsechno všechno za ze že jo jj tohle tady ted teď taky pak bych
+    bys pokud mel měl mela měla ona oni tvoje tvuj tvůj moje svoje vsechny všechny vsem všem
+    nebude
+    aj ako alebo bol bola bolo čo este ešte ich ja len ma nie sa ste sú su v vo ked keď
+    the and you that for are was with this have not but they his her she him what all can
+    just your from will one about would there their out get like when who know them some how
+    its it's i'm don't dont yes yeah lol got been has had were our more then than also only why
+    """.split()
+)
+
 # A name after an "@" - where the sign begins a word, which leaves out the
 # one in the middle of an address.
 _MENTION = re.compile(r"(?<![\w.])@([A-Za-z0-9_]{2,40})")
@@ -422,6 +455,8 @@ class Collected:
     mentions: Counter[str] = field(default_factory=Counter)
     mention_people: dict[str, set[str]] = field(default_factory=dict)
     mention_spelling: dict[str, Counter[str]] = field(default_factory=dict)
+    # The words used (see words_of), lowercased: in how many messages.
+    words: Counter[str] = field(default_factory=Counter)
 
 
 def collect(
@@ -474,6 +509,8 @@ def collect(
             kept.chatter_emotes.setdefault(sender, Counter())[picture] += 1
         kept.with_emote += bool(used)
 
+        kept.words.update(words_of(part["text"] for part in parts if "text" in part))
+
         # Emotes have a table of their own; what was said is words.
         if any("text" in part and part["text"].strip() for part in parts):
             key, shown = said_key(content)
@@ -491,6 +528,19 @@ def collect(
             kept.mention_people.setdefault(key, set()).add(sender)
             kept.mention_spelling.setdefault(key, Counter())[name] += 1
     return kept
+
+
+def words_of(texts: Iterable[str]) -> set[str]:
+    """The words a message's text has in it (emotes aside), each once,
+    lowercased: no typed laugh, nothing shorter than WORD_MIN_LENGTH, none
+    of the STOP_WORDS."""
+    found = set()
+    for text in texts:
+        for word in _WORD.findall(_LINK.sub(" ", text)):
+            key = word.casefold()
+            if len(key) >= WORD_MIN_LENGTH and key not in STOP_WORDS and not _LAUGH_WORD.match(key):
+                found.add(key)
+    return found
 
 
 def mentions_of(messages: Iterable[Row], name: str) -> int:
@@ -555,8 +605,38 @@ def rank_of(counts: list[tuple[str, int]], name: str) -> int | None:
 # -- figures --------------------------------------------------------------------
 
 
-def _figure(label: str, value: str, caption: str = "", href: str | None = None) -> dict[str, Any]:
-    return {"label": label, "value": value, "caption": caption, "href": href}
+def _figure(
+    label: str, value: str, caption: str = "", href: str | None = None, change: str | None = None
+) -> dict[str, Any]:
+    return {"label": label, "value": value, "caption": caption, "href": href, "change": change}
+
+
+@dataclass(frozen=True)
+class Before:
+    """The period a period is set against: what it is called in a sentence
+    ("the 7 days before", "the session before"), and how many messages and
+    chatters it had."""
+
+    words: str
+    messages: int
+    chatters: int
+
+
+def change_words(now: int, before: int, before_words: str) -> str | None:
+    """How a count compares with the one of the period before: "18% more
+    than the 7 days before", "2.4 times as many as ...". None where the
+    period before had none, which leaves nothing to compare with."""
+    if before <= 0:
+        return None
+    ratio = now / before
+    if ratio >= 2:
+        return f"{number_words(ratio, 1)} times as many as {before_words}"
+    change = round((ratio - 1) * 100)
+    if change == 0:
+        return f"as many as {before_words}"
+    if change > 0:
+        return f"{change}% more than {before_words}"
+    return f"{-change}% fewer than {before_words}"
 
 
 def busiest_minutes(kept: Collected, limit: int = BUSIEST_MINUTES) -> list[tuple[datetime, int]]:
@@ -580,11 +660,12 @@ def overview_figures(
     returning: int | None = None,
     moments: int = 0,
     moments_href: str | None = None,
+    before: Before | None = None,
 ) -> list[dict[str, Any]]:
     """The figures at the top of the overview of a period that has chat.
     `returning` is how many of its chatters had written in the channel
     before (None where that cannot be told), `moments` how many were
-    detected in it."""
+    detected in it, `before` the period it is set against, if any."""
     chatters = len(kept.by_chatter)
     minutes = len(kept.by_minute)
     pace = f"{number_words(kept.messages / minutes, 1)} a minute in the {counted_words(minutes, 'minute')} with chat"
@@ -593,11 +674,17 @@ def overview_figures(
     (busiest, most_in_one), *_ = busiest_minutes(kept, 1)
 
     figures = [
-        _figure("Messages", whole_words(kept.messages), pace),
+        _figure(
+            "Messages",
+            whole_words(kept.messages),
+            pace,
+            change=change_words(kept.messages, before.messages, before.words) if before else None,
+        ),
         _figure(
             "Chatters",
             whole_words(chatters),
             f"half of them wrote {counted_words(half, 'message')}" + ("" if half == 1 else " or fewer"),
+            change=change_words(chatters, before.chatters, before.words) if before else None,
         ),
     ]
     if returning is not None:
@@ -883,6 +970,63 @@ def mentioned_most(kept: Collected, limit: int, link: Callable[[str], str] | Non
             }
         )
     return rows
+
+
+def top_words(kept: Collected, limit: int) -> list[dict[str, Any]]:
+    """The words used in most messages (see words_of): in how many, and
+    what part of all messages that is."""
+    return [
+        {"word": word, "messages": whole_words(count), "share": share_words(count, kept.messages)}
+        for word, count in most(kept.words, limit)
+        if count > 1
+    ]
+
+
+# Who a chatter is in the channel, by the badges they have there now - the
+# highest they have: the badge types each group is told by, and what it is
+# called. Everyone with none of them is EVERYONE_ELSE.
+BADGE_GROUPS = (
+    ("The streamer", frozenset({"broadcaster"})),
+    ("Moderators", frozenset({"moderator"})),
+    ("VIPs", frozenset({"vip"})),
+    ("Subscribers", frozenset({"subscriber", "founder"})),
+)
+EVERYONE_ELSE = "Everyone else"
+
+
+def badge_group(badges: str) -> str:
+    """Which of BADGE_GROUPS a chatter with these badges (as they are
+    stored, see chat_identity) is in."""
+    have = {badge["type"] for badge in json.loads(badges or chat_identity.NO_BADGES)}
+    for label, types in BADGE_GROUPS:
+        if have & types:
+            return label
+    return EVERYONE_ELSE
+
+
+def badge_groups(kept: Collected, identities: Mapping[str, chat_identity.Identity]) -> list[dict[str, Any]]:
+    """Chat by who wrote it - the streamer, moderators, VIPs, subscribers,
+    everyone else: how many chatters each group had, how many messages they
+    wrote, what part of all messages that is, and how many each wrote on
+    average. A group nobody in the period was in is left out. Badges are
+    the ones a chatter has now, as the dashboard knows them."""
+    chatters: Counter[str] = Counter()
+    messages: Counter[str] = Counter()
+    for name, count in kept.by_chatter.items():
+        group = badge_group(identities.get(name, (None, chat_identity.NO_BADGES))[1])
+        chatters[group] += 1
+        messages[group] += count
+    return [
+        {
+            "group": label,
+            "chatters": whole_words(chatters[label]),
+            "messages": whole_words(messages[label]),
+            "share": share_words(messages[label], kept.messages),
+            "each": number_words(messages[label] / chatters[label], 1),
+        }
+        for label in [label for label, _types in BADGE_GROUPS] + [EVERYONE_ELSE]
+        if chatters[label]
+    ]
 
 
 def chatter_emotes(kept: Collected, limit: int = CHATTER_EMOTES) -> list[dict[str, Any]]:
