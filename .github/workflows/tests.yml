@@ -57,9 +57,36 @@ jobs:
       - name: Install ffmpeg (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      # A full build straight from where it is published - gyan.dev's, the one
+      # the service runs on, or BtbN's on GitHub when that cannot be had -
+      # rather than through Chocolatey, whose community feed has been down
+      # long enough to fail every run, and whose ffmpeg is a launcher in
+      # front of the real one.
       - name: Install ffmpeg (Windows)
         if: runner.os == 'Windows'
-        run: choco install ffmpeg --no-progress -y
+        shell: pwsh
+        run: |
+          $sources = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          )
+          $zip = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $into = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          foreach ($source in $sources) {
+            try {
+              Invoke-WebRequest -Uri $source -OutFile $zip -MaximumRetryCount 3 -RetryIntervalSec 10
+              Expand-Archive -Path $zip -DestinationPath $into -Force
+              break
+            } catch {
+              Write-Warning "ffmpeg could not be had from ${source}: $_"
+            }
+          }
+          $found = Get-ChildItem -Path $into -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $found) { throw "ffmpeg could not be installed from any source" }
+          $found.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Check ffmpeg
+        shell: bash
+        run: ffmpeg -hide_banner -version | head -1 && ffprobe -hide_banner -version | head -1
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Run the test suite
