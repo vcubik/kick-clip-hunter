@@ -79,6 +79,7 @@ class TestSwitches:
             "notify_clip_videos_enabled": True,
             "notify_recordings_enabled": True,
             "notify_health_enabled": True,
+            "notify_daily_enabled": True,
         }
 
     async def test_a_fresh_installation_watches_but_analyses_nothing(self, service):
@@ -97,6 +98,7 @@ class TestSwitches:
             "notify_clip_videos": True,
             "notify_recordings": True,
             "notify_health": True,
+            "notify_daily": True,
         }
 
     async def test_every_switch_has_a_default_and_every_analysis_and_notification_switch_a_label(self, service):
