@@ -167,7 +167,7 @@ def recommended() -> Tuning:
 # -- the settings on offer ---------------------------------------------------
 
 # What a setting's value is: a whole number, a number, on or off, or a list -
-# of parts of emote names, or of whole messages. A list is kept lowercased
+# of parts of emote names, of whole messages, or of accounts' names. A list is kept lowercased
 # and in alphabetical order, so two that hold the same things are equal. It
 # is posted as what it holds, item by item - the page adds them one at a
 # time - never as text for the service to split: then a message can have a
@@ -177,7 +177,10 @@ NUMBER = "number"
 SWITCH = "switch"
 WORDS = "words"
 PHRASES = "phrases"
-LISTS = (WORDS, PHRASES)
+NAMES = "names"
+LISTS = (WORDS, PHRASES, NAMES)
+# The lists that are taken as sets of what they hold.
+SETS = (PHRASES, NAMES)
 
 Value = bool | int | float | tuple[str, ...]
 
@@ -190,9 +193,11 @@ DETECTOR = "detector."
 WORD_MIN_LENGTH = 3
 WORD_MAX_LENGTH = 40
 PHRASE_MAX_LENGTH = 100
+# A YouTube channel's name can be this long; Kick's and Twitch's are shorter.
+NAME_MAX_LENGTH = 100
 LIST_MAX_ITEMS = 50
 # What the field an item is added from says while it is empty.
-LIST_PROMPTS = {WORDS: "Part of an emote's name", PHRASES: "A whole message"}
+LIST_PROMPTS = {WORDS: "Part of an emote's name", PHRASES: "A whole message", NAMES: "An account's name"}
 
 # The sections of the page, in the order they come: key, heading, and what is
 # said under it. The first two are on a channel's page only (see
@@ -425,6 +430,14 @@ SETTINGS: tuple[Setting, ...] = (
         (DETECTOR + "added_ignored_messages",),
     ),
     Setting(
+        "ignored_senders", SIGNALS, NAMES,
+        "Accounts to ignore",
+        "Chat bots, whose messages the detector leaves out altogether: they post on a timer and answer "
+        "commands, which is no reaction. The well-known ones are in to begin with - take one out if a person "
+        "goes by that name, and add a channel's own bot.",
+        (DETECTOR + "ignored_senders",),
+    ),
+    Setting(
         "longest_seconds", CLIPS, WHOLE,
         "Longest a moment stays open",
         "A reaction that keeps drawing in new people extends its clip, for up to this long after it fired.",
@@ -592,7 +605,7 @@ def tuned(for_all: Mapping[str, Value], own: Mapping[str, Value] | None = None) 
     detector_fields: dict[str, Any] = {}
     for name, value in {**shared(for_all), **(own or {})}.items():
         setting = BY_NAME[name]
-        if setting.kind == PHRASES:
+        if setting.kind in SETS:
             value = frozenset(value)
         for path in setting.sets:
             if path.startswith(DETECTOR):
@@ -614,9 +627,12 @@ def _range_words(setting: Setting) -> str:
 
 def _items(setting: Setting, raw: object) -> list[str]:
     """What a list holds, as it was posted or stored: each of its items,
-    lowercased and without the spaces around it, an empty one left out."""
+    lowercased and without the spaces around it, an empty one left out - and
+    an account's name without the "@" a YouTube handle is written with."""
     if not isinstance(raw, (list, tuple)) or not all(isinstance(item, str) for item in raw):
         raise ValueError(f'"{setting.label}" has to be a list of words.')
+    if setting.kind == NAMES:
+        raw = [detector.sender_key(item) for item in raw]
     return [item.strip().lower() for item in raw if item.strip()]
 
 
@@ -646,6 +662,9 @@ def clean(name: str, raw: object) -> Value:
                 raise ValueError(
                     f"{label}: {wrong[0]!r} has to be {WORD_MIN_LENGTH} to {WORD_MAX_LENGTH} characters long."
                 )
+        elif setting.kind == NAMES:
+            if any(len(item) > NAME_MAX_LENGTH for item in items):
+                raise ValueError(f"{label}: a name can be {NAME_MAX_LENGTH} characters long at the most.")
         elif any(len(item) > PHRASE_MAX_LENGTH for item in items):
             raise ValueError(f"{label}: a message can be {PHRASE_MAX_LENGTH} characters long at the most.")
         return tuple(items)
@@ -747,7 +766,7 @@ def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) ->
             entries=list(value),
             rest_entries=list(rest),
             shortest=WORD_MIN_LENGTH if of_words else 1,
-            longest=WORD_MAX_LENGTH if of_words else PHRASE_MAX_LENGTH,
+            longest={WORDS: WORD_MAX_LENGTH, PHRASES: PHRASE_MAX_LENGTH, NAMES: NAME_MAX_LENGTH}[setting.kind],
             most_items=LIST_MAX_ITEMS,
             prompt=LIST_PROMPTS[setting.kind],
         )

@@ -34,7 +34,7 @@
 {%- endmacro %}
 
 {% macro setting(field) -%}
-{%- set listed = field.kind in ("words", "phrases") -%}
+{%- set listed = field.kind in ("words", "phrases", "names") -%}
 <div class="set-row{% if not field.at_rest %} is-set{% endif %}"{% if listed %} data-status-scope{% endif %}>
   {% if field.kind == "switch" -%}
   <span class="set-name" id="set-{{ field.name }}">{{ field.label }}</span>

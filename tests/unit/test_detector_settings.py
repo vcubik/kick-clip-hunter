@@ -365,6 +365,44 @@ class TestMessagesToIgnore:
         assert counting.reactions_needed("xd") == detector._dynamic_min_reaction_unique(210)
 
 
+class TestAccountsToIgnore:
+    BOT = sorted(detector.IGNORED_SENDERS)[0]
+
+    @pytest.mark.parametrize("written", [BOT, BOT.upper(), f"@{BOT}", f"  {BOT} "])
+    def test_a_known_bots_messages_never_enter_the_window(self, written):
+        chat = warm_chat()
+        before = len(detector._entries[chat.channel])
+
+        for _ in range(20):
+            assert chat.say(written, "!giveaway is on, type !join xD") is None
+
+        assert len(detector._entries[chat.channel]) == before
+
+    def test_a_person_with_another_name_is_counted(self):
+        chat = warm_chat()
+        before = len(detector._entries[chat.channel])
+
+        chat.say(f"{self.BOT}_fan", "xd")
+
+        assert len(detector._entries[chat.channel]) == before + 1
+
+    def test_a_channel_that_took_the_bot_off_its_list_counts_it(self):
+        chat = warm_chat(settings=settings(ignored_senders=detector.IGNORED_SENDERS - {self.BOT}))
+        before = len(detector._entries[chat.channel])
+
+        chat.say(self.BOT, "xd")
+
+        assert len(detector._entries[chat.channel]) == before + 1
+
+    def test_a_channel_can_add_its_own_bot(self):
+        chat = warm_chat(settings=settings(ignored_senders=detector.IGNORED_SENDERS | {"channels_own_bot"}))
+        before = len(detector._entries[chat.channel])
+
+        chat.say("Channels_Own_Bot", "xd")
+
+        assert len(detector._entries[chat.channel]) == before
+
+
 class TestExtendingAMoment:
     def chat_with_a_moment(self, **changed) -> tuple[ChatSim, float]:
         """A warmed-up channel under its own settings, on which a moment has

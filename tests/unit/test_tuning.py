@@ -126,10 +126,12 @@ class TestTheSettingsOnOffer:
         assert setting("lull_seconds").least > detector.SHORT_WINDOW_SECONDS
         assert setting("lull_seconds").least <= detector.COOLDOWN_SECONDS
 
-    def test_a_list_starts_out_empty(self):
+    def test_a_list_starts_out_empty_but_the_accounts_to_ignore(self):
         recommended = tuning.recommended_values()
+        lists = {item.name for item in tuning.SETTINGS if item.kind in tuning.LISTS}
 
-        assert {recommended[item.name] for item in tuning.SETTINGS if item.kind in tuning.LISTS} == {()}
+        assert {recommended[name] for name in lists - {"ignored_senders"}} == {()}
+        assert recommended["ignored_senders"] == tuple(sorted(detector.IGNORED_SENDERS))
 
 
 class TestTakingAValue:
@@ -191,6 +193,23 @@ class TestTakingAValue:
             "gg wp",
             "ok, go",
         )
+
+    def test_an_account_to_ignore_is_its_name_lowercased_without_a_handles_at(self):
+        assert tuning.clean("ignored_senders", ["BotRix", "@Some Channel", "nightbot", " @nightbot "]) == (
+            "botrix",
+            "nightbot",
+            "some channel",
+        )
+
+    def test_an_account_to_ignore_has_a_length_limit(self):
+        with pytest.raises(ValueError, match="a name can be"):
+            tuning.clean("ignored_senders", ["x" * (tuning.NAME_MAX_LENGTH + 1)])
+
+    def test_the_accounts_to_ignore_reach_the_detector_as_a_set(self):
+        chosen = tuning.tuned({"ignored_senders": ("botrix", "own_bot")})
+
+        assert chosen.detector.ignored_senders == frozenset({"botrix", "own_bot"})
+        assert tuning.tuned({"ignored_senders": ()}).detector.ignored_senders == frozenset()
 
     def test_an_empty_list_is_a_list(self):
         assert tuning.clean("laugh_emote_words", []) == ()
