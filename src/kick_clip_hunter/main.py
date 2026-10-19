@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -68,7 +68,9 @@ from .db import (
     add_channel_rename,
     add_subscription_drop,
     count_channel_chat,
+    count_chat_between,
     count_moments,
+    count_moments_between,
     count_moments_by_channel,
     count_moments_with_clip,
     count_returning_chatters,
@@ -94,6 +96,7 @@ from .db import (
     get_chat_span,
     get_chatter_counts,
     get_connection,
+    get_daily_summary_sent_for,
     get_first_message_time,
     get_flag,
     get_moment,
@@ -116,6 +119,7 @@ from .db import (
     insert_stream_recording,
     iter_channel_chat,
     iter_channel_chat_between,
+    recordings_saved_between,
     remove_channel_chat,
     remove_streamer,
     rename_streamer,
@@ -124,6 +128,7 @@ from .db import (
     search_channel_chat,
     set_chat_delay,
     set_chat_identities,
+    set_daily_summary_sent_for,
     set_flag,
     set_stream_recording_state,
     set_streamer_always_record,
@@ -266,6 +271,7 @@ SETTING_KEYS = {
     "notify_clip_videos": "notify_clip_videos_enabled",
     "notify_recordings": "notify_recordings_enabled",
     "notify_health": "notify_health_enabled",
+    "notify_daily": "notify_daily_enabled",
 }
 # The per-clip analysis steps (everything but "watching") are pure data
 # capture for a future classifier, and each one costs real CPU time on every
@@ -287,6 +293,7 @@ NOTIFY_SETTINGS = [
     ("notify_clip_videos", "Clip videos"),
     ("notify_recordings", "Recordings"),
     ("notify_health", "Problems"),
+    ("notify_daily", "Daily summary"),
 ]
 # Used until a setting is first toggled from the dashboard.
 SETTING_DEFAULTS = {
@@ -299,6 +306,7 @@ SETTING_DEFAULTS = {
     "notify_clip_videos_enabled": True,
     "notify_recordings_enabled": True,
     "notify_health_enabled": True,
+    "notify_daily_enabled": True,
 }
 _flags: dict[str, bool] = {}
 
@@ -835,6 +843,12 @@ def _carry_out(message: ChatMessage, command: str) -> None:
 # and how long a part has to have been trouble on end before it is.
 HEALTH_NOTE_SECONDS = 60
 HEALTH_NOTE_AFTER_SECONDS = 120
+# The day's summary goes out at this hour, local time, of the 24 hours
+# before it - in the morning, the evening's streams over - and whether it
+# is due is looked at this often. One missed while the service was not
+# running goes out once it is again.
+DAILY_SUMMARY_HOUR = 9
+DAILY_SUMMARY_SECONDS = 60
 
 # What sends the notes, and what has become of them - and the setup it was
 # made by. Both are made again once the Settings page saves another.
@@ -974,6 +988,70 @@ def _tell_of_health(now: datetime | None = None) -> None:
         )
 
 
+async def _keep_summing_up_days() -> None:
+    """Sends the day's summary once it is due (see _sum_up_day)."""
+    while True:
+        await asyncio.sleep(DAILY_SUMMARY_SECONDS)
+        try:
+            await _sum_up_day()
+        except Exception:
+            logger.exception("the day's summary could not be made")
+
+
+def _utc_words(moment: datetime) -> str:
+    """A moment as the database's times are compared with."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _day_figures(streamers, start: datetime, end: datetime) -> notify.Day:
+    """What the stored rows say of the day from `start` to `end`."""
+    since, until = _utc_words(start), _utc_words(end)
+    conn = get_connection()
+    try:
+        clips = count_moments_between(conn, since, until)
+        unrated = count_moments(conn, unrated=True)
+        saved = recordings_saved_between(conn, since, until)
+        chat = sum(count_chat_between(conn, row["broadcaster_user_id"], since, until) for row in streamers)
+    finally:
+        conn.close()
+    return notify.Day(
+        clips=clips,
+        unrated=unrated,
+        recordings=len(saved),
+        recorded_seconds=sum(seconds for seconds, _ in saved),
+        recorded_bytes=sum(size for _, size in saved),
+        chat_messages=chat,
+    )
+
+
+async def _sum_up_day(now: datetime | None = None) -> bool:
+    """Sends the summary of the last day where notes of it go, if one is due
+    (see notify.summary_due) - and whether it did. A day is summed up once,
+    whether or not its note got through: the Health page says if it did not."""
+    if not _notifying("notify_daily") or _shutdown_requested:
+        return False
+    now = (now or datetime.now()).astimezone()
+    conn = get_connection()
+    try:
+        streamers = get_streamers(conn)
+        end = notify.summary_due(now, get_daily_summary_sent_for(conn), DAILY_SUMMARY_HOUR)
+        if end is None:
+            return False
+        set_daily_summary_sent_for(conn, end)
+    finally:
+        conn.close()
+    day = await asyncio.to_thread(_day_figures, streamers, end - timedelta(days=1), end)
+    report = health.report(_health_facts(streamers, _right_now(streamers)["channels"]), _today())
+    day = replace(
+        day,
+        health=report["lead"] if report["troubles"] else "Nothing on the Health page needs a look.",
+        health_trouble=bool(report["troubles"]),
+        free_bytes=stream_recording.free_bytes(),
+    )
+    _track_task(_notes().notify(notify.daily_note(day, link=_link("/dashboard"))))
+    return True
+
+
 def _say_where_notes_go() -> None:
     """Logs where notifications go, and what in .env keeps them from going
     where it was meant to. What the Settings page saved was checked as it
@@ -1014,6 +1092,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_keep_chat_subscriptions()),
         asyncio.create_task(_keep_looking_at_tunnel()),
         asyncio.create_task(_keep_telling_of_health()),
+        asyncio.create_task(_keep_summing_up_days()),
     ]
     reader = _start_reading_twitch_chat()
     if reader is not None:

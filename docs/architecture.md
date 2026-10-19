@@ -357,7 +357,12 @@ Module map (`src/kick_clip_hunter/`):
   `_start_stream_recording` (who started it: `notify.DASHBOARD`, `CHAT` and by whom, `ALWAYS`),
   `_end_stream_recording` and `_save_stream_recording`, and `_keep_telling_of_health`, which
   looks at the Health page's judgement every `HEALTH_NOTE_SECONDS` (`_tell_of_health`) and
-  tells of a part after `HEALTH_NOTE_AFTER_SECONDS`
+  tells of a part after `HEALTH_NOTE_AFTER_SECONDS`, and `_keep_summing_up_days`, which sends
+  the summary of the last 24 hours at `DAILY_SUMMARY_HOUR` local time (`_sum_up_day`: clips by
+  channel, clips still unrated, recordings saved, chat counted a channel at a time on its
+  index, the Health page and the disk - `notify.daily_note`; the day last summed up is kept in
+  `app_settings` as `daily_summary_sent_for`, so a day missed while the service was down goes
+  out once it runs again, and none goes out twice)
 - `dashboard_view.py` — what the dashboard's pages say, worked out from stored rows: how
   the queue is grouped by stream, how times, counts and detector reasons are worded.
   Pure functions, so the wording is unit-tested without rendering a page

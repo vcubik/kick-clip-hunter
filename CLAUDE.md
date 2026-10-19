@@ -16,8 +16,8 @@ can write in a channel's chat - when a recording starts or ends, when a clip was
 take commands there from its streamer and moderators (start or stop a recording, say how
 things stand); it is off for every channel until that channel's settings switch it on. And
 the service can tell whoever runs it what happens - a clip saved, a recording started or
-saved, something on the Health page that needs a look - in a Telegram chat, a Discord channel
-or both (`notify.py`), once `.env` says where. See [README.md](README.md) for the roadmap.
+saved, something on the Health page that needs a look, a summary of each day - in a Telegram
+chat, a Discord channel or both (`notify.py`), once `.env` says where. See [README.md](README.md) for the roadmap.
 
 Status: the core pipeline works end-to-end (webhook ingestion, SQLite storage, the detection
 heuristic, automated clip recording, a web dashboard). The detector is still being tuned against

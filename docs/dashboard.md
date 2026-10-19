@@ -95,7 +95,7 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   service's: Notifications - where they go (a Telegram bot and its chat, with "Find chats" to
   pick it among those that wrote to the bot; a Discord webhook; the dashboard's address for
   their links), which kinds go out (clips, the clips themselves as videos, recordings,
-  problems; all on to begin with), and a test - saved by a button of its own, not the form's
+  problems, a daily summary; all on to begin with), and a test - saved by a button of its own, not the form's
   (`POST /notifications/setup`), holding at once, `.env` holding for what was never set there;
   the token and the webhook are never put on the page. A channel's page begins with what is
   its own whatever it goes by:

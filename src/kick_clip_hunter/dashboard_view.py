@@ -966,6 +966,10 @@ NOTIFY_CAPTIONS = {
     ),
     "notify_recordings": "A recording of a whole stream started, was saved, or could not be.",
     "notify_health": "Something on the Health page needs a look, and when it looks fine again.",
+    "notify_daily": (
+        "Every morning at 9: the last 24 hours' clips by channel, the clips still to rate, recordings saved, "
+        "chat taken in, the Health page and the disk."
+    ),
 }
 
 

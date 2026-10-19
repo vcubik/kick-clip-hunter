@@ -156,6 +156,46 @@ class TestWhatItSays:
         assert notify.too_big_words(None, "Discord", 1) == "The clip could not be read to be sent."
 
 
+class TestTheDaysSummary:
+    LOCAL = timezone(timedelta(hours=2))
+    HOUR = 9
+
+    def at(self, day: int, hour: int, minute: int = 0) -> datetime:
+        return datetime(2026, 10, day, hour, minute, tzinfo=self.LOCAL)
+
+    def test_is_due_for_the_day_that_ended_at_the_hour_this_morning(self):
+        assert notify.summary_due(self.at(19, 9, 30), self.at(18, 9), self.HOUR) == self.at(19, 9)
+
+    def test_before_the_hour_the_day_that_ended_yesterday_morning_is_the_latest(self):
+        assert notify.summary_due(self.at(19, 8, 59), self.at(17, 9), self.HOUR) == self.at(18, 9)
+        assert notify.summary_due(self.at(19, 8, 59), self.at(18, 9), self.HOUR) is None
+
+    def test_is_not_due_again_for_a_day_summed_up_already(self):
+        assert notify.summary_due(self.at(19, 23), self.at(19, 9), self.HOUR) is None
+
+    def test_with_none_sent_ever_the_last_day_is_due(self):
+        assert notify.summary_due(self.at(19, 12), None, self.HOUR) == self.at(19, 9)
+
+    def test_clips_are_said_busiest_channel_first(self):
+        note = notify.daily_note(notify.Day(clips={"b_channel": 1, "A_channel": 1, "busy": 5}, chat_messages=1))
+
+        assert note.lines[:2] == ("7 clips: busy 5, A_channel 1, b_channel 1.", "1 chat message taken in.")
+        assert (note.kind, note.title, note.trouble) == (notify.DAILY, "The last 24 hours", False)
+
+    def test_what_did_not_happen_is_left_out_but_the_clips_and_chat(self):
+        note = notify.daily_note(notify.Day())
+
+        assert note.lines == ("No clips.", "0 chat messages taken in.")
+
+    def test_one_clip_waits(self):
+        assert "1 clip waits to be rated." in notify.daily_note(notify.Day(unrated=1)).lines
+
+    def test_trouble_on_the_health_page_makes_it_trouble(self):
+        note = notify.daily_note(notify.Day(health="The disk needs a look.", health_trouble=True))
+
+        assert note.trouble and "The disk needs a look." in note.lines
+
+
 class TestSetUp:
     def test_telegram_needs_a_bot_and_a_chat_discord_a_webhook(self):
         assert notify.destinations() == ()
