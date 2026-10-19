@@ -320,6 +320,11 @@ class ChatReader:
             status = error.response.status_code
             if status == 401:
                 raise _TokenTurnedDown from error
+            if status == 400 and "transport session" in _said(error.response):
+                # The connection is gone on Twitch's side, not the channel
+                # refused: held against the channel, it would keep its chat
+                # out of the next connection too, for REFUSED_SECONDS.
+                raise ConnectionLost("Twitch no longer knows the connection's session") from error
             if status != 409:  # 409: subscribed on this session already
                 why = f"{status} {_said(error.response)}".strip()
                 self.refused[channel.twitch_id] = why
