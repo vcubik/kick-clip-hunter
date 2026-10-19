@@ -33,7 +33,7 @@ from kick_clip_hunter.recorder import CLIPS_DIR
 def import_clip(conn: sqlite3.Connection, source: Path, channel_slug: str) -> tuple[int, str]:
     """Moves `source` into data/clips/<channel_slug>/ and inserts a moment
     for it - the source file is gone from its original location afterward
-    (shutil.move, not copy2; storage adds up fast, see CLAUDE.md). Shared by
+    (shutil.move, not copy2; storage adds up fast, see docs/operations.md). Shared by
     this script's CLI and import_clips_dir.py - callers manage the
     connection so a directory import can reuse one across files. Returns
     (moment_id, clip_path relative to CLIPS_DIR).

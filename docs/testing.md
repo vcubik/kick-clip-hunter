@@ -93,6 +93,30 @@ service's own code:
 | `tailscale.FakeTailscale` | The machine's Tailscale client, which the Health page asks about the tunnel: answers the two commands that are run, in the shapes the real client prints, or is missing, not connected, slow or failing. |
 | `data.add_moment` / `add_chat` / `add_stream_recording` | Rows in the test database, written through the service's own storage code. |
 
+The same helpers by fixture, as CLAUDE.md used to list them (some, such as `FakeTwitchApi`, `FakeEventSub` and `FakeYouTube`, are not in the table above):
+
+- A behaviour change comes with a test that would fail without it; a bug gets a failing test
+  first. Fake at the boundary (`tests/support/`: `FakeKickApi` (with the account the bot
+  writes as: Kick's consent page, which a test calls with the address the service sent the
+  browser to, its token endpoint checking the PKCE verifier, and the chat a message is
+  written in), `FakeTwitchApi` (Helix - the chat a message is written in among it -,
+  Twitch's OAuth, BetterTTV, FrankerFaceZ - the `twitch_api` fixture, which also sets the
+  service up for Twitch), `bot.kick_bot_signed_in` / `twitch_signed_in` (an account
+  signed in for the bot, kept where the service finds it), `FakeEventSub` (Twitch's chat WebSocket, the `eventsub`
+  fixture), `FakeYouTube` (InnerTube: a channel's addresses, its page, a video's player, a
+  live chat's page and every look at it - the `youtube` fixture; the other platforms'
+  fakes answer through the fake Kick's transport, so a test can have several),
+  `FakeTikTok` (`api-live/user/room` - the `tiktok` fixture), `FakeTikTokChats` (the
+  connection TikTokLive makes to a room's chat; the comments are TikTokLive's own
+  CommentEvent, `tiktok.comment`), `FakeHlsServer` (MPEG-TS, or fragmented MP4 with an
+  initialization segment), `FakeFlvServer` (an FLV download, made TikTok-like by
+  `as_tiktok_sends_it`), `FakeTelegram` and `FakeDiscord` (where notifications go: the Bot
+  API with its HTML read as Telegram reads it, and a channel's webhook - the `telegram` and
+  `discord` fixtures, which put them in `.env`; a test then loads the service's settings
+  again), `WebhookSigner`, `ChatSim`, the `service` fixture) rather than
+  patching the service's own functions, and never `sleep` - pass the clock in or use
+  `wait_until`.
+
 ## What is tested
 
 The suite follows the pipeline. For each stage, the question it answers and where to look:
@@ -460,7 +484,7 @@ Run this on a live channel after changing any of the above, or the code right ne
    new; the Channels page shows the watchlist and the switches. Clicking a row of the queue opens
    that moment without the page reloading, and `J`/`K` move through the queue.
 3. **Check chat is arriving.** With a tracked channel live, chat lines appear in the log within
-   seconds. If they don't, see "Operational quirks" in `CLAUDE.md`.
+   seconds. If they don't, see [operations.md](operations.md).
 4. **Check recording.** A browser window opens briefly, then the log says `recording started`.
    `data/recordings/<channel>/` fills with `.ts` segments and stays at roughly ten minutes' worth.
 5. **Wait for a moment.** The log shows, in order: `MOMENT detected`, `moment N closed after Xs
