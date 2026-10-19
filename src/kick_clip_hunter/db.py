@@ -1175,6 +1175,12 @@ def get_chatter_counts(
     return [(row[0] or "", row[1]) for row in rows]
 
 
+def count_channel_chatters(conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime) -> int:
+    """How many different people wrote in a stretch of a channel's chat."""
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end)
+    return conn.execute(f"SELECT COUNT(DISTINCT sender_username) FROM chat_messages {where}", params).fetchone()[0]
+
+
 def count_returning_chatters(
     conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
 ) -> int | None:
