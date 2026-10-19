@@ -14,7 +14,7 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from kick_clip_hunter import webhook_security
+from kick_clip_hunter import db, webhook_security
 from kick_clip_hunter.webhook_security import verify_signature
 from tests.support.webhook import WebhookSigner
 
@@ -112,3 +112,58 @@ class TestKicksPublicKey:
 
         assert await webhook_security.get_kick_public_key() is not None
         assert len(kick_api.calls("GET", "/public-key")) == 2
+
+
+def _restart() -> None:
+    """What a new run of the service starts with: nothing cached."""
+    webhook_security._public_key_cache = None
+    webhook_security._kept_copy_until = None
+
+
+class TestTheKeptCopy:
+    pytestmark = pytest.mark.anyio
+
+    async def test_a_fetched_key_is_kept_in_the_database(self, kick_api):
+        await webhook_security.get_kick_public_key()
+
+        conn = db.get_connection()
+        try:
+            assert "PUBLIC KEY" in db.get_kick_public_key_pem(conn)
+        finally:
+            conn.close()
+
+    async def test_verifies_kicks_signatures_when_kick_cannot_be_reached_after_a_restart(
+        self, kick_api, signer, signature, caplog
+    ):
+        await webhook_security.get_kick_public_key()
+        _restart()
+        kick_api.failures["/public-key"] = 503
+
+        public_key = await webhook_security.get_kick_public_key()
+
+        assert verify_signature(public_key, MESSAGE_ID, TIMESTAMP, BODY, signature) is True
+        assert "the one kept from before is used" in caplog.text
+
+    async def test_stands_in_for_a_while_before_kick_is_asked_again(self, kick_api, monkeypatch):
+        await webhook_security.get_kick_public_key()
+        _restart()
+        kick_api.failures["/public-key"] = 503
+        now = 1000.0
+        monkeypatch.setattr(webhook_security.time, "monotonic", lambda: now)
+
+        await webhook_security.get_kick_public_key()
+        await webhook_security.get_kick_public_key()
+        assert len(kick_api.calls("GET", "/public-key")) == 2
+
+        kick_api.failures.clear()
+        now += webhook_security.FETCH_AGAIN_SECONDS
+        await webhook_security.get_kick_public_key()
+        await webhook_security.get_kick_public_key()
+
+        assert len(kick_api.calls("GET", "/public-key")) == 3
+
+    async def test_without_a_kept_copy_a_failed_fetch_is_still_an_error(self, kick_api):
+        kick_api.failures["/public-key"] = 503
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await webhook_security.get_kick_public_key()

@@ -1185,6 +1185,12 @@ def get_chatter_counts(
     return [(row[0] or "", row[1]) for row in rows]
 
 
+def count_channel_chatters(conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime) -> int:
+    """How many different people wrote in a stretch of a channel's chat."""
+    where, params = _chat_filter(conn, broadcaster_user_id, start, end)
+    return conn.execute(f"SELECT COUNT(DISTINCT sender_username) FROM chat_messages {where}", params).fetchone()[0]
+
+
 def count_returning_chatters(
     conn: sqlite3.Connection, broadcaster_user_id: int, start: datetime, end: datetime
 ) -> int | None:
@@ -1603,6 +1609,24 @@ def set_chat_delay(conn: sqlite3.Connection, channel_slug: str, seconds: int) ->
         "INSERT INTO app_settings (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (_chat_delay_key(channel_slug), str(seconds)),
+    )
+    conn.commit()
+
+
+# Kick's public key for webhook signatures, as PEM, the last time it was
+# fetched (see webhook_security).
+KICK_PUBLIC_KEY_KEY = "kick_public_key"
+
+
+def get_kick_public_key_pem(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (KICK_PUBLIC_KEY_KEY,)).fetchone()
+    return row[0] if row else None
+
+
+def set_kick_public_key_pem(conn: sqlite3.Connection, pem: str) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (KICK_PUBLIC_KEY_KEY, pem),
     )
     conn.commit()
 

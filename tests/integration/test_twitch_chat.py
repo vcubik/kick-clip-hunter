@@ -139,6 +139,20 @@ class TestSubscribing:
         assert rig.reader.refused["202"].startswith("403")
         assert "202" not in rig.reader.subscribed
 
+    async def test_a_session_twitch_no_longer_knows_is_a_lost_connection_not_refused_channels(
+        self, twitch_api, eventsub, quick
+    ):
+        signed_in(twitch_api)
+        twitch_api.gone_sessions.add("session-1")
+        rig = Rig(eventsub, [FIRST, SECOND])
+
+        async with running(rig):
+            await subscribed(twitch_api, "session-2", "101", "202")
+            await async_wait_until(lambda: rig.reader.connected_since is not None, "the reader to say it is connected")
+
+        assert rig.reader.refused == {}
+        assert set(rig.reader.subscribed) == {"101", "202"}
+
     async def test_with_every_subscription_refused_the_connection_is_not_kept(self, twitch_api, eventsub, quick):
         signed_in(twitch_api)
         twitch_api.subscribe_failures.update({"101": 403, "202": 403})

@@ -548,6 +548,95 @@ class TestTheOverview:
         assert counted_on[0] is not loop_thread
 
 
+def changes(page: Element) -> dict[str, str]:
+    """How each figure that is set against the period before compares."""
+    return {
+        box.one("dt").text: box.one("dd", class_="an-change").text
+        for box in page.one("dl", class_="an-figures").find("div")
+        if box.find("dd", class_="an-change")
+    }
+
+
+class TestSetAgainstThePeriodBefore:
+    async def test_a_stretch_is_set_against_the_same_stretch_before(self, service):
+        for second, sender in enumerate(["alice", "bob"]):
+            say(-300 - second, sender)
+        for second, sender in enumerate(["alice", "bob", "carol"]):
+            say(second, sender)
+
+        page = await analyze(service, **TEN_MINUTES)
+
+        assert changes(page) == {
+            "Messages": "50% more than the same stretch before",
+            "Chatters": "50% more than the same stretch before",
+        }
+
+    async def test_a_preset_is_set_against_the_same_time_before_it(self, service):
+        for number in range(4):
+            say(-86400 + number, f"viewer{number}")
+        say(0)
+
+        page = await analyze(service, period="day")
+
+        assert changes(page)["Messages"] == "75% fewer than the 24 hours before"
+
+    async def test_a_session_is_set_against_the_session_before(self, service):
+        session(T0 - timedelta(days=2), messages=20)
+        session(T0, messages=30)
+
+        page = await analyze(service)
+
+        assert changes(page)["Messages"] == "50% more than the session before"
+        oldest = page.one("aside", class_="queue").find("a", class_="rec-row")[1]
+        assert changes(await analyze_at(service, oldest.attrs["href"])) == {}
+
+    async def test_all_the_stored_chat_and_a_period_with_nothing_before_are_set_against_nothing(self, service):
+        say(0)
+
+        assert changes(await analyze(service, period="all")) == {}
+        assert changes(await analyze(service, **TEN_MINUTES)) == {}
+
+
+async def analyze_at(service, href: str) -> Element:
+    response = await service.client.get(href)
+    assert response.status_code == 200, response.text
+    return parse(response.text)
+
+
+class TestWhoWroteAndWhatWords:
+    async def test_chat_is_split_by_the_badges_its_chatters_have_now(self, service):
+        conn = db.get_connection()
+        try:
+            db.set_chat_identities(
+                conn,
+                [
+                    (1, "the_mod", None, '[{"type": "moderator", "text": "Moderator"}]'),
+                    (1, "a_sub", None, '[{"type": "subscriber", "text": "Subscriber"}]'),
+                    (2, "anyone", None, '[{"type": "moderator", "text": "Moderator"}]'),  # elsewhere
+                ],
+            )
+        finally:
+            conn.close()
+        for second, sender in enumerate(["the_mod", "a_sub", "a_sub", "anyone"]):
+            say(second, sender)
+
+        page = await analyze(service, **TEN_MINUTES)
+
+        assert table(page, "an-groups") == [
+            ["Moderators", "1", "1", "25%", "1"],
+            ["Subscribers", "1", "2", "50%", "2"],
+            ["Everyone else", "1", "1", "25%", "1"],
+        ]
+
+    async def test_the_words_used_most_leave_out_emotes_laughs_and_little_words(self, service):
+        for second, said in enumerate(["ten gambit je xD", f"GAMBIT {KICK_KEKW}", "gambit znovu", "znovu a znovu"]):
+            say(second, content=said)
+
+        page = await analyze(service, **TEN_MINUTES)
+
+        assert table(page, "an-words") == [["gambit", "3", "75%"], ["znovu", "2", "50%"]]
+
+
 class TestTheMessagesOfAPeriod:
     async def test_they_are_listed_the_newest_first_with_when_each_arrived(self, service, today):
         say(1, "alice", "first")

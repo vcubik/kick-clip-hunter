@@ -22,6 +22,9 @@ HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv", "api.betterttv.net", "api.fr
 # What an account signed in for the service lets it do: read chat, and write
 # in it - what twitch_login.py asks for.
 SCOPES = ("user:read:chat", "user:write:chat")
+# What Twitch says to a subscription to a session it no longer knows - as
+# seen in the live log.
+GONE_SESSION = "websocket transport session does not exist or has already disconnected"
 
 
 def bttv_emote_id(name: str) -> str:
@@ -123,6 +126,9 @@ class FakeTwitchApi:
     # subscription to a channel (by its Twitch id) is refused with.
     eventsub_subscriptions: list[dict] = field(default_factory=list)
     subscribe_failures: dict[str, int] = field(default_factory=dict)
+    # Sessions Twitch no longer knows (the connection gone on its side):
+    # a subscription to one is refused as Twitch refuses it.
+    gone_sessions: set[str] = field(default_factory=set)
     # Every chat message written, in order: the channel (its Twitch id),
     # what was written, and as whom. A channel in `chat_refusals` turns
     # messages down with that status; one in `chat_drops` takes them and
@@ -315,6 +321,8 @@ class FakeTwitchApi:
         account = self.user_tokens.get(token)
         if account is None:
             return httpx.Response(401, json={"status": 401, "message": "Invalid OAuth token"})
+        if body["transport"].get("session_id") in self.gone_sessions:
+            return httpx.Response(400, json={"status": 400, "message": GONE_SESSION})
         broadcaster = body["condition"]["broadcaster_user_id"]
         if broadcaster in self.subscribe_failures:
             status = self.subscribe_failures[broadcaster]

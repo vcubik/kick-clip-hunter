@@ -68,6 +68,7 @@ from .db import (
     add_channel_rename,
     add_subscription_drop,
     count_channel_chat,
+    count_channel_chatters,
     count_chat_between,
     count_moments,
     count_moments_between,
@@ -4092,12 +4093,50 @@ def _analyze_lines(conn, owner: int, rows, emotes, today: date, url, asked: str 
     return lines
 
 
-def _analyze_overview(conn, owner: int, period: chat_stats.Period, words: _ChatWords, today: date, url, top: int):
-    """The overview of a period of a channel's chat: its figures, the chart
-    of its messages, and the tables. None for a period without chat."""
+def _period_before(
+    period: chat_stats.Period, preset: str | None, sessions: list
+) -> tuple[chat_stats.Period, str] | None:
+    """The period a period is set against, and what it is called: the
+    session before for a session, the same stretch of time before for any
+    other - none for all of the stored chat."""
+    if preset == chat_stats.PRESET_ALL:
+        return None
+    if preset in chat_stats.PRESETS:
+        return chat_stats.Period(period.start - (period.end - period.start), period.start), (
+            f"the {chat_stats.PRESETS[preset][0]} before"
+        )
+    held = [chat_stats.session_period(session) for session in sessions]
+    if period in held:
+        place = held.index(period)
+        # Sessions come newest first.
+        return (held[place + 1], "the session before") if place + 1 < len(held) else None
+    return chat_stats.Period(period.start - (period.end - period.start), period.start), "the same stretch before"
+
+
+def _analyze_overview(
+    conn,
+    owner: int,
+    period: chat_stats.Period,
+    words: _ChatWords,
+    today: date,
+    url,
+    top: int,
+    before: tuple[chat_stats.Period, str] | None = None,
+):
+    """The overview of a period of a channel's chat: its figures, set
+    against the period `before` where there is one, the chart of its
+    messages, and the tables. None for a period without chat."""
     total = count_channel_chat(conn, owner, period.start, period.end)
     if not total:
         return None
+    against = None
+    if before is not None:
+        (earlier, before_words) = before
+        earlier_total = count_channel_chat(conn, owner, earlier.start, earlier.end)
+        if earlier_total:
+            against = chat_stats.Before(
+                before_words, earlier_total, count_channel_chatters(conn, owner, earlier.start, earlier.end)
+            )
     emotes = get_chat_emotes(conn, owner)
     kept = chat_stats.collect(
         iter_channel_chat(conn, owner, period.start, period.end, limit=ANALYZE_MESSAGE_LIMIT),
@@ -4146,6 +4185,9 @@ def _analyze_overview(conn, owner: int, period: chat_stats.Period, words: _ChatW
             returning=count_returning_chatters(conn, owner, period.start, period.end) if whole else None,
             moments=len(moments),
             moments_href=dashboard_view.review_url(dashboard_view.SHOW_ALL, get_chat_name(conn, owner)),
+            # Set against counts of all the period before, which only all
+            # of this one's can be.
+            before=against if whole else None,
         ),
         "activity": chat_stats.activity_chart(
             kept, today, one_day=chat_stats.one_day(period), moments=moments, link=column
@@ -4156,6 +4198,8 @@ def _analyze_overview(conn, owner: int, period: chat_stats.Period, words: _ChatW
         "emotes": chat_stats.top_emotes(kept, top),
         "said": chat_stats.said_most(kept, chat_stats.SIDE_ROWS, emotes),
         "mentioned": mentioned,
+        "groups": chat_stats.badge_groups(kept, get_chat_identities(conn, owner, kept.by_chatter)),
+        "words": chat_stats.top_words(kept, chat_stats.SIDE_ROWS),
         "rows": top,
         "more_href": url(top=chat_stats.TOP_ROWS_MORE) if longer and top == chat_stats.TOP_ROWS else None,
         "fewer_href": url(top=chat_stats.TOP_ROWS) if top != chat_stats.TOP_ROWS else None,
@@ -4363,7 +4407,9 @@ def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, to
         elif reading:
             page["messages"] = _analyze_messages(conn, owner, period, words, today, url, asked)
         else:
-            page["overview"] = _analyze_overview(conn, owner, period, words, today, url, asked.top)
+            page["overview"] = _analyze_overview(
+                conn, owner, period, words, today, url, asked.top, _period_before(period, preset, sessions)
+            )
         return page
     finally:
         conn.close()
@@ -5996,7 +6042,13 @@ async def kick_webhook(
 ):
     body = await request.body()
 
-    public_key = await get_kick_public_key()
+    try:
+        public_key = await get_kick_public_key()
+    except httpx.HTTPError as error:
+        # Never fetched, and Kick cannot be reached for it now: a refusal
+        # Kick can see, rather than a traceback.
+        logger.warning("a webhook could not be verified: Kick's public key could not be fetched (%r)", error)
+        raise HTTPException(status_code=503, detail="Kick's public key could not be fetched") from None
     if not verify_signature(
         public_key, kick_event_message_id, kick_event_message_timestamp, body, kick_event_signature
     ):

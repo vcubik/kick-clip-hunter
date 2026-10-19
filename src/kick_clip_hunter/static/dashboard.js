@@ -2138,7 +2138,7 @@
   // field beside it, one at a time, and taken out by its cross.
 
   const settingsOf = (control) => control.closest("[data-tuning]");
-  const isList = (field) => field.dataset.kind === "words" || field.dataset.kind === "phrases";
+  const isList = (field) => ["words", "phrases", "names"].includes(field.dataset.kind);
   // What a list holds, in the order the service keeps it in.
   const listed = (list) => all("[data-item]", list).map((item) => item.dataset.item);
   const sectionTab = (inside) => one(`[data-section="${inside.closest("[data-section-pane]").dataset.sectionPane}"]`);
@@ -2263,7 +2263,9 @@
   function addTyped(input) {
     const row = input.closest(".set-row");
     const list = one("[data-setting]", row);
-    const item = input.value.trim().toLowerCase();
+    let item = input.value.trim().toLowerCase();
+    // An account's name is kept without the "@" of a YouTube handle.
+    if (list.dataset.kind === "names") item = item.replace(/^@/, "");
     if (!item) return true;
     const items = listed(list);
     const shortest = Number(list.dataset.shortest);

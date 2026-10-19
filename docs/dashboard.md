@@ -72,9 +72,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   below). Whose chat and of which period is set in the pane on the left: a tab (24 hours,
   7 days, 30 days, all), any two times, or one of the sessions the chat came in - the
   newest of which is what the page opens on. Beside it is either the period's overview
-  (figures, messages over time with the laughing and the detected moments marked, the
-  busiest minutes, the most active chatters, the most used emotes, what was said and who
-  was addressed most) or its messages, a page at a time (numbered pages above and under them, as under the review
+  (figures - messages and chatters set against the period before: the same stretch of time
+  before, or for a session the session before - messages over time with the laughing and
+  the detected moments marked, the busiest minutes, the most active chatters, the most used
+  emotes, what was said and who was addressed most, chat by the badges its chatters have
+  now, and the words used most, the little words of Czech, Slovak and English left out) or its messages, a page at a time (numbered pages above and under them, as under the review
   queue and the list of recordings - `dashboard_view.pages`), which is where a chatter or a
   text is searched for: a chatter that is found gets figures of their own, and every
   message leads to the chat around it. The page is links and forms and needs no script.
@@ -86,8 +88,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   them (`?section=`, which the script keeps in the address, and which choosing another
   channel keeps), but the form is saved as a whole, from the foot under every one of them.
   Each setting has a button that puts back what it would be if left alone (what is
-  recommended, or for a channel what all channels have). A list - laughing emotes, emotes and
-  messages to ignore, the commands - is its items, a rectangle each: one is added from the
+  recommended, or for a channel what all channels have). A list - laughing emotes, emotes,
+  messages and accounts to ignore, the commands - is its items, a rectangle each (the accounts
+  to ignore start as the well-known chat bots, `detector.IGNORED_SENDERS`): one is added from the
   field beside it (Add, or Enter; checked there as the service would) and taken out by its
   cross, and what is typed but not added goes in with the save. The last tab, "Try on stored
   chat", replays a channel's newest chat under the saved settings and under the form's,
