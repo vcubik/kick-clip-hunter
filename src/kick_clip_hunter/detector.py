@@ -370,6 +370,33 @@ def is_vote_message(content: str) -> bool:
     return content.strip() in VOTE_MESSAGES
 
 
+# Chat bots post on a timer and answer commands - announcements, giveaways,
+# a song request taken - none of it a reaction, but every message one more
+# sender in the window and the baseline. The ones seen in the watched chats,
+# and the best known elsewhere; lowercased. On the Settings page this is
+# where the list of accounts to ignore starts, and a channel can drop one
+# (a person who happens to go by the name) or add its own bot.
+IGNORED_SENDERS = frozenset(
+    {
+        "botrix",
+        "fossabot",
+        "kickbot",
+        "moobot",
+        "nightbot",
+        "sery_bot",
+        "streamelements",
+        "streamlabs",
+        "wizebot",
+    }
+)
+
+
+def sender_key(sender: str) -> str:
+    """A sender's name as it is looked up among the accounts to ignore:
+    lowercased, without the "@" a YouTube handle is written with."""
+    return sender.strip().lower().removeprefix("@")
+
+
 def is_ignored_message(content: str, added: frozenset[str] = frozenset()) -> bool:
     """Whether the detector leaves a message out altogether: a vote, or one
     of the messages a channel was told to ignore (`added`, lowercased - see
@@ -387,7 +414,9 @@ class Settings:
     open. The three collections come on top of what is built in: emote name
     patterns that also mean laughing (see LAUGH_EMOTE_NAME_PATTERNS), ones
     that mean an emote is no reaction at all (as the dance emotes are), and
-    whole messages to leave out the way votes are - all lowercased.
+    whole messages to leave out the way votes are - all lowercased. The
+    accounts whose messages are left out (`ignored_senders`, as sender_key
+    writes them) are not on top of anything: they start as IGNORED_SENDERS.
     """
 
     cooldown_seconds: float
@@ -415,6 +444,7 @@ class Settings:
     added_laugh_emote_patterns: tuple[str, ...] = ()
     added_ignored_emote_patterns: tuple[str, ...] = ()
     added_ignored_messages: frozenset[str] = frozenset()
+    ignored_senders: frozenset[str] = frozenset()
 
 
 def recommended() -> Settings:
@@ -440,6 +470,7 @@ def recommended() -> Settings:
         emote_other_weight=EMOTE_OTHER_WEIGHT,
         emote_mention_laugh_weight=EMOTE_MENTION_LAUGH_WEIGHT,
         emote_mention_other_weight=EMOTE_MENTION_OTHER_WEIGHT,
+        ignored_senders=IGNORED_SENDERS,
     )
 
 
@@ -645,7 +676,9 @@ def record_message(
     settings: Settings | None = None,
 ) -> Spike | None:
     settings = settings or recommended()
-    if is_ignored_message(content, settings.added_ignored_messages):
+    if is_ignored_message(content, settings.added_ignored_messages) or (
+        sender_key(sender) in settings.ignored_senders
+    ):
         return None
 
     now = now if now is not None else time.monotonic()

@@ -86,8 +86,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   them (`?section=`, which the script keeps in the address, and which choosing another
   channel keeps), but the form is saved as a whole, from the foot under every one of them.
   Each setting has a button that puts back what it would be if left alone (what is
-  recommended, or for a channel what all channels have). A list - laughing emotes, emotes and
-  messages to ignore, the commands - is its items, a rectangle each: one is added from the
+  recommended, or for a channel what all channels have). A list - laughing emotes, emotes,
+  messages and accounts to ignore, the commands - is its items, a rectangle each (the accounts
+  to ignore start as the well-known chat bots, `detector.IGNORED_SENDERS`): one is added from the
   field beside it (Add, or Enter; checked there as the service would) and taken out by its
   cross, and what is typed but not added goes in with the save. The last tab, "Try on stored
   chat", replays a channel's newest chat under the saved settings and under the form's,

@@ -993,6 +993,29 @@ class TestItsLists:
         assert item.one("span").text == '<img src=x onerror="alert(1)">'
         assert item.find("img") == []
 
+    async def test_the_accounts_to_ignore_start_as_the_known_bots_and_one_can_be_taken_out(self, service):
+        page = await settings_page(service)
+        assert items(page, "ignored_senders") == sorted(detector.IGNORED_SENDERS)
+        assert row_of(page, "ignored_senders").one("input", data_chip_input=True).attrs["placeholder"] == (
+            "An account's name"
+        )
+
+        kept = sorted(detector.IGNORED_SENDERS)[1:]
+        await save(service, ignored_senders=[*kept, "@Channels_Bot"])
+
+        page = await settings_page(service)
+        assert items(page, "ignored_senders") == sorted([*kept, "channels_bot"])
+
+    async def test_a_bots_chat_is_stored_but_never_judged(self, service):
+        service.watch(CHANNEL)
+        bot = sorted(detector.IGNORED_SENDERS)[0]
+
+        await service.chat(CHANNEL, bot.capitalize(), "Type !join to enter the giveaway xD")
+        await service.chat(CHANNEL, "alice", "xd")
+
+        assert [sender for _, sender, _ in service.chat_log()] == [bot.capitalize(), "alice"]
+        assert [entry[1] for entry in detector._entries[CHANNEL]] == ["alice"]
+
     async def test_the_page_has_an_item_to_copy_for_one_that_is_added(self, service):
         page = await settings_page(service)
 
