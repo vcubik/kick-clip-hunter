@@ -18,7 +18,7 @@ import pytest
 from kick_clip_hunter import db, notify, recorder, recording_manager, stream_recording
 from kick_clip_hunter.chat_trace import TIMES_SIGN as TIMES
 from kick_clip_hunter.config import load_settings
-from tests.support.data import add_chat
+from tests.support.data import add_chat, add_moment, add_stream_recording
 from tests.support.html import Element, parse
 from tests.support.media import make_video, probe
 from tests.support.notify import TELEGRAM_CHAT, FakeDiscord, FakeTelegram
@@ -428,6 +428,114 @@ class TestTheHealthPageWatched:
         assert looked == [True, True]
 
 
+class TestTheDaysSummary:
+    @pytest.fixture
+    def morning(self):
+        """Half past the hour the summary goes out at, today, local time."""
+        return datetime.now().astimezone().replace(hour=9, minute=30, second=0, microsecond=0)
+
+    @pytest.fixture
+    def free(self, monkeypatch):
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: 500 * 1024**3)
+
+    def a_day(self, ended: datetime) -> None:
+        """Clips, a recording and chat in the day that `ended`, and some
+        on either side of it."""
+        ended = ended.astimezone(timezone.utc)  # as the service stores its times
+        for hours in (1, 2):
+            add_moment(CHANNEL, detected_at=ended - timedelta(hours=hours), broadcaster_user_id=USER_ID)
+        add_moment("other_channel", detected_at=ended - timedelta(hours=3), rating=4)
+        add_moment(CHANNEL, detected_at=ended - timedelta(hours=25), broadcaster_user_id=USER_ID)
+        add_moment(CHANNEL, detected_at=ended + timedelta(minutes=10), broadcaster_user_id=USER_ID)
+        add_stream_recording(
+            CHANNEL, broadcaster_user_id=USER_ID, started_at=ended - timedelta(hours=3), seconds=2 * 3600
+        )
+        for minutes in (10, 20, 30):
+            add_chat(CHANNEL, "alice", "hi", ended - timedelta(minutes=minutes), broadcaster_user_id=USER_ID)
+        add_chat(CHANNEL, "alice", "too early", ended - timedelta(hours=30), broadcaster_user_id=USER_ID)
+
+    async def test_once_due_it_tells_what_the_last_day_held(self, notified, telegram, discord, morning, free):
+        ended = morning.replace(minute=0)
+        self.a_day(ended)
+
+        assert await notified.main._sum_up_day(morning) is True
+        await notified.settle()
+
+        assert told(telegram) == ["The last 24 hours"]
+        assert telegram.shown()[0].split("\n")[1:7] == [
+            "3 clips: some_channel 2, other_channel 1.",
+            "4 clips wait to be rated.",
+            "1 recording saved: 2 hours of streams, 3 GB.",
+            "3 chat messages taken in.",
+            "Nothing on the Health page needs a look.",
+            "500 GB free on the disk recordings are kept on.",
+        ]
+        assert telegram.sent[0]["links"] == [f"{DASHBOARD}/dashboard"]
+        assert discord.embeds()[0]["color"] == notify.COLOURS[notify.DAILY]
+
+    async def test_a_day_is_summed_up_once(self, notified, telegram, morning, free):
+        assert await notified.main._sum_up_day(morning) is True
+        assert await notified.main._sum_up_day(morning + timedelta(hours=5)) is False
+        assert await notified.main._sum_up_day(morning + timedelta(days=1)) is True
+        await notified.settle()
+
+        assert told(telegram) == ["The last 24 hours", "The last 24 hours"]
+
+    async def test_days_missed_while_the_service_was_not_running_are_one_summary_of_the_last(
+        self, notified, telegram, morning, free
+    ):
+        assert await notified.main._sum_up_day(morning - timedelta(days=3)) is True
+
+        assert await notified.main._sum_up_day(morning) is True
+        assert await notified.main._sum_up_day(morning + timedelta(minutes=1)) is False
+        await notified.settle()
+
+        assert len(telegram.sent) == 2
+
+    async def test_a_quiet_day_says_so(self, notified, telegram, morning, free):
+        await notified.main._sum_up_day(morning)
+        await notified.settle()
+
+        assert telegram.shown()[0].split("\n")[1:3] == ["No clips.", "0 chat messages taken in."]
+
+    async def test_trouble_on_the_health_page_is_said_as_trouble(self, notified, discord, morning, monkeypatch):
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: recording_manager.MIN_FREE_BYTES // 2)
+
+        await notified.main._sum_up_day(morning)
+        await notified.settle()
+
+        (embed,) = discord.embeds()
+        assert embed["color"] == notify.TROUBLE_COLOUR
+        assert "The disk needs a look." in embed["description"]
+
+    async def test_switched_off_nothing_is_sent_or_marked_as_sent(self, notified, telegram, morning, free):
+        await switch(notified, "notify_daily", False)
+        assert await notified.main._sum_up_day(morning) is False
+
+        await switch(notified, "notify_daily", True)
+        assert await notified.main._sum_up_day(morning) is True
+
+    async def test_with_nowhere_to_send_it_nothing_is_made(self, service, morning):
+        assert await service.main._sum_up_day(morning) is False
+
+    async def test_it_is_looked_at_every_so_often_once_the_service_runs(self, notified, monkeypatch):
+        import asyncio
+
+        looked = []
+
+        async def sum_up_day():
+            looked.append(True)
+
+        monkeypatch.setattr(notified.main, "_sum_up_day", sum_up_day)
+        task = asyncio.create_task(notified.main._keep_summing_up_days())
+        try:
+            while len(looked) < 2:
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+        assert looked == [True, True]
+
+
 class TestTheHealthPage:
     async def test_it_says_where_notifications_go_and_what_they_tell_of(self, notified):
         page = await page_at(notified, "/dashboard/health")
@@ -518,9 +626,10 @@ class TestTheSettingsPage:
             "notify_clip_videos",
             "notify_recordings",
             "notify_health",
+            "notify_daily",
         ]
         lit = [[half.text for half in kind.find("button") if half.attrs["aria-pressed"] == "true"] for kind in kinds]
-        assert lit == [["On"], ["On"], ["Off"], ["On"]]
+        assert lit == [["On"], ["On"], ["Off"], ["On"], ["On"]]
         assert "disabled" not in pane.one("button", data_notify_test=True).attrs
         assert page.one("main", data_settings=True).attrs["data-shown"] == "notifications"
 

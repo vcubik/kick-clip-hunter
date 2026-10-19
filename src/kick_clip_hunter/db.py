@@ -778,6 +778,16 @@ def count_moments(
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
+def count_moments_between(conn: sqlite3.Connection, since: str, until: str) -> dict[str, int]:
+    """How many moments each channel had detected from `since` up to
+    `until` (UTC, as "YYYY-MM-DDTHH:MM:SS")."""
+    rows = conn.execute(
+        "SELECT channel_slug, COUNT(*) FROM moments WHERE detected_at >= ? AND detected_at < ? GROUP BY channel_slug",
+        (since, until),
+    )
+    return {channel: count for channel, count in rows}
+
+
 def count_moments_with_clip(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM moments WHERE clip_path IS NOT NULL").fetchone()[0]
 
@@ -1619,6 +1629,43 @@ def set_kick_public_key_pem(conn: sqlite3.Connection, pem: str) -> None:
         (KICK_PUBLIC_KEY_KEY, pem),
     )
     conn.commit()
+
+
+def recordings_saved_between(conn: sqlite3.Connection, since: str, until: str) -> list[tuple[float, int]]:
+    """The recordings saved into their file that ended from `since` up to
+    `until` (UTC, as "YYYY-MM-DDTHH:MM:SS"): how long each is and how big."""
+    rows = conn.execute(
+        "SELECT duration, size_bytes FROM stream_recordings WHERE state = 'ready' AND ended_at >= ? AND ended_at < ?",
+        (since, until),
+    )
+    return [(duration or 0.0, size or 0) for duration, size in rows]
+
+
+# When the day the last daily summary was sent for ended (see notify.Day).
+DAILY_SUMMARY_KEY = "daily_summary_sent_for"
+
+
+def get_daily_summary_sent_for(conn: sqlite3.Connection) -> datetime | None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (DAILY_SUMMARY_KEY,)).fetchone()
+    return datetime.fromisoformat(row[0]) if row else None
+
+
+def set_daily_summary_sent_for(conn: sqlite3.Connection, ended: datetime) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (DAILY_SUMMARY_KEY, ended.isoformat()),
+    )
+    conn.commit()
+
+
+def count_chat_between(conn: sqlite3.Connection, broadcaster_user_id: int, since: str, until: str) -> int:
+    """How many chat messages of a channel arrived from `since` up to
+    `until` - counted on the index, a channel at a time, so that the count
+    holds no commit off for long."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM chat_messages WHERE broadcaster_user_id = ? AND received_at >= ? AND received_at < ?",
+        (broadcaster_user_id, since, until),
+    ).fetchone()[0]
 
 
 # Where notifications go, as it was set on the Settings page (see

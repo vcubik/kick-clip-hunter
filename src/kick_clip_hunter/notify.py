@@ -14,7 +14,10 @@ both (`Telegram`, `Discord` - each a `Destination`):
   it runs, how big it is - could not be saved, or ended before it had any
   footage (`recording_*_note`);
 - a part of the Health page needs a look, and when it looks fine again
-  (`HealthWatch`, which keeps a part that only flickers from being told of).
+  (`HealthWatch`, which keeps a part that only flickers from being told of);
+- once a day, what the last day held: clips by channel, the ones still to
+  be rated, recordings saved, chat taken in, how the Health page and the
+  disk stand (`daily_note`, sent when `summary_due` says).
 
 Nothing is sent until a destination is set up - on the dashboard's Settings
 page, or in .env (see config.py) for whatever the page never set (`Setup`,
@@ -54,7 +57,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -100,12 +103,13 @@ RETRY_SECONDS = 30
 CLIP = "clip"
 RECORDING = "recording"
 HEALTH = "health"
+DAILY = "daily"
 TEST = "test"
 
 # The colour of a Discord embed, by what it tells of: the dashboard's
 # marker for a moment, its lamp for a recording, the red pen for trouble,
-# the grid's green for trouble that is over.
-COLOURS = {CLIP: 0xFFEB57, RECORDING: 0xFF4A3D, HEALTH: 0xA6CCB7, TEST: 0xEDEDED}
+# the grid's green for trouble that is over, its paper for the day's summary.
+COLOURS = {CLIP: 0xFFEB57, RECORDING: 0xFF4A3D, HEALTH: 0xA6CCB7, DAILY: 0xF4F1E8, TEST: 0xEDEDED}
 TROUBLE_COLOUR = 0xCF2E2E
 
 
@@ -253,6 +257,62 @@ def health_note(words: str, plural: bool, said: str, trouble: bool, *, link: str
     else:
         title = f"{sentence_case(words)} {'look' if plural else 'looks'} fine again"
     return Note(HEALTH, title, (said,) if said else (), link=link, trouble=trouble)
+
+
+@dataclass(frozen=True)
+class Day:
+    """What a day held, for its summary: clips made, by channel; how many
+    clips wait to be rated, of all there are; the recordings saved - how
+    many, how much of the streams, how big; chat messages taken in; what the
+    Health page says on top, and whether that is trouble; and the room left
+    on the disk recordings are kept on."""
+
+    clips: Mapping[str, int] = field(default_factory=dict)
+    unrated: int = 0
+    recordings: int = 0
+    recorded_seconds: float = 0.0
+    recorded_bytes: int = 0
+    chat_messages: int = 0
+    health: str = ""
+    health_trouble: bool = False
+    free_bytes: int | None = None
+
+
+def daily_note(day: Day, *, link: str | None = None) -> Note:
+    """The summary of the last day: clips first, busiest channel first."""
+    made = sum(day.clips.values())
+    if made:
+        busiest = sorted(day.clips.items(), key=lambda item: (-item[1], item[0].lower()))
+        lines = [f"{sentence_case(count_words(made, 'clip'))}: {', '.join(f'{name} {n}' for name, n in busiest)}."]
+    else:
+        lines = ["No clips."]
+    if day.unrated:
+        lines.append(
+            f"{sentence_case(count_words(day.unrated, 'clip'))} {'waits' if day.unrated == 1 else 'wait'} to be rated."
+        )
+    if day.recordings:
+        lines.append(
+            f"{sentence_case(count_words(day.recordings, 'recording'))} saved: "
+            f"{length_words(day.recorded_seconds)} of streams, {size_words(day.recorded_bytes)}."
+        )
+    lines.append(f"{sentence_case(count_words(day.chat_messages, 'chat message'))} taken in.")
+    if day.health:
+        lines.append(day.health)
+    if day.free_bytes is not None:
+        lines.append(f"{size_words(day.free_bytes)} free on the disk recordings are kept on.")
+    return Note(DAILY, "The last 24 hours", tuple(lines), link=link, trouble=day.health_trouble)
+
+
+def summary_due(now: datetime, last_sent: datetime | None, hour: int) -> datetime | None:
+    """When the day a summary is due for ended - the last `hour` o'clock
+    (local time, as `now` is) - if none was sent for it yet (`last_sent` is
+    when the one sent last ended); None while the last one is the latest."""
+    end = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if end > now:
+        end -= timedelta(days=1)
+    if last_sent is not None and last_sent >= end:
+        return None
+    return end
 
 
 def test_note(*, link: str | None = None) -> Note:
