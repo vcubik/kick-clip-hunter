@@ -423,7 +423,7 @@ async def _ensure_chat_subscriptions(report_all_present: bool = True) -> None:
 
     Kick silently drops event subscriptions to zero every so often with no
     error - chat just stops arriving for every channel until they're
-    re-subscribed (see CLAUDE.md). Reconciling on startup, and then every
+    re-subscribed (see docs/operations.md). Reconciling on startup, and then every
     SUBSCRIPTION_CHECK_SECONDS while running, makes that self-healing instead
     of needing a restart or subscribe.py run by hand. It's check-then-subscribe
     (only the missing ones) so it never duplicates an existing subscription,

@@ -249,8 +249,10 @@ what, and the short manual checklist for the parts that only exist against the r
 | `subtitles.py` | A clip's transcript as subtitles: lines a subtitle long made of the words the speech model heard, put right on the review page, written out as SubRip timed to the video they go with. |
 | `transcriber.py`, `audio_events.py`, `sound_events.py`, `frame_encoder.py` | The optional per-clip analysis steps - and the speech model a transcript is made with. |
 
-[CLAUDE.md](CLAUDE.md) holds the detailed development notes: design decisions, what had to be
-worked out about Kick's behaviour and why, and the operational quirks found along the way.
+[CLAUDE.md](CLAUDE.md) is the short guide for development; the detailed notes are in `docs/`:
+[architecture](docs/architecture.md), [the dashboard](docs/dashboard.md), [how video is got from
+each platform and why](docs/platforms.md), [the operational quirks found along the
+way](docs/operations.md), [setup](docs/setup.md) and [testing](docs/testing.md).
 
 The dashboard is set in [Archivo](https://github.com/Omnibus-Type/Archivo), bundled under the SIL
 Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
