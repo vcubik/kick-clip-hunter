@@ -53,7 +53,10 @@ but the moment doesn't have to end there: reaction_active() reports whether
 new people are still piling into the reaction after that instant (see
 SUSTAIN_FRACTION), which main.py's moment session uses to hold the moment
 open and extend the clip for as long as that's true. Most moments don't
-qualify and get a short fixed-length clip.
+qualify and get a short fixed-length clip. Once it has closed, a moment is
+only kept if enough people laughed around it (laughing_people,
+laughing_needed): a burst of three people is enough to fire, and a burst
+nobody else joined in was what most of the worst-rated moments were.
 
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
@@ -131,6 +134,22 @@ MIN_ABSOLUTE_UNIQUE = 3
 # cut 13 moments/hour to about 5; 0.125 gave ~4/hour and 0.15 ~2.5/hour.
 MIN_REACTION_UNIQUE_FRACTION = 0.10
 MIN_REACTION_UNIQUE_CEILING = 12
+
+# Once a moment has closed, it is only kept if enough distinct people laughed
+# around it: from SHORT_WINDOW_SECONDS before it fired to KEEP_LAUGHING_SECONDS
+# after (see laughing_people). Firing is decided within ten seconds, and three
+# people typing "xd" in a chat of thirty is enough for it - on its own that
+# was most of the moments rated worst. Whether more people joined in over the
+# next minute was, of everything measured on ~630 hand-rated moments, what
+# told a usable clip from a useless one best (far better than the score).
+# How many are needed scales with the chat like the firing floor does, never
+# below that floor (min_absolute_unique) - a small channel is not held to a
+# bigger one's bar - and never above KEEP_LAUGHING_MOST. On the rated set,
+# 0.15 dropped 19 of ~260 unusable moments for 1 of ~180 usable ones, the
+# small channels included; 0 keeps every moment.
+KEEP_LAUGHING_FRACTION = 0.15
+KEEP_LAUGHING_MOST = 5
+KEEP_LAUGHING_SECONDS = 60
 
 
 def _dynamic_min_count(baseline_unique_senders: int, settings: Settings | None = None) -> int:
@@ -427,6 +446,7 @@ class Settings:
     min_absolute_unique: int
     min_reaction_unique_fraction: float
     min_reaction_unique_ceiling: int
+    keep_laughing_fraction: float
     emote_spike_multiplier: float
     laugh_multiplier: float
     laugh_unique_sender_multiplier: float
@@ -459,6 +479,7 @@ def recommended() -> Settings:
         min_absolute_unique=MIN_ABSOLUTE_UNIQUE,
         min_reaction_unique_fraction=MIN_REACTION_UNIQUE_FRACTION,
         min_reaction_unique_ceiling=MIN_REACTION_UNIQUE_CEILING,
+        keep_laughing_fraction=KEEP_LAUGHING_FRACTION,
         emote_spike_multiplier=EMOTE_SPIKE_MULTIPLIER,
         laugh_multiplier=LAUGH_MULTIPLIER,
         laugh_unique_sender_multiplier=LAUGH_UNIQUE_SENDER_MULTIPLIER,
@@ -488,6 +509,9 @@ class Spike:
     current_message_rate: float
     emote_count: int
     keyword_hits: int  # laughs + emote mentions combined, for display/storage
+    # How many distinct people chatted in the baseline window: what the
+    # number of people laughing a moment is kept for scales from.
+    baseline_unique_senders: int = 0
 
 
 def classify_message(
@@ -662,6 +686,43 @@ def reaction_active(
         if ratio is not None and ratio >= multiplier * settings.sustain_fraction:
             return True
     return False
+
+
+def laughing_needed(baseline_unique_senders: int, settings: Settings | None = None) -> int:
+    """How many distinct people have to have laughed around a moment for it
+    to be kept (see KEEP_LAUGHING_FRACTION), in a chat where this many
+    people chatted in the baseline window. 0 when the channel keeps every
+    moment."""
+    settings = settings or recommended()
+    if settings.keep_laughing_fraction <= 0:
+        return 0
+    return max(
+        settings.min_absolute_unique,
+        min(KEEP_LAUGHING_MOST, round(baseline_unique_senders * settings.keep_laughing_fraction)),
+    )
+
+
+def laughing_people(
+    channel_slug: str, since: float, until: float, laugh_names: Iterable[str] = (), settings: Settings | None = None
+) -> int:
+    """How many distinct people laughed in the channel's chat from `since` to
+    `until` (the detector's clock), by any of the signs is_laughing knows -
+    `laugh_names` being the channel's 7TV laugh emotes (laugh_emote_names).
+
+    Read-only, like reaction_active. Only what the detector still holds can
+    be counted: the last BASELINE_WINDOW_SECONDS before the newest message,
+    without the messages and accounts it leaves out.
+    """
+    settings = settings or recommended()
+    laugh_names = tuple(laugh_names)
+    return len(
+        {
+            entry[1]
+            for entry in _entries.get(channel_slug, ())
+            if since <= entry[0] <= until
+            and is_laughing(entry[2], laugh_names, settings.added_laugh_emote_patterns)
+        }
+    )
 
 
 def record_message(
@@ -850,4 +911,5 @@ def record_message(
         current_message_rate=current_message_rate,
         emote_count=short_emote_count,
         keyword_hits=short_laugh_count + short_mention_count,
+        baseline_unique_senders=baseline_unique_senders,
     )

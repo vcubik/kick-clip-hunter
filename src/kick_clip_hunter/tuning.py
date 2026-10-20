@@ -300,6 +300,16 @@ SETTINGS: tuple[Setting, ...] = (
         least=1, most=1000,
     ),
     Setting(
+        "laughing_share", MOMENTS, NUMBER,
+        "Share of chat that has to laugh to keep a moment",
+        f"Once a moment has closed, it is kept only if this part of the people who chatted lately laughed "
+        f"from {_WINDOW} seconds before it fired to {detector.KEEP_LAUGHING_SECONDS} seconds after - never "
+        f"more than {detector.KEEP_LAUGHING_MOST} people, never fewer than the least above. At 0 every moment "
+        "is kept.",
+        (DETECTOR + "keep_laughing_fraction",),
+        least=0, most=1,
+    ),
+    Setting(
         "lull_seconds", MOMENTS, WHOLE,
         "Lull that ends a moment",
         "A moment closes once chat has gone this long without a fresh reaction, and nothing new fires sooner "

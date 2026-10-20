@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import main, tuning
+from kick_clip_hunter import detector, main, tuning
 
 TRIGGER = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 QUIET = tuning.MOMENT_SESSION_QUIET_SECONDS
@@ -124,3 +124,28 @@ def test_walking_through_a_typical_extended_moment(session):
 
     assert session.window_end == after(reacting_until)
     assert second == pytest.approx(reacting_until + QUIET, abs=poll)
+
+
+class TestKeepingItOnceClosed:
+    CHAT = 40
+
+    def needed(self, session) -> int:
+        return detector.laughing_needed(self.CHAT, session.tuned.detector)
+
+    def test_kept_with_as_many_people_laughing_as_its_chat_asks_for(self, session):
+        session.baseline_unique_senders = self.CHAT
+
+        assert main._laughing_enough(session, self.needed(session)) is True
+        assert main._laughing_enough(session, self.needed(session) - 1) is False
+
+    def test_by_the_settings_it_fired_under(self, session):
+        session.baseline_unique_senders = self.CHAT
+        session.tuned = replace(session.tuned, detector=replace(session.tuned.detector, keep_laughing_fraction=0))
+
+        assert main._laughing_enough(session, 0) is True
+
+    def test_one_asked_for_is_kept_however_few_laughed(self, session):
+        session.baseline_unique_senders = self.CHAT
+        session.asked_for = True
+
+        assert main._laughing_enough(session, 0) is True

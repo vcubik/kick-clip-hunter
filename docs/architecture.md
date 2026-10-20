@@ -22,7 +22,8 @@ Watchlist (streamers, each on its platform - see platforms.py)
        the stream's own HLS segments into a rolling buffer - found by a browser on Kick,
        by streamlink on Twitch and YouTube; on TikTok one FLV download, cut into segments of
        its own as it arrives) -> a detected moment cuts a clip from that buffer, path
-       stored back on the moment
+       stored back on the moment - once its session has closed, and only if enough
+       people laughed around it (a moment that falls short is removed)
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
     -> the bot (chat_bot), where a channel has it: a command in its chat starts or stops
