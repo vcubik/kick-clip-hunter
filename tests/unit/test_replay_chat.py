@@ -387,11 +387,38 @@ class TestReplay:
         messages, _keywords = load()
         keywords = detector.classify_emote_names(["Sadge"])
 
-        listened = replay.replay(messages, keywords, tuning.recommended())
-        ignored = replay.replay(messages, keywords, tuning.tuned({"ignored_emote_words": ("sadge",)}))
+        # Nobody laughs at Sadge: every moment is kept, or there would be none.
+        listened = replay.replay(messages, keywords, tuning.tuned({"laughing_share": 0}))
+        ignored = replay.replay(
+            messages, keywords, tuning.tuned({"laughing_share": 0, "ignored_emote_words": ("sadge",)})
+        )
 
         assert [moment.reasons for moment in listened] == [("emote_mention",)]
         assert ignored == []
+
+    def busier_evening(self, stream, joining: int) -> None:
+        """A chat of forty, a burst just big enough to fire, and `joining`
+        more people laughing half a minute later - a reaction nobody joins
+        is dropped there once its minute is up."""
+        stream.chatter(150, chatters=40)
+        stream.say("viewer1", "xd")
+        stream.chatter(150, chatters=40)
+        stream.burst(people(detector._dynamic_min_reaction_unique(40)), "xDDD")
+        stream.chatter(30, chatters=40)
+        stream.burst(people(joining, "joined"), "xd", spacing=3)
+        stream.chatter(120, chatters=40)
+
+    def test_a_moment_too_few_laughed_at_is_dropped_as_it_is_live(self, stream):
+        self.busier_evening(stream, joining=0)
+
+        assert replayed() == []
+        assert len(replayed(detector=with_detector(keep_laughing_fraction=0))) == 1
+
+    def test_and_kept_once_enough_people_join_in_within_the_minute(self, stream):
+        needed = detector.laughing_needed(40) - detector._dynamic_min_reaction_unique(40)
+        self.busier_evening(stream, joining=needed)
+
+        assert len(replayed()) == 1
 
     def test_a_clip_command_is_left_out_as_it_is_live(self, stream):
         # Who posted a stored message, with what badges, is not kept with it,

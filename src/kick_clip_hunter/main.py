@@ -1533,7 +1533,10 @@ def _analysis_steps() -> list:
 # (detector.reaction_active) its end is pushed out, so a reaction that really
 # does keep going gets one clip covering all of it. Most moments don't earn
 # that and close at their base length once chat has been quiet for a while;
-# there is a hard cap either way. Only then is the clip cut. How long quiet,
+# there is a hard cap either way. Only then is the clip cut - if enough people
+# laughed around the moment for it to be kept at all (_laughing_enough; a
+# moment that is not is removed, row and all, before any of it is cut or
+# announced). How long quiet,
 # how hard a cap and how long a clip are the channel's settings - see
 # tuning.py for what they are recommended to be, and why.
 
@@ -1553,6 +1556,13 @@ class _MomentSession:
     # through under these - how long it may stay open, what keeps it open,
     # how its clip is cut - whatever is saved in the meantime.
     tuned: tuning.Tuning
+    # What it takes to keep the moment once it closes (_laughing_enough): how
+    # big the chat was when it fired, and the channel's 7TV laugh emotes.
+    baseline_unique_senders: int = 0
+    laugh_names: tuple[str, ...] = ()
+    # Asked for in chat, when it was made or while it was open: kept however
+    # few laughed.
+    asked_for: bool = False
 
 
 # One open moment per channel at a time.
@@ -1583,6 +1593,15 @@ def _session_should_close(session: _MomentSession, reaction_is_active: bool, now
     return (now - session.last_active).total_seconds() >= session.tuned.quiet_seconds
 
 
+def _laughing_enough(session: _MomentSession, laughing: int) -> bool:
+    """Whether a closed moment is kept, `laughing` people having laughed
+    around it (see detector.KEEP_LAUGHING_FRACTION). One asked for in chat
+    always is."""
+    return session.asked_for or laughing >= detector.laughing_needed(
+        session.baseline_unique_senders, session.tuned.detector
+    )
+
+
 async def _run_moment_session(session: _MomentSession) -> None:
     try:
         while True:
@@ -1598,6 +1617,33 @@ async def _run_moment_session(session: _MomentSession) -> None:
         # cancelled at shutdown) so a fresh reaction can open a new moment
         # while this one's clip is still being cut.
         _moment_sessions.pop(session.channel, None)
+
+    if not session.asked_for:
+        # Whoever laughs is counted up to a minute after the moment fired,
+        # however soon it closed - its clip waits for footage after it anyway.
+        until = session.triggered_at + detector.KEEP_LAUGHING_SECONDS
+        if until > time.monotonic():
+            await asyncio.sleep(until - time.monotonic())
+        laughing = detector.laughing_people(
+            session.channel,
+            session.triggered_at - detector.SHORT_WINDOW_SECONDS,
+            until,
+            session.laugh_names,
+            session.tuned.detector,
+        )
+        if not _laughing_enough(session, laughing):
+            conn = get_connection()
+            try:
+                delete_moment(conn, session.moment_id)
+            finally:
+                conn.close()
+            logger.info(
+                "[%s] moment %d dropped: %d people laughed, %d needed in a chat of %d",
+                session.channel, session.moment_id, laughing,
+                detector.laughing_needed(session.baseline_unique_senders, session.tuned.detector),
+                session.baseline_unique_senders,
+            )
+            return
 
     conn = get_connection()
     try:
@@ -6228,8 +6274,9 @@ async def _detect(conn, message: ChatMessage) -> None:
         session.last_active = datetime.now(timezone.utc)
         if commanded:
             # What was asked for is what was on screen just now: the open
-            # moment's clip is made to reach it.
+            # moment's clip is made to reach it, and it is kept.
             session.window_end = session.last_active
+            session.asked_for = True
             logger.info("[%s] clip asked for by %s: moment %d extended", channel, message.sender, session.moment_id)
     elif spike is not None:
         await _open_moment_session(conn, message, spike, tuned)
@@ -6276,6 +6323,13 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
         last_active=window_end,
         triggered_at=time.monotonic(),
         tuned=tuned,
+        baseline_unique_senders=spike.baseline_unique_senders,
+        laugh_names=tuple(
+            detector.laugh_emote_names(
+                _channel_keywords(conn, message.broadcaster_user_id), tuned.detector.added_laugh_emote_patterns
+            )
+        ),
+        asked_for=spike is _COMMANDED,
     )
     _moment_sessions[channel] = session
     # Tracked (not just held via _moment_sessions) so there's no gap between

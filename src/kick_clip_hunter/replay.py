@@ -10,8 +10,10 @@ been and how long their clips.
 
 What this can and cannot tell: it reproduces *when* moments fire (on the day
 it was first used it matched the live run 102 to 103), so it answers "how
-many" and "how long". It says nothing about whether the moments that remain
-are the good ones - that needs ratings. Nor does it count clips made on
+many" and "how long" - of the moments the service would also have kept, a
+minute after each fired, for enough people having laughed around it. It says
+nothing about whether the moments that remain are the good ones - that needs
+ratings. Nor does it count clips made on
 command (see tuning.py): who posted a stored message, with what badges, is
 not kept with it. A command is left out of the detector here as it is live
 - a clip command, and as much the commands the bot takes (chat_bot.py).
@@ -205,10 +207,29 @@ def replay(
     channel = f"replay {next(_runs)}"
     settings = tuning.detector
     weights = detector.keyword_weights(keywords, settings)
+    laugh_names = tuple(detector.laugh_emote_names(weights, settings.added_laugh_emote_patterns))
     poll = MOMENT_SESSION_POLL_SECONDS
 
     moments: list[ReplayedMoment] = []
     open_session: dict | None = None
+    # Closed moments waiting to be kept or dropped, as the service does once
+    # the minute after each fired has gone by (see detector.laughing_people).
+    closed: list[ReplayedMoment] = []
+
+    def judge_until(time: float) -> None:
+        """Keeps or drops each closed moment whose minute has gone by. Run
+        before a message at `time` is fed, so what it counts is still held."""
+        while closed and closed[0].time + detector.KEEP_LAUGHING_SECONDS <= time:
+            moment = closed.pop(0)
+            laughing = detector.laughing_people(
+                channel,
+                moment.time - detector.SHORT_WINDOW_SECONDS,
+                moment.time + detector.KEEP_LAUGHING_SECONDS,
+                laugh_names,
+                settings,
+            )
+            if laughing >= detector.laughing_needed(moment.spike.baseline_unique_senders, settings):
+                moments.append(moment)
 
     def run_session_until(time: float) -> None:
         """The session polls on its own schedule, between messages too."""
@@ -222,7 +243,7 @@ def replay(
             gone_quiet = now - open_session["last_active"] >= tuning.quiet_seconds
             if timed_out or gone_quiet:
                 spike = open_session["spike"]
-                moments.append(
+                closed.append(
                     ReplayedMoment(
                         time=open_session["fired_at"],
                         reasons=tuple(spike.reasons),
@@ -240,6 +261,7 @@ def replay(
             if progress is not None and fed % PROGRESS_EVERY == 0:
                 progress(fed)
             run_session_until(message.time)
+            judge_until(message.time)
             if tuning.is_clip_command(message.content) or tuning.bot_command(message.content) is not None:
                 continue
             laugh_weight, mention_weight = detector.classify_message(message.content, weights, settings)
@@ -270,6 +292,7 @@ def replay(
 
         if messages:
             run_session_until(messages[-1].time + tuning.max_open_seconds + poll)
+            judge_until(float("inf"))
     finally:
         detector._entries.pop(channel, None)
         detector._last_moment_at.pop(channel, None)

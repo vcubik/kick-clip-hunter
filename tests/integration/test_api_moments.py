@@ -248,6 +248,82 @@ class TestMomentSession:
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
+class TestKeepingAMoment:
+    """Once its session has closed, a moment is kept only if enough people
+    laughed around it (detector.laughing_needed) - in a chat big enough that
+    the bar is above what fires a moment."""
+
+    CHATTERS = 40
+
+    def sizes(self) -> tuple[int, int]:
+        """How many people fire a moment in that chat, and how many have to
+        laugh for it to be kept."""
+        fires = detector._dynamic_min_reaction_unique(self.CHATTERS)
+        keeps = detector.laughing_needed(self.CHATTERS)
+        assert fires < keeps
+        return fires, keeps
+
+    async def test_a_burst_nobody_joins_is_dropped_before_its_clip_is_cut(self, service, monkeypatch, caplog):
+        cut = []
+
+        async def create_clip(*args, **kwargs):
+            cut.append(args)
+            raise RecorderError("not asked for in this test")
+
+        monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
+        fires, _keeps = self.sizes()
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            await service.crowd_laughs(CHANNEL, people=fires)
+            assert len(service.moments()) == 1  # stored while it is open
+            await service.settle()
+
+        assert service.moments() == []
+        assert cut == []
+        assert any("dropped" in record.getMessage() for record in caplog.records)
+
+    async def test_people_who_join_in_after_it_fired_keep_it(self, service):
+        fires, keeps = self.sizes()
+        service.quiet_seconds = 0.5
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+        await service.crowd_laughs(CHANNEL, people=fires)
+        await service.clock_tick()
+
+        for number in range(keeps - fires):
+            await service.chat(CHANNEL, f"latecomer{number}", "xd")
+        await service.settle()
+
+        assert len(service.moments()) == 1
+
+    async def test_a_channel_that_keeps_every_moment_keeps_it(self, service):
+        fires, _keeps = self.sizes()
+        service.watch(CHANNEL)
+        await set_up(service, laughing_share=0)
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+
+        await service.crowd_laughs(CHANNEL, people=fires)
+        await service.settle()
+
+        assert len(service.moments()) == 1
+
+    async def test_one_the_streamer_asked_for_while_it_was_open_is_kept(self, service):
+        fires, _keeps = self.sizes()
+        service.quiet_seconds = 0.5
+        service.watch(CHANNEL)
+        await set_up(service, clip_commands=["!clip"])
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+        await service.crowd_laughs(CHANNEL, people=fires)
+
+        await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
+        await service.settle()
+
+        (moment,) = service.moments()
+        assert moment["reason"] == "laugh"
+
+
 @pytest.fixture
 def moment(service) -> int:
     """A stored moment to cut a clip for; returns its id."""
