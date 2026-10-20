@@ -486,7 +486,9 @@ Run this on a live channel after changing any of the above, or the code right ne
 3. **Check chat is arriving.** With a tracked channel live, chat lines appear in the log within
    seconds. If they don't, see [operations.md](operations.md).
 4. **Check recording.** A browser window opens briefly, then the log says `recording started`.
-   `data/recordings/<channel>/` fills with `.ts` segments and stays at roughly ten minutes' worth.
+   `data/recordings/<channel>/` fills with `.ts` segments. For the recorder's first ten minutes it
+   keeps them all; from then on, about four and a half minutes' worth with the recommended clip
+   settings (more for a channel whose clips reach further - `tuning.buffer_seconds`).
 5. **Wait for a moment.** The log shows, in order: `MOMENT detected`, `moment N closed after Xs
    reaction`, and about a minute and a half later `clip saved for moment N: ... (35 s, with 30 s
    before it and 60 s after)` - one file, cut once the footage after the clip has been broadcast.

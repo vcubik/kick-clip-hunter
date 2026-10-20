@@ -1088,6 +1088,7 @@ async def lifespan(app: FastAPI):
                 _always_recorded_slugs,
                 _record_stream_by_itself,
                 _look_failed,
+                _buffer_seconds,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -1203,6 +1204,21 @@ def _tuning_now(broadcaster_user_id: int) -> tuning.Tuning:
     conn = get_connection()
     try:
         return _tuning(conn, broadcaster_user_id)
+    finally:
+        conn.close()
+
+
+def _buffer_seconds(slug: str) -> float:
+    """How far back a channel's recorder keeps its stream: as far as its
+    clips need under its settings now (tuning.buffer_seconds). A channel no
+    longer on the watchlist - recorded still, for a stream kept whole - keeps
+    as much as any clip could need."""
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            return recorder.BUFFER_RETENTION_SECONDS
+        return tuning.buffer_seconds(_tuning(conn, row["broadcaster_user_id"]))
     finally:
         conn.close()
 

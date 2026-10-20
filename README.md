@@ -14,7 +14,7 @@ Kick chat ────── signed webhooks ──┐
 Twitch chat ──── EventSub ─────────┼─> detector ─────────────────> moment ─┐
                  WebSocket         │   per-channel rolling baseline        ├─> clip + context ──> dashboard
 YouTube chat ─── read while live ──┘                                       │   (ffmpeg)           review, rate, tag
-Kick, Twitch, ── HLS segments ───────> recorder ──> 10-minute buffer ──────┘
+Kick, Twitch, ── HLS segments ───────> recorder ──> rolling buffer ────────┘
 YouTube stream
 ```
 
@@ -31,7 +31,8 @@ YouTube stream
   chat with its own emotes and those of 7TV, BetterTTV and FrankerFaceZ, Kick's with its own and
   7TV's, YouTube's with its emoji - read while the channel is live.
 - **Records what it watches.** Every live channel on the watchlist is recorded into a rolling
-  ten-minute buffer by downloading the stream's own HLS segments, which keeps working through ad
+  buffer a few minutes deep - as far back as the channel's clip settings need - by downloading
+  the stream's own HLS segments, which keeps working through ad
   breaks and other mid-stream discontinuities. A clip whose footage an ad covered is cut from the
   stream's own VOD instead, where the channel keeps one.
 - **Cuts the clip.** When a moment fires, a clip of about 35 seconds is cut around it - longer if

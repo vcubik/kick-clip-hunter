@@ -637,6 +637,14 @@ Module map (`src/kick_clip_hunter/`):
   segment - so the buffer, clips and stream recordings need nothing of their own for it. A
   break the cutter sees, or a piece that could not be copied, starts a new group; an FLV
   address about to run out ends the run, and the next tick starts one at a new address.
+  How far back the buffer reaches is the channel's: `tuning.buffer_seconds` adds up what
+  its clip settings need kept from a file's first frame until it is cut (context, rolls,
+  playback delay, how long a moment stays open or its laughs are counted, the wait for the
+  last segment) plus `BUFFER_MARGIN_SECONDS`, about four and a half minutes as
+  recommended. The loop tells the recorder before every tick (`ChannelRecorder.keep`); a
+  recorder not told yet keeps `BUFFER_RETENTION_SECONDS`, enough for the longest clip the
+  Settings page allows. A shorter reach takes hold only once the longer one has run out,
+  so a clip framed under the old settings still finds its footage.
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips

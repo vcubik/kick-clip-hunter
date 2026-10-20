@@ -321,6 +321,60 @@ class TestPruning:
         assert not deletable.exists()
 
 
+class TestHowFarBackItReaches:
+    """`keep`: how far back a channel's clips need its buffer to reach."""
+
+    def now(self, seconds_ago: float = 0) -> datetime:
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+
+    def test_until_told_it_reaches_as_far_as_any_clip_could_need(self, rec):
+        assert rec.reach() == recorder.BUFFER_RETENTION_SECONDS
+
+    def test_a_shorter_reach_prunes_once_the_longer_one_has_run_out(self, rec):
+        # Told long enough ago that whatever was framed before has been cut.
+        rec.keep(200, now=self.now(recorder.BUFFER_RETENTION_SECONDS + 1))
+        expired = add_segment(rec, self.now(260))
+        kept = add_segment(rec, self.now(140))
+
+        rec._prune()
+
+        assert rec.reach() == 200
+        assert not expired.exists()
+        assert kept.exists()
+
+    def test_until_then_the_longer_one_holds(self, rec):
+        # A clip framed under it may still be waiting for its footage.
+        rec.keep(200, now=self.now(recorder.BUFFER_RETENTION_SECONDS - 60))
+        waited_for = add_segment(rec, self.now(260))
+
+        rec._prune()
+
+        assert rec.reach() == recorder.BUFFER_RETENTION_SECONDS
+        assert waited_for.exists()
+
+    def test_being_told_the_same_again_does_not_put_it_off(self, rec):
+        told = self.now(recorder.BUFFER_RETENTION_SECONDS + 1)
+        rec.keep(200, now=told)
+
+        rec.keep(200)
+
+        assert rec.reach() == 200
+
+    def test_a_longer_reach_holds_at_once(self, rec):
+        rec.keep(200, now=self.now(recorder.BUFFER_RETENTION_SECONDS + 1))
+
+        rec.keep(300)
+
+        assert rec.reach() == 300
+
+    def test_cut_short_twice_it_steps_down_as_each_runs_out(self, rec):
+        rec.keep(400, now=self.now(recorder.BUFFER_RETENTION_SECONDS + 1))
+        rec.keep(200, now=self.now(100))
+
+        assert rec.reach() == 400
+        assert rec.reach(now=self.now(-301)) == 200
+
+
 class TestAdGroups:
     def test_a_group_recorded_during_an_ad_is_recognisable(self, rec):
         add_segment(rec, at(0), group="1-0")
