@@ -103,23 +103,20 @@ class TestTheSettingsOnOffer:
     def test_what_is_recommended_keeps_to_the_rules(self):
         tuning.check(tuning.recommended_values())
 
-    def test_the_longest_file_a_moment_can_get_fits_in_what_the_recorder_keeps(self):
-        # From the first frame of the context before the clip to the moment
-        # the file is cut: the footage has to be in the buffer all that time.
+    def test_the_longest_file_a_moment_can_get_fits_in_what_a_recorder_keeps_before_it_is_told(self):
         most = {item.name: item.most for item in tuning.SETTINGS if item.most is not None}
-        needed = (
-            most["context_before_seconds"]
-            + most["pre_roll_seconds"]
-            + most["playback_delay_seconds"]
-            + detector.SHORT_WINDOW_SECONDS
-            + most["longest_seconds"]
-            + tuning.MOMENT_SESSION_POLL_SECONDS
-            + most["post_roll_seconds"]
-            + most["context_after_seconds"]
-            + recorder.CLIP_SETTLE_SECONDS
+        framing = (
+            "longest_seconds",
+            "pre_roll_seconds",
+            "post_roll_seconds",
+            "playback_delay_seconds",
+            "context_before_seconds",
+            "context_after_seconds",
         )
 
-        assert needed < recorder.BUFFER_RETENTION_SECONDS
+        longest = tuning.tuned({name: most[name] for name in framing})
+
+        assert tuning.buffer_seconds(longest) <= recorder.BUFFER_RETENTION_SECONDS
 
     def test_the_lull_cannot_be_as_short_as_the_window_a_reaction_is_judged_in(self):
         # See test_detector_settings: the same laughs would fire twice.
@@ -396,6 +393,47 @@ class TestLayingValuesOverEachOther:
         assert tuned.record_commands == frozenset({"!record start", "!rec"})
         assert tuned.stop_commands == frozenset({"!record stop"})
         assert tuned.status_commands == frozenset({"!status"})
+
+
+class TestTheBuffer:
+    """How far back a channel's recorder keeps its stream: from the first
+    frame of a clip's file to when the file is cut."""
+
+    def test_what_is_recommended_needs_less_than_a_recorder_keeps_before_it_is_told(self):
+        assert tuning.buffer_seconds(tuning.recommended()) < recorder.BUFFER_RETENTION_SECONDS
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "pre_roll_seconds",
+            "post_roll_seconds",
+            "playback_delay_seconds",
+            "context_before_seconds",
+            "context_after_seconds",
+            "longest_seconds",
+        ],
+    )
+    def test_every_second_more_of_a_clips_file_is_a_second_more_of_it(self, name):
+        value = tuning.recommended_values()[name] + 7
+
+        longer = tuning.buffer_seconds(tuning.tuned({name: value}))
+
+        assert longer == tuning.buffer_seconds(tuning.recommended()) + 7
+
+    def test_a_moment_that_closes_early_is_still_not_cut_before_the_laughs_are_counted(self):
+        # So it is no shorter for a moment that may stay open for less.
+        shortest = setting("longest_seconds").least
+        assert shortest + tuning.MOMENT_SESSION_POLL_SECONDS < detector.KEEP_LAUGHING_SECONDS
+        counted = detector.KEEP_LAUGHING_SECONDS - tuning.MOMENT_SESSION_POLL_SECONDS
+
+        buffer = tuning.buffer_seconds(tuning.tuned({"longest_seconds": shortest}))
+
+        assert buffer == tuning.buffer_seconds(tuning.tuned({"longest_seconds": counted}))
+
+    def test_nothing_but_the_clips_framing_has_a_say_in_it(self):
+        other = tuning.tuned({"reacting_share": 0.3, "lull_seconds": 60, "clip_commands": ("!clip",)})
+
+        assert tuning.buffer_seconds(other) == tuning.buffer_seconds(tuning.recommended())
 
 
 class TestWhatIsAChannelsAlone:

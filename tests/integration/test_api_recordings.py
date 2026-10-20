@@ -748,6 +748,8 @@ class TestAChannelRecordedAlways:
             # ...and whom to tell that a channel could not be looked at, which
             # may have renamed itself (see test_channel_rename.py).
             service.main._look_failed,
+            # ...and how far back each channel's recorder keeps its stream.
+            service.main._buffer_seconds,
         ]
 
 

@@ -336,12 +336,33 @@ def _always_recorded(always_recorded: Callable[[], Iterable[str]]) -> set[str]:
         return set()
 
 
-async def _see_to(slug: str, *, tracked: bool, always: bool, stream_is_on: StreamIsOn | None) -> None:
+BufferSeconds = Callable[[str], float]
+
+
+def _keep(recorder: ChannelRecorder, slug: str, buffer_seconds: BufferSeconds) -> None:
+    """Tells a recorder how far back its buffer reaches. One whose channel's
+    settings could not be read goes on reaching as far as it did."""
+    try:
+        recorder.keep(buffer_seconds(slug))
+    except Exception:
+        logger.exception("[%s] could not tell how much of its stream to keep", slug)
+
+
+async def _see_to(
+    slug: str,
+    *,
+    tracked: bool,
+    always: bool,
+    stream_is_on: StreamIsOn | None,
+    buffer_seconds: BufferSeconds | None = None,
+) -> None:
     """One channel's turn in a round: its recorder is ticked if the channel
     is live and its stream is wanted - for clips (`tracked`) or whole - and
     stopped if it is running for nothing. A channel that is recorded
     `always` and turns out to be live with nothing keeping its stream is
-    reported first, so that what is started for it gets this round's tick."""
+    reported first, so that what is started for it gets this round's tick.
+    Before a tick the recorder is told how far back to keep its buffer
+    (`buffer_seconds`), which the tick prunes it to."""
     recorder = _get_recorder(slug)
     if not (tracked or always or slug in _stream_recordings):
         # Tracking paused for this one channel - same teardown as the
@@ -361,6 +382,8 @@ async def _see_to(slug: str, *, tracked: bool, always: bool, stream_is_on: Strea
         except Exception:
             logger.exception("[%s] is live and always recorded, but its recording could not be started", slug)
     if live and (tracked or slug in _stream_recordings):
+        if buffer_seconds is not None:
+            _keep(recorder, slug, buffer_seconds)
         await asyncio.to_thread(_tick_one, slug)
     elif recorder.is_active:
         await asyncio.to_thread(recorder.stop)
@@ -374,6 +397,7 @@ async def run_forever(
     always_recorded: Callable[[], Iterable[str]] = lambda: (),
     stream_is_on: StreamIsOn | None = None,
     look_failed: LookFailed | None = None,
+    buffer_seconds: BufferSeconds | None = None,
 ) -> None:
     """Drives the recorders until cancelled. `stream_recording_over` is
     told, with the channel and why, when a stream recording should be ended;
@@ -383,7 +407,10 @@ async def run_forever(
     with no recording of it running; starting one (`start_stream_recording`)
     is up to whoever that is, too. `look_failed` is told, with the channel
     and what was raised, when a look at a channel fails - for one whose
-    platform no longer knows it by that name, which it may have changed."""
+    platform no longer knows it by that name, which it may have changed.
+    `buffer_seconds` says, by channel, how far back its recorder keeps the
+    stream for clips; without it every buffer reaches as far as any clip
+    could need (recorder.BUFFER_RETENTION_SECONDS)."""
     global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:
@@ -417,6 +444,7 @@ async def run_forever(
                         tracked=watching and is_channel_tracked(slug),
                         always=slug in always,
                         stream_is_on=stream_is_on,
+                        buffer_seconds=buffer_seconds,
                     )
                 except Exception as error:
                     logger.exception("[%s] recording tick failed", slug)

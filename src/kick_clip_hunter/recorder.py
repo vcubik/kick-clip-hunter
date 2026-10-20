@@ -6,8 +6,10 @@ every 30s) makes sure a background thread is following the channel's live HLS
 playlist and saving every media segment it lists, exactly as served, into
 `data/recordings/<slug>/` - starting one if there isn't one running, or
 restarting against a freshly fetched URL if the previous one died or stalled
-(see STALL_TIMEOUT_SECONDS) - and prunes segments older than the retention
-window.
+(see STALL_TIMEOUT_SECONDS) - and prunes segments older than the buffer
+reaches back. How far that is depends on the channel's settings: as far as
+its longest clip, with the context around it, needs footage to be kept until
+the clip is cut (`ChannelRecorder.keep`).
 
 The segments are downloaded directly rather than by a long-running
 `ffmpeg -c copy` process (which is how this used to work) because a live
@@ -114,7 +116,13 @@ FFPROBE_BIN = "ffprobe"
 # Reading a file's length takes a fraction of a second; a probe that takes
 # this long is stuck on something that is not a video.
 PROBE_TIMEOUT_SECONDS = 15
+# How far back a buffer reaches until it is told how far its channel's clips
+# need it to (`ChannelRecorder.keep`, tuning.buffer_seconds): far enough for
+# the longest clip the Settings page allows.
 BUFFER_RETENTION_SECONDS = 600
+# Kept on top of what a channel's clips need: a cut can wait on the VOD
+# (VOD_WAIT_SECONDS) or behind another one, and a segment runs some seconds.
+BUFFER_MARGIN_SECONDS = 60
 # Chat reacts to a moment with a lag - the detector's window_start/window_end
 # mark when the *reaction* (message spike) was seen, not when the funny thing
 # actually happened, which is typically a few seconds earlier. So pre-roll is
@@ -498,6 +506,11 @@ class ChannelRecorder:
         # `add` of stream_recording.StreamWriter. Set from outside, read by
         # the recording thread.
         self.whole_stream = None
+        # How far back the buffer reaches (see `keep`) - BUFFER_RETENTION_SECONDS
+        # while None - and the longer reaches it had before, each with when it
+        # runs out.
+        self._reach: float | None = None
+        self._longer: list[tuple[float, datetime]] = []
 
     def _start_run(self) -> None:
         urls = stream_urls(self.channel_slug)
@@ -768,8 +781,26 @@ class ChannelRecorder:
         stored.sort(key=lambda segment: segment.started_at)
         return stored
 
+    def keep(self, seconds: float, now: datetime | None = None) -> None:
+        """Sets how far back the buffer reaches. A longer reach holds at
+        once; a shorter one only once the longer has run out, since a clip
+        framed while it held may still be waiting to be cut from footage the
+        shorter one would prune."""
+        now = now or datetime.now(timezone.utc)
+        reach = BUFFER_RETENTION_SECONDS if self._reach is None else self._reach
+        if seconds < reach:
+            self._longer.append((reach, now + timedelta(seconds=reach)))
+        self._reach = seconds
+
+    def reach(self, now: datetime | None = None) -> float:
+        """How many seconds back the buffer reaches now."""
+        now = now or datetime.now(timezone.utc)
+        self._longer = [(seconds, until) for seconds, until in self._longer if until > now]
+        reach = BUFFER_RETENTION_SECONDS if self._reach is None else self._reach
+        return max([reach, *(seconds for seconds, _until in self._longer)])
+
     def _prune(self) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=BUFFER_RETENTION_SECONDS)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.reach())
         kept_groups = set()
         for segment in self._stored_segments():
             if segment.ended_at < cutoff:

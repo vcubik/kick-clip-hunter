@@ -22,7 +22,8 @@ Three things are in this module:
   and whether the bot writes in the channel's chat and what it is asked
   there (see chat_bot.py). `recommended()` is what the constants say, read
   where they are kept (detector.py, recorder.py, and the moment session's
-  below) at the time it is called;
+  below) at the time it is called, and `buffer_seconds` how much of the
+  stream its recorder keeps for its clips;
 * `SETTINGS` - the ones on offer: what each is called on the page, what it
   may be, and which fields of a Tuning it sets. One setting can set two:
   the lull that ends a moment is also how soon the next one may fire;
@@ -161,6 +162,29 @@ def recommended() -> Tuning:
         playback_delay_seconds=recorder.PLAYBACK_DELAY_SECONDS,
         context_before_seconds=recorder.CONTEXT_BEFORE_SECONDS,
         context_after_seconds=recorder.CONTEXT_AFTER_SECONDS,
+    )
+
+
+def buffer_seconds(tuned: Tuning) -> float:
+    """How far back a channel's buffer has to reach for its clips to be cut
+    under these settings (see recorder.ChannelRecorder.keep): from the first
+    frame of the context before a clip to when its file is cut, with room to
+    spare."""
+    # A moment fires on the short window's reaction and stays open for up to
+    # max_open_seconds, seen to every poll; its clip is not cut before the
+    # people laughing around it have been counted, and then waits for its
+    # post-roll and the context after it to be broadcast (see main.py).
+    open_for = max(tuned.max_open_seconds + MOMENT_SESSION_POLL_SECONDS, detector.KEEP_LAUGHING_SECONDS)
+    return (
+        tuned.context_before_seconds
+        + tuned.pre_roll_seconds
+        + tuned.playback_delay_seconds
+        + detector.SHORT_WINDOW_SECONDS
+        + open_for
+        + tuned.post_roll_seconds
+        + tuned.context_after_seconds
+        + recorder.CLIP_SETTLE_SECONDS
+        + recorder.BUFFER_MARGIN_SECONDS
     )
 
 

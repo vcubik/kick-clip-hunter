@@ -36,6 +36,12 @@ class StandInRecorder:
         self.stops = 0
         self.active = active
         self.tick_error = tick_error
+        # How far back it was told to keep its buffer, with how many ticks
+        # it had had by then.
+        self.kept: list[tuple[float, int]] = []
+
+    def keep(self, seconds: float) -> None:
+        self.kept.append((seconds, self.ticks))
 
     def tick(self) -> None:
         self.ticks += 1
@@ -181,6 +187,67 @@ class TestWhichChannelsGetRecorded:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+
+class TestHowMuchOfAStreamIsKept:
+    async def run_until(self, condition, what: str, slugs, buffer_seconds) -> None:
+        task = asyncio.create_task(
+            recording_manager.run_forever(
+                lambda: list(slugs), lambda: True, lambda slug: True, buffer_seconds=buffer_seconds
+            )
+        )
+        try:
+            await async_wait_until(condition, what)
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def test_a_recorder_is_told_its_channels_reach_before_every_tick(self, kick_api, recorders):
+        kick_api.add_channel("short", 1, is_live=True)
+        kick_api.add_channel("long", 2, is_live=True)
+        recorders["short"] = StandInRecorder()
+        recorders["long"] = StandInRecorder()
+        reaches = {"short": 200.0, "long": 500.0}
+
+        await self.run_until(
+            lambda: recorders["short"].ticks >= 2 and recorders["long"].ticks >= 2,
+            "two ticks of each",
+            ["short", "long"],
+            reaches.get,
+        )
+
+        assert recorders["short"].kept[:2] == [(200.0, 0), (200.0, 1)]
+        assert recorders["long"].kept[:2] == [(500.0, 0), (500.0, 1)]
+
+    async def test_an_offline_channels_recorder_is_not_told(self, kick_api, recorders):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        kick_api.add_channel("offline_one", 2, is_live=False)
+        recorders["live_one"] = StandInRecorder()
+        recorders["offline_one"] = StandInRecorder()
+
+        await self.run_until(
+            lambda: recorders["live_one"].ticks >= 2, "two ticks", ["live_one", "offline_one"], lambda slug: 200.0
+        )
+
+        assert recorders["offline_one"].kept == []
+
+    async def test_settings_that_cannot_be_read_do_not_cost_the_tick(self, kick_api, recorders, caplog):
+        kick_api.add_channel("live_one", 1, is_live=True)
+        recorders["live_one"] = StandInRecorder()
+
+        def unreadable(slug: str) -> float:
+            raise RuntimeError("database is locked")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await self.run_until(lambda: recorders["live_one"].ticks >= 2, "two ticks", ["live_one"], unreadable)
+
+        assert recorders["live_one"].kept == []
+        assert any(
+            "[live_one] could not tell how much of its stream to keep" in record.getMessage()
+            for record in caplog.records
+        )
+        assert not any("recording tick failed" in record.getMessage() for record in caplog.records)
 
 
 class TestPausing:

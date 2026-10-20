@@ -428,6 +428,21 @@ class TestAMomentAndItsSettings:
         assert pending(recommended) > recommended.max_open_seconds + recommended.context_after_seconds
         assert pending(longer) == pending(recommended) + added
 
+    async def test_its_channels_buffer_reaches_as_far_back_as_its_clips_need(self, service):
+        user_id = service.watch(CHANNEL)
+        service.watch(OTHER)
+        await save(service, CHANNEL, context_before_seconds=recorder.CONTEXT_BEFORE_SECONDS + 50)
+        await use_own(service, CHANNEL)
+
+        mine, other = service.main._buffer_seconds(CHANNEL), service.main._buffer_seconds(OTHER)
+
+        assert mine == tuning.buffer_seconds(in_force(service, user_id))
+        assert mine == other + 50
+        assert other == tuning.buffer_seconds(tuning.recommended())
+
+    async def test_a_channel_off_the_watchlist_keeps_as_much_as_any_clip_could_need(self, service):
+        assert service.main._buffer_seconds("nobody") == recorder.BUFFER_RETENTION_SECONDS
+
 
 class TestTryingOnStoredChat:
     @pytest.fixture
