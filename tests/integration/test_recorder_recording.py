@@ -660,12 +660,19 @@ class TestHandingTheStreamOn:
         assert stored_data(rec) == [segment.data for segment in timeline]
         assert server.segment_requests() == list(range(6))  # fetched once, kept twice
 
-    def test_only_what_is_broadcast_from_then_on_is_kept(self, hls, recording, writer):
+    def test_only_what_is_broadcast_from_then_on_is_kept(self, hls, recording, writer, tmp_path):
         # The buffer is not emptied into a recording that starts later.
         timeline = fake_segments(8)
         server = hls(timeline, published=3)
         rec = recording.of(server)
+        # Something else takes the stream until then. A segment is in the
+        # buffer before it is handed on, so waiting for the buffer alone left
+        # the third one in flight, to be handed to the recording below.
+        earlier = StreamWriter(tmp_path / "earlier_parts")
+        rec.whole_stream = earlier
         start(rec)
+        wait_until(lambda: earlier.seconds == 3 * SEGMENT_SECONDS, "the first three to be handed on")
+        earlier.close()
 
         rec.whole_stream = writer
         server.publish_all()
