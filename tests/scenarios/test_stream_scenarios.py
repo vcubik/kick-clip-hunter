@@ -133,11 +133,8 @@ def test_an_evening_on_a_busy_channel():
         "an absurd in-game bug",
         "a perfectly timed joke",
     ]
-    reasons = [spike.reasons for _time, spike in stream.moments]
-    assert "laugh" in reasons[0]
-    assert "emotes" in reasons[1]
-    # A mixed reaction fires on whichever signal crosses its threshold first.
-    assert set(reasons[2]) & {"laugh", "emotes"}
+    # Typed or posted as an emote, a laugh is a laugh.
+    assert all("laugh" in spike.reasons for _time, spike in stream.moments)
 
 
 def test_an_evening_on_a_small_channel():

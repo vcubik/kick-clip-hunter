@@ -135,13 +135,36 @@ class TestLaughReaction:
 
 
 class TestEmoteReaction:
-    def test_a_crowd_posting_a_laugh_emote_is_a_moment(self):
+    def test_a_crowd_posting_a_laugh_emote_is_a_laughing_moment(self):
         chat = warm_chat()
 
         spike = chat.burst(people(8), LAUGH_EMOTE)
 
         assert spike is not None
+        assert spike.reasons == ["laugh"]
+
+    def test_a_crowd_posting_another_emote_is_an_emotes_moment(self):
+        chat = warm_chat()
+
+        spike = chat.burst(people(30), OTHER_EMOTE)
+
+        assert spike is not None
         assert spike.reasons == ["emotes"]
+
+    def test_people_laughing_each_their_own_way_are_one_crowd(self):
+        # Seen live: one person typed "xDDDD", the next posted KEKW - the
+        # typed laughs and the laughing emotes each fell short of the crowd
+        # floor, so a reaction everyone could see was no moment.
+        needed = warm_chat(stray_reactions=False, channel="typing").reactions_needed(LAUGH)
+        assert needed is not None and needed >= 2
+        chat = warm_chat(stray_reactions=False)
+
+        fired = None
+        for number, sender in enumerate(people(needed)):
+            fired = chat.say(sender, LAUGH if number % 2 else LAUGH_EMOTE) or fired
+            chat.wait(0.2)
+
+        assert fired is not None and fired.reasons == ["laugh"]
 
     def test_unrelated_emotes_need_more_people_than_laugh_emotes(self):
         needed_laugh = warm_chat(channel="laugh").reactions_needed(LAUGH_EMOTE)

@@ -143,7 +143,7 @@ class TestSavingForAllChannels:
         [
             ({"reacting_share": 7}, "Share of chat that has to react"),
             ({"reacting_least": 2.5}, "At least this many people"),
-            ({"laugh_signal": "off"}, "Typed laughs"),
+            ({"laugh_signal": "off"}, "Laughs"),
             ({"laugh_emote_words": ["ab"]}, "More laughing emotes"),
             ({"laugh_emote_words": ["smich haha"]}, "More laughing emotes"),
             ({"self_destruct": 1}, "self_destruct"),

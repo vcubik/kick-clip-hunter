@@ -12,14 +12,18 @@ signals are tracked this way over a rolling window per channel:
   (as a small score booster, MESSAGE_RATE_SCORE_WEIGHT) when a laugh/emote
   signal already fired in the same window.
 - emotes: a spike in distinct senders using one of the platform's own
-  emotes - Kick's, Twitch's (not a raw emote-position count - one person
-  stacking several emotes in a message, or repeating one across several
-  messages, still only counts as one)
+  emotes - Kick's, Twitch's - that is not a laughing one (not a raw
+  emote-position count - one person stacking several emotes in a message,
+  or repeating one across several messages, still only counts as one)
 - laugh: the Czech "xD"/"xDDDD" laugh convention - about as reliable a sign
   of a funny moment as chat gets, so it needs a lower multiplier. Not all
   laughs are equal either: the exaggerated form ("xDD" and longer) counts for more
   than a bare "xd" (see LAUGH_STRONG_WEIGHT / LAUGH_WEAK_WEIGHT), same
-  weighting idea as emote_mention below
+  weighting idea as emote_mention below. A platform's own laughing emote
+  (KEKW, emojiLol, LUL, ...) is someone laughing too and counts here, at
+  EMOTE_LAUGH_WEIGHT: posted next to typed laughs it used to go to the
+  emotes signal, and a reaction of a few people laughing each their own way
+  reached neither signal's crowd floor.
 - emote_mention: a channel's 7TV emote name typed as plain text - noisier
   than laugh (some emote names double as ordinary words), so it needs a
   higher multiplier to fire. Not all emote mentions are equal: emotes whose
@@ -132,7 +136,14 @@ MIN_ABSOLUTE_UNIQUE = 3
 # laughs are rare enough in the baseline that almost any small cluster clears
 # them. On that replay (~80 distinct chatters per 5 minutes) this fraction
 # cut 13 moments/hour to about 5; 0.125 gave ~4/hour and 0.15 ~2.5/hour.
-MIN_REACTION_UNIQUE_FRACTION = 0.10
+# It was 0.10 until a platform's laughing emotes began to count as laughs:
+# people laughing each their own way then make one crowd, which on a replay
+# of all stored chat (~107 h, eleven channels) fired a third more moments.
+# At 0.15 there were fewer than before that (563 against 619), and of the
+# hand-rated moments it kept 169 of the 194 rated 3 or more but only 212 of
+# the 276 rated 1-2. Below about 30 chatters the floor stays at
+# MIN_ABSOLUTE_UNIQUE, so a small channel is not held to a bigger one's bar.
+MIN_REACTION_UNIQUE_FRACTION = 0.15
 MIN_REACTION_UNIQUE_CEILING = 12
 
 # Once a moment has closed, it is only kept if enough distinct people laughed
@@ -146,7 +157,11 @@ MIN_REACTION_UNIQUE_CEILING = 12
 # below that floor (min_absolute_unique) - a small channel is not held to a
 # bigger one's bar - and never above KEEP_LAUGHING_MOST. On the rated set,
 # 0.15 dropped 19 of ~260 unusable moments for 1 of ~180 usable ones, the
-# small channels included; 0 keeps every moment.
+# small channels included; 0 keeps every moment. Since the firing floor became
+# the same share of the chat (MIN_REACTION_UNIQUE_FRACTION), a moment fired by
+# people laughing already has enough of them as recommended: what this drops
+# is one fired by other emotes or 7TV names that nobody laughed at, or any
+# moment on a channel whose own settings fire on fewer people than this asks.
 KEEP_LAUGHING_FRACTION = 0.15
 KEEP_LAUGHING_MOST = 5
 KEEP_LAUGHING_SECONDS = 60
@@ -210,7 +225,8 @@ EMOTE_MENTION_OTHER_WEIGHT = 1.0
 # embeds in message content, and Twitch's put in the same form): a
 # genuinely laugh-related emote (emojiLol, LUL,
 # collectibleswideomelaugh, KEKW, ...) counts for more than an unrelated one
-# (asmonSmash, resttD, ...) that just happens to be popular. Dance/music
+# (asmonSmash, resttD, ...) that just happens to be popular - and towards the
+# laugh signal, not the emotes one (see native_laugh_weight). Dance/music
 # emotes (beeBobble, catJAM, ...) are a third category, excluded entirely -
 # see DANCE_EMOTE_NAME_PATTERNS / _emote_name_weight.
 EMOTE_LAUGH_WEIGHT = 3.5
@@ -279,15 +295,25 @@ def _is_ignored_emote_name(emote_name: str, settings: Settings) -> bool:
     return any(pattern in lowered for pattern in settings.added_ignored_emote_patterns)
 
 
+def _is_native_laugh_emote_name(emote_name: str, settings: Settings) -> bool:
+    """Whether a platform's own emote is a laughing one - unless the channel
+    was told to ignore it, which comes before what its name says: it is the
+    one thing said about this emote in particular."""
+    return not _is_ignored_emote_name(emote_name, settings) and is_laugh_emote_name(
+        emote_name, settings.added_laugh_emote_patterns
+    )
+
+
 def _emote_name_weight(emote_name: str, settings: Settings) -> float:
-    """Classifies a single emote name as laugh > dance (excluded) > other -
-    unless the channel was told to ignore it, which comes before any of
-    that: it is the one thing said about this emote in particular."""
-    if _is_ignored_emote_name(emote_name, settings):
-        return 0.0
-    if is_laugh_emote_name(emote_name, settings.added_laugh_emote_patterns):
-        return settings.emote_laugh_weight
-    if is_dance_emote_name(emote_name):
+    """What a single emote name weighs towards the emotes signal: nothing
+    for one the channel was told to ignore, a laughing one (that counts as a
+    laugh, see native_laugh_weight) or a dance one, the other emotes' weight
+    for the rest."""
+    if (
+        _is_ignored_emote_name(emote_name, settings)
+        or is_laugh_emote_name(emote_name, settings.added_laugh_emote_patterns)
+        or is_dance_emote_name(emote_name)
+    ):
         return 0.0
     return settings.emote_other_weight
 
@@ -301,13 +327,25 @@ NATIVE_EMOTE_TOKEN_PATTERN = re.compile(r"\[emote:[0-9A-Za-z_.\-]+:([^\]]+)\]")
 
 
 def classify_native_emotes(content: str, settings: Settings | None = None) -> float:
-    """Returns the highest emote weight among any of a platform's native
-    emotes in content, or 0.0 if none."""
+    """Returns the highest emote weight among a platform's native emotes in
+    content that are not laughing ones, or 0.0 if none - what the message
+    weighs towards the emotes signal."""
     names = NATIVE_EMOTE_TOKEN_PATTERN.findall(content)
     if not names:
         return 0.0
     settings = settings or recommended()
     return max(_emote_name_weight(name, settings) for name in names)
+
+
+def native_laugh_weight(content: str, settings: Settings | None = None) -> float:
+    """What a platform's own laughing emote in content weighs as a laugh:
+    the laughing emotes' weight (EMOTE_LAUGH_WEIGHT unless the channel's
+    settings say otherwise), however many of them there are, or 0.0 if
+    there is none."""
+    settings = settings or recommended()
+    if any(_is_native_laugh_emote_name(name, settings) for name in NATIVE_EMOTE_TOKEN_PATTERN.findall(content)):
+        return settings.emote_laugh_weight
+    return 0.0
 
 
 # Real 7TV emote sets include very short names (e.g. "lo", "re", "xd",
@@ -548,7 +586,9 @@ def classify_message(
 
     laugh_weight is 0.0 (no match), the weak laugh's weight (bare "xd"), or
     the strong one's ("xdd" or more d's) - LAUGH_WEAK_WEIGHT and
-    LAUGH_STRONG_WEIGHT unless the channel's settings say otherwise.
+    LAUGH_STRONG_WEIGHT unless the channel's settings say otherwise - or,
+    where it is more, what a platform's own laughing emote in it weighs
+    (native_laugh_weight).
 
     mention_weight is 0.0 if no channel keyword matched, otherwise the
     highest weight among the keywords that did (channel_keyword_weights
@@ -562,6 +602,7 @@ def classify_message(
         laugh_weight = settings.laugh_weak_weight
     else:
         laugh_weight = 0.0
+    laugh_weight = max(laugh_weight, native_laugh_weight(content, settings))
 
     lowered = content.lower()
     matched_weights = [

@@ -250,16 +250,20 @@ class TestMomentSession:
 
 class TestKeepingAMoment:
     """Once its session has closed, a moment is kept only if enough people
-    laughed around it (detector.laughing_needed) - in a chat big enough that
-    the bar is above what fires a moment."""
+    laughed around it (detector.laughing_needed) - on a channel whose own
+    reacting share puts that bar above what fires a moment. As recommended
+    the two are the same share of the chat, and a moment fired by laughs
+    always has enough people laughing."""
 
     CHATTERS = 40
+    SHARE = detector.MIN_REACTION_UNIQUE_FRACTION / 2
 
     def sizes(self) -> tuple[int, int]:
         """How many people fire a moment in that chat, and how many have to
         laugh for it to be kept."""
-        fires = detector._dynamic_min_reaction_unique(self.CHATTERS)
-        keeps = detector.laughing_needed(self.CHATTERS)
+        settings = replace(detector.recommended(), min_reaction_unique_fraction=self.SHARE)
+        fires = detector._dynamic_min_reaction_unique(self.CHATTERS, settings)
+        keeps = detector.laughing_needed(self.CHATTERS, settings)
         assert fires < keeps
         return fires, keeps
 
@@ -273,6 +277,7 @@ class TestKeepingAMoment:
         monkeypatch.setattr(service.main.recording_manager, "create_clip_for_moment", create_clip)
         fires, _keeps = self.sizes()
         service.watch(CHANNEL)
+        await set_up(service, reacting_share=self.SHARE)
         service.warm_up(CHANNEL, chatters=self.CHATTERS)
 
         with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
@@ -288,6 +293,7 @@ class TestKeepingAMoment:
         fires, keeps = self.sizes()
         service.quiet_seconds = 0.5
         service.watch(CHANNEL)
+        await set_up(service, reacting_share=self.SHARE)
         service.warm_up(CHANNEL, chatters=self.CHATTERS)
         await service.crowd_laughs(CHANNEL, people=fires)
         await service.clock_tick()
@@ -301,7 +307,7 @@ class TestKeepingAMoment:
     async def test_a_channel_that_keeps_every_moment_keeps_it(self, service):
         fires, _keeps = self.sizes()
         service.watch(CHANNEL)
-        await set_up(service, laughing_share=0)
+        await set_up(service, reacting_share=self.SHARE, laughing_share=0)
         service.warm_up(CHANNEL, chatters=self.CHATTERS)
 
         await service.crowd_laughs(CHANNEL, people=fires)
@@ -313,7 +319,7 @@ class TestKeepingAMoment:
         fires, _keeps = self.sizes()
         service.quiet_seconds = 0.5
         service.watch(CHANNEL)
-        await set_up(service, clip_commands=["!clip"])
+        await set_up(service, reacting_share=self.SHARE, clip_commands=["!clip"])
         service.warm_up(CHANNEL, chatters=self.CHATTERS)
         await service.crowd_laughs(CHANNEL, people=fires)
 

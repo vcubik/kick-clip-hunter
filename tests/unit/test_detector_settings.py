@@ -175,14 +175,26 @@ class TestSignalsSwitchedOff:
     def test_the_other_signals_still_do(self):
         chat = warm_chat(settings=settings(laugh_enabled=False))
 
-        spike = chat.burst(people(8), LAUGH_EMOTE)
+        spike = chat.burst(people(30), OTHER_EMOTE)
 
         assert spike is not None and spike.reasons == ["emotes"]
+
+    def test_laughing_kick_emotes_are_laughs_and_switched_off_with_them(self):
+        chat = warm_chat(settings=settings(laugh_enabled=False))
+
+        assert chat.burst(people(30), LAUGH_EMOTE) is None
 
     def test_kick_emotes_switched_off_never_fire(self):
         chat = warm_chat(settings=settings(emotes_enabled=False))
 
-        assert chat.burst(people(30), LAUGH_EMOTE) is None
+        assert chat.burst(people(30), OTHER_EMOTE) is None
+
+    def test_laughing_kick_emotes_still_do_then(self):
+        chat = warm_chat(settings=settings(emotes_enabled=False))
+
+        spike = chat.burst(people(8), LAUGH_EMOTE)
+
+        assert spike is not None and spike.reasons == ["laugh"]
 
     def test_emote_names_switched_off_never_fire(self):
         keywords = detector.classify_emote_names(["KEKW"])
@@ -204,7 +216,7 @@ class TestSignalsSwitchedOff:
         """A moment fired by emotes, and a crowd that piles in afterwards
         only laughing: is the reaction still going?"""
         chat = warm_chat(settings=settings(**changed))
-        assert chat.burst(people(8), LAUGH_EMOTE) is not None
+        assert chat.burst(people(30), OTHER_EMOTE) is not None
         fired_at = chat.now
         chat.wait(2)
         chat.burst(people(8, prefix="latecomer"), LAUGH)
@@ -227,7 +239,8 @@ class TestWeights:
     def test_so_do_kick_emotes(self):
         mine = settings(emote_laugh_weight=8.0, emote_other_weight=0.25)
 
-        assert detector.classify_native_emotes(LAUGH_EMOTE, mine) == 8.0
+        assert detector.native_laugh_weight(LAUGH_EMOTE, mine) == 8.0
+        assert detector.classify_native_emotes(LAUGH_EMOTE, mine) == 0.0
         assert detector.classify_native_emotes(OTHER_EMOTE, mine) == 0.25
         assert detector.classify_native_emotes(native_emote("catJAM"), mine) == 0.0
 
@@ -243,7 +256,9 @@ class TestEmotesOfTheChannelsOwn:
         mine = settings(added_laugh_emote_patterns=("smich",))
 
         assert detector.classify_native_emotes(OWN_EMOTE) == detector.EMOTE_OTHER_WEIGHT
-        assert detector.classify_native_emotes(OWN_EMOTE, mine) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(OWN_EMOTE) == 0.0
+        assert detector.classify_native_emotes(OWN_EMOTE, mine) == 0.0
+        assert detector.native_laugh_weight(OWN_EMOTE, mine) == detector.EMOTE_LAUGH_WEIGHT
 
     def test_fewer_people_are_then_enough_as_with_any_laughing_emote(self):
         needed_before = warm_chat(channel="before").reactions_needed(OWN_EMOTE)
@@ -257,7 +272,7 @@ class TestEmotesOfTheChannelsOwn:
     def test_the_patterns_built_in_still_hold(self):
         mine = settings(added_laugh_emote_patterns=("smich",))
 
-        assert detector.classify_native_emotes(LAUGH_EMOTE, mine) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(LAUGH_EMOTE, mine) == detector.EMOTE_LAUGH_WEIGHT
         assert detector.is_laugh_emote_name("KEKW", ("smich",))
         assert not detector.is_laugh_emote_name("Sadge", ("smich",))
 
@@ -272,13 +287,14 @@ class TestEmotesOfTheChannelsOwn:
         # "KEKWait" spammed for no reason: it is a laughing emote by name.
         mine = settings(added_ignored_emote_patterns=("kekwait",))
 
+        assert detector.native_laugh_weight(native_emote("KEKWait"), mine) == 0.0
         assert detector.classify_native_emotes(native_emote("KEKWait"), mine) == 0.0
-        assert detector.classify_native_emotes(native_emote("KEKW"), mine) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(native_emote("KEKW"), mine) == detector.EMOTE_LAUGH_WEIGHT
 
     def test_among_several_emotes_the_others_still_count(self):
         mine = settings(added_ignored_emote_patterns=("smash",))
 
-        assert detector.classify_native_emotes(f"{OTHER_EMOTE} {LAUGH_EMOTE}", mine) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(f"{OTHER_EMOTE} {LAUGH_EMOTE}", mine) == detector.EMOTE_LAUGH_WEIGHT
 
 
 class TestKeywordWeights:
