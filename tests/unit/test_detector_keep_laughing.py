@@ -57,6 +57,14 @@ class TestHowManyHaveToLaugh:
     def test_at_zero_every_moment_is_kept(self):
         assert detector.laughing_needed(500, settings(keep_laughing_fraction=0)) == 0
 
+    def test_as_recommended_it_never_asks_more_than_it_takes_to_fire(self):
+        # The firing floor became as big a share of the chat once laughing
+        # emotes counted as laughs: a moment fired by laughing people already
+        # has enough of them, and what is dropped is a moment fired by other
+        # emotes that nobody laughed at.
+        for chatters in (0, 5, 20, 30, 33, 40, 100, 300):
+            assert detector.laughing_needed(chatters) <= detector._dynamic_min_reaction_unique(chatters)
+
 
 class TestWhoLaughed:
     def chat(self, **fields) -> ChatSim:

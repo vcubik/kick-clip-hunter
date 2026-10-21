@@ -136,7 +136,14 @@ MIN_ABSOLUTE_UNIQUE = 3
 # laughs are rare enough in the baseline that almost any small cluster clears
 # them. On that replay (~80 distinct chatters per 5 minutes) this fraction
 # cut 13 moments/hour to about 5; 0.125 gave ~4/hour and 0.15 ~2.5/hour.
-MIN_REACTION_UNIQUE_FRACTION = 0.10
+# It was 0.10 until a platform's laughing emotes began to count as laughs:
+# people laughing each their own way then make one crowd, which on a replay
+# of all stored chat (~107 h, eleven channels) fired a third more moments.
+# At 0.15 there were fewer than before that (563 against 619), and of the
+# hand-rated moments it kept 169 of the 194 rated 3 or more but only 212 of
+# the 276 rated 1-2. Below about 30 chatters the floor stays at
+# MIN_ABSOLUTE_UNIQUE, so a small channel is not held to a bigger one's bar.
+MIN_REACTION_UNIQUE_FRACTION = 0.15
 MIN_REACTION_UNIQUE_CEILING = 12
 
 # Once a moment has closed, it is only kept if enough distinct people laughed
@@ -150,7 +157,11 @@ MIN_REACTION_UNIQUE_CEILING = 12
 # below that floor (min_absolute_unique) - a small channel is not held to a
 # bigger one's bar - and never above KEEP_LAUGHING_MOST. On the rated set,
 # 0.15 dropped 19 of ~260 unusable moments for 1 of ~180 usable ones, the
-# small channels included; 0 keeps every moment.
+# small channels included; 0 keeps every moment. Since the firing floor became
+# the same share of the chat (MIN_REACTION_UNIQUE_FRACTION), a moment fired by
+# people laughing already has enough of them as recommended: what this drops
+# is one fired by other emotes or 7TV names that nobody laughed at, or any
+# moment on a channel whose own settings fire on fewer people than this asks.
 KEEP_LAUGHING_FRACTION = 0.15
 KEEP_LAUGHING_MOST = 5
 KEEP_LAUGHING_SECONDS = 60
