@@ -67,16 +67,25 @@ class TestNativeEmotes:
     @pytest.mark.parametrize(
         "name", ["emojiLol", "KEKW", "OMEGALUL", "pepeLaugh", "collectibleswideomelaugh", "LULW", "collectiblesLMAO"]
     )
-    def test_laugh_emotes_weigh_the_most(self, name):
-        assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+    def test_a_laugh_emote_is_a_laugh_not_an_emote(self, name):
+        assert detector.classify_message(native_emote(name))[0] == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_native_emotes(native_emote(name)) == 0.0
 
     @pytest.mark.parametrize("name", ["POGGERS", "PogChamp", "peepoPog"])
     def test_pog_anywhere_in_the_name_is_laughing(self, name):
-        assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
 
     @pytest.mark.parametrize("name", ["lo", "LO", "Lo"])
     def test_an_emote_called_just_lo_is_laughing_in_any_case(self, name):
-        assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
+
+    @pytest.mark.parametrize("name", ["asmonSmash", "catJAM", "Love"])
+    def test_any_other_emote_is_no_laugh(self, name):
+        assert detector.native_laugh_weight(native_emote(name)) == 0.0
+
+    def test_a_typed_laugh_outweighs_a_laugh_emote_next_to_it(self):
+        assert detector.LAUGH_STRONG_WEIGHT > detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_message(f"xDDD {native_emote('KEKW')}")[0] == detector.LAUGH_STRONG_WEIGHT
 
     @pytest.mark.parametrize("name", ["asmonSmash", "resttD", "shoulderRoll", "collectiblesGoldenLOOT", "Glow", "Love"])
     def test_unrelated_emotes_weigh_little(self, name):
@@ -86,16 +95,18 @@ class TestNativeEmotes:
     def test_dance_emotes_weigh_nothing(self, name):
         assert detector.classify_native_emotes(native_emote(name)) == 0.0
 
-    def test_several_emotes_in_one_message_count_as_the_strongest_one(self):
+    def test_a_laugh_emote_among_others_is_a_laugh_and_the_others_still_emotes(self):
         content = f"{native_emote('asmonSmash')} {native_emote('KEKW', 2)} {native_emote('catJAM', 3)}"
-        assert detector.classify_native_emotes(content) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_native_emotes(content) == detector.EMOTE_OTHER_WEIGHT
+        assert detector.native_laugh_weight(content) == detector.EMOTE_LAUGH_WEIGHT
 
     def test_stacking_the_same_emote_does_not_add_up(self):
-        assert detector.classify_native_emotes(native_emote("KEKW") * 8) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(native_emote("KEKW") * 8) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_native_emotes(native_emote("asmonSmash") * 8) == detector.EMOTE_OTHER_WEIGHT
 
     def test_laugh_outranks_dance_when_a_name_matches_both(self):
         # "LULdance" style names exist; laughing is the stronger reading.
-        assert detector.classify_native_emotes(native_emote("LULdance")) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight(native_emote("LULdance")) == detector.EMOTE_LAUGH_WEIGHT
 
     def test_weights_are_ordered_laugh_over_other_over_dance(self):
         assert detector.EMOTE_LAUGH_WEIGHT > detector.EMOTE_OTHER_WEIGHT > 0.0
@@ -164,22 +175,23 @@ class TestIsLaughing:
         assert detector.is_laughing(content)
 
     def test_a_twitch_emote_is_weighed_like_a_kick_one(self):
-        assert detector.classify_native_emotes("[emote:twitch.425618:LUL]") == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.native_laugh_weight("[emote:twitch.425618:LUL]") == detector.EMOTE_LAUGH_WEIGHT
         assert detector.classify_native_emotes("[emote:twitch.25:Kappa]") == detector.EMOTE_OTHER_WEIGHT
         assert detector.classify_native_emotes("[emote:twitch.1:catJAM]") == 0.0
 
     @pytest.mark.parametrize(
-        ("content", "weight"),
+        ("content", "laugh", "emote"),
         [
-            ("[emote:emoji.1f602:face_with_tears_of_joy]", detector.EMOTE_LAUGH_WEIGHT),
-            ("[emote:emoji.1f923:rolling_on_the_floor_laughing]", detector.EMOTE_LAUGH_WEIGHT),
-            ("[emote:emoji.2764_fe0f:red_heart]", detector.EMOTE_OTHER_WEIGHT),
-            ("[emote:youtube.KOxdr_z3A5h-1Gb7k:face-purple-laughing]", detector.EMOTE_LAUGH_WEIGHT),
-            ("[emote:youtube.tRnrCQtE-KlTM9YL:face-purple-sweating]", detector.EMOTE_OTHER_WEIGHT),
+            ("[emote:emoji.1f602:face_with_tears_of_joy]", detector.EMOTE_LAUGH_WEIGHT, 0.0),
+            ("[emote:emoji.1f923:rolling_on_the_floor_laughing]", detector.EMOTE_LAUGH_WEIGHT, 0.0),
+            ("[emote:emoji.2764_fe0f:red_heart]", 0.0, detector.EMOTE_OTHER_WEIGHT),
+            ("[emote:youtube.KOxdr_z3A5h-1Gb7k:face-purple-laughing]", detector.EMOTE_LAUGH_WEIGHT, 0.0),
+            ("[emote:youtube.tRnrCQtE-KlTM9YL:face-purple-sweating]", 0.0, detector.EMOTE_OTHER_WEIGHT),
         ],
     )
-    def test_a_youtube_emoji_is_weighed_by_its_name_like_any_platforms_emote(self, content, weight):
-        assert detector.classify_native_emotes(content) == weight
+    def test_a_youtube_emoji_is_weighed_by_its_name_like_any_platforms_emote(self, content, laugh, emote):
+        assert detector.native_laugh_weight(content) == laugh
+        assert detector.classify_native_emotes(content) == emote
 
     def test_one_of_the_channels_laugh_emotes_named_in_the_text(self):
         assert detector.is_laughing("KEKW", ["kekw"])

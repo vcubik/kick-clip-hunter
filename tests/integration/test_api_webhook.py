@@ -127,7 +127,7 @@ class TestChatMessages:
         assert sender == "alice"
         assert content == "xddd kekw [emote:7:emojilol]"
         assert emote_count == 3
-        assert emote_weight == detector.EMOTE_LAUGH_WEIGHT
+        assert emote_weight == 0.0  # emojiLol is a laugh, and "xDDD" the stronger one
         assert laugh_weight == detector.LAUGH_STRONG_WEIGHT
         assert mention_weight == detector.EMOTE_MENTION_LAUGH_WEIGHT
 
