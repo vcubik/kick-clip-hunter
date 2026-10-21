@@ -500,7 +500,12 @@ class TestReplay:
             )
             # A stored time is kept to the microsecond, which shows in a rate.
             assert spike.score == pytest.approx(measured.score, rel=1e-3)
-            assert spike.baseline_message_rate == pytest.approx(measured.baseline_message_rate, rel=1e-3)
+            # So does whether a message right at the baseline window's edge
+            # is still held: one message more or less of a full window.
+            assert spike.baseline_message_rate == pytest.approx(
+                measured.baseline_message_rate,
+                abs=1.01 / (detector.BASELINE_WINDOW_SECONDS - detector.SHORT_WINDOW_SECONDS),
+            )
             assert spike.current_message_rate == pytest.approx(measured.current_message_rate, rel=1e-3)
 
     def test_it_says_how_far_it_has_got_as_it_goes(self, stream, monkeypatch):

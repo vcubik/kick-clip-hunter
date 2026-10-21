@@ -294,8 +294,7 @@ def replay(
             run_session_until(messages[-1].time + tuning.max_open_seconds + poll)
             judge_until(float("inf"))
     finally:
-        detector._entries.pop(channel, None)
-        detector._last_moment_at.pop(channel, None)
+        detector.forget(channel)
     return moments
 
 
