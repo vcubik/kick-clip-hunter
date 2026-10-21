@@ -64,7 +64,9 @@ class TestNativeEmotes:
     def test_message_without_emote_tokens_weighs_nothing(self):
         assert detector.classify_native_emotes("no emotes here") == 0.0
 
-    @pytest.mark.parametrize("name", ["emojiLol", "KEKW", "OMEGALUL", "pepeLaugh", "collectibleswideomelaugh", "LULW"])
+    @pytest.mark.parametrize(
+        "name", ["emojiLol", "KEKW", "OMEGALUL", "pepeLaugh", "collectibleswideomelaugh", "LULW", "collectiblesLMAO"]
+    )
     def test_laugh_emotes_weigh_the_most(self, name):
         assert detector.classify_native_emotes(native_emote(name)) == detector.EMOTE_LAUGH_WEIGHT
 

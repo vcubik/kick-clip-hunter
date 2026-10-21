@@ -186,8 +186,7 @@ def test_a_restart_in_the_middle_of_a_stream_costs_one_warm_up_period():
     stream.crowd("before the restart", big, LAUGHS)
     stream.idle(2 * MINUTE)
 
-    detector._entries.clear()  # the process restarts
-    detector._last_moment_at.clear()
+    detector.forget()  # the process restarts
 
     stream.idle(1 * MINUTE)
     stream.crowd("one minute after the restart", big, LAUGHS)

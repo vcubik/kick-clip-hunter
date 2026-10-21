@@ -54,6 +54,17 @@ class TestWarmUp:
 
         assert chat.burst(people(30), LAUGH) is not None
 
+    def test_a_short_silence_at_the_edge_of_the_window_is_no_warming_up(self):
+        # Seen live: on a quiet chat the oldest message still held is often
+        # well inside the window - no one wrote in the seconds just past its
+        # edge - and that read as a channel that had only just started, so a
+        # third of its messages could fire nothing.
+        chat = warm_chat()
+        chat.wait(30)
+        chat.chatter(detector.BASELINE_WINDOW_SECONDS - 25)  # the window now reaches back into the silence
+
+        assert chat.burst(people(8), LAUGH) is not None
+
     def test_a_long_silence_means_warming_up_again(self):
         # The window only reaches back five minutes: after a longer gap the
         # channel has no history left, exactly as after a restart.

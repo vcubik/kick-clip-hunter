@@ -185,9 +185,8 @@ def _reset_module_state() -> None:
         youtube_client,
     )
 
-    detector._entries.clear()
+    detector.forget()
     tiktok_chat._sign_key = ""
-    detector._last_moment_at.clear()
     kick_client._token_cache.clear()
     twitch_client._token_cache.clear()
     youtube_client._client_version = youtube_client.CLIENT_VERSION

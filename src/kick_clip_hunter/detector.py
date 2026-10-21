@@ -240,7 +240,7 @@ LAUGH_WEAK_PATTERN = re.compile(r"\bxd\b", re.IGNORECASE)
 # laugh-related. A first pass based on well-known Twitch/7TV emotes (KEKW,
 # KEKWait, LUL, LULW, OMEGALUL, LOL, pepeLaugh, monkaLaugh, ...) - expected
 # to be tuned as we see which emotes actually show up in real streams.
-LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "haha", "laugh", "joy", "pog")
+LAUGH_EMOTE_NAME_PATTERNS = ("kek", "lul", "lol", "lmao", "haha", "laugh", "joy", "pog")
 # Emote names that mean laughing only as the whole name (in any case): too
 # short to be looked for inside other names - "lo" is in Glow, Love, Slow,
 # pepeLost. Being laughing emotes, they are listened for in typed text too,
@@ -498,6 +498,33 @@ def recommended() -> Settings:
 # each entry: (timestamp, sender, normalized_content, emote_count, emote_weight, laugh_weight, mention_weight)
 _entries: dict[str, deque] = defaultdict(deque)
 _last_moment_at: dict[str, float] = {}
+# When each channel's chat began to be held without a break: its first
+# message since the process started, or since a silence longer than the
+# baseline window left nothing held. How much baseline a channel has is
+# measured from here, not from the oldest message still held - on a quiet
+# chat that one is often well inside the window (no one wrote in the ten
+# seconds just past its edge), which read as "not warmed up yet" on about a
+# third of messages of a channel writing one every seven seconds or so, and
+# made the baseline look shorter, so busier, than it was.
+_history_start: dict[str, float] = {}
+
+
+def forget(channel_slug: str | None = None) -> None:
+    """Drops what the detector holds for a channel - or for every channel,
+    as a restart of the process does: its chat, its cooldown, its history."""
+    for state in (_entries, _last_moment_at, _history_start):
+        if channel_slug is None:
+            state.clear()
+        else:
+            state.pop(channel_slug, None)
+
+
+def _held_since(channel_slug: str, entries: deque) -> float:
+    """From when the baseline of a channel's held chat reaches: when it
+    began to be held (_history_start), but no further back than the
+    baseline window before its newest message, which is all that is kept."""
+    start = _history_start.get(channel_slug, entries[0][0])
+    return max(start, entries[-1][0] - BASELINE_WINDOW_SECONDS)
 
 
 @dataclass
@@ -653,7 +680,7 @@ def reaction_active(
     if not short:
         return False
     baseline = [e for e in entries if e[0] < short_cutoff]
-    baseline_seconds = max(short_cutoff - entries[0][0], 1e-9)
+    baseline_seconds = max(short_cutoff - _held_since(channel_slug, entries), 1e-9)
 
     # The same crowd-size floor as firing, scaled down like the ratio is:
     # without it a single straggler typing "xd" every so often was enough to
@@ -745,13 +772,14 @@ def record_message(
 
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
-    entries.append((now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight))
-
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
         entries.popleft()
+    if not entries:
+        _history_start[channel_slug] = now
+    entries.append((now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight))
 
-    history_seconds = now - entries[0][0]
+    history_seconds = now - _held_since(channel_slug, entries)
     if history_seconds < BASELINE_WINDOW_SECONDS - SHORT_WINDOW_SECONDS:
         return None  # not enough history yet to trust a baseline
 
