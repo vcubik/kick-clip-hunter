@@ -367,8 +367,8 @@ SETTINGS: tuple[Setting, ...] = (
     ),
     Setting(
         "laugh_multiplier", MOMENTS, NUMBER,
-        "Typed laughs, times the usual",
-        "How many times the channel's own usual rate a burst of typed laughs has to be - the laughs, and the "
+        "Laughs, times the usual",
+        "How many times the channel's own usual rate a burst of laughs has to be - the laughs, and the "
         "people laughing. In a lively chat nearly any cluster clears it; the share above is what holds.",
         (DETECTOR + "laugh_multiplier", DETECTOR + "laugh_unique_sender_multiplier"),
         least=1, most=20, advanced=True,
@@ -397,14 +397,14 @@ SETTINGS: tuple[Setting, ...] = (
     ),
     Setting(
         "laugh_signal", SIGNALS, SWITCH,
-        "Typed laughs",
-        '"xd" at any length.',
+        "Laughs",
+        "\"xd\" at any length, and Kick's own laughing emotes.",
         (DETECTOR + "laugh_enabled",),
     ),
     Setting(
         "emote_signal", SIGNALS, SWITCH,
         "Kick emotes",
-        "Kick's own emotes posted in chat.",
+        "Kick's own emotes posted in chat, other than the laughing ones - those are laughs.",
         (DETECTOR + "emotes_enabled",),
     ),
     Setting(

@@ -96,7 +96,7 @@ class TestEmoji:
     def test_the_detector_weighs_youtubes_laughing_emoji_as_laughing(self):
         got = taken(message("m-1", "alice", emoji("😂", "face_with_tears_of_joy", "1f602")))
 
-        assert detector.classify_native_emotes(got.content) == detector.EMOTE_LAUGH_WEIGHT
+        assert detector.classify_message(got.content)[0] == detector.EMOTE_LAUGH_WEIGHT
 
     def test_an_emoji_whose_picture_is_somewhere_else_is_kept_as_typed(self):
         odd = emoji("😂", "face_with_tears_of_joy", "1f602")
