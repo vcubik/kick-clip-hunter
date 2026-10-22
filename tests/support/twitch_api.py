@@ -27,6 +27,21 @@ SCOPES = ("user:read:chat", "user:write:chat")
 GONE_SESSION = "websocket transport session does not exist or has already disconnected"
 
 
+def past_broadcast(
+    video_id: str, created_at: str, duration: str, *, stream_id: str = "", viewable: str = "public"
+) -> dict:
+    """A recording of a channel's stream as Helix lists it: when its stream
+    began ("...Z"), how long it is ("3h2m1s") and who may watch it."""
+    return {
+        "id": video_id,
+        "stream_id": stream_id or f"stream-{video_id}",
+        "created_at": created_at,
+        "duration": duration,
+        "viewable": viewable,
+        "type": "archive",
+    }
+
+
 def bttv_emote_id(name: str) -> str:
     """The id the fake BetterTTV gives an emote of that name."""
     return "b" + name.encode().hex()
@@ -53,9 +68,12 @@ class FakeTwitchChannel:
     ffz_emotes: list[str] | None = field(default_factory=list)
     # The recording Twitch makes of the stream that is on (its VOD); None
     # for a channel that keeps no past broadcasts. `older_archives` are of
-    # streams that are over.
+    # streams that are over. `past_broadcasts` are recordings as Helix lists
+    # them in full - with when each began and how long it is (see
+    # past_broadcast) - after those.
     archive_id: str | None = None
     older_archives: list[str] = field(default_factory=list)
+    past_broadcasts: list[dict] = field(default_factory=list)
     # The channel's own subscriber badges: the picture's address by the
     # badge version (months, with the tier's thousands above the first).
     subscriber_badges: dict[str, str] = field(default_factory=dict)
@@ -263,6 +281,7 @@ class FakeTwitchApi:
                         {"id": video_id, "stream_id": f"old-{video_id}", "type": "archive"}
                         for video_id in channel.older_archives
                     )
+                    videos.extend(channel.past_broadcasts)
                 return httpx.Response(200, json={"data": videos, "pagination": {}})
             if path == "/helix/chat/badges":
                 channel = self._by_id(request.url.params.get("broadcaster_id", ""))

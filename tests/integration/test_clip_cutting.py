@@ -621,6 +621,32 @@ class TestAdReplacedFromTheVod:
         assert probe(clip)["duration"] == pytest.approx(4, abs=TOLERANCE)
         assert decodes_cleanly(clip)
 
+    def test_a_vod_not_found_as_the_run_began_is_looked_for_when_a_clip_needs_it(
+        self, recording, live, vod, start, monkeypatch
+    ):
+        rec = recording.of(live, vod_later=vod)
+        rec.tick()
+        wait_until(lambda: len(rec._stored_segments()) == 40, "the whole stream being recorded")
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        clip = self.clip(rec, start, 12, 28)
+
+        assert recording.vod_lookups == ["some_channel"]
+        assert probe(clip)["duration"] == pytest.approx(20, abs=TOLERANCE)  # VOD 10s..30s, no ad
+        assert vod.segment_requests() == [2, 3, 4, 5]
+
+    def test_a_clip_does_not_have_it_looked_for_sooner_than_the_ticks_would(self, recording, live, vod, start):
+        rec = recording.of(live, vod_later=vod)
+        rec.tick()
+        wait_until(lambda: len(rec._stored_segments()) == 40, "the whole stream being recorded")
+
+        clip = self.clip(rec, start, 12, 28)
+
+        # The run has only just looked, as it started: the clip goes round
+        # the ad, as for a channel without a VOD.
+        assert recording.vod_lookups == []
+        assert probe(clip)["duration"] == pytest.approx(4, abs=TOLERANCE)
+
     def test_a_vod_that_cannot_be_fetched_still_leaves_a_clip(self, recording, live, vod, start, caplog):
         vod.fail_next["/master.m3u8"] = [503]
         rec = self.recorded(recording, live, vod)

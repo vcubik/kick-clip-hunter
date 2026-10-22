@@ -93,12 +93,14 @@ async def get_stream(login: str, client_id: str, token: str) -> dict | None:
     return streams[0] if streams else None
 
 
-async def get_archives(user_id: str, client_id: str, token: str) -> list[dict]:
-    """The channel's newest recordings of its own streams (its past
-    broadcasts), newest first. The one of a stream that is still on is
-    among them, with that stream's id (`stream_id`), where the channel keeps
-    them at all."""
-    return await _get("videos", {"user_id": user_id, "type": "archive", "first": 5}, client_id, token)
+async def get_archives(user_id: str, client_id: str, token: str, count: int = 5) -> list[dict]:
+    """The channel's newest `count` recordings of its own streams (its past
+    broadcasts, at most 100), newest first: each with when its stream began
+    (`created_at`), how long it is (`duration`, as "3h2m1s") and who may
+    watch it (`viewable`). The one of a stream that is still on is among
+    them, with that stream's id (`stream_id`), where the channel keeps them
+    at all."""
+    return await _get("videos", {"user_id": user_id, "type": "archive", "first": count}, client_id, token)
 
 
 async def get_chat_badges(user_id: str, client_id: str, token: str) -> list[dict]:

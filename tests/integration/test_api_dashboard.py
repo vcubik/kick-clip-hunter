@@ -1210,7 +1210,7 @@ class TestClipLength:
 
         article = open_moment(await review(service))
 
-        assert article.one("video", data_clip=True).attrs["src"] == "/clips/channel_a/moment_1.mp4"
+        assert article.one("video", data_clip=True).attrs["src"].split("?")[0] == "/clips/channel_a/moment_1.mp4"
         assert service.rows("SELECT clip_duration FROM moments WHERE id = ?", moment_id)[0][0] is None
 
     async def test_a_length_that_is_stored_is_not_measured_again(self, service, monkeypatch):
@@ -1452,7 +1452,7 @@ class TestClips:
 
         address = open_moment(await review(service)).one("video", data_clip=True).attrs["src"]
 
-        assert address == "/clips/channel_a/manual_1_best%20of%20%233.mp4"
+        assert address.split("?")[0] == "/clips/channel_a/manual_1_best%20of%20%233.mp4"
         assert (await service.client.get(address)).content == b"not really video"
 
     async def test_clip_files_are_served(self, service):
@@ -1922,7 +1922,7 @@ class TestTrimming:
         assert "data-window" not in dialog.attrs
         assert dialog.attrs["data-min"] == view.number_words(clip_trim.MIN_SECONDS)
         assert dialog.attrs["aria-labelledby"] == dialog.one("h2").attrs["id"] == f"trim-title-{moment_id}"
-        assert dialog.one("video").attrs["data-src"] == "/clips/channel_a/moment_1.mp4"
+        assert dialog.one("video").attrs["data-src"].split("?")[0] == "/clips/channel_a/moment_1.mp4"
         assert [handle.attrs["data-trim-handle"] for handle in dialog.find("div", role="slider")] == ["from", "to"]
         assert dialog.one("p", role="status").text == ""
         assert all("hidden" in link.attrs for link in dialog.find("a"))

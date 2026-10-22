@@ -10,7 +10,7 @@ import pytest
 from streamlink.exceptions import PluginError
 
 from kick_clip_hunter import streams, youtube_stream
-from kick_clip_hunter.platforms import StreamUrlError, StreamUrls
+from kick_clip_hunter.platforms import NoVod, StreamUrlError, StreamUrls, Vod
 
 MASTER = "https://manifest.example/api/manifest/hls_variant/expire/1792091778/ei/abc/id/livevideo01.1/file/index.m3u8"
 EXPIRES = datetime.fromtimestamp(1792091778, timezone.utc)
@@ -93,6 +93,48 @@ class TestFindingTheStream:
         streamlink.answers[WATCH] = {"best": FakeStream(MASTER)}
 
         assert streams.stream_urls("some.channel@youtube").live == MASTER
+
+
+class TestWindingTheStreamBack:
+    """YouTube keeps no VOD the recorder could take, but a stream that is
+    on can be wound back: footage of earlier in it is had from its live
+    playlist, by number."""
+
+    def test_the_stream_that_is_on_is_where_earlier_footage_of_it_is(self, youtube, streamlink):
+        youtube.add_channel("some_channel").go_live("livevideo01", started_at="2026-03-01T20:00:00+00:00")
+        streamlink.answers[WATCH] = {"best": FakeStream(MASTER)}
+
+        vod = youtube_stream.vod_at("some_channel", datetime(2026, 3, 1, 21, 0, tzinfo=timezone.utc))
+
+        assert vod == Vod(master=MASTER, numbered=True)
+
+    def test_a_moment_from_before_the_stream_that_is_on_was_in_another_that_is_gone(self, youtube, streamlink):
+        youtube.add_channel("some_channel").go_live("livevideo01", started_at="2026-03-01T20:00:00+00:00")
+
+        with pytest.raises(NoVod, match="only while the stream is still on"):
+            youtube_stream.vod_at("some_channel", datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc))
+        assert streamlink.asked == []
+
+    def test_once_the_stream_is_over_there_is_nothing_to_be_had(self, youtube, streamlink):
+        youtube.add_channel("some_channel").schedule()
+
+        with pytest.raises(NoVod, match="only while the stream is still on"):
+            youtube_stream.vod_at("some_channel", datetime(2026, 3, 1, 21, 0, tzinfo=timezone.utc))
+
+    def test_youtube_not_saying_what_is_streamed_is_said(self, youtube, streamlink):
+        youtube.add_channel("some_channel").go_live("livevideo01")
+        youtube.failures["resolve_url"] = 429
+
+        with pytest.raises(NoVod, match="did not say what the channel is streaming"):
+            youtube_stream.vod_at("some_channel", datetime(2026, 3, 1, 21, 0, tzinfo=timezone.utc))
+
+    @pytest.mark.parametrize("answer", [PluginError("could not get video info"), {}])
+    def test_streamlink_not_finding_the_stream_is_said(self, youtube, streamlink, answer):
+        youtube.add_channel("some_channel").go_live("livevideo01")
+        streamlink.answers[WATCH] = answer
+
+        with pytest.raises(NoVod, match="would not say where the stream is"):
+            youtube_stream.vod_at("some_channel", datetime(2026, 3, 1, 21, 0, tzinfo=timezone.utc))
 
 
 class TestWhenAnAddressRunsOut:

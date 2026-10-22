@@ -883,3 +883,82 @@ class TestWhereItStands:
         rec.tick()
 
         assert rec.state().since > first.since
+
+
+class TestLookingForTheVodAgain:
+    """Where the broadcast's own recording was not found as the run started -
+    not listed yet in a stream's first minute, or a look that came back empty
+    although there was one - it is looked for again on later ticks."""
+
+    def test_a_later_tick_finds_it_and_says_so(self, hls, recording, monkeypatch, caplog):
+        rec = recording.of(hls(fake_segments(6), published=3), vod_later=hls(fake_segments(6), published=3))
+        start(rec)
+        assert rec.state().has_vod is False
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
+            rec.tick()
+
+        assert rec.state().has_vod is True
+        assert recording.vod_lookups == ["some_channel"]
+        assert any("VOD was found on a later look" in record.getMessage() for record in caplog.records)
+
+    def test_it_is_looked_for_no_more_often_than_every_so_often(self, hls, recording):
+        rec = recording.of(hls(fake_segments(6), published=3), vod_later=hls(fake_segments(6), published=3))
+        start(rec)
+
+        rec.tick()
+        rec.tick()
+
+        # The run looked as it started, by what found the stream.
+        assert recording.vod_lookups == []
+        assert rec.state().has_vod is False
+
+    def test_once_found_it_is_not_looked_for_again(self, hls, recording, monkeypatch):
+        rec = recording.of(hls(fake_segments(6), published=3), vod_later=hls(fake_segments(6), published=3))
+        start(rec)
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        rec.tick()
+        rec.tick()
+
+        assert recording.vod_lookups == ["some_channel"]
+
+    def test_a_channel_that_keeps_none_is_looked_at_again_and_again_for_nothing(self, hls, recording, monkeypatch):
+        rec = recording.of(hls(fake_segments(6), published=3))
+        start(rec)
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        rec.tick()
+        rec.tick()
+
+        assert recording.vod_lookups == ["some_channel", "some_channel"]
+        assert rec.state().has_vod is False
+
+    @pytest.mark.parametrize("channel", ["some_channel@youtube", "some_channel@tiktok"])
+    def test_a_platform_that_keeps_no_vod_is_never_asked_for_one(self, hls, recording, monkeypatch, channel):
+        rec = recording.of(hls(fake_segments(6), published=3), channel, vod_later=hls(fake_segments(6), published=3))
+        start(rec)
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        rec.tick()
+
+        assert recording.vod_lookups == []
+
+    def test_a_look_that_fails_is_said_and_the_recording_goes_on(self, hls, recording, monkeypatch, caplog):
+        # Recent, so that the tick doesn't prune it from the buffer.
+        server = hls(fake_segments(8), published=3, stream_start=datetime.now(timezone.utc) - timedelta(seconds=30))
+        rec = recording.of(server)
+        start(rec)
+        monkeypatch.setattr(recorder, "VOD_LOOKUP_SECONDS", 0)
+
+        def fails(channel, when):
+            raise RuntimeError("Kick changed")
+
+        monkeypatch.setattr(recorder, "vod_at", fails)
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            rec.tick()
+        server.publish_all()
+
+        wait_for_segments(rec, 8)
+        assert any("looking for the stream's VOD failed: RuntimeError" in r.getMessage() for r in caplog.records)

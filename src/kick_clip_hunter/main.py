@@ -55,6 +55,7 @@ from . import (
     twitch_auth,
     twitch_chat,
     twitch_client,
+    vod_footage,
     win_console,
     youtube_chat,
 )
@@ -138,6 +139,7 @@ from .db import (
     update_moment_audio_events,
     update_moment_clip_duration,
     update_moment_clip_path,
+    update_moment_context,
     update_moment_downloaded,
     update_moment_frame_embedding,
     update_moment_notes,
@@ -159,7 +161,7 @@ from .kick_client import (
     get_event_subscriptions,
     subscribe_chat_messages,
 )
-from .platforms import StreamUrlError
+from .platforms import NoVod, StreamUrlError
 from .recorder import CLIPS_DIR
 from .recording_manager import RecorderError
 from .stream_recording import STREAMS_DIR
@@ -2106,8 +2108,18 @@ def _clip_state(row, tuned: tuning.Tuning) -> str:
     return "pending" if _moment_age_seconds(row) <= _clip_pending_seconds(tuned) else "missing"
 
 
-def _clip_url(clip_path: str) -> str:
-    return f"/clips/{quote(clip_path)}"
+def _clip_url(clip_path: str, versioned: bool = False) -> str:
+    """Where a moment's file is served. `versioned`, with when the file was
+    last written in it: a file made longer is another file under the same
+    name (see vod_footage.py), which a browser must not play from its cache
+    of the one before."""
+    url = f"/clips/{quote(clip_path)}"
+    if versioned:
+        try:
+            url += f"?v={int((CLIPS_DIR / clip_path).stat().st_mtime)}"
+        except OSError:
+            pass
+    return url
 
 
 # Stretches of footage being cut out for an editor right now, the ones that
@@ -2499,6 +2511,156 @@ def _subtitles_file(transcript: list[subtitles.Line], start: float, length: floa
     )
 
 
+# -- more footage in a moment's file, from its stream's VOD (see vod_footage.py)
+
+# Moments footage is being added to right now, and how the last time it was
+# asked for came out, by moment id. A restart forgets it: what a moment's
+# file holds is in its row.
+_footage: dict[int, dict] = {}
+# A file that is being read - a player fetching the clip - can't have
+# another put in its place on Windows: that is tried again this often, this
+# many times.
+REPLACE_ATTEMPTS = 40
+REPLACE_WAIT_SECONDS = 0.25
+# The longer file is made beside the moment's own, under its name and this.
+LONGER_SUFFIX = ".longer"
+FOOTAGE_BUSY_WORDS = "Footage is being added to this moment. Try again once that is done."
+
+
+def _footage_busy(moment_id: int) -> bool:
+    return _footage.get(moment_id, {}).get("state") in dashboard_view.FOOTAGE_BUSY
+
+
+def _takes_footage(row) -> bool:
+    """Whether footage can be added to a moment's file from its stream's
+    recording at all: a clip the service cut from a stream, whose place on
+    the stream's clock is kept, on a platform that keeps a VOD - or on
+    YouTube, while the stream is still on."""
+    if not row["clip_path"] or not row["clip_start"] or not row["clip_duration"]:
+        return False
+    if row["reason"] == dashboard_view.IMPORT_REASON:
+        return False
+    return platforms.platform_of(row["channel_slug"]) in (*platforms.KEEP_VODS, platforms.YOUTUBE)
+
+
+def _footage_standing(moment_id: int) -> dict:
+    """Where adding footage to a moment's file stands, as the page says it."""
+    known = _footage.get(moment_id, {})
+    state = known.get("state", dashboard_view.FOOTAGE_NONE)
+    return {
+        "state": state,
+        "busy": state in dashboard_view.FOOTAGE_BUSY,
+        "words": dashboard_view.footage_words(
+            state,
+            known.get("done"),
+            known.get("added"),
+            short=known.get("short", False),
+            muted=known.get("muted", False),
+            why=known.get("why"),
+        ),
+    }
+
+
+def _put_in_place(new: Path, target: Path) -> None:
+    """Puts a file in another's place - trying again for a few seconds
+    while the other is being read, which on Windows holds it."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            new.replace(target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_WAIT_SECONDS)
+
+
+def _shift_cut_record(row, seconds: float) -> None:
+    """Moves what is kept of the cut made of a moment's file (see
+    clip_trim.cut_record) on by `seconds` added before it: its pictures are
+    that much further into the file now."""
+    video = CLIPS_DIR / _trim_paths(row["clip_path"])[0]
+    record = _cut_record(video)
+    if record is None or not seconds:
+        return
+    _write_cut_record(
+        video,
+        record._replace(begins=record.begins + seconds, end=record.end + seconds),
+        row["channel_slug"],
+        f"moment {row['id']}",
+    )
+
+
+async def _add_footage_background(
+    moment_id: int, channel: str, clip: Path, first_at: datetime, before: float, after: float
+) -> None:
+    # Finding the VOD, fetching minutes of it and putting them together
+    # takes seconds, sometimes a minute: off the event loop, and as a tracked
+    # task, which gives up when the service shuts down.
+    def progress(step: str, done: float | None) -> None:
+        if _shutdown_requested:
+            raise _GivenUp
+        _footage[moment_id] = {"state": step, "done": done}
+
+    longer = clip.with_name(f"{clip.stem}{LONGER_SUFFIX}{clip.suffix}")
+    try:
+        vod = await asyncio.to_thread(streams.vod_at, channel, first_at)
+        made = await asyncio.to_thread(vod_footage.lengthen, clip, first_at, vod, before, after, longer, progress)
+    except _GivenUp:
+        _footage.pop(moment_id, None)
+        logger.info("[%s] adding footage to moment %d given up: shutting down", channel, moment_id)
+        return
+    except (NoVod, vod_footage.FootageError) as error:
+        _footage[moment_id] = {"state": dashboard_view.FOOTAGE_FAILED, "why": str(error)}
+        logger.info("[%s] no footage added to moment %d: %s", channel, moment_id, error)
+        return
+    except Exception:
+        longer.unlink(missing_ok=True)
+        _footage[moment_id] = {"state": dashboard_view.FOOTAGE_FAILED}
+        logger.exception("[%s] adding footage to moment %d failed", channel, moment_id)
+        return
+
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None or not row["clip_path"]:
+        # Removed meanwhile.
+        made.path.unlink(missing_ok=True)
+        _footage.pop(moment_id, None)
+        return
+    try:
+        await asyncio.to_thread(_put_in_place, made.path, clip)
+    except OSError:
+        made.path.unlink(missing_ok=True)
+        _footage[moment_id] = {
+            "state": dashboard_view.FOOTAGE_FAILED,
+            "why": "The clip's file is in use. Pause the player and try again.",
+        }
+        logger.warning("[%s] the longer file of moment %d could not be put in place", channel, moment_id, exc_info=True)
+        return
+    # The clip is where it was in the broadcast, and that much further into
+    # its file.
+    context_before = made.lead + (row["context_before"] or 0.0)
+    context_after = max(made.seconds - context_before - row["clip_duration"], 0.0)
+    conn = get_connection()
+    try:
+        update_moment_context(conn, moment_id, row["clip_duration"], context_before, context_after)
+    finally:
+        conn.close()
+    _shift_cut_record(row, made.lead)
+    _footage[moment_id] = {
+        "state": dashboard_view.FOOTAGE_DONE,
+        "added": (made.added_before, made.added_after),
+        "short": made.short,
+        "muted": made.muted,
+    }
+    logger.info(
+        "[%s] footage added to moment %d from the VOD: %.1f s before, %.1f s after (%.0f s in all)",
+        channel, moment_id, made.added_before, made.added_after, made.seconds,
+    )
+
+
 def _moment_window(row) -> tuple[datetime, datetime]:
     """When a moment's reaction ran, on chat's clock."""
     return datetime.fromisoformat(row["window_start"]), datetime.fromisoformat(row["window_end"])
@@ -2598,7 +2760,7 @@ def _open_moment(conn, row, today: date) -> dict:
         "channel": row["channel_slug"],
         "when": dashboard_view.when_words(to_local_datetime(row["detected_at"]), today),
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
-        "clip_url": _clip_url(row["clip_path"]) if row["clip_path"] else None,
+        "clip_url": _clip_url(row["clip_path"], versioned=True) if row["clip_path"] else None,
         "clip_state": _clip_state(row, _tuning(conn, row["broadcaster_user_id"])),
         # How far into its file the clip begins: the footage that led up to
         # it comes first. The page starts the player there.
@@ -2641,7 +2803,7 @@ def _open_moment(conn, row, today: date) -> dict:
             {
                 "id": str(row["id"]),
                 "url": f"/moments/{row['id']}/trim",
-                "video_url": _clip_url(row["clip_path"]),
+                "video_url": _clip_url(row["clip_path"], versioned=True),
                 "lead": dashboard_view.number_words(row["context_before"] or 0.0, 3),
                 "last": dashboard_view.number_words(clip_trim.footage(row)[1], 2),
                 "chat": bool(chat),
@@ -2660,6 +2822,21 @@ def _open_moment(conn, row, today: date) -> dict:
         # What is said in the footage, written down when it is asked for:
         # beside the clip, where there is a clip to write it down from.
         "transcript": _transcript(row) if row["clip_path"] else None,
+        # More of the stream in the clip's file, before it or after it, from
+        # the stream's own recording: where the clip can be found in one.
+        "footage": (
+            {
+                "url": f"/moments/{row['id']}/footage",
+                "choices": [
+                    {"seconds": seconds, "words": dashboard_view.footage_choice_words(seconds)}
+                    for seconds in dashboard_view.FOOTAGE_CHOICES
+                ],
+                "default": dashboard_view.FOOTAGE_DEFAULT_SECONDS,
+                **_footage_standing(row["id"]),
+            }
+            if _takes_footage(row) and (CLIPS_DIR / row["clip_path"]).exists()
+            else None
+        ),
     }
 
 
@@ -4590,6 +4767,8 @@ def _moment_busy(moment_id: int) -> str | None:
         return "A stretch of this moment is being cut out. Try again once that is done."
     if _transcripts.get(moment_id, {}).get("state") == dashboard_view.TRANSCRIPT_MAKING:
         return "This moment is being transcribed. Try again once that is done."
+    if _footage_busy(moment_id):
+        return FOOTAGE_BUSY_WORDS
     return None
 
 
@@ -4602,6 +4781,7 @@ def _remove_moment(conn, row) -> None:
     delete_moment(conn, row["id"])
     _trims.pop(row["id"], None)
     _transcripts.pop(row["id"], None)
+    _footage.pop(row["id"], None)
 
 
 @app.post("/moments/{moment_id}/delete")
@@ -4665,6 +4845,8 @@ async def trim_moment(moment_id: int, request: Request):
         row = await _with_clip_length(conn, row)
         if not row["clip_path"] or not row["clip_duration"] or not (CLIPS_DIR / row["clip_path"]).exists():
             raise HTTPException(status_code=409, detail="The moment has no clip to trim.")
+        if _footage_busy(moment_id):
+            raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
         try:
             span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
             look = clip_trim.chat_look(asked)
@@ -4806,6 +4988,8 @@ async def trim_moment_chat(moment_id: int, request: Request):
         video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
         if _trims.get(moment_id, {}).get("state") in dashboard_view.TRIM_BUSY:
             return {"moment_id": moment_id, **_trim(row)}
+        if _footage_busy(moment_id):
+            raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
         if not video.exists():
             raise HTTPException(status_code=409, detail="Nothing has been cut out of this moment yet.")
         record = _cut_record(video)
@@ -4891,6 +5075,8 @@ async def transcribe_moment(moment_id: int):
         raise HTTPException(status_code=409, detail="The moment has no clip to transcribe.")
     if subtitles.read(row["subtitles"]) is not None:
         raise HTTPException(status_code=409, detail="The moment has its transcript already.")
+    if _footage_busy(moment_id):
+        raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
     if _transcripts.get(moment_id, {}).get("state") != dashboard_view.TRANSCRIPT_MAKING:
         _transcripts[moment_id] = {"state": dashboard_view.TRANSCRIPT_MAKING}
         _track_task(
@@ -4968,6 +5154,76 @@ async def dashboard_transcript(request: Request, moment_id: int):
     if not row["clip_path"]:
         raise HTTPException(status_code=404, detail="The moment has no clip, so nothing to transcribe.")
     return templates.TemplateResponse(request, "_transcript.html", {"transcript": _transcript(row)})
+
+
+def _asked_footage(asked: object) -> tuple[float, float]:
+    """How much footage was asked for before a moment's file and after it,
+    from what was posted: `side` ("before" or "after") and `seconds`."""
+    if not isinstance(asked, dict) or asked.get("side") not in ("before", "after"):
+        raise HTTPException(status_code=400, detail="Expected side (before or after) and seconds as JSON.")
+    seconds = asked.get("seconds")
+    if not isinstance(seconds, int | float) or isinstance(seconds, bool) or not math.isfinite(seconds):
+        raise HTTPException(status_code=400, detail="Expected side (before or after) and seconds as JSON.")
+    least, most = vod_footage.ADD_LEAST_SECONDS, vod_footage.ADD_MOST_SECONDS
+    if not least <= seconds <= most:
+        raise HTTPException(status_code=400, detail=f"Footage is added {least} to {most} seconds at a time.")
+    return (float(seconds), 0.0) if asked["side"] == "before" else (0.0, float(seconds))
+
+
+@app.post("/moments/{moment_id}/footage")
+async def add_footage(moment_id: int, request: Request):
+    """Starts adding `seconds` of the stream to a moment's file - `side`
+    "before" its first frame or "after" its last - from the stream's own
+    recording (its VOD, see vod_footage.py): the file is made anew from that,
+    longer, and put in the old one's place, the clip where it was in the
+    broadcast. Asked again while that goes on, nothing more is started."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    before, after = _asked_footage(asked)
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        row = await _with_clip_length(conn, row)
+    finally:
+        conn.close()
+    if not row["clip_path"] or not (CLIPS_DIR / row["clip_path"]).exists():
+        raise HTTPException(status_code=409, detail="The moment has no clip to add footage to.")
+    if not _takes_footage(row):
+        raise HTTPException(
+            status_code=409,
+            detail="Footage can be added only to a clip the service cut from a Kick, Twitch or YouTube stream.",
+        )
+    if not _footage_busy(moment_id):
+        if (busy := _moment_busy(moment_id)) is not None:
+            raise HTTPException(status_code=409, detail=busy)
+        first_at = datetime.fromisoformat(row["clip_start"]) - timedelta(seconds=row["context_before"] or 0.0)
+        _footage[moment_id] = {"state": dashboard_view.FOOTAGE_FINDING}
+        _track_task(
+            _add_footage_background(
+                moment_id, row["channel_slug"], CLIPS_DIR / row["clip_path"], first_at, before, after
+            )
+        )
+    return {"moment_id": moment_id, **_footage_standing(moment_id)}
+
+
+@app.get("/moments/{moment_id}/footage")
+async def footage_state(moment_id: int):
+    """Where adding footage to a moment's file stands - what the page asks
+    while it goes on."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    return {"moment_id": moment_id, **_footage_standing(moment_id)}
 
 
 @app.post("/moments/{moment_id}/stream_type")

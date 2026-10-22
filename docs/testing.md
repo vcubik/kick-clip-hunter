@@ -82,7 +82,8 @@ service's own code:
 | `kick_api.FakeKickApi` | Kick's public API (token, channel lookup, subscriptions, webhook public key) and 7TV's emote lookup, as an `httpx` transport - the real client code runs unmodified against it. Also the account the bot writes in Kick's chat as: Kick's consent page (`consent`, called with the address the service sent the browser to), its token endpoint checking the PKCE verifier against the challenge, who a user token is of, and the chat a message is written in. |
 | `bot.kick_bot_signed_in` / `twitch_signed_in` | An account signed in for the bot, its tokens kept where the service finds them - as the dashboard's sign-in leaves Kick's, as `scripts/twitch_login.py` leaves Twitch's (or as one signed in before the bot could write). |
 | `webhook.WebhookSigner` | Kick's signing key: produces deliveries signed exactly the way Kick signs them (RSA-SHA256 over id, timestamp and body). |
-| `hls.FakeHlsServer` | A live HLS stream over real HTTP, driven by the test: how much has been broadcast, where it has a discontinuity or an ad, which requests fail. |
+| `hls.FakeHlsServer` | A live HLS stream over real HTTP, driven by the test: how much has been broadcast, where it has a discontinuity or an ad, which requests fail. Also a VOD - with or without program date-times, in fragmented MP4, with segments Twitch silenced (`Segment.muted`) - and, `numbered`, a YouTube stream whose every segment is had by its number in the address. |
+| `kick_api.kick_video`, `twitch_api.past_broadcast` | A stream as kick.com lists it with its VOD (`FakeChannel.videos`), and a past broadcast as Helix lists it (`FakeTwitchChannel.past_broadcasts`): when it began, how long it ran, who may watch it. |
 | `tiktok.FakeTikTok` | TikTok's own web API (`api-live/user/room`): a channel, whether it is live and where its stream is, as an `httpx` transport (the `tiktok` fixture). |
 | `tiktok.FakeFlvServer`, `tiktok.make_flv`, `tiktok.as_tiktok_sends_it` | A stream as one FLV download over real HTTP, of real video made by ffmpeg - dressed, where a test wants it, as TikTok sends one: `start_time` in its onMetaData, its times from then, a SEI unit after every keyframe's picture. |
 | `tiktok.FakeTikTokChats`, `tiktok.comment` | The connection TikTokLive makes to a room's chat, and a comment as TikTokLive hands one over (its own CommentEvent). |
@@ -159,6 +160,9 @@ time? Does it survive what broke its predecessor - a discontinuity, a stitched a
 gap - by starting a new group and carrying on? Are failed downloads retried, playlist errors ridden
 out, a stalled or dead run restarted, the buffer pruned while recording? Is a channel only ever
 ticked (which opens a browser in production) when the API says it is live and it isn't paused?
+Is a stream's VOD that was not found as a run started looked for again - on the loop's ticks
+every so often, and when a clip through an ad needs it - once found never again, never on a
+platform that keeps none, and is a look that fails said without costing the recording anything?
 `unit/test_flv.py` and `integration/test_recorder_flv.py` ask the same of a stream that comes as one
 FLV download, as TikTok's do: are its tags read whole however the bytes arrive, is it cut into
 pieces from keyframe to keyframe named by when onMetaData says the stream began, does a picture
@@ -174,6 +178,21 @@ first picture? Do an older moment's separate context clips join into the file th
 (with the scripts that use this in `integration/test_clip_scripts.py`)? Is a stretch trimmed out of a
 file playable, begun on the last frame a cut can begin on before the start asked for and ended where
 it was asked to, with the file it came from untouched?
+
+**6a. Footage from a VOD** - `integration/test_vod_footage.py`, `unit/test_vod_footage.py`,
+`integration/test_api_footage.py`, `unit/test_kick_stream.py`, and in `unit/test_twitch_stream.py`,
+`unit/test_youtube_stream.py`, `unit/test_streams.py` and `unit/test_dashboard_view.py`
+Is the recording of the stream a moment was in found by its time - Kick's VOD from kick.com's
+list over plain HTTP, Twitch's past broadcast through Helix with when it began, YouTube's stream
+that is on to be wound back - and is one there is none of (kept for subscribers only, gone, a
+stream that is over on YouTube, TikTok) said in words? With the real ffmpeg: is a moment's file
+made longer from a VOD of the same footage in longer segments - the old file in the new one frame
+for frame, found by its pictures however far off the clock is or whether the VOD has times of its
+own at all, begun on a frame a cut can begin on, in fragmented MP4 too, by number from a live
+YouTube stream - and is a VOD that falls short taken as far as it goes, one of other pictures or
+with the clip's stretch silenced refused, nothing left behind either way? Through the service: is
+the file replaced in its place with the clip where it was, the Trim dialog's cut moved with it,
+the player's address changed with the file, and is nothing else made of the moment meanwhile?
 
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
@@ -461,6 +480,8 @@ only test the fake:
 | `static/dashboard.js` - the moments found in a recording: asking for them, following a replay or the cutting of clips, the marks on the trace, playing from a row | The same: every request and the section the service renders are tested, the script is checked by hand (step 11 below). |
 | Loading and running the four models (`_get_model` bodies, `frame_encoder.encode_clip`'s tensor maths) | Multi-gigabyte downloads; the wrappers' own logic *is* tested, with stand-in models. That the speech model still hands over words with their times, and what a real transcript looks like as subtitles in an editor, is step 15 below. |
 | `static/dashboard.js` - the transcript beside a clip: its tab, asking for it and following it while it is made, marking the line being said, a line's time playing the clip, saving what is put right in a line | As for the rest of the script: the tab the service renders and every request it makes are tested, the script is checked by hand (step 15 below). |
+| `static/dashboard.js` - adding footage to a moment's file: the buttons, following it while it is made, opening the moment again | As for the rest of the script: the control the service renders and every request it makes are tested, the script is checked by hand (step 20 below). |
+| Kick's list of a channel's streams and their VODs, Twitch's past broadcasts, YouTube's older segments by number | `FakeKickApi`, `FakeTwitchApi` and `FakeHlsServer` encode what was observed (October 2026: kick.com's `videos` list and its VOD playlists, Helix's archives and a past broadcast's playlist without times, `/sq/<n>/` in a live YouTube segment's address); that the VOD is the same encoding as the live stream was measured on real streams. Step 20 below is what notices a change. |
 | Kick's actual API and playlist behaviour | `FakeKickApi` and `FakeHlsServer` encode what has been observed. If Kick changes, the fakes keep passing - the checklist below is what notices. |
 | Kick's actual consent page and chat API, and Twitch's chat API: the bot's sign-in on Kick, a message written in a Kick or Twitch chat | `FakeKickApi` and `FakeTwitchApi` encode what Kick and Twitch document (Kick's OAuth 2.1 with PKCE, `POST /public/v1/chat`; Helix's `POST chat/messages`); a channel's own rules of who may chat exist only there. Step 17 below is what notices a change. |
 | Twitch's actual API, chat connection and playlists: Helix, the device flow of `scripts/twitch_login.py`, the EventSub WebSocket, streamlink finding a stream and its VOD | `FakeTwitchApi`, `FakeEventSub` and `FakeHlsServer` encode what Twitch documents and what was observed (a live playlist's tags, a VOD in fragmented MP4); streamlink itself is never run - a test that would reach it fails. Step 14 below is what notices a change. |
@@ -707,6 +728,19 @@ Run this on a live channel after changing any of the above, or the code right ne
    limit, otherwise the note says it was too big). Take the Discord webhook away in Discord, send
    a test again: the Health page says the last one could not be sent to Discord, with "1 problem"
    beside "Health", and a couple of minutes later Telegram is told that notifications need a look.
+20. **Add footage from a VOD.** Open a moment of a Kick channel that keeps its VODs public, from
+   a stream that is over. Choose "30 s" and press "Add after": the moment's status line says it
+   is looking for the moment in the VOD, counts up while it fetches, and within half a minute the
+   moment opens again with a file that runs on about 30 s longer - the clip still starts at 0:00
+   and plays as it did, chat beside it in step, the strip reaching further. The log says
+   `footage added to moment N from the VOD: 0.0 s before, 30.x s after`. "Add before" does the
+   same at the other end (a few seconds more than asked: the file begins on a frame a cut can
+   begin on), and a cut made with Trim before is still offered where it was. Do the same on a
+   Twitch moment some days old. On a YouTube moment while its stream is still on it works too;
+   once the stream is over, and on a Kick channel whose VODs are for subscribers only, the
+   status line says why not and the file is as it was. With the Kick channel live, the log's
+   `recording started` line may say `VOD not available`: within a minute or two it should say
+   `the stream's VOD was found on a later look`, and the Health page's VOD column "Found".
 
 ## Checking a detector change against a real stream
 

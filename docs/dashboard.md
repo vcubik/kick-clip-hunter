@@ -19,14 +19,27 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below); a moment something was downloaded from there is marked in the queue, beside its
-  rating (`moments.downloaded_at`). Beside the clip, on a tab next to its chat, is its transcript
+  rating (`moments.downloaded_at`). After it, "Add before" and "Add after" put that much more of
+  the stream into the moment's file - 15 s to 2 min, chosen in the list in front of them, which
+  the script remembers - ahead of its first frame or after its last, from the stream's own
+  recording: its VOD on Kick and Twitch, days later too, and on YouTube the stream wound back
+  while it is still on (see `vod_footage.py` below). That is `POST /moments/{id}/footage`
+  (`side`, `seconds`), a tracked background task the page follows (`GET /moments/{id}/footage`,
+  every second, its words in the moment's status line) until it opens the moment again with its
+  longer file: the clip where it was in the broadcast and that much further into the file, the
+  Trim dialog's cut moved with it. The player's address carries when the file was written
+  (`?v=`), so a browser never plays its cached copy of the one before. Not offered for an
+  imported clip, or one cut before its place on the stream's clock was kept; refused while a
+  stretch of the moment is being cut or it is being transcribed, and those wait for it in turn.
+  Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
   line's time plays the clip from there - and downloaded as subtitles (.srt) timed to the
   moment's file, or beside the cut in the Trim dialog. Delete, under the moment's tags, asks once
   more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
   beside its clip - the cut, its chat video and record, old context clips - but not while a
-  stretch of it is being cut or it is being transcribed; one whose clip is still being cut has
+  stretch of it is being cut, it is being transcribed or footage is being added to it; one whose
+  clip is still being cut has
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its

@@ -16,21 +16,38 @@ the stream rather than in it, and there is no recording of the stream to
 stand in for any (no VOD). Their addresses stop working six hours after they
 were handed out and say when, which the recorder is told
 (StreamUrls.expires_at), to ask for new ones in time.
+
+A stream that is on can be wound back, though, as its viewers can wind it
+back (where the streamer lets them, up to twelve hours): the live playlist
+lists only the newest segments, but a segment's address carries its number
+(`/sq/<number>/`, counted from 0 at the stream's start), and with an older
+number in it the address serves that older segment, in full quality. So
+while a channel is still streaming, footage of earlier in its stream is had
+from there (`vod_at`, see vod_footage.py). Once the stream is over the video
+YouTube keeps of it is not in this form: streamlink plays such a video in
+low quality only.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from . import youtube_client
-from .platforms import YOUTUBE_SITE, StreamUrlError, StreamUrls
+from .platforms import YOUTUBE_SITE, NoVod, StreamUrlError, StreamUrls, Vod
 from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
 
 VIDEO_URL = f"{YOUTUBE_SITE}/watch?v={{video_id}}"
+# How long before the stream that is on began, as YouTube says it, a moment
+# of it may lie: the first segments go out a little before that.
+STREAM_SLACK_SECONDS = 60
+NO_VOD = (
+    "YouTube keeps no VOD a stream can be taken from once it is over: footage can be added only "
+    "while the stream is still on."
+)
 # Where an address of YouTube's says when it stops working, in seconds since
 # 1970: a part of its path ("/expire/<seconds>/") or of its query.
 _EXPIRY = re.compile(r"[/?&]expire[/=](\d{9,11})(?=[/&]|$)")
@@ -69,3 +86,26 @@ def get_stream_urls(login: str) -> StreamUrls:
     if live is None:
         raise StreamUrlError(f"YouTube did not say where the stream of {login!r} is")
     return StreamUrls(live=live, expires_at=expires_at(live))
+
+
+def vod_at(login: str, when: datetime) -> Vod:
+    """The stream the channel is streaming, to be wound back to `when` - if
+    `when` was in it: YouTube keeps nothing of a stream that is over that
+    the recorder could take. Blocks while it is asked for; raises NoVod,
+    saying why, where there is nothing to be had."""
+    try:
+        # A thread of its own, with no event loop running in it.
+        video = asyncio.run(youtube_client.live_video(login))
+    except (ValueError, httpx.HTTPError, youtube_client.YouTubeChanged, youtube_client.Refused) as error:
+        raise NoVod(f"YouTube did not say what the channel is streaming ({type(error).__name__}).") from error
+    if video is None or (
+        video.started_at is not None and when < video.started_at - timedelta(seconds=STREAM_SLACK_SECONDS)
+    ):
+        raise NoVod(NO_VOD)
+    try:
+        live = _master(VIDEO_URL.format(video_id=video.video_id))
+    except StreamlinkError as error:
+        raise NoVod(f"YouTube would not say where the stream is: {error}") from error
+    if live is None:
+        raise NoVod("YouTube would not say where the stream is.")
+    return Vod(master=live, numbered=True)

@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from kick_clip_hunter import kick_stream, streams, twitch_client
-from kick_clip_hunter.platforms import LiveStatus, StreamUrls
+from kick_clip_hunter import kick_stream, streams, twitch_client, twitch_stream, youtube_stream
+from kick_clip_hunter.platforms import LiveStatus, NoVod, StreamUrls, Vod
 
 pytestmark = pytest.mark.anyio
 
@@ -56,6 +56,32 @@ class TestKickStream:
 
         assert streams.stream_urls("some_channel") == StreamUrls("x")
         assert asked == ["some_channel"]
+
+
+class TestWhereAStreamsRecordingIs:
+    """The recording of a stream a moment was in is looked for on the
+    platform the channel's name says it is on."""
+
+    WHEN = datetime(2026, 10, 21, 20, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize(
+        ("channel", "module", "login"),
+        [
+            ("some_channel", kick_stream, "some_channel"),
+            ("some_channel@twitch", twitch_stream, "some_channel"),
+            ("some.channel@youtube", youtube_stream, "some.channel"),
+        ],
+    )
+    def test_it_is_asked_of_the_channels_platform_by_its_name_there(self, monkeypatch, channel, module, login):
+        asked = []
+        monkeypatch.setattr(module, "vod_at", lambda name, when: asked.append((name, when)) or Vod("x"))
+
+        assert streams.vod_at(channel, self.WHEN) == Vod("x")
+        assert asked == [(login, self.WHEN)]
+
+    def test_tiktok_keeps_none(self):
+        with pytest.raises(NoVod, match="TikTok keeps no VOD"):
+            streams.vod_at("some_channel@tiktok", self.WHEN)
 
 
 class TestTwitchLiveStatus:

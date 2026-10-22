@@ -216,6 +216,7 @@ def _reset_module_state() -> None:
         main._tuning_values = None
         main._trims.clear()
         main._transcripts.clear()
+        main._footage.clear()
         main._recording_trims.clear()
         main._recording_counts.clear()
         main._chat_identity_cache.clear()

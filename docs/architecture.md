@@ -60,7 +60,10 @@ Module map (`src/kick_clip_hunter/`):
 - `streams.py` — what is asked of a channel's platform, sent to the one its name says:
   whether it is live and since when (`live_status` - Kick's API, Helix, YouTube's own or
   TikTok's own), where its stream is (`stream_urls` - `kick_stream.py`, `twitch_stream.py`,
-  `youtube_stream.py` or `tiktok_stream.py`)
+  `youtube_stream.py` or `tiktok_stream.py`), and where the recording is of the stream it
+  had on at a given time (`vod_at`, a `platforms.Vod`, or `NoVod` in words that say why):
+  Kick's VOD and Twitch's past broadcast of a stream that is on or one that is over, or the
+  YouTube stream that is on, to be wound back; TikTok keeps none
 - `chat_message.py` — one chat message as the service takes it in, whichever platform it
   came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
   `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id, YouTube's emoji
@@ -71,7 +74,8 @@ Module map (`src/kick_clip_hunter/`):
   (`typed`)
 - `kick_client.py` — app access token + channel lookup (by slug, or by broadcaster id -
   `get_channel_by_id`, what a renamed channel is called now; `NoSuchChannel` when Kick has
-  none) + event subscription; and, with
+  none) + event subscription; a channel's newest streams with their VODs, from kick.com's
+  own list over plain HTTP (`get_videos`); and, with
   the user access token of the account the bot writes as, who that account is
   (`get_user`) and a message written in a channel's chat (`send_chat_message`,
   `POST /public/v1/chat`, as type "user": the bot writes in other channels' chat as an
@@ -136,8 +140,10 @@ Module map (`src/kick_clip_hunter/`):
   playback service the way the site's player does, over plain HTTP - no browser). Only
   H.264, which Twitch serves as MPEG-TS. Also the stream's VOD, where the channel keeps
   past broadcasts: the recording Helix lists with the live stream's id, its playlist
-  from streamlink. Importing streamlink renames the standard log levels in small letters
-  for the whole process; this module names them back
+  from streamlink - and, by its time, the past broadcast any moment was in, with when it
+  began (`vod_at`; the playlist of one that is over gives no times of its own). Importing
+  streamlink renames the standard log levels in small letters for the whole process; this
+  module names them back
 - `twitch_emotes.py` — a Twitch channel's emotes beyond Twitch's own: 7TV's, BetterTTV's
   and FrankerFaceZ's together (7TV's wins a name, then BetterTTV's). A BetterTTV or
   FrankerFaceZ emote is kept with its service before its id (`bttv.<id>`, `ffz.<id>`),
@@ -178,7 +184,10 @@ Module map (`src/kick_clip_hunter/`):
   for the Health page
 - `youtube_stream.py` — where a live YouTube stream is: `youtube_client.live_video` says
   which video, streamlink the master playlist of its stream (nothing else is asked of it).
-  YouTube's addresses run out after six hours and say when (`expires_at`)
+  YouTube's addresses run out after six hours and say when (`expires_at`). A stream that is
+  on can be wound back - an older segment is had by its number in a segment's address - so
+  it is where earlier footage of the stream is while it is still on (`vod_at`, a `Vod`
+  marked `numbered`); YouTube keeps nothing of a stream that is over that could be taken
 - `streamlink_support.py` — streamlink, imported once for `twitch_stream.py` and
   `youtube_stream.py`: the service starts without it (only those streams then fail, saying
   what to install), and the standard log levels it renames in small letters for the whole
@@ -286,7 +295,9 @@ Module map (`src/kick_clip_hunter/`):
   background task, and removed or retried through `POST /recordings/{id}/delete` and
   `/save`; what is being done with one right now is in memory, everything about one that
   is over in its row. A stretch is cut out of one through `/recordings/{id}/trim`, by the
-  same background task that cuts one out of a moment's footage (`_trim_background`). `POST /channels/{slug}/always_record` sets whether a channel is
+  same background task that cuts one out of a moment's footage (`_trim_background`). A
+  moment's file is made longer from its stream's VOD through `POST /moments/{id}/footage`
+  (`_add_footage_background`, see `vod_footage.py`). `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
@@ -606,7 +617,11 @@ Module map (`src/kick_clip_hunter/`):
   `chat_video.css`/`chat_video.js` dress the page chat is laid out on for a chat video
   and say where each line of it is
 - `kick_session.py` — paths for the persisted browser login (session state + profile dir)
-- `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation")
+- `kick_stream.py` — captures a live channel's real, working HLS URL (see "Clip creation"),
+  looking up its stream's VOD inside the same browser; and, over plain HTTP, the VOD of the
+  stream a channel had on at any time, from kick.com's list of its streams (`vod_at`, by
+  `covering`): an address without a token that works for as long as the channel keeps it,
+  none for a VOD kept for subscribers only
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
   `extract_clip()` to cut a clip from it. A thread per channel polls the live playlist
   (`httpx`) and saves each source MPEG-TS segment untouched, named by its
@@ -644,7 +659,35 @@ Module map (`src/kick_clip_hunter/`):
   recommended. The loop tells the recorder before every tick (`ChannelRecorder.keep`); a
   recorder not told yet keeps `BUFFER_RETENTION_SECONDS`, enough for the longest clip the
   Settings page allows. A shorter reach takes hold only once the longer one has run out,
-  so a clip framed under the old settings still finds its footage.
+  so a clip framed under the old settings still finds its footage. A run on a platform that
+  keeps VODs (`platforms.KEEP_VODS`) whose VOD was not found as it started - not listed yet
+  in a stream's first minute, or Kick's look in the browser coming back empty for a stream
+  that had one - looks for it again over plain HTTP (`streams.vod_at`) every
+  `VOD_LOOKUP_SECONDS`, from the loop's ticks and when a clip through an ad needs it
+  (`_look_for_vod`, one look at a time); the Health page's "VOD" follows.
+- `vod_footage.py` — a moment's file made longer, before its clip or after it, with footage
+  of the broadcast from the broadcast's own recording, days later too (`lengthen`; the
+  dashboard's "Add before" / "Add after"). Its module docstring is the full story. The new
+  file is the recording's own footage only, the old file's stretch included - joined as the
+  recorder joins a group and cut on a frame a cut can begin on (`recorder.trim_clip`),
+  nothing re-encoded - since a live stream's segments and its VOD's are cut differently and
+  never stitched together; the VOD is the same encoding, so the clip comes out as it was.
+  Where the old file lies in the recording is found by its pictures, not by the clocks,
+  which were seen seconds apart: keyframes of the file whose picture it shows once
+  (`unique_marks`, an MD5 of the decoded frame - `keyframes`) looked for among the keyframes
+  of the recording's segments nearest where the clocks put it (`nearest_first`), until two
+  agree; where it ended up in the new file is measured the same way. The recording's
+  segments are its playlist's (`pieces`: by their program date-time, or counted on from when
+  a Twitch past broadcast began), or for a YouTube stream that is on, older ones by their
+  number (`numbered`). A VOD that does not reach as far yet gives what it has (`short`); a
+  stretch Twitch silenced ("-muted") is refused where the old file is in it and said where it
+  is only among what is added (`muted`). main.py's `POST /moments/{id}/footage` runs it with
+  the lookup in a tracked background task (`_add_footage_background`): the longer file is
+  made beside the moment's own, put in its place - tried again for a few seconds while a
+  player has the file open on Windows (`_put_in_place`) - and the moment's `context_before`
+  / `context_after` say where the clip is in it now (`clip_start`, `clip_duration` stay); what
+  is kept of the Trim dialog's cut is moved on with it (`_shift_cut_record`). While it runs,
+  the moment is not trimmed, transcribed or removed, and the other way round
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips

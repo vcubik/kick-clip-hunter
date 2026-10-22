@@ -31,10 +31,15 @@ class Segment:
     discontinuity: bool = False
     # Extra tag lines emitted right before this segment (e.g. an ad marker).
     tags: tuple[str, ...] = ()
+    # Its address says its sound was silenced ("-muted"), as Twitch's VODs
+    # say it of a stretch with music Twitch may not play.
+    muted: bool = False
 
 
 class FakeHlsServer:
-    """Serves `/master.m3u8`, two variant playlists and `/segment/<n>.ts`.
+    """Serves `/master.m3u8`, two variant playlists and `/segment/<n>.ts` -
+    or, `numbered`, every segment of the timeline at `/sq/<number>/file.ts`,
+    as YouTube serves a live stream's.
 
     `published` is how many segments of `timeline` exist so far - the live
     edge. The variant playlist lists a sliding window of the most recent
@@ -53,12 +58,17 @@ class FakeHlsServer:
         init: bytes | None = None,
         best_variant: str = BEST_VARIANT,
         program_date_time_once: bool = False,
+        numbered: bool = False,
     ) -> None:
         self.timeline = timeline
         self.best_variant = best_variant
         # Program date-time only for the first segment listed, as YouTube
         # writes it, rather than for every segment.
         self.program_date_time_once = program_date_time_once
+        # Segment addresses that carry the segment's number, as YouTube's
+        # live ones do (/sq/<number>/...) - and serve any segment of the
+        # timeline by its number, whether it is listed or not.
+        self.numbered = numbered
         # The initialization segment of a stream in fragmented MP4 (served at
         # /segment/init.mp4, its segments as .m4s); None for MPEG-TS.
         self.init = init
@@ -117,7 +127,11 @@ class FakeHlsServer:
     def segment_requests(self) -> list[int]:
         """Timeline indexes of the segments requested so far, in order."""
         with self._lock:
-            return [_index(path) for path in self.requests if "/segment/" in path and not path.endswith("init.mp4")]
+            return [
+                self._timeline_index(path)
+                for path in self.requests
+                if ("/segment/" in path or "/sq/" in path) and not path.endswith("init.mp4")
+            ]
 
     def close(self) -> None:
         self._httpd.shutdown()
@@ -152,8 +166,12 @@ class FakeHlsServer:
             body = b"#EXTM3U\n#EXT-X-TARGETDURATION:6\n"
         elif path == "/segment/init.mp4" and self.init is not None:
             body = self.init
-        elif path.startswith("/segment/"):
-            body = self.timeline[_index(path)].data
+        elif path.startswith(("/segment/", "/sq/")):
+            index = self._timeline_index(path)
+            if not 0 <= index < len(self.timeline):
+                handler.send_error(404)
+                return
+            body = self.timeline[index].data
         else:
             handler.send_error(404)
             return
@@ -187,15 +205,24 @@ class FakeHlsServer:
                 lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{stamp}")
             lines.append(f"#EXTINF:{segment.duration:.3f},{segment.title}")
             # Relative on purpose: the recorder has to resolve it itself.
-            lines.append(f"../segment/{index}{suffix}")
+            if self.numbered:
+                lines.append(f"../sq/{self.first_sequence + index}/file{suffix}")
+            else:
+                lines.append(f"../segment/{index}{'-muted' if segment.muted else ''}{suffix}")
         if ended:
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 
+    def _timeline_index(self, path: str) -> int:
+        """The timeline index of a segment by the address it was asked at."""
+        if path.startswith("/sq/"):
+            return int(path.split("/")[2]) - self.first_sequence
+        return _index(path)
+
 
 def _index(path: str) -> int:
     """The timeline index of a segment by the address it was asked at."""
-    return int(path.split("/")[-1].removesuffix(".ts").removesuffix(".m4s"))
+    return int(path.split("/")[-1].removesuffix(".ts").removesuffix(".m4s").removesuffix("-muted"))
 
 
 def fake_segments(count: int, **kwargs) -> list[Segment]:

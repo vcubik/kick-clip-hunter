@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from kick_clip_hunter import dashboard_view as view
-from kick_clip_hunter import notify
+from kick_clip_hunter import notify, vod_footage
 
 TODAY = date(2026, 10, 9)  # a Friday
 
@@ -703,6 +703,59 @@ class TestTheServiceInWords:
     )
     def test_what_a_shutdown_is_waiting_for(self, pending, words):
         assert view.shutdown_words(pending) == words
+
+
+class TestFootageInWords:
+    """What the page says of footage being added to a moment's file from
+    its stream's VOD."""
+
+    def test_nothing_is_said_before_any_was_asked_for(self):
+        assert view.footage_words(view.FOOTAGE_NONE) == ""
+
+    @pytest.mark.parametrize(
+        "state", [view.FOOTAGE_FINDING, view.FOOTAGE_FETCHING, view.FOOTAGE_JOINING, view.FOOTAGE_FAILED]
+    )
+    def test_every_other_state_is_a_sentence(self, state):
+        words = view.footage_words(state)
+
+        assert words[0].isupper() and words.endswith(".")
+
+    def test_the_busy_states_are_vod_footages_own_steps(self):
+        assert view.FOOTAGE_BUSY == {vod_footage.FINDING, vod_footage.FETCHING, vod_footage.JOINING}
+
+    def test_fetching_says_how_far_it_has_got(self):
+        assert view.footage_words(view.FOOTAGE_FETCHING, 0.427) == "Fetching the footage from the VOD: 42 %."
+
+    def test_what_was_added_is_said_side_by_side(self):
+        assert view.footage_words(view.FOOTAGE_DONE, added=(31.38, 0.0)) == "Added 31.4 s before from the stream's VOD."
+        assert view.footage_words(view.FOOTAGE_DONE, added=(0.2, 30.04)) == "Added 30 s after from the stream's VOD."
+        assert view.footage_words(view.FOOTAGE_DONE, added=(4.0, 3.0)) == (
+            "Added 4 s before and 3 s after from the stream's VOD."
+        )
+
+    def test_a_vod_that_fell_short_or_had_no_sound_says_so(self):
+        words = view.footage_words(view.FOOTAGE_DONE, added=(0.0, 12.0), short=True, muted=True)
+
+        assert words == (
+            "Added 12 s after from the stream's VOD. The VOD did not reach as far as you asked. "
+            "Some of it has no sound: Twitch silenced it in its VOD."
+        )
+
+    def test_a_failure_says_why_where_that_is_known(self):
+        assert view.footage_words(view.FOOTAGE_FAILED, why="Kick keeps no VOD.") == "Kick keeps no VOD."
+        assert view.footage_words(view.FOOTAGE_FAILED) == view.FOOTAGE_WORDS[view.FOOTAGE_FAILED]
+
+    @pytest.mark.parametrize(
+        ("seconds", "words"), [(15, "15 s"), (30, "30 s"), (60, "1 min"), (90, "90 s"), (120, "2 min")]
+    )
+    def test_an_amount_on_offer_is_written_short(self, seconds, words):
+        assert view.footage_choice_words(seconds) == words
+
+    def test_the_amount_it_starts_at_is_on_offer(self):
+        assert view.FOOTAGE_DEFAULT_SECONDS in view.FOOTAGE_CHOICES
+        assert all(
+            vod_footage.ADD_LEAST_SECONDS <= seconds <= vod_footage.ADD_MOST_SECONDS for seconds in view.FOOTAGE_CHOICES
+        )
 
 
 class TestACutInWords:

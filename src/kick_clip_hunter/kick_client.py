@@ -18,7 +18,8 @@ import httpx
 ID_BASE = "https://id.kick.com/oauth"
 API_BASE = "https://api.kick.com/public/v1"
 # The site's own API, which says more of a channel than the public one does
-# - its subscriber badges, among other things - and needs no token.
+# - its subscriber badges and its streams' VODs, among other things - and
+# needs no token.
 SITE_API_BASE = "https://kick.com/api/v2"
 
 _token_cache: dict[str, float | str] = {}
@@ -130,6 +131,21 @@ async def get_site_channel(slug: str) -> dict:
         response = await client.get(f"{SITE_API_BASE}/channels/{slug.lower()}", headers={"Accept": "application/json"})
         response.raise_for_status()
         return response.json()
+
+
+async def get_videos(slug: str) -> list[dict]:
+    """A channel's newest streams as kick.com's own pages are told about
+    them, by its slug, newest first - each with when it began (`start_time`,
+    UTC without saying so), how long it ran (`duration`, ms; 0 while it is
+    on, `is_live`) and the master playlist of its VOD (`source`: empty where
+    the VOD is kept for subscribers only, which `video.status` then says)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SITE_API_BASE}/channels/{slug.lower()}/videos", headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        videos = response.json()
+    return videos if isinstance(videos, list) else []
 
 
 async def get_user(token: str) -> dict:

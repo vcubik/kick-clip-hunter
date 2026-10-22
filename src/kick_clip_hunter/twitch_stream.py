@@ -21,22 +21,43 @@ keeps its past broadcasts: Helix says which of a channel's recordings is the
 one of the stream that is on (by the stream's id), and streamlink where its
 playlist is. Twitch's VODs are fragmented MP4 on the same program clock -
 the recorder keeps their fragments for the clips that need them.
+
+A past broadcast stays there once its stream is over - for a week to two
+months, as long as Twitch keeps the channel's - and `vod_at` finds the one
+of any moment by its time (Helix gives when each began and how long it
+runs). Its playlist is seen to be another make then: 10s MPEG-TS segments
+without a program date-time, so where footage of it is is counted from
+when the broadcast began, to a few seconds (see vod_footage.py). Where
+Twitch found music in it that it may not play, a segment's address says
+"-muted": its sound is silence.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import datetime, timedelta
+
+import httpx
 
 from . import twitch_client
 from .config import load_settings
-from .platforms import StreamUrlError, StreamUrls
+from .platforms import NoVod, StreamUrlError, StreamUrls, Vod
 from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
 
 CHANNEL_URL = "https://www.twitch.tv/{login}"
 VIDEO_URL = "https://www.twitch.tv/videos/{video_id}"
+# How many of a channel's past broadcasts are looked through for the one a
+# moment was in: as many as Helix gives at once.
+ARCHIVES_LOOKED_AT = 100
+# How far outside the time Helix gives a past broadcast a moment of it may
+# lie: the length of one that is still on lags behind it.
+VOD_SLACK_SECONDS = 120
+_LENGTH = re.compile(r"(\d+)([hms])")
+_UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
 
 
 def _master(url: str) -> str | None:
@@ -85,3 +106,77 @@ async def _archive_of_the_stream(login: str) -> str | None:
         if str(video.get("stream_id")) == str(stream["id"]):
             return str(video["id"])
     return None
+
+
+def length_seconds(text: object) -> int:
+    """How long Helix says a past broadcast is ("3h2m1s"), in seconds."""
+    return sum(int(number) * _UNIT_SECONDS[unit] for number, unit in _LENGTH.findall(str(text or "")))
+
+
+def _began(video: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(video.get("created_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def covering(videos: list, when: datetime, live_stream_id: str | None = None) -> dict | None:
+    """Which of a channel's past broadcasts `when` was in: the one whose time
+    it lies in, or failing that the nearest that begins or ends no more than
+    VOD_SLACK_SECONDS from it - the one of the stream that is on (by its
+    id) reaching to now. None if none does. Pure."""
+    best: tuple[float, dict] | None = None
+    for video in videos:
+        began = _began(video) if isinstance(video, dict) else None
+        if began is None:
+            continue
+        on = live_stream_id is not None and str(video.get("stream_id")) == str(live_stream_id)
+        ended = None if on else began + timedelta(seconds=length_seconds(video.get("duration")))
+        if when < began:
+            outside = (began - when).total_seconds()
+        elif ended is not None and when > ended:
+            outside = (when - ended).total_seconds()
+        else:
+            outside = 0.0
+        if outside <= VOD_SLACK_SECONDS and (best is None or outside < best[0]):
+            best = (outside, video)
+    return best[1] if best else None
+
+
+async def _archive_at(login: str, when: datetime) -> dict | None:
+    """The past broadcast of the channel's that `when` was in, if Helix
+    lists one."""
+    settings = load_settings()
+    token = await twitch_client.app_token(settings)
+    user = await twitch_client.get_user(login, settings.twitch_client_id, token)
+    stream = await twitch_client.get_stream(login, settings.twitch_client_id, token)
+    archives = await twitch_client.get_archives(user["id"], settings.twitch_client_id, token, ARCHIVES_LOOKED_AT)
+    return covering(archives, when, stream["id"] if stream else None)
+
+
+def vod_at(login: str, when: datetime) -> Vod:
+    """The past broadcast of the channel's stream that was on at `when` -
+    one that is on, or one that is over - with when it began. Blocks while
+    it is asked for; raises NoVod, saying why, where there is none to be
+    had."""
+    try:
+        # A thread of its own, with no event loop running in it.
+        video = asyncio.run(_archive_at(login, when))
+    except twitch_client.NotSetUp as error:
+        raise NoVod(str(error)) from error
+    except (httpx.HTTPError, ValueError) as error:
+        raise NoVod(f"Twitch could not be asked for the channel's past broadcasts ({type(error).__name__}).") from error
+    if video is None:
+        raise NoVod(
+            "Twitch lists no past broadcast of that stream: the channel keeps none, it was deleted, "
+            "or it is older than Twitch keeps them."
+        )
+    if video.get("viewable", "public") != "public":
+        raise NoVod("Twitch keeps the past broadcast of that stream from the public.")
+    try:
+        master = _master(VIDEO_URL.format(video_id=video["id"]))
+    except StreamlinkError as error:
+        raise NoVod(f"Twitch would not say where the past broadcast is: {error}") from error
+    if master is None:
+        raise NoVod("Twitch would not say where the past broadcast is.")
+    return Vod(master=master, started_at=_began(video))
