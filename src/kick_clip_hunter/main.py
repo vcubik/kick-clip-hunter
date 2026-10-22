@@ -1144,7 +1144,7 @@ _tuning_values: dict[int, dict[str, tuning.Value]] | None = None
 # Channel keyword weights rarely change (only when re-subscribing/refreshing
 # emotes, or when the channel's settings do), so we cache them per-process
 # instead of hitting the DB on every single chat message.
-_channel_keywords_cache: dict[int, dict[str, float]] = {}
+_channel_keywords_cache: dict[int, detector.KeywordWeights] = {}
 
 # Stream start times don't need to be looked up on every message - only when
 # a moment fires - and barely change within a single stream, so a short
@@ -1239,7 +1239,7 @@ def _forget_tuning() -> None:
     _channel_keywords_cache.clear()
 
 
-def _channel_keywords(conn, broadcaster_user_id: int) -> dict[str, float]:
+def _channel_keywords(conn, broadcaster_user_id: int) -> detector.KeywordWeights:
     """The channel's 7TV emote names the detector listens for, with what
     each weighs under the channel's settings."""
     if broadcaster_user_id not in _channel_keywords_cache:

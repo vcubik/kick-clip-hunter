@@ -39,6 +39,11 @@ class TestLaughs:
 CHANNEL_KEYWORDS = {"kekw": 3.5, "pogchamp": 1.0, "sadge": 1.0}
 
 
+# Keywords that share their first letters, overlap, sit at either end of the
+# text or are short enough to be found only as words of their own.
+INDEXED = {"kekw": 1.0, "kekwait": 3.0, "lulw": 2.0, "omegalul": 4.0, "lol": 5.0, "xd": 0.5}
+
+
 class TestEmoteMentions:
     KEYWORDS = CHANNEL_KEYWORDS
 
@@ -58,6 +63,38 @@ class TestEmoteMentions:
 
     def test_laugh_and_mention_are_independent(self):
         assert detector.classify_message("xDDD KEKW", self.KEYWORDS) == (STRONG, 3.5)
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "kekw",
+            "kekwai",
+            "KEKWait",
+            "xkekwaitx",
+            "omegalu",
+            "omegalulw",
+            "lulwomegalul",
+            "lolkekw",
+            "lol kekw",
+            "kekw lol",
+            "xd",
+            "xdd lulw",
+            "kek",
+            "",
+        ],
+    )
+    def test_indexed_weights_find_exactly_what_mentions_finds(self, content):
+        lowered = content.lower()
+        expected = max((w for k, w in INDEXED.items() if detector.mentions(lowered, k)), default=0.0)
+        weights = detector.KeywordWeights(INDEXED)
+        assert weights.highest_mentioned(lowered) == expected
+        assert detector.classify_message(content, weights)[1] == expected
+        assert detector.classify_message(content, INDEXED)[1] == expected
+
+    def test_keyword_weights_come_indexed_and_compare_as_a_plain_dict(self):
+        weights = detector.keyword_weights(["kekw", "sadge"])
+        assert isinstance(weights, detector.KeywordWeights)
+        assert weights == {"kekw": detector.EMOTE_MENTION_LAUGH_WEIGHT, "sadge": detector.EMOTE_MENTION_OTHER_WEIGHT}
 
 
 class TestNativeEmotes:
