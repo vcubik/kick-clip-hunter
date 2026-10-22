@@ -123,6 +123,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
     into one file, in the clip's place, without re-encoding, and records where the clip
     lies in it. Until it has been run such a moment plays as its clip alone. Running it
     again does nothing more.
+  - `backfill_laughing.py` — counts how many people laughed around each moment stored
+    before the count was kept, from its stored chat (what the review queue can be ordered
+    by); safe to re-run and to run while the service runs
   - `backfill_taste.py [--limit N]` — fills in transcript/audio-event tags/frame
     embedding for any moment with a clip but missing one or more of them (imports
     don't go through the live pipeline's background tasks, so they start out missing

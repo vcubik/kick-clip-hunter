@@ -532,6 +532,8 @@ class TestMakingAMomentOfOne:
         assert moment["current_message_rate"] == first.spike.current_message_rate
         assert (moment["emote_count"], moment["keyword_hits"]) == (first.spike.emote_count, first.spike.keyword_hits)
         assert moment["rating"] is None and moment["stream_elapsed_seconds"] is None
+        # Everyone in the crowd laughed, and nobody else near it.
+        assert moment["laughing"] == first.laughing == len(exact_crowd())
 
     async def test_its_file_is_cut_out_of_the_recording_clip_and_context_in_one(self, service, footage):
         stream_chat()

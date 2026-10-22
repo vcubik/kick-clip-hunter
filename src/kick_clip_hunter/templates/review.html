@@ -22,6 +22,11 @@
         <option value="{{ name }}"{% if name == selected_channel %} selected{% endif %}>{{ name }}</option>
         {% endfor %}
       </select>
+      <select class="ch-select" id="order-filter" name="order" aria-label="Order" data-submit-on-change>
+        {% for option in orders %}
+        <option value="{{ option.order }}"{% if option.order == order %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
       <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
     </form>
   </div>
@@ -46,6 +51,8 @@
           {%- endif -%}
         </span>
         <span class="ch-what" data-unnamed="{{ row.unnamed }}"{% if not row.has_clip %} data-no-clip{% endif %}>{{ row.what }}</span>
+        {#- How many people laughed around it, where that was counted. -#}
+        {% if row.laughing is not none %}<span class="ch-laughing" title="{{ row.laughing_words }}">{{ row.laughing }}</span>{% endif %}
         {#- Something cut out of it has been downloaded from the Trim dialog. -#}
         <span class="ch-taken" role="img" aria-label="Downloaded" title="Downloaded from Trim"{% if not row.downloaded %} hidden{% endif %} data-taken>
           <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M6 1v6.5M3 5l3 3 3-3M1.5 10.5h9" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
@@ -58,7 +65,7 @@
     {% if empty %}
     <p class="queue-empty">{{ empty.queue }}</p>
     {% endif %}
-    {% if paging %}{{ pages(paging, "Pages of the list", "Newer", "Older") }}{% endif %}
+    {% if paging %}{{ pages(paging, "Pages of the list", paging_words[0], paging_words[1]) }}{% endif %}
   </div>
 
   <p class="ch-keys-hint">

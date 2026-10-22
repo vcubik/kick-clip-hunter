@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 import runpy
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+import backfill_laughing
 import backfill_taste
 import check
 import import_clip
@@ -22,7 +24,7 @@ import import_clips_dir
 import refresh_emotes
 import subscribe
 from kick_clip_hunter import audio_events, db, detector, frame_encoder, recorder, sound_events, transcriber
-from tests.support.data import T0, add_moment, add_streamer, minutes, moment
+from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes, moment
 
 SCRIPTS = Path(import_clip.__file__).parent
 
@@ -275,6 +277,46 @@ class TestBackfill:
 
         assert moment(moment_id)["frame_embedding"] is None
         assert "no frames extracted" in capsys.readouterr().out
+
+
+class TestBackfillLaughing:
+    def test_a_moment_is_given_the_count_the_service_would_have_given_it(self, conn):
+        moment_id = add_moment(detected_at=T0)
+
+        def seconds(count: float) -> datetime:
+            return T0 + timedelta(seconds=count)
+
+        add_chat("some_channel", "early", "xd", seconds(-detector.SHORT_WINDOW_SECONDS - 5))
+        add_chat("some_channel", "alice", "xDDD", seconds(-3))
+        add_chat("some_channel", "alice", "xd", seconds(2))  # the same person again
+        add_chat("some_channel", "bob", "KEKW xd", seconds(20))
+        add_chat("some_channel", "carol", "what happened", seconds(25))
+        add_chat("some_channel", "nightbot", "xd", seconds(30))  # a bot, left out as it is live
+        add_chat("some_channel", "dave", "xd", seconds(detector.KEEP_LAUGHING_SECONDS - 1))
+        add_chat("some_channel", "late", "xd", seconds(detector.KEEP_LAUGHING_SECONDS + 5))
+
+        assert backfill_laughing.backfill(conn) == (1, 0)
+        assert moment(moment_id)["laughing"] == 3
+
+    def test_what_has_no_count_to_be_had_is_left_without_one(self, conn):
+        laughed_at = add_moment(detected_at=T0)
+        imported = add_moment(detected_at=T0, reason="manual_import")
+        add_chat("some_channel", "alice", "xd", T0)
+        counted = add_moment(detected_at=T0 - minutes(30), laughing=7)
+
+        # The imported one is not looked at; the counted one keeps its count.
+        assert backfill_laughing.backfill(conn) == (1, 0)
+        assert moment(imported)["laughing"] is None
+        assert moment(counted)["laughing"] == 7
+        assert moment(laughed_at)["laughing"] == 1
+
+    def test_a_moment_with_no_chat_around_it_is_not_said_to_have_had_nobody(self, conn):
+        moment_id = add_moment(detected_at=T0)
+
+        assert backfill_laughing.backfill(conn) == (0, 1)
+        assert moment(moment_id)["laughing"] is None
+        # Run again, it is looked at again: chat stored late would still count.
+        assert backfill_laughing.backfill(conn) == (0, 1)
 
 
 class TestWatchlistCommands:

@@ -97,6 +97,12 @@ class TestWhereAMomentLiesInTheFile:
         assert found.fired_at == T0 + timedelta(seconds=600)
         assert found.spike is SPIKE
 
+    def test_and_with_how_many_people_laughed_around_it(self):
+        (counted,) = found_in(one_part(), replace(fired(600), laughing=11))
+        (uncounted,) = found_in(one_part(), fired(600))
+
+        assert (counted.laughing, uncounted.laughing) == (11, None)
+
     def test_the_channels_own_framing_is_what_frames_it(self):
         (found,) = found_in(
             one_part(),

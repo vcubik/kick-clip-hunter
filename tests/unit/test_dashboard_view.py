@@ -45,6 +45,7 @@ def row(**overrides) -> dict:
         "rating": None,
         "title": None,
         "downloaded_at": None,
+        "laughing": None,
     }
     values.update(overrides)
     return values
@@ -409,7 +410,7 @@ class TestQueueGroups:
         assert [item["id"] for item in group["rows"]] == [2, 1]
 
     def test_a_row_says_when_in_the_stream_what_and_how_it_was_rated(self):
-        rows = [row(id=7, detected_at=local(21, 2).isoformat(), stream_elapsed_seconds=3723, rating=4)]
+        rows = [row(id=7, detected_at=local(21, 2).isoformat(), stream_elapsed_seconds=3723, rating=4, laughing=9)]
 
         ((item,),) = (group["rows"] for group in view.queue_groups(rows, TODAY))
 
@@ -423,6 +424,8 @@ class TestQueueGroups:
             "downloaded": False,
             "rating": 4,
             "rating_words": "rated 4 of 5",
+            "laughing": 9,
+            "laughing_words": "9 people laughed around it",
         }
 
     def test_a_row_says_what_chat_said_most_where_that_is_known(self):
@@ -507,6 +510,29 @@ class TestQueueGroups:
     def test_no_rows_no_groups(self):
         assert view.queue_groups([], TODAY) == []
 
+    def test_ordered_by_laughing_a_stream_stands_where_its_best_moment_does(self):
+        rows = [
+            row(id=3, channel_slug="channel_b", laughing=20),
+            row(id=1, channel_slug="channel_a", laughing=12),
+            row(id=2, channel_slug="channel_b", laughing=4),
+        ]
+
+        groups = view.queue_groups(rows, TODAY)
+
+        assert [(group["channel"], [item["id"] for item in group["rows"]]) for group in groups] == [
+            ("channel_b", [3, 2]),
+            ("channel_a", [1]),
+        ]
+
+    def test_a_row_says_how_many_people_laughed_where_that_was_counted(self):
+        ((counted, uncounted),) = (
+            group["rows"] for group in view.queue_groups([row(id=2, laughing=14), row(id=1)], TODAY)
+        )
+
+        assert (counted["laughing"], counted["laughing_words"]) == (14, "14 people laughed around it")
+        assert (uncounted["laughing"], uncounted["laughing_words"]) == (None, None)
+        assert view.laughing_words(1) == "1 person laughed around it"
+
 
 class TestReviewUrl:
     def test_the_plain_address_is_the_unrated_list(self):
@@ -517,6 +543,12 @@ class TestReviewUrl:
         assert view.review_url(view.SHOW_BEST) == "/dashboard?show=best"
         assert view.review_url(view.SHOW_ALL, "channel_a", offset=50, moment=7) == (
             "/dashboard?show=all&channel=channel_a&offset=50&moment=7"
+        )
+
+    def test_an_order_other_than_newest_first_is_spelled_out(self):
+        assert view.review_url(order=view.ORDER_NEWEST) == "/dashboard"
+        assert view.review_url(view.SHOW_ALL, order=view.ORDER_LAUGHING, offset=50) == (
+            "/dashboard?show=all&order=laughing&offset=50"
         )
 
     def test_a_channel_name_is_made_safe_for_an_address(self):

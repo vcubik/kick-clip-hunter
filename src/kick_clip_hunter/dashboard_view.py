@@ -29,6 +29,13 @@ SHOWS = (SHOW_UNRATED, SHOW_ALL, SHOW_BEST)
 SHOW_LABELS = {SHOW_UNRATED: "Unrated", SHOW_ALL: "All", SHOW_BEST: "Best"}
 # A clip rated this or higher is listed under "Best".
 BEST_RATING_MIN = 4
+# How a list is ordered: newest first, or the moments the most people
+# laughed around first - which told a good clip from a poor one far better
+# than anything else measured on the rated ones (see detector.laughing_people).
+ORDER_NEWEST = "newest"
+ORDER_LAUGHING = "laughing"
+ORDERS = (ORDER_NEWEST, ORDER_LAUGHING)
+ORDER_LABELS = {ORDER_NEWEST: "Newest first", ORDER_LAUGHING: "Most laughing first"}
 
 # How many colours chat usernames are spread over (nick-1 to nick-6 in the
 # stylesheet).
@@ -442,15 +449,23 @@ def emote_source(picture: str) -> str:
 
 
 def review_url(
-    show: str = SHOW_UNRATED, channel: str | None = None, *, offset: int = 0, moment: int | None = None
+    show: str = SHOW_UNRATED,
+    channel: str | None = None,
+    *,
+    order: str = ORDER_NEWEST,
+    offset: int = 0,
+    moment: int | None = None,
 ) -> str:
-    """The review page for one list, channel, page and open moment. Whatever
-    is at its default is left out, so the plain address is the unrated list."""
+    """The review page for one list, channel, order, page and open moment.
+    Whatever is at its default is left out, so the plain address is the
+    unrated list, newest first."""
     query: dict[str, Any] = {}
     if show != SHOW_UNRATED:
         query["show"] = show
     if channel:
         query["channel"] = channel
+    if order != ORDER_NEWEST:
+        query["order"] = order
     if offset:
         query["offset"] = offset
     if moment is not None:
@@ -522,15 +537,16 @@ def _same_stream(group: dict[str, Any], started: datetime | None, day: date) -> 
 def queue_groups(
     rows: Iterable[Row], today: date, reactions: Mapping[int, str | None] | None = None
 ) -> list[dict[str, Any]]:
-    """The queue's rows, given newest first, grouped by the stream they came
-    from. `reactions` maps a moment's id to what chat said most in it, where
-    that is known (see chat_trace.reaction_words).
+    """The queue's rows grouped by the stream they came from, in the order
+    they are given. `reactions` maps a moment's id to what chat said most in
+    it, where that is known (see chat_trace.reaction_words).
 
     A stream is a channel and the time it went live, which is known for any
     moment that recorded how far into the stream it was. Moments without it
     (imported clips, or Kick's API not answering at the time) are grouped by
-    channel and day instead. Groups are in the order of their newest moment,
-    so the list as a whole still reads newest first.
+    channel and day instead. Groups are in the order of their first moment,
+    so the list as a whole still reads in the order it was given - newest
+    first, or the most laughing first with each stream where its best is.
     """
     groups: list[dict[str, Any]] = []
     for row in rows:
@@ -563,9 +579,19 @@ def queue_groups(
                 "downloaded": row["downloaded_at"] is not None,
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
+                "laughing": row["laughing"],
+                "laughing_words": laughing_words(row["laughing"]),
             }
         )
     return groups
+
+
+def laughing_words(laughing: int | None) -> str | None:
+    """What a moment's count of people laughing says on hovering it, or
+    None where it was not counted."""
+    if laughing is None:
+        return None
+    return f"{laughing} {'person' if laughing == 1 else 'people'} laughed around it"
 
 
 def empty_queue_words(show: str, channel: str | None, newest: datetime | None, today: date) -> dict[str, str]:

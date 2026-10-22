@@ -32,7 +32,7 @@ import json
 import sqlite3
 import statistics
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from . import detector
@@ -68,6 +68,9 @@ class ReplayedMoment:
     # Everything the detector measured when it fired, as a moment is stored
     # with it. None only for one that was not made by `replay`.
     spike: detector.Spike | None = None
+    # How many people laughed around it (see detector.laughing_people), as
+    # it is stored with that too. None like `spike`.
+    laughing: int | None = None
 
     def clip_seconds(self, tuning: Tuning) -> float:
         """Length of the clip this moment would get: pre-roll, the detection
@@ -229,7 +232,7 @@ def replay(
                 settings,
             )
             if laughing >= detector.laughing_needed(moment.spike.baseline_unique_senders, settings):
-                moments.append(moment)
+                moments.append(replace(moment, laughing=laughing))
 
     def run_session_until(time: float) -> None:
         """The session polls on its own schedule, between messages too."""
@@ -296,6 +299,34 @@ def replay(
     finally:
         detector.forget(channel)
     return moments
+
+
+def laughing_around(messages: list[Message], fired_at: float, keywords: dict[str, float], tuning: Tuning) -> int:
+    """How many people laughed around a moment that fired at `fired_at`, as
+    the service counts it when the moment closes (detector.laughing_people):
+    the same messages left out, the same signs of laughing. `messages` are
+    the channel's chat from around then and `keywords` its emote keywords,
+    as load_between gives them - only those from SHORT_WINDOW_SECONDS
+    before it to KEEP_LAUGHING_SECONDS after are counted. For a moment
+    stored before the count was kept (scripts/backfill_laughing.py)."""
+    channel = f"replay {next(_runs)}"
+    settings = tuning.detector
+    weights = detector.keyword_weights(keywords, settings)
+    since = fired_at - detector.SHORT_WINDOW_SECONDS
+    until = fired_at + detector.KEEP_LAUGHING_SECONDS
+    try:
+        for message in messages:
+            if since <= message.time <= until:
+                # Too little of it for the detector to judge anything, so
+                # all this does is hold it as it would be held live.
+                detector.record_message(
+                    channel, sender=message.sender, content=message.content, now=message.time, settings=settings
+                )
+        return detector.laughing_people(
+            channel, since, until, detector.laugh_emote_names(weights, settings.added_laugh_emote_patterns), settings
+        )
+    finally:
+        detector.forget(channel)
 
 
 def summarise(moments: list[ReplayedMoment], hours: float, tuning: Tuning) -> Summary:

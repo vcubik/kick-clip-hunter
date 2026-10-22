@@ -304,6 +304,22 @@ class TestKeepingAMoment:
 
         assert len(service.moments()) == 1
 
+    async def test_it_is_kept_with_how_many_people_laughed_around_it(self, service):
+        fires, keeps = self.sizes()
+        service.quiet_seconds = 0.5
+        service.watch(CHANNEL)
+        await set_up(service, reacting_share=self.SHARE)
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+        await service.crowd_laughs(CHANNEL, people=fires)
+        await service.clock_tick()
+
+        for number in range(keeps + 2 - fires):
+            await service.chat(CHANNEL, f"latecomer{number}", "xd")
+        await service.settle()
+
+        (moment,) = service.moments()
+        assert moment["laughing"] == keeps + 2
+
     async def test_a_channel_that_keeps_every_moment_keeps_it(self, service):
         fires, _keeps = self.sizes()
         service.watch(CHANNEL)
@@ -328,6 +344,8 @@ class TestKeepingAMoment:
 
         (moment,) = service.moments()
         assert moment["reason"] == "laugh"
+        # Counted all the same, for the queue to be ordered by.
+        assert moment["laughing"] == fires
 
 
 @pytest.fixture

@@ -140,6 +140,7 @@ from .db import (
     update_moment_clip_path,
     update_moment_downloaded,
     update_moment_frame_embedding,
+    update_moment_laughing,
     update_moment_notes,
     update_moment_rating,
     update_moment_sound_embedding,
@@ -1634,36 +1635,38 @@ async def _run_moment_session(session: _MomentSession) -> None:
         # while this one's clip is still being cut.
         _moment_sessions.pop(session.channel, None)
 
-    if not session.asked_for:
-        # Whoever laughs is counted up to a minute after the moment fired,
-        # however soon it closed - its clip waits for footage after it anyway.
-        until = session.triggered_at + detector.KEEP_LAUGHING_SECONDS
-        if until > time.monotonic():
-            await asyncio.sleep(until - time.monotonic())
-        laughing = detector.laughing_people(
-            session.channel,
-            session.triggered_at - detector.SHORT_WINDOW_SECONDS,
-            until,
-            session.laugh_names,
-            session.tuned.detector,
+    # Whoever laughs is counted up to a minute after the moment fired,
+    # however soon it closed - its clip waits for footage after it anyway. A
+    # moment asked for in chat is counted too, though it is kept whatever
+    # the count: the queue can be ordered by it.
+    until = session.triggered_at + detector.KEEP_LAUGHING_SECONDS
+    if until > time.monotonic():
+        await asyncio.sleep(until - time.monotonic())
+    laughing = detector.laughing_people(
+        session.channel,
+        session.triggered_at - detector.SHORT_WINDOW_SECONDS,
+        until,
+        session.laugh_names,
+        session.tuned.detector,
+    )
+    if not _laughing_enough(session, laughing):
+        conn = get_connection()
+        try:
+            delete_moment(conn, session.moment_id)
+        finally:
+            conn.close()
+        logger.info(
+            "[%s] moment %d dropped: %d people laughed, %d needed in a chat of %d",
+            session.channel, session.moment_id, laughing,
+            detector.laughing_needed(session.baseline_unique_senders, session.tuned.detector),
+            session.baseline_unique_senders,
         )
-        if not _laughing_enough(session, laughing):
-            conn = get_connection()
-            try:
-                delete_moment(conn, session.moment_id)
-            finally:
-                conn.close()
-            logger.info(
-                "[%s] moment %d dropped: %d people laughed, %d needed in a chat of %d",
-                session.channel, session.moment_id, laughing,
-                detector.laughing_needed(session.baseline_unique_senders, session.tuned.detector),
-                session.baseline_unique_senders,
-            )
-            return
+        return
 
     conn = get_connection()
     try:
         update_moment_window_end(conn, session.moment_id, session.window_end.isoformat())
+        update_moment_laughing(conn, session.moment_id, laughing)
     finally:
         conn.close()
     logger.info(
@@ -2947,18 +2950,21 @@ async def dashboard(
     request: Request,
     show: str = dashboard_view.SHOW_UNRATED,
     channel: str | None = None,
+    order: str = dashboard_view.ORDER_NEWEST,
     offset: int = 0,
     moment: int | None = None,
 ):
     """The review page: a queue of moments and the one that is open.
 
     `show` picks the list (unrated, all, best), `channel` narrows it to one
-    channel and `offset` pages through it. `moment` is the one to open; left
+    channel, `order` says whether the newest or the most laughing come first
+    and `offset` pages through it. `moment` is the one to open; left
     out, it is the first of the list, and with an empty list the page says
     what the service is doing instead.
     """
     show = show if show in dashboard_view.SHOWS else dashboard_view.SHOW_UNRATED
     channel = channel or None
+    order = order if order in dashboard_view.ORDERS else dashboard_view.ORDER_NEWEST
     today = _today()
 
     conn = get_connection()
@@ -2970,14 +2976,21 @@ async def dashboard(
         # there a minute ago may be past its end now: show the last one then.
         offset = dashboard_view.page_offset(offset, MOMENTS_PAGE_SIZE, counts[show])
         rows = get_recent_moments(
-            conn, limit=MOMENTS_PAGE_SIZE, offset=offset, channel_slug=channel, **SHOW_FILTERS[show]
+            conn,
+            limit=MOMENTS_PAGE_SIZE,
+            offset=offset,
+            channel_slug=channel,
+            most_laughing=order == dashboard_view.ORDER_LAUGHING,
+            **SHOW_FILTERS[show],
         )
         activity = _queue_activity(conn, rows)
         spark_top = chat_trace.spark_top(chat["all"] for chat in activity.values())
         groups = dashboard_view.queue_groups(rows, today, {key: chat["said"] for key, chat in activity.items()})
         for group in groups:
             for item in group["rows"]:
-                item["href"] = dashboard_view.review_url(show, channel, offset=offset, moment=item["id"])
+                item["href"] = dashboard_view.review_url(
+                    show, channel, order=order, offset=offset, moment=item["id"]
+                )
                 chat = activity.get(item["id"])
                 item["spark"] = chat_trace.spark_paths(chat["all"], chat["laugh"], spark_top) if chat else None
 
@@ -3003,25 +3016,35 @@ async def dashboard(
                         "show": name,
                         "label": dashboard_view.SHOW_LABELS[name],
                         "count": counts[name],
-                        "href": dashboard_view.review_url(name, channel),
+                        "href": dashboard_view.review_url(name, channel, order=order),
                         "current": name == show,
                     }
                     for name in dashboard_view.SHOWS
                 ],
                 "channels": get_moment_channels(conn),
                 "selected_channel": channel,
+                "order": order,
+                "orders": [
+                    {"order": name, "label": dashboard_view.ORDER_LABELS[name]} for name in dashboard_view.ORDERS
+                ],
                 "groups": groups,
                 "empty": empty,
                 "paging": dashboard_view.pages(
                     offset,
                     MOMENTS_PAGE_SIZE,
                     counts[show],
-                    lambda other: dashboard_view.review_url(show, channel, offset=other),
+                    lambda other: dashboard_view.review_url(show, channel, order=order, offset=other),
+                ),
+                # The list's ends in its paging: newer and older, or more and fewer laughing.
+                "paging_words": (
+                    ("More laughing", "Less laughing")
+                    if order == dashboard_view.ORDER_LAUGHING
+                    else ("Newer", "Older")
                 ),
                 "moment": _open_moment(conn, opened, today) if opened is not None else None,
                 # Offered from an empty list when there is something to go through elsewhere.
                 "rated_href": (
-                    dashboard_view.review_url(dashboard_view.SHOW_ALL, channel)
+                    dashboard_view.review_url(dashboard_view.SHOW_ALL, channel, order=order)
                     if show != dashboard_view.SHOW_ALL and counts[dashboard_view.SHOW_ALL]
                     else None
                 ),
@@ -3771,6 +3794,8 @@ def _moment_from_recording(
                 keyword_hits=spike.keyword_hits,
                 detected_at=found.fired_at.isoformat(),
             )
+            if found.laughing is not None:
+                update_moment_laughing(conn, moment_id, found.laughing)
             clip = cut.with_name(f"moment_{moment_id}.mp4")
             try:
                 cut.replace(clip)

@@ -430,6 +430,31 @@ class TestReplay:
 
         assert len(replayed(detector=settings)) == 1
 
+    def evening_joined_slowly(self, stream, joining: int) -> int:
+        """A chat of forty, a burst that fires, and `joining` more people
+        laughing one at a time over the next minute, too far apart to fire
+        again. Returns how many people laughed around the moment."""
+        firing = detector._dynamic_min_reaction_unique(40)
+        stream.chatter(300, chatters=40)
+        stream.burst(people(firing), "xDDD")
+        stream.burst(people(joining, "joined"), "xd", spacing=detector.SHORT_WINDOW_SECONDS / 2 + 1)
+        stream.chatter(120, chatters=40)
+        return firing + joining
+
+    def test_a_kept_moment_says_how_many_people_laughed_around_it(self, stream):
+        laughed = self.evening_joined_slowly(stream, joining=4)
+
+        (moment,) = replayed()
+
+        assert moment.laughing == laughed
+
+    def test_the_same_count_is_had_afterwards_from_the_chat_around_it(self, stream):
+        self.evening_joined_slowly(stream, joining=4)
+        (moment,) = replayed()
+        messages, keywords = load()
+
+        assert replay.laughing_around(messages, moment.time, keywords, tuning.recommended()) == moment.laughing
+
     def test_a_clip_command_is_left_out_as_it_is_live(self, stream):
         # Who posted a stored message, with what badges, is not kept with it,
         # so a replay makes no clips on command - and, like the service, it
