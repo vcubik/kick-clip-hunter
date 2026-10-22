@@ -762,8 +762,8 @@ class TestTheSettingsPage:
         page = await settings_page(service, CHANNEL)
 
         form = page.one("form", data_tuning=True)
-        assert locked(form) == [False, False] + [True] * (len(form.find("fieldset")) - 2)
-        first, second, *_ = form.find("fieldset")
+        assert locked(form) == [False, False, False] + [True] * (len(form.find("fieldset")) - 3)
+        first, second, third, *_ = form.find("fieldset")
         assert first.one("h2").text == "A clip on command"
         assert [control.attrs["data-setting"] for control in first.find(data_setting=True)] == [
             "clip_commands",
@@ -772,11 +772,16 @@ class TestTheSettingsPage:
         assert second.one("h2").text == "The bot in chat"
         assert [control.attrs["data-setting"] for control in second.find(data_setting=True)] == [
             "bot_writes",
+            "bot_tells_live",
+            "bot_tells_recordings",
+            "bot_tells_moments",
             "bot_tells_clips",
             "record_commands",
             "stop_commands",
             "status_commands",
+            "help_commands",
         ]
+        assert third.one("h2").text == "What the bot says"
         assert (shown(page, "clip_commands"), "is-set" in row_of(page, "clip_commands").classes) == ("!clip", True)
         assert rest_button(page, "clip_commands").text == "Recommended: none"
         assert form.attrs["data-tuning"] == f"/channels/{CHANNEL}/tuning"
@@ -863,14 +868,16 @@ class TestItsSections:
 
         side = page.one("aside", class_="set-side")
         assert side.one(role="tablist").attrs["aria-orientation"] == "vertical"
+        # The bot's come after detection's.
         assert [tab.text for tab in tabs(page)] == [
-            *(title for _key, title, _lead in tuning.GROUPS[2:]),
+            *(title for _key, title, _lead in tuning.GROUPS[3:]),
+            *(title for _key, title, _lead in tuning.GROUPS[1:3]),
             "Notifications",
             "Try on stored chat",
         ]
         assert [(tab.attrs["aria-selected"], tab.attrs["tabindex"]) for tab in tabs(page)] == [
             ("true", "0"),
-            *[("false", "-1")] * 4,
+            *[("false", "-1")] * 6,
         ]
         for tab in tabs(page):
             pane = page.one(id=tab.attrs["aria-controls"])
@@ -911,8 +918,8 @@ class TestItsSections:
         assert open_section(page) == tuning.SIGNALS
         form = page.one("form", data_tuning=True)
         said = [[note.text for note in fieldset.find("p", class_="set-locked")] for fieldset in form.find("fieldset")]
-        assert [bool(notes) for notes in said] == locked(form) == [False, False, True, True, True]
-        assert said[2] == [
+        assert [bool(notes) for notes in said] == locked(form) == [False, False, False, True, True, True]
+        assert said[3] == [
             f"These are the settings for all channels, which {CHANNEL} goes by. To change them for {CHANNEL} "
             "alone, switch its own settings on."
         ]
@@ -936,6 +943,8 @@ class TestItsSections:
             tuning.MOMENTS: "2 set",
             tuning.SIGNALS: "1 set",
             tuning.CLIPS: "",
+            tuning.BOT: "",
+            tuning.MESSAGES: "",
             "notifications": "",
         }
 

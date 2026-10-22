@@ -1,13 +1,16 @@
 """The bot in chat: what it writes in a channel's chat, and how.
 
 A channel can have the bot write in its chat - its "Write in chat" setting,
-off to begin with, like everything else here (see tuning.py). It then says
-there when a recording of the stream starts and when it ends, when a clip
-of it was made if that is asked for too, and it answers the commands the
-channel's streamer and moderators post: start a recording, stop it, say how
-things stand. What it says is worded here, in sentences short enough for a
-chat (the `*_words` functions), from what main.py tells it; main.py decides
-when, and carries the commands out.
+off to begin with, like everything else here (see tuning.py). It then tells
+there of what the channel's settings switch on (`Announcement`): the stream
+starting, a recording of it starting and ending, a moment caught, a clip
+made; it says a message of the channel's own every so often while the
+stream is on (`repeat_due`); and it answers the commands the channel's
+streamer and moderators post: start a recording, stop it, say how things
+stand, say what the commands are. What it says is worded here, in sentences
+short enough for a chat (the `*_words` functions), from what main.py tells
+it - or, for what it tells of, in the channel's own words where it set them
+(`worded`); main.py decides when, and carries the commands out.
 
 It writes as an account, each platform's own way (`Writer`): on Kick through
 the public API, as the account signed in for the bot (kick_auth.py); on
@@ -35,7 +38,7 @@ from typing import Protocol
 
 import httpx
 
-from . import account_tokens, kick_auth, kick_client, stream_recording, twitch_auth, twitch_client
+from . import account_tokens, kick_auth, kick_client, stream_recording, tuning, twitch_auth, twitch_client
 from .account_tokens import AccountToken, SignInNeeded
 from .dashboard_view import count_words, stream_time_words
 
@@ -66,6 +69,43 @@ class Channel:
 
 
 # -- what it says -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Announcement:
+    """Something the bot tells of in chat by itself: the field of a
+    channel's settings (tuning.Tuning) that switches it on, and the one
+    with the channel's own words for it."""
+
+    switch: str
+    words: str
+
+
+LIVE = Announcement("bot_tells_live", "bot_live_message")
+RECORDING_STARTED = Announcement("bot_tells_recordings", "bot_started_message")
+RECORDING_ENDED = Announcement("bot_tells_recordings", "bot_ended_message")
+MOMENT = Announcement("bot_tells_moments", "bot_moment_message")
+CLIP = Announcement("bot_tells_clips", "bot_clip_message")
+
+
+def worded(own: str, built_in: str, **fills: str) -> str:
+    """A message in a channel's `own` words, with what is in braces filled
+    in - or the bot's, `built_in`, where it has none. Own words that can't
+    be filled in (tuning.py checks that they can) are not left unsaid: the
+    bot's are said instead."""
+    if not own:
+        return built_in
+    try:
+        return own.format_map(fills)
+    except (KeyError, ValueError, IndexError, AttributeError):
+        logger.warning("could not fill in the bot's message %r", own)
+        return built_in
+
+
+def live_words(tracked: bool) -> str:
+    """What the bot says when the stream starts: that it looks for clips,
+    where it does."""
+    return "Watching chat for clips this stream." if tracked else "Here for this stream."
 
 
 def length_words(seconds: float) -> str:
@@ -110,6 +150,15 @@ def ended_words(ended_by: str, kept: bool, seconds: float = 0.0) -> str:
     if not seconds:
         return f"{said} What was recorded is being saved."
     return f"{said} {length_words(seconds)} of the stream recorded."
+
+
+def ended_fills(ended_by: str, kept: bool, seconds: float = 0.0) -> dict[str, str]:
+    """What a channel's own words for a recording that ended fill in: why it
+    ended, and how much of the stream it holds - "nothing", or "some" where
+    that could not be measured."""
+    reason = ENDED_WORDS.get(ended_by, ENDED_WORDS[stream_recording.STOPPED])
+    length = length_words(seconds) if kept and seconds else ("some" if kept else "nothing")
+    return {"reason": reason, "length": length}
 
 
 def recording_already_words(seconds: float, waiting: bool) -> str:
@@ -177,6 +226,70 @@ def clip_words(seconds: float, stream_seconds: int | None) -> str:
     into = stream_time_words(stream_seconds)
     where = f", at {into} into the stream" if into else ""
     return f"Clip saved: {length_words(seconds)}{where}."
+
+
+def moment_words(stream_seconds: int | None, asked_by: str | None) -> str:
+    """What the bot says when a moment is caught: asked for by someone, or
+    set off by chat, and how far into the stream."""
+    into = stream_time_words(stream_seconds)
+    where = f" at {into} into the stream" if into else ""
+    if asked_by:
+        return f"Clip asked for by {asked_by}{where}."
+    return f"Moment caught{where}."
+
+
+# What each of the bot's commands does, as its answer to a command asking
+# for them says it.
+COMMAND_WORDS = (
+    ("clip_commands", "a clip"),
+    ("record_commands", "start recording"),
+    ("stop_commands", "stop recording"),
+    ("status_commands", "how things stand"),
+    ("help_commands", "these commands"),
+)
+
+
+def help_words(tuned: tuning.Tuning) -> str:
+    """The answer to a command asking for the channel's commands: each,
+    with what it does."""
+    said = []
+    for field, does in COMMAND_WORDS:
+        commands = sorted(getattr(tuned, field))
+        if commands:
+            said.append(f"{' or '.join(commands)} - {does}")
+    return f"Commands: {'; '.join(said)}." if said else "No commands here."
+
+
+def repeat_due(now: datetime, live_since: datetime | None, last_said: datetime | None, minutes: float) -> bool:
+    """Whether the channel's message of its own is to be said again: while
+    the stream is on (`live_since`), `minutes` after it started or after it
+    was last said in it, whichever came later."""
+    if live_since is None:
+        return False
+    since = max(live_since, last_said) if last_said is not None else live_since
+    return (now - since).total_seconds() >= minutes * 60
+
+
+class LiveWatch:
+    """Which channels have just been seen to start a stream, from how each
+    was last seen (recording_manager.looks()): one that is live since a time
+    it was not before. A channel is first seen as it is - one already live
+    then, as when the service has just started, has not just started."""
+
+    def __init__(self) -> None:
+        # When each channel's stream was last seen to have started, by name.
+        self._since: dict[str, datetime | None] = {}
+
+    def started(self, seen: dict[str, datetime | None]) -> list[str]:
+        """The channels of `seen` (live since, by name) whose stream started
+        since they were last seen."""
+        started = [
+            slug
+            for slug, since in seen.items()
+            if since is not None and slug in self._since and self._since[slug] != since
+        ]
+        self._since = dict(seen)
+        return started
 
 
 # -- how it writes ------------------------------------------------------------

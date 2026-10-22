@@ -240,6 +240,8 @@ def _reset_module_state() -> None:
         main._twitch_tokens = None
         main._chat_bot = None
         main._bot_commands = main.chat_bot.Recent()
+        main._live_watch = main.chat_bot.LiveWatch()
+        main._repeated_at.clear()
         main._kick_sign_ins.clear()
         main._tiktok_reader = None
         main._notifier = None

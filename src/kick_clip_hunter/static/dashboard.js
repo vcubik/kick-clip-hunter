@@ -2145,10 +2145,12 @@
 
   // What a setting's field says, the way the service takes it. A number
   // typed with a comma is the same number; one that is no number at all is
-  // sent as nothing, and the service says what the field takes.
+  // sent as nothing, and the service says what the field takes. A message
+  // the bot writes is one line, as the service keeps it.
   function settingValue(field) {
     if (field.dataset.kind === "switch") return one('[aria-pressed="true"]', field).dataset.enabled === "1";
     if (isList(field)) return listed(field);
+    if (field.dataset.kind === "text") return field.value.split(/\s+/).filter(Boolean).join(" ");
     const typed = field.value.trim().replace(",", ".");
     return typed === "" || Number.isNaN(Number(typed)) ? null : Number(typed);
   }
@@ -2174,6 +2176,7 @@
       let atRest;
       if (field.dataset.kind === "switch") atRest = value === (rest.dataset.rest === "1");
       else if (isList(field)) atRest = JSON.stringify([...value].sort()) === JSON.stringify(JSON.parse(rest.dataset.rest).sort());
+      else if (field.dataset.kind === "text") atRest = value === rest.dataset.rest;
       else atRest = value === Number(rest.dataset.rest);
       row.classList.toggle("is-set", !atRest);
       rest.disabled = atRest;

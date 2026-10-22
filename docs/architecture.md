@@ -28,8 +28,9 @@ Watchlist (streamers, each on its platform - see platforms.py)
        segment on to it as well (stream_recording) -> one video file when it is over
     -> the bot (chat_bot), where a channel has it: a command in its chat starts or stops
        that recording or asks how things stand, and what it says goes back into the
-       chat - on Kick through the public API as an account signed in for it, on Twitch
-       through Helix as the account chat is read as
+       chat, as do the stream starting, a recording, a moment and a clip where the
+       channel has it tell of them - on Kick through the public API as an account signed
+       in for it, on Twitch through Helix as the account chat is read as
     -> notifications (notify), where .env says: a clip saved, a recording started or
        saved or not, a part of the Health page that needs a look and looks fine again -
        to a Telegram chat through the Bot API, to a Discord channel through its webhook
@@ -254,18 +255,26 @@ Module map (`src/kick_clip_hunter/`):
   opens the moment without the detector (`reason=command`, its figures zero), so it
   needs no chat history, only a tracked channel; the detector never sees a command, and
   a replay leaves commands out without counting them. And the bot in chat (see
-  `chat_bot.py`): whether it writes in the channel's chat (`bot_writes`) and says there
-  when a clip was made (`bot_tells_clips`), and the whole messages that ask it to start a
-  recording, stop it, or say how things stand (`record_commands`, `stop_commands`,
-  `status_commands`; `Tuning.bot_command` says which a message is) - all off, and none,
+  `chat_bot.py`): the whole messages that ask it to start a recording, stop it, say how
+  things stand or say what the commands are (`record_commands`, `stop_commands`,
+  `status_commands`, `help_commands`; `Tuning.bot_command` says which a message is) - none
   to begin with. A message may be in one list of commands at the most (`COMMAND_LISTS`,
-  refused in `check`). These seven are a channel's alone (`Setting.per_channel`,
+  refused in `check`). The commands are a channel's alone (`Setting.per_channel`,
   `PER_CHANNEL`): not on offer for all channels (posted there they are refused, and one
-  stored there holds for nobody), in force for a channel whether or not its "Own
-  settings" switch is on, and the first two sections of a channel's Settings page - the
-  only ones that are not locked while the switch is off. The page's script sends only
-  what is not locked, so saving them leaves alone the values a channel keeps for when it
-  goes by its own again
+  stored there holds for nobody). What the bot does besides is in two sections that can be
+  set for all channels and for one (`Setting.either_way`): whether it writes in a
+  channel's chat at all (`bot_writes`, off to begin with) and what it tells of there by
+  itself (`bot_tells_live`, `bot_tells_recordings` - the only one on to begin with -
+  `bot_tells_moments`, `bot_tells_clips`), and "What the bot says": each of those in words
+  of the channel's own (`bot_*_message`, kind `TEXT`, "" for the bot's own), checked to
+  have in braces only what the message fills in (`Setting.fills`, `_check_fills`), and a
+  message said every `bot_repeat_minutes` while the stream is on (`bot_repeat_message`).
+  Both kinds hold of a channel's own whether or not its "Own settings" switch is on
+  (`EITHER_WAY`, what `db.get_tuning_in_force` reads for a channel without its own), and
+  are the first three sections of a channel's Settings page - the only ones that are not
+  locked while the switch is off; on the page for all channels the bot's two come after
+  detection's. The page's script sends only what is not locked, so saving them leaves
+  alone the values a channel keeps for when it goes by its own again
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
   rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`,
   the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`
@@ -300,17 +309,24 @@ Module map (`src/kick_clip_hunter/`):
   moderator (`_bot_command`) - whatever the switches say, as the buttons on the Channels
   page work whatever they say, and once the messages are stored (not if they could not
   be: the platform delivers them again) has each carried out once (`_carry_out`: a
-  recording started or stopped as the buttons do it, or how things stand). The detector
-  never sees one. What the bot says goes through `_tell`, which writes in a channel's
-  chat in the background where the channel has the bot writing there:
-  `_start_stream_recording` and `_end_stream_recording` say so whoever started or ended
-  the recording, and `_create_clip_background` says a clip was saved where that is asked
-  for too. The bot's Kick account signs in through `GET /bot/kick/sign_in` (to Kick's
+  recording started or stopped as the buttons do it, how things stand, or the commands).
+  The detector never sees one. What the bot says goes through `_tell`, which writes in a
+  channel's chat in the background where the channel has the bot writing there - and,
+  for an `Announcement`, where the channel has that switched on, in its own words where
+  it set them: `_start_stream_recording` and `_end_stream_recording` say so whoever
+  started or ended the recording, `_open_moment_session` says a moment was caught,
+  `_create_clip_background` that a clip was saved. `_keep_the_bot_talking` runs
+  `_bot_round` every `BOT_ROUND_SECONDS`: from `recording_manager.looks()` it says that a
+  stream has started (`chat_bot.LiveWatch`) and the channel's message of its own where it
+  is due (`chat_bot.repeat_due`, last said in `_repeated_at`). The bot's Kick account signs in through `GET /bot/kick/sign_in` (to Kick's
   consent page) and `GET /bot/kick/signed_in` (where Kick sends the browser back:
   `signed_in.html` says what came of it); the sign-ins under way are in memory
   (`_kick_sign_ins`, by their state)
 - `chat_bot.py` — the bot in chat. What it says, worded for a chat (`started_words`,
-  `ended_words`, `status_words`, `clip_words` - in English, like the dashboard), and how it
+  `ended_words`, `status_words`, `clip_words`, `live_words`, `moment_words`, `help_words` -
+  in English, like the dashboard) or in a channel's own words with what is in braces
+  filled in (`worded`; an `Announcement` names the settings that switch it on and word it),
+  when on its own it says something (`LiveWatch`, `repeat_due`), and how it
   writes on each platform (`KickWriter`, `TwitchWriter`; nothing on YouTube, read as a
   visitor who is not signed in, nor on TikTok, read as nobody while a stream is recorded -
   its commands are carried out without an answer there). A writer

@@ -728,19 +728,28 @@ def _bot_channel(row) -> chat_bot.Channel:
     )
 
 
-def _tell(broadcaster_user_id: int, text: str, *, of_a_clip: bool = False) -> None:
+def _tell(
+    broadcaster_user_id: int, text: str, about: chat_bot.Announcement | None = None, **fills: str
+) -> None:
     """Has the bot write `text` in a watched channel's chat, if the channel
-    has it writing there - and, `of_a_clip`, saying when a clip is made as
-    well. In the background: nothing waits for it. What holds is the
-    channel's settings as they are now."""
+    has it writing there. A message `about` something the bot tells of by
+    itself is written only where the channel has that switched on too, and
+    in the channel's own words where it set them, with `fills` (and the
+    channel's name) filled in; one about nothing is an answer to a command.
+    In the background: nothing waits for it. What holds is the channel's
+    settings as they are now."""
     conn = get_connection()
     try:
         row = get_streamer_by_id(conn, broadcaster_user_id)
         tuned = _tuning(conn, broadcaster_user_id)
     finally:
         conn.close()
-    if row is None or not tuned.bot_writes or (of_a_clip and not tuned.bot_tells_clips):
+    if row is None or not tuned.bot_writes:
         return
+    if about is not None:
+        if not getattr(tuned, about.switch):
+            return
+        text = chat_bot.worded(getattr(tuned, about.words), text, channel=row["slug"], **fills)
     _track_task(_bot().say(_bot_channel(row), text))
 
 
@@ -811,9 +820,9 @@ def _status_answer(row) -> str:
 
 def _carry_out(message: ChatMessage, command: str) -> None:
     """Does what one of the bot's commands asks: starts or ends the
-    recording of the channel's stream, or says how things stand - answering
-    in chat where the channel has the bot writing there. A message that
-    comes again is not carried out again."""
+    recording of the channel's stream, says how things stand, or what the
+    channel's commands are - answering in chat where the channel has the
+    bot writing there. A message that comes again is not carried out again."""
     if not _bot_commands.first_time(message.message_id):
         return
     conn = get_connection()
@@ -828,10 +837,58 @@ def _carry_out(message: ChatMessage, command: str) -> None:
         answer = _record_on_command(row, message.sender)
     elif command == tuning.STOP:
         answer = _stop_on_command(row)
+    elif command == tuning.HELP:
+        answer = chat_bot.help_words(_tuning_now(row["broadcaster_user_id"]))
     else:
         answer = _status_answer(row)
     if answer:
         _tell(row["broadcaster_user_id"], answer)
+
+
+# How often the bot looks whether a channel's stream has started, and whether
+# its message of its own is due (see _bot_round).
+BOT_ROUND_SECONDS = 30
+# Which channels' streams have started since the last round.
+_live_watch = chat_bot.LiveWatch()
+# When each channel's message of its own was last said, by its id.
+_repeated_at: dict[int, datetime] = {}
+
+
+def _bot_round(now: datetime) -> None:
+    """Has the bot say, in each channel that has it writing there, that the
+    stream has started where it just has, and the channel's message of its
+    own where that is due - from how the recording loop last saw each
+    channel (recording_manager.looks)."""
+    looks = recording_manager.looks()
+    started = set(_live_watch.started({slug: look.live_since for slug, look in looks.items()}))
+    conn = get_connection()
+    try:
+        streamers = get_streamers(conn)
+    finally:
+        conn.close()
+    for row in streamers:
+        owner, slug = row["broadcaster_user_id"], row["slug"]
+        look = looks.get(slug)
+        if slug in started:
+            _tell(owner, chat_bot.live_words(bool(row["tracking_enabled"])), chat_bot.LIVE)
+        tuned = _tuning_now(owner)
+        live_since = look.live_since if look else None
+        if not (tuned.bot_writes and tuned.bot_repeat_message):
+            continue
+        if chat_bot.repeat_due(now, live_since, _repeated_at.get(owner), tuned.bot_repeat_minutes):
+            _repeated_at[owner] = now
+            _tell(owner, chat_bot.worded(tuned.bot_repeat_message, "", channel=slug))
+
+
+async def _keep_the_bot_talking() -> None:
+    """Has the bot say what it says by itself at a time of its own (see
+    _bot_round)."""
+    while True:
+        await asyncio.sleep(BOT_ROUND_SECONDS)
+        try:
+            _bot_round(datetime.now(timezone.utc))
+        except Exception:
+            logger.exception("the bot's round failed")
 
 
 # -- notifications -------------------------------------------------------------
@@ -1095,6 +1152,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_keep_looking_at_tunnel()),
         asyncio.create_task(_keep_telling_of_health()),
         asyncio.create_task(_keep_summing_up_days()),
+        asyncio.create_task(_keep_the_bot_talking()),
     ]
     reader = _start_reading_twitch_chat()
     if reader is not None:
@@ -1185,12 +1243,13 @@ def _remember_chat_identities(conn, messages: Iterable[ChatMessage]) -> None:
 
 def _tuning(conn, broadcaster_user_id: int) -> tuning.Tuning:
     """The settings the service goes by for a channel: what was set for all
-    channels, the channel's own on top where it goes by them (what is a
-    channel's alone, like its clip commands, either way), and the constants
+    channels, the channel's own on top where it goes by them (what holds of
+    a channel's own either way, like its clip commands and what the bot
+    says in its chat, either way), and the constants
     for everything nobody set (see tuning.py)."""
     global _tuning_values
     if _tuning_values is None:
-        in_force = get_tuning_in_force(conn, tuning.PER_CHANNEL)
+        in_force = get_tuning_in_force(conn, tuning.EITHER_WAY)
         _tuning_values = {owner: tuning.stored(texts) for owner, texts in in_force.items()}
     own = _tuning_values.get(broadcaster_user_id) if broadcaster_user_id != TUNING_FOR_ALL else None
     return tuning.tuned(_tuning_values.get(TUNING_FOR_ALL, {}), own)
@@ -1228,7 +1287,7 @@ def _own_values(conn, streamer) -> dict[str, tuning.Value]:
     where it goes by its own settings, otherwise only what is a channel's
     alone."""
     mine = tuning.stored(get_tuning(conn, streamer["broadcaster_user_id"]))
-    return mine if streamer["own_tuning"] else tuning.per_channel(mine)
+    return mine if streamer["own_tuning"] else tuning.either_way(mine)
 
 
 def _forget_tuning() -> None:
@@ -1425,7 +1484,9 @@ async def _create_clip_background(
     _tell(
         moment["broadcaster_user_id"],
         chat_bot.clip_words(clip.duration, moment["stream_elapsed_seconds"]),
-        of_a_clip=True,
+        chat_bot.CLIP,
+        length=chat_bot.length_words(clip.duration),
+        stream_time=dashboard_view.stream_time_words(moment["stream_elapsed_seconds"]) or "",
     )
     logger.info(
         "[%s] clip saved for moment %d: %s (%.0f s, with %.0f s before it and %.0f s after)",
@@ -1841,7 +1902,12 @@ def _end_stream_recording(slug: str, ended_by: str) -> bool:
             delete_stream_recording(conn, kept.recording_id)
     finally:
         conn.close()
-    _tell(kept.broadcaster_user_id, chat_bot.ended_words(ended_by, bool(writer.size), writer.seconds))
+    _tell(
+        kept.broadcaster_user_id,
+        chat_bot.ended_words(ended_by, bool(writer.size), writer.seconds),
+        chat_bot.RECORDING_ENDED,
+        **chat_bot.ended_fills(ended_by, bool(writer.size), writer.seconds),
+    )
     if not writer.size:
         shutil.rmtree(writer.folder, ignore_errors=True)
         logger.info("[%s] stream recording %d ended (%s) before any footage", slug, kept.recording_id, ended_by)
@@ -1908,7 +1974,7 @@ def _start_stream_recording(
         raise _NotStarted(500, "Could not make a place to keep the recording. The server log says why.") from None
     look = recording_manager.looks().get(slug)
     live = None if look is None else look.live_since is not None
-    _tell(broadcaster_user_id, chat_bot.started_words(live))
+    _tell(broadcaster_user_id, chat_bot.started_words(live), chat_bot.RECORDING_STARTED)
     _notify(
         "notify_recordings",
         notify.recording_started_note(
@@ -6352,6 +6418,14 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
     # the session closing and its clip-cut task existing - both would
     # otherwise look "idle" to _shutdown_when_idle for the moment in between.
     _track_task(_run_moment_session(session))
+    asked_by = message.sender if spike is _COMMANDED else None
+    _tell(
+        message.broadcaster_user_id,
+        chat_bot.moment_words(stream_elapsed, asked_by),
+        chat_bot.MOMENT,
+        stream_time=dashboard_view.stream_time_words(stream_elapsed) or "",
+        by=asked_by or "",
+    )
     stream_time = str(timedelta(seconds=stream_elapsed)) if stream_elapsed is not None else "unknown"
     logger.info(
         "MOMENT detected in [%s] (%s) at stream time %s: %d msgs, %d emotes, %d keyword hits in %ds, score=%.2f",

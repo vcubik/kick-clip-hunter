@@ -102,9 +102,15 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   (`POST /notifications/setup`), holding at once, `.env` holding for what was never set there;
   the token and the webhook are never put on the page. A channel's page begins with what is
   its own whatever it goes by:
-  its clips on command, and "The bot in chat" - whether the bot writes in its chat, and the
+  its clips on command; "The bot in chat" - whether the bot writes in its chat, what it tells
+  of there by itself (the stream starting, recordings, a moment caught, a clip made), and the
   messages that ask it for something - with a sentence on as whom the bot writes on the
-  channel's platform. `GET /dashboard/health` says
+  channel's platform; and "What the bot says" - each of those messages in words of its own,
+  a field each that shows the bot's own words while it is empty (a word in braces, such as
+  `{stream_time}`, is filled in; the caption says which), and a message said every so many
+  minutes while the stream is on. The page for all channels has the bot's two sections
+  too, without the commands, after detection's; a channel's own values of them hold over
+  them whatever it goes by. `GET /dashboard/health` says
   whether what the service depends on is there (see `health.py` below): when the last webhook
   arrived and when each channel's chat last spoke, what the last check of Kick's chat
   subscriptions found - with a button that checks now, and the list of the times Kick was found to

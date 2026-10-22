@@ -5,10 +5,12 @@ chat is read as - against the fake platforms, through the real clients.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 
-from kick_clip_hunter import chat_bot, kick_auth, stream_recording, twitch_auth
+from kick_clip_hunter import chat_bot, kick_auth, stream_recording, tuning, twitch_auth
 from kick_clip_hunter.chat_bot import CannotWrite, Channel, ChatBot, Status
 from tests.support.bot import kick_bot_signed_in, twitch_signed_in
 from tests.support.kick_api import CLIENT_ID, CLIENT_SECRET
@@ -131,6 +133,85 @@ class TestWhatItSays:
         )
 
         assert len(longest) < chat_bot.MAX_LENGTH
+
+    def test_the_stream_starting_says_whether_it_looks_for_clips(self):
+        assert chat_bot.live_words(True) == "Watching chat for clips this stream."
+        assert chat_bot.live_words(False) == "Here for this stream."
+
+    def test_a_moment_caught_says_who_asked_for_it_and_how_far_into_the_stream(self):
+        assert chat_bot.moment_words(5025, None) == "Moment caught at 1:23:45 into the stream."
+        assert chat_bot.moment_words(None, "a_mod") == "Clip asked for by a_mod."
+
+    def test_asked_for_the_commands_it_names_each_of_the_channels_with_what_it_does(self):
+        tuned = tuning.tuned({}, {"status_commands": ("!status", "!st"), "help_commands": ("!commands",)})
+
+        assert chat_bot.help_words(tuned) == "Commands: !st or !status - how things stand; !commands - these commands."
+        assert chat_bot.help_words(tuning.recommended()) == "No commands here."
+
+
+class TestInItsOwnWords:
+    def test_none_are_the_bots(self):
+        assert chat_bot.worded("", "Clip saved.", length="35 seconds") == "Clip saved."
+
+    def test_its_own_have_what_is_in_braces_filled_in(self):
+        said = chat_bot.worded("{channel}: {length} {{clip}}", "Clip saved.", channel="Some", length="35 seconds")
+
+        assert said == "Some: 35 seconds {clip}"
+
+    @pytest.mark.parametrize("own", ["{lenght}", "{", "{0}"])
+    def test_ones_that_cannot_be_filled_in_are_the_bots_instead(self, own):
+        assert chat_bot.worded(own, "Clip saved.", length="35 seconds") == "Clip saved."
+
+    def test_every_setting_of_the_bots_own_words_is_given_what_it_fills_in(self):
+        given = {
+            chat_bot.LIVE: {"channel"},
+            chat_bot.RECORDING_STARTED: {"channel"},
+            chat_bot.RECORDING_ENDED: {"channel", *chat_bot.ended_fills(stream_recording.STOPPED, True, 60)},
+            chat_bot.MOMENT: {"channel", "stream_time", "by"},
+            chat_bot.CLIP: {"channel", "length", "stream_time"},
+        }
+
+        for announcement, fills in given.items():
+            assert set(tuning.BY_NAME[announcement.words].fills) == fills
+            assert isinstance(getattr(tuning.recommended(), announcement.switch), bool)
+
+    def test_a_recording_that_ended_fills_in_why_and_how_much(self):
+        assert chat_bot.ended_fills(stream_recording.STREAM_ENDED, True, 3600) == {
+            "reason": "The stream is over.",
+            "length": "1 hour",
+        }
+        assert chat_bot.ended_fills(stream_recording.STOPPED, True, 0)["length"] == "some"
+        assert chat_bot.ended_fills(stream_recording.STOPPED, False)["length"] == "nothing"
+
+
+class TestWhenItSaysThingsByItself:
+    BEGAN = datetime(2026, 3, 1, 20, 0, tzinfo=timezone.utc)
+
+    def at(self, minutes: float) -> datetime:
+        return self.BEGAN + timedelta(minutes=minutes)
+
+    def test_its_own_message_is_due_every_so_often_from_when_the_stream_started(self):
+        assert not chat_bot.repeat_due(self.at(9), self.BEGAN, None, 10)
+        assert chat_bot.repeat_due(self.at(10), self.BEGAN, None, 10)
+        assert not chat_bot.repeat_due(self.at(19), self.BEGAN, self.at(10), 10)
+        assert chat_bot.repeat_due(self.at(20), self.BEGAN, self.at(10), 10)
+
+    def test_never_while_the_stream_is_off_and_not_from_the_last_stream(self):
+        assert not chat_bot.repeat_due(self.at(60), None, None, 10)
+        # Last said in the stream before: counted from this one's start.
+        assert not chat_bot.repeat_due(self.at(65), self.at(60), self.at(30), 10)
+
+    def test_a_stream_is_seen_to_start_once_and_one_on_when_first_seen_is_not(self):
+        watch = chat_bot.LiveWatch()
+
+        assert watch.started({"a": self.BEGAN, "b": None}) == []
+        assert watch.started({"a": self.BEGAN, "b": None}) == []
+        assert watch.started({"a": self.BEGAN, "b": self.at(5)}) == ["b"]
+        assert watch.started({"a": self.BEGAN, "b": self.at(5)}) == []
+        assert watch.started({"a": None, "b": self.at(5)}) == []
+        assert watch.started({"a": self.at(90), "b": self.at(5)}) == ["a"]
+        # One added since is first seen as it is.
+        assert watch.started({"a": self.at(90), "b": self.at(5), "c": self.at(91)}) == []
 
 
 class TestWritingOnKick:
