@@ -52,7 +52,10 @@ clip's window touches an ad, the matching VOD segments are downloaded into
 the buffer as one more group (see `backfill_from_vod`); covering the whole
 window, that group is then the one the clip is cut from. If the channel keeps
 no VOD, or it can't be fetched, the clip is cut from the live segments as
-before - ad included.
+before - ad included. Where the VOD was not found when the run started (it
+is not listed yet in a stream's first minute, and the browser's look has
+come back empty for whole streams that had one), it is looked for again
+every VOD_LOOKUP_SECONDS, and when a clip needs it (`_look_for_vod`).
 
 Twitch's playlists are of the same make (both come from Amazon's IVS) and
 mark their ads the same way, with their own names for it: a stream source of
@@ -105,9 +108,9 @@ from urllib.parse import urljoin
 
 import httpx
 
-from . import flv
-from .platforms import StreamUrls
-from .streams import stream_urls
+from . import flv, platforms
+from .platforms import NoVod, StreamUrls
+from .streams import stream_urls, vod_at
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -193,6 +196,9 @@ VOD_GROUP = "vod"
 # whose window ends later than the VOD reaches waits up to this long for it
 # to catch up, re-reading its playlist this often.
 VOD_WAIT_SECONDS = 45
+# A run that has not found its stream's VOD looks for it again this often
+# (see `_look_for_vod`) - on its platform's list of streams, over plain HTTP.
+VOD_LOOKUP_SECONDS = 60
 # How far either side of where a clip should begin in its file the frame it
 # really begins on is looked for, and how far past that frame's own time a cut
 # is asked to start so that rounding can't put it before the frame.
@@ -332,6 +338,9 @@ class _Run:
     variant_url: str
     vod_url: str | None = None
     vod_variant_url: str | None = None
+    # When the VOD was last looked for (time.monotonic()) - as the run
+    # started, by whatever found where the stream is.
+    vod_looked_at: float | None = None
     thread: threading.Thread | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     last_progress_at: datetime | None = None
@@ -511,6 +520,9 @@ class ChannelRecorder:
         # runs out.
         self._reach: float | None = None
         self._longer: list[tuple[float, datetime]] = []
+        # The VOD is looked for from the loop's ticks and from a clip being
+        # cut, one look at a time.
+        self._vod_lock = threading.Lock()
 
     def _start_run(self) -> None:
         urls = stream_urls(self.channel_slug)
@@ -525,6 +537,7 @@ class ChannelRecorder:
             started_at=datetime.now(timezone.utc),
             variant_url=variant_url,
             vod_url=urls.vod,
+            vod_looked_at=time.monotonic(),
             variant=variant,
             renew_at=_renew_at(urls),
             flv=urls.flv,
@@ -847,6 +860,7 @@ class ChannelRecorder:
                 )
             self._stop_run()
             self._start_run()
+        self._look_for_vod(self._run)
         self._prune()
 
     def stop(self) -> None:
@@ -889,6 +903,30 @@ class ChannelRecorder:
         partial.replace(path)
         return True
 
+    def _look_for_vod(self, run: _Run) -> bool:
+        """Looks for the VOD of the stream a run follows once more, if the
+        run has none and none was looked for in VOD_LOOKUP_SECONDS - on a
+        platform that keeps one. Returns whether the run has one now."""
+        with self._vod_lock:
+            if run.vod_url is not None:
+                return True
+            if platforms.platform_of(self.channel_slug) not in platforms.KEEP_VODS:
+                return False
+            now = time.monotonic()
+            if run.vod_looked_at is not None and now - run.vod_looked_at < VOD_LOOKUP_SECONDS:
+                return False
+            run.vod_looked_at = now
+            try:
+                vod = vod_at(self.channel_slug, datetime.now(timezone.utc))
+            except NoVod:
+                return False
+            except Exception as error:
+                logger.warning("[%s] looking for the stream's VOD failed: %s", self.channel_slug, type(error).__name__)
+                return False
+            run.vod_url, run.vod_variant_url = vod.master, None
+        logger.info("[%s] the stream's VOD was found on a later look", self.channel_slug)
+        return True
+
     def backfill_from_vod(self, start: datetime, end: datetime) -> bool:
         """Download the stream's own recording of [start, end] into the buffer,
         as the VOD group. Returns whether any of it is there afterwards.
@@ -896,7 +934,7 @@ class ChannelRecorder:
         Blocks while the VOD hasn't reached `end` yet (see VOD_WAIT_SECONDS).
         """
         run = self._run
-        if run is None or run.vod_url is None:
+        if run is None or not self._look_for_vod(run):
             return False
         have = {segment.path.name for segment in self._stored_segments() if segment.is_vod}
         deadline = time.monotonic() + VOD_WAIT_SECONDS

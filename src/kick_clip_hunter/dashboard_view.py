@@ -269,6 +269,71 @@ def transcript_words(state: str, done: float | None = None, said: bool = True) -
     return TRANSCRIPT_WORDS[state]
 
 
+# Where adding footage to a moment's file from its stream's VOD stands (see
+# vod_footage.py) - looking for the VOD and the file's place in it, fetching
+# the footage, putting it together; done, or failed - and what the page
+# says of each. The three busy ones are vod_footage's own steps.
+FOOTAGE_NONE = "none"
+FOOTAGE_FINDING = "finding"
+FOOTAGE_FETCHING = "fetching"
+FOOTAGE_JOINING = "joining"
+FOOTAGE_DONE = "done"
+FOOTAGE_FAILED = "failed"
+FOOTAGE_WORDS = {
+    FOOTAGE_NONE: "",
+    FOOTAGE_FINDING: "Looking for the moment in its stream's VOD.",
+    FOOTAGE_FETCHING: "Fetching the footage from the VOD.",
+    FOOTAGE_JOINING: "Putting the footage together.",
+    FOOTAGE_DONE: "",
+    FOOTAGE_FAILED: "The footage could not be added. The server log says why.",
+}
+FOOTAGE_BUSY = frozenset({FOOTAGE_FINDING, FOOTAGE_FETCHING, FOOTAGE_JOINING})
+# How much footage the page offers to add at a time, and what it starts at.
+FOOTAGE_CHOICES = (15, 30, 60, 120)
+FOOTAGE_DEFAULT_SECONDS = 30
+# Footage a side was given less of than this was given none.
+FOOTAGE_LEAST_SECONDS = 0.5
+
+
+def footage_choice_words(seconds: int) -> str:
+    """An amount of footage the page offers to add: "30 s", "2 min"."""
+    return f"{seconds // 60} min" if seconds >= 60 and seconds % 60 == 0 else f"{seconds} s"
+
+
+def footage_words(
+    state: str,
+    done: float | None = None,
+    added: tuple[float, float] | None = None,
+    *,
+    short: bool = False,
+    muted: bool = False,
+    why: str | None = None,
+) -> str:
+    """What the page says of footage being added to a moment's file. `done`
+    is how much of it has been fetched, as a share, while that goes on;
+    `added` how many seconds came before and after what the file held, once
+    it is done - `short` if the VOD did not reach as far as was asked, and
+    `muted` if some of it has no sound. `why` is why it failed, where that
+    can be said."""
+    if state == FOOTAGE_FETCHING and done is not None:
+        return f"Fetching the footage from the VOD: {int(done * 100)} %."
+    if state == FOOTAGE_FAILED and why:
+        return why
+    if state != FOOTAGE_DONE or added is None:
+        return FOOTAGE_WORDS[state]
+    sides = [
+        f"{number_words(seconds, 1)} s {side}"
+        for seconds, side in zip(added, ("before", "after"), strict=True)
+        if seconds >= FOOTAGE_LEAST_SECONDS
+    ]
+    words = f"Added {' and '.join(sides)} from the stream's VOD."
+    if short:
+        words += " The VOD did not reach as far as you asked."
+    if muted:
+        words += " Some of it has no sound: Twitch silenced it in its VOD."
+    return words
+
+
 # What a time before the clip is written with: a real minus sign, as the
 # page's script writes one, not a hyphen.
 MINUS = "\u2212"

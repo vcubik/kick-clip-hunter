@@ -67,6 +67,21 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   by asking for byte ranges; Starlette's `StaticFiles` answers those (pinned by a test),
   so the file is written with its index at the end and not rewritten to move it forward.
 
+- Footage added to a moment's file from its stream's VOD (the review page's "Add before" /
+  "Add after") is only there while the channel keeps its VODs where anyone may watch them:
+  a Kick channel that keeps them for its subscribers only, or a Twitch past broadcast that
+  is gone (after a week for most channels, up to two months for some), has none, and the
+  page says so. Kick lists only a channel's newest 10-30 streams. A YouTube stream can be
+  wound back only while it is still on, and only where its streamer lets viewers rewind.
+  Every press fetches the file's whole stretch again with what is added - for a two-minute
+  file and half a minute more, 150-200 MB of Kick's 1080p60, some 15-25 s on this host - and
+  the file it replaces is gone: there is no undoing it but Trim.
+- The recorder's look for a Kick stream's VOD, inside the browser that finds the stream, has
+  come back empty for whole streams that had one (`recording started ... (VOD not
+  available)`), which left the clips through their ads without the VOD's footage. A run
+  without its VOD looks again over plain HTTP every minute, and logs `the stream's VOD was
+  found on a later look` when it finds it; the Health page's VOD column follows.
+
 - The database is in SQLite's default journal mode, where a statement that is still
   being read holds off every commit - and a chat message that cannot be stored within
   the five-second busy timeout fails its webhook delivery. So whatever goes through chat

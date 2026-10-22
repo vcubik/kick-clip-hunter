@@ -4,13 +4,15 @@ master playlist is taken - the recorder follows the stream from there."""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import ClassVar
 
 import pytest
 from streamlink.exceptions import NoPluginError, PluginError
 
 from kick_clip_hunter import streams, twitch_stream
-from kick_clip_hunter.platforms import StreamUrlError, StreamUrls
+from kick_clip_hunter.platforms import NoVod, StreamUrlError, StreamUrls, Vod
+from tests.support.twitch_api import past_broadcast
 
 MASTER = "https://usher.example/api/v2/channel/hls/some_channel.m3u8?sig=abc&token=def"
 
@@ -127,3 +129,81 @@ class TestFindingTheVod:
 
     def test_without_twitch_set_up_there_is_no_vod_to_find(self, live_stream, kick_api):
         assert twitch_stream.get_stream_urls("some_channel") == StreamUrls(live=MASTER, vod=None)
+
+
+PAST_MASTER = "https://usher.example/vod/v2/777.m3u8?nauthsig=abc&nauth=def"
+BEGAN = datetime(2026, 10, 16, 14, 38, 15, tzinfo=timezone.utc)
+
+
+class TestFindingAPastBroadcast:
+    """The recording of a stream that is over stays there for a while: the
+    one a moment was in is found by its time, with when it began - its
+    playlist says no times of its own."""
+
+    @pytest.fixture
+    def channel(self, twitch_api, streamlink):
+        channel = twitch_api.add_channel("some_channel", "101")
+        channel.past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "9h58m16s"),
+            past_broadcast("666", "2026-10-15T08:39:13Z", "17h3m33s"),
+        ]
+        streamlink.answers["https://www.twitch.tv/videos/777"] = {"best": FakeStream(PAST_MASTER)}
+        return channel
+
+    def test_the_one_a_time_was_in_is_found_with_when_it_began(self, channel):
+        vod = twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+        assert vod == Vod(master=PAST_MASTER, started_at=BEGAN)
+
+    def test_helix_is_asked_for_as_many_of_the_channels_as_it_gives_at_once(self, channel, twitch_api):
+        twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+        assert twitch_api.calls("GET", "/helix/videos") == [
+            {"user_id": "101", "type": "archive", "first": str(twitch_stream.ARCHIVES_LOOKED_AT)}
+        ]
+
+    def test_the_one_of_the_stream_that_is_on_reaches_to_now(self, channel, streamlink):
+        channel.is_live, channel.stream_id = True, "9"
+        channel.past_broadcasts.insert(0, past_broadcast("888", "2026-10-22T09:00:00Z", "5m", stream_id="9"))
+        streamlink.answers["https://www.twitch.tv/videos/888"] = {"best": FakeStream(VOD_MASTER)}
+
+        vod = twitch_stream.vod_at("some_channel", datetime(2026, 10, 22, 11, 0, tzinfo=timezone.utc))
+
+        assert vod.master == VOD_MASTER
+
+    def test_a_time_no_past_broadcast_holds_has_none(self, channel):
+        with pytest.raises(NoVod, match="Twitch lists no past broadcast of that stream"):
+            twitch_stream.vod_at("some_channel", BEGAN - timedelta(hours=2))
+
+    def test_one_kept_from_the_public_is_none_to_be_had(self, channel):
+        channel.past_broadcasts[0]["viewable"] = "private"
+
+        with pytest.raises(NoVod, match="from the public"):
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+    def test_one_streamlink_cannot_open_is_said(self, channel, streamlink):
+        streamlink.answers["https://www.twitch.tv/videos/777"] = PluginError("subscribers only")
+
+        with pytest.raises(NoVod, match="subscribers only"):
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+    def test_one_streamlink_finds_nothing_at_is_said(self, channel, streamlink):
+        streamlink.answers["https://www.twitch.tv/videos/777"] = {}
+
+        with pytest.raises(NoVod, match="would not say where"):
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+    def test_a_channel_twitch_does_not_have_has_none(self, channel):
+        with pytest.raises(NoVod, match=r"could not be asked .*ValueError"):
+            twitch_stream.vod_at("gone_channel", BEGAN)
+
+    def test_without_twitch_set_up_there_is_none(self, kick_api):
+        with pytest.raises(NoVod, match="Twitch"):
+            twitch_stream.vod_at("some_channel", BEGAN)
+
+
+@pytest.mark.parametrize(
+    ("helix", "seconds"), [("9h58m16s", 35896), ("43m50s", 2630), ("59s", 59), ("1h", 3600), ("", 0), (None, 0)]
+)
+def test_how_long_helix_says_a_past_broadcast_is_is_read_in_seconds(helix, seconds):
+    assert twitch_stream.length_seconds(helix) == seconds

@@ -51,7 +51,10 @@ YouTube stream
   can go with it, moved against the picture if it does not sit right: drawn into the picture in a
   corner (the stretch is then encoded anew, on the graphics card where there is one), or as a video
   of its own - transparent to lay over it, or on a colour to put beside it. A stretch of a recorded
-  stream is cut out the same way, half an hour with its chat in it as readily as a clip.
+  stream is cut out the same way, half an hour with its chat in it as readily as a clip. A clip's
+  file that ends too soon, or begins too late, gets more of the stream before or after it at the
+  press of a button, from the stream's own VOD - days later too on Kick and Twitch, and on YouTube
+  while the stream is still on - found in it by its pictures and joined without re-encoding.
 - **Writes down what is said, as subtitles.** A clip's transcript is made on request, on the
   machine: what is said in it and in the footage around it, line by line with its times, beside the
   clip to be put right while it plays. It is downloaded as subtitles (.srt) that line up with the
@@ -229,7 +232,7 @@ what, and the short manual checklist for the parts that only exist against the r
 | Module (`src/kick_clip_hunter/`) | Role |
 |---|---|
 | `main.py` | FastAPI app: chat taken in from either platform, moment sessions, dashboard and its controls. |
-| `platforms.py`, `streams.py`, `chat_message.py` | Which platform a channel is on and how its name says so; what is asked of a channel's platform (is it live, where is its stream); one chat message as the service takes it in, whichever platform it came from. |
+| `platforms.py`, `streams.py`, `chat_message.py` | Which platform a channel is on and how its name says so; what is asked of a channel's platform (is it live, where is its stream, where is the VOD of a stream of it); one chat message as the service takes it in, whichever platform it came from. |
 | `dashboard_view.py`, `chat_trace.py`, `templates/`, `static/` | The dashboard's pages: what they say, how chat is drawn against a clip and over a whole recording, their markup, stylesheet and script. |
 | `chat_stats.py` | A channel's stored chat in figures, for the Analyze page: one pass over a period's messages, and the figures, chart columns and table rows made of it. |
 | `detector.py` | The detection heuristic - a rolling window per channel. |
@@ -242,7 +245,8 @@ what, and the short manual checklist for the parts that only exist against the r
 | `twitch_client.py`, `twitch_auth.py`, `twitch_chat.py`, `twitch_stream.py`, `twitch_emotes.py` | Twitch: its API (Helix); the account chat is read as; its chat over an EventSub WebSocket; where a live stream and its VOD are (through streamlink); a channel's BetterTTV and FrankerFaceZ emotes. |
 | `youtube_client.py`, `youtube_chat.py`, `youtube_stream.py`, `streamlink_support.py` | YouTube: the site's own API - who a channel is, whether it is live, its chat; the chat of a live channel, looked at every few seconds; where a live stream is (through streamlink, imported once for Twitch and YouTube). |
 | `tiktok_client.py`, `tiktok_stream.py`, `tiktok_chat.py`, `flv.py` | TikTok: the site's own API - who a channel is, whether it is live, where its stream is; the chat of a channel whose stream is recorded, through TikTokLive; an FLV stream read as it arrives and cut into pieces the recorder keeps as MPEG-TS segments. |
-| `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip. |
+| `kick_stream.py`, `clip_creator.py` | The parts that need a browser: finding a live stream's playable URL, publishing an official clip - and, without one, where a Kick stream's VOD is. |
+| `vod_footage.py` | A moment's file made longer from its stream's VOD: the file found in the VOD by its pictures, the VOD's own footage joined without re-encoding. |
 | `clip_trim.py`, `chat_video.py` | For an editor: a stretch of a moment's footage, or of a recorded stream, cut out as a video of its own, with its chat drawn into the picture or as a video of its own (transparent ProRes 4444, or H.264 on a colour). The chat is laid out once by a headless browser and every frame is put together from that layout. |
 | `notify.py` | Notifications: what is told of a clip, a recording or a part of the Health page that needs a look, and how it goes to a Telegram chat (the Bot API) and a Discord channel (its webhook). |
 | `health.py`, `tunnel.py` | The Health page: what the service notices of the things it depends on put into words, and where the tunnel Kick reaches it through stands. |

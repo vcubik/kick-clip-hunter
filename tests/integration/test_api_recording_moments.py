@@ -607,7 +607,7 @@ class TestMakingAMomentOfOne:
         page = parse(response.text)
         # The player opens on the clip, past the footage that led up to it.
         address, starts = page.one("video", data_clip=True).attrs["src"].split("#t=")
-        assert address == f"/clips/{CHAT_NAME}/moment_{moment['id']}.mp4"
+        assert address.split("?")[0] == f"/clips/{CHAT_NAME}/moment_{moment['id']}.mp4"
         assert float(starts) == pytest.approx(moment["context_before"], abs=0.01)
         assert (await service.client.get(address)).status_code == 200
         # The crowd's laughs are the lines of the moment.

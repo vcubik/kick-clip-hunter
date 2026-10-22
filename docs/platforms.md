@@ -31,8 +31,10 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
 - What was really on stream during an ad is only in the broadcast's VOD, which Kick
   writes as the stream goes along (12.5s segments, same program clock, roughly 15-25s
   behind live) and serves from `stream.kick.com` to a plain HTTP client. Its URL comes
-  from `/api/v2/channels/{slug}/videos` (not reachable with a plain HTTP client, so it
-  is fetched inside the browser session that captures the live URL). A moment whose file
+  from `/api/v2/channels/{slug}/videos`, which is looked up inside the browser session
+  that captures the live URL - and, where that comes back empty (it has, for whole
+  streams that had a VOD), again over plain HTTP every minute, which the endpoint
+  answers as of October 2026 (`kick_stream.vod_at`, see `recorder._look_for_vod`). A moment whose file
   would touch an ad - in the clip or in the context around it - is cut from the VOD
   instead, so its clip comes out up to ~25s longer than usual (whole VOD segments); a
   channel with VODs turned off gets the clip from the live segments, and context only as
@@ -78,6 +80,35 @@ the MP4), which is why SEI units are dropped in the copy. No ads, no VOD; an add
 for about two weeks (`expire`). Unverified: streams for adults or subscribers only (the
 service is a visitor that is not signed in), and a stream whose encoding changes part-way
 (a new run, so a break in the recording).
+
+**Footage from a broadcast's VOD, days later (`vod_footage.py`, `streams.vod_at`)** - what
+the dashboard's "Add before" / "Add after" take a moment's file further with. Seen in
+October 2026:
+- Kick: kick.com lists a channel's newest 10-30 streams (`/api/v2/channels/{slug}/videos`,
+  plain HTTP, no token): when each began (`start_time`, UTC without saying so), how long it
+  ran (`duration`, ms; 0 while it is on) and its VOD's master playlist (`source`). That
+  address carries no token and does not run out - VODs a month old still played. The
+  playlist gives every 12.5s segment its program date-time and has SCTE-35 date ranges
+  where the live stream had its ads (the VOD itself has none), and `#EXT-X-ENDLIST` even
+  while the stream is on. A VOD kept for subscribers only (`video.status` is
+  `subscriber_only`) is listed without an address - some channels keep all of theirs so.
+- Twitch: Helix lists a channel's past broadcasts (`videos?type=archive`, up to 100) with
+  when each began (`created_at`) and how long it is (`"9h58m16s"`); Twitch keeps them for a
+  week to two months, depending on the channel. streamlink gives `twitch.tv/videos/<id>`'s
+  master playlist (usher, signed; the variant and its segments on CloudFront are not). A
+  past broadcast's playlist is 10s MPEG-TS without a program date-time - footage is placed
+  by when it began, which was three seconds off where it was measured - and Twitch marks
+  the segments it silenced for music it may not play with `-muted` in their address.
+- YouTube: nothing of a stream that is over in a form that could be taken (streamlink plays
+  such a video in 360p only). A stream that is on can be wound back, as its viewers can, up
+  to twelve hours: the live playlist lists only its newest segments, but a segment's address
+  carries its number (`/sq/<n>/`, from 0 at the stream's start), and an older number in it
+  serves that older segment in full quality.
+- TikTok: no VOD.
+- The VOD is the same encoding as the live stream: decoded, a moment's file and the VOD give
+  the very same frames, and the same sound to within rounding. The clocks are another
+  matter - a moment's file was found two seconds off Kick's VOD clock, and Twitch's has
+  none - so the file is found in the VOD by its pictures.
 
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`

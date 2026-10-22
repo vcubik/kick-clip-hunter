@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, recorder
-from kick_clip_hunter.platforms import StreamUrls
+from kick_clip_hunter.platforms import NoVod, StreamUrls, Vod
 from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.eventsub import FakeEventSub
 from tests.support.hls import FakeHlsServer, Segment
@@ -59,18 +59,33 @@ class Recording:
         # Channel slugs the recorder asked a stream URL for, in order - each
         # one would have been a browser window against the real site.
         self.url_requests: list[str] = []
+        # Channel slugs the recorder looked for its stream's VOD for again,
+        # after its run began without one (see recorder._look_for_vod).
+        self.vod_lookups: list[str] = []
 
     def of(
-        self, server: FakeHlsServer, channel: str = "some_channel", vod: FakeHlsServer | None = None
+        self,
+        server: FakeHlsServer,
+        channel: str = "some_channel",
+        vod: FakeHlsServer | None = None,
+        vod_later: FakeHlsServer | None = None,
     ) -> ChannelRecorder:
         """`vod` is a second fake stream standing in for the broadcast's own
-        recording; without one the channel has no VOD."""
+        recording; without one the channel has no VOD. `vod_later` is one
+        that is not found as a run starts, only when it is looked for again."""
 
         def stream_urls(slug: str) -> StreamUrls:
             self.url_requests.append(slug)
             return StreamUrls(live=server.master_url, vod=vod.master_url if vod else None)
 
+        def vod_at(slug: str, when: datetime) -> Vod:
+            self.vod_lookups.append(slug)
+            if vod_later is None:
+                raise NoVod("The channel keeps no VOD.")
+            return Vod(master=vod_later.master_url)
+
         self._monkeypatch.setattr(recorder, "stream_urls", stream_urls)
+        self._monkeypatch.setattr(recorder, "vod_at", vod_at)
         channel_recorder = ChannelRecorder(channel)
         self._recorders.append(channel_recorder)
         return channel_recorder

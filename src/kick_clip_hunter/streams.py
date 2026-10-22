@@ -1,6 +1,7 @@
 """What the service asks a channel's platform about its stream: whether it is
-live and since when, and where the stream is. Each question goes to the
-platform the channel's name says it is on (see platforms.py).
+live and since when, where the stream is, and where the recording of a
+stream of it is (its VOD). Each question goes to the platform the channel's
+name says it is on (see platforms.py).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from . import (
     youtube_stream,
 )
 from .config import load_settings
-from .platforms import LiveStatus, StreamUrlError, StreamUrls
+from .platforms import LiveStatus, NoVod, StreamUrlError, StreamUrls, Vod
 
 
 def _moment(text: str | None) -> datetime | None:
@@ -94,3 +95,19 @@ def stream_urls(channel: str) -> StreamUrls:
     if platform == platforms.TIKTOK:
         return tiktok_stream.get_stream_urls(login)
     raise StreamUrlError(f"there is no way to find the stream of {channel!r}")
+
+
+def vod_at(channel: str, when: datetime) -> Vod:
+    """Where the recording is of the channel's stream that was on at `when`:
+    Kick's VOD, Twitch's past broadcast - of a stream that is on or one that
+    is over - or, for a YouTube channel, the stream it is streaming, to be
+    wound back. Blocks while it is found out, with no browser; raises NoVod,
+    in words that say why, where there is none to be had."""
+    platform, login = platforms.split(channel)
+    if platform == platforms.KICK:
+        return kick_stream.vod_at(login, when)
+    if platform == platforms.TWITCH:
+        return twitch_stream.vod_at(login, when)
+    if platform == platforms.YOUTUBE:
+        return youtube_stream.vod_at(login, when)
+    raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream.")

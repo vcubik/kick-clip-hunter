@@ -3,7 +3,7 @@
 `FakeKickApi` answers the same endpoints, with the same response shapes, as
 Kick's public API (token, channel lookup, event subscriptions, webhook public
 key), the channel lookup of kick.com's own API (for subscriber badges) and
-7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
+its list of a channel's streams with their VODs, and 7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
 real client code runs unmodified - request building, auth headers, status
 handling and JSON parsing are all exercised; only the network is replaced.
 
@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Protocol
 
 import httpx
@@ -57,6 +58,9 @@ class FakeChannel:
     # The channel's own subscriber badges: the picture's address by the
     # months it is shown from, as kick.com lists them.
     subscriber_badges: dict[int, str] = field(default_factory=dict)
+    # The channel's newest streams, as kick.com lists them with their VODs
+    # (see kick_video).
+    videos: list[dict] = field(default_factory=list)
 
     def seventv_emote(self, name: str) -> dict:
         """One entry of the channel's emote set, in the shape 7TV sends."""
@@ -74,6 +78,28 @@ class FakeChannel:
             "name": name,
             "data": {"id": emote_id, "host": {"url": f"//cdn.7tv.app/emote/{emote_id}", "files": files}},
         }
+
+
+def kick_video(
+    started: datetime,
+    seconds: float,
+    source: str = "",
+    *,
+    live: bool = False,
+    status: str = "public",
+) -> dict:
+    """A stream as kick.com lists it with its VOD: when it began (in UTC,
+    written without saying so, as kick.com writes it), how long it ran (0
+    while it is on), the master playlist of its VOD - empty where the VOD is
+    for subscribers only - and what kick.com says of the VOD."""
+    return {
+        "id": int(started.timestamp()),
+        "start_time": started.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "duration": 0 if live else int(seconds * 1000),
+        "is_live": live,
+        "source": source if status == "public" else "",
+        "video": {"uuid": f"video-{int(started.timestamp())}", "status": status},
+    }
 
 
 @dataclass(frozen=True)
@@ -354,6 +380,13 @@ class FakeKickApi:
                     return httpx.Response(500, json={"message": "Internal Server Error"})
                 self.subscribed.append(body["broadcaster_user_id"])  # type: ignore[index]
                 return httpx.Response(200, json={"data": [{"name": "chat.message.sent", "version": 1}]})
+
+        if request.url.host == "kick.com" and path.startswith("/api/v2/channels/") and path.endswith("/videos"):
+            wanted = path.split("/")[-2].lower()
+            channel = next((c for slug, c in self.channels.items() if slug.lower() == wanted), None)
+            if channel is None:
+                return httpx.Response(404, json={"message": "Channel not found"})
+            return httpx.Response(200, json=channel.videos)
 
         if request.url.host == "kick.com" and path.startswith("/api/v2/channels/"):
             # Any spelling of a channel's slug finds it, as on kick.com.

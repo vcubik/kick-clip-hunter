@@ -144,6 +144,8 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
 - `recording_manager.py` — the loop driving the recorders, ending whole-stream recordings
 - `stream_recording.py` — a whole stream kept as one file
 - `recording_moments.py` — moments found afterwards in a recording's chat
+- `vod_footage.py` — a moment's file made longer from its stream's VOD, days later too (the file
+  found in the VOD by its pictures; `streams.vod_at` says where a stream's VOD is)
 - `clip_creator.py` — manual official Kick clips via the site's internal API
 - `transcriber.py`, `audio_events.py`, `frame_encoder.py`, `sound_events.py`, `ml_loading.py` —
   optional per-clip local ML capture (off by default), lazily loaded under one lock

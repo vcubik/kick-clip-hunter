@@ -7,7 +7,8 @@
 // the review from the keyboard (1 to 5 rate, J and K move, Space plays, Del
 // deletes), has the dialog a stretch of footage is cut out for an editor in
 // - a moment's or a recording's - has a moment's transcript made, follows it
-// as the clip plays and saves what is put right in it, saves the Settings
+// as the clip plays and saves what is put right in it, has footage from the
+// stream's VOD added to a moment's file and opens it again, saves the Settings
 // page's form - whose sections are tabs, and whose lists are added to an
 // item at a time - starts and stops the recording of a whole stream,
 // replays a recording's chat beside it, puts what chat did over all of it
@@ -1431,10 +1432,116 @@
     }
   }
 
+  // ---- More footage -----------------------------------------------------
+  //
+  // More of the stream in a moment's file, before it or after it, from the
+  // stream's own recording (its VOD). The service fetches it and puts the
+  // longer file in the old one's place, which takes some seconds; the page
+  // asks how far it has got meanwhile, and once it is done opens the moment
+  // again - its player, its strip and its Trim dialog are all of the file.
+  // How much to add is remembered.
+
+  const FOOTAGE_POLL_MS = 1000;
+  const FOOTAGE_SECONDS_KEY = "footageSeconds";
+  let footageWatch = null;
+
+  function setFootageBusy(group, busy) {
+    group.toggleAttribute("data-busy", busy);
+    for (const button of all("[data-footage-side]", group)) button.disabled = busy;
+  }
+
+  async function addFootage(button) {
+    const group = button.closest("[data-footage]");
+    const seconds = Number(one("[data-footage-seconds]", group).value);
+    // The file is about to be another one: nothing should be playing it.
+    clipOf(group)?.pause();
+    setFootageBusy(group, true);
+    say(group, "Asking for the footage.");
+    const response = await post(group.dataset.footage, { side: button.dataset.footageSide, seconds });
+    if (!group.isConnected) return; // another moment was opened meanwhile
+    if (!response || !response.ok) {
+      setFootageBusy(group, false);
+      say(group, response ? await problem(response, "Could not add the footage. Try again.") : "Could not reach the service.");
+      return;
+    }
+    say(group, (await response.json()).words);
+    watchFootage();
+  }
+
+  function watchFootage() {
+    clearTimeout(footageWatch);
+    footageWatch = one("[data-footage][data-busy]") ? setTimeout(checkFootage, FOOTAGE_POLL_MS) : null;
+  }
+
+  async function checkFootage() {
+    const group = one("[data-footage][data-busy]");
+    if (!group) return;
+    let standing = null;
+    try {
+      const response = await fetch(group.dataset.footage);
+      if (response.ok) standing = await response.json();
+    } catch {
+      // asked again in a moment
+    }
+    if (!group.isConnected) return;
+    if (standing && !standing.busy) {
+      setFootageBusy(group, false);
+      if (standing.state === "done") await reopenMoment(group.closest(".moment"), standing.words);
+      else say(group, standing.words);
+      return;
+    }
+    if (standing) say(group, standing.words);
+    watchFootage();
+  }
+
+  // The moment as the service has it now, in place of the one on the page,
+  // saying what came of what was asked.
+  async function reopenMoment(article, words) {
+    let markup = null;
+    try {
+      const response = await fetch(`/dashboard/moments/${article.dataset.moment}`);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // handled below, like any other answer that is not the moment
+    }
+    if (!article.isConnected) return;
+    const fresh = markup && one(".moment", new DOMParser().parseFromString(markup, "text/html"));
+    if (!fresh) {
+      say(article, `${words} Reload the page to play it.`);
+      return;
+    }
+    article.replaceWith(fresh);
+    dress();
+    say(fresh, words);
+  }
+
+  function keepFootageSeconds(select) {
+    try {
+      localStorage.setItem(FOOTAGE_SECONDS_KEY, select.value);
+    } catch {
+      // kept for this page only, then
+    }
+  }
+
+  function recallFootageSeconds() {
+    for (const select of all("[data-footage-seconds]")) {
+      try {
+        const kept = localStorage.getItem(FOOTAGE_SECONDS_KEY);
+        if (Array.from(select.options).some((option) => option.value === kept)) select.value = kept;
+      } catch {
+        // no storage here: the first choice stands
+      }
+    }
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
-    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file]")) button.hidden = false;
+    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file], [data-footage]")) {
+      button.hidden = false;
+    }
+    recallFootageSeconds();
+    watchFootage();
     markFound();
     const article = one(".moment");
     if (article) showSide(article, side);
@@ -2625,6 +2732,7 @@
     ["[data-side]", chooseSide],
     ["[data-transcribe]", transcribe],
     ["[data-transcript-go]", playLine],
+    ["[data-footage-side]", addFootage],
     ["[data-switch] button", flip],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
     ["[data-chip-add]", addFromButton],
@@ -2908,6 +3016,7 @@
     }
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
+    else if (target.matches("[data-footage-seconds]")) keepFootageSeconds(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
   });
 

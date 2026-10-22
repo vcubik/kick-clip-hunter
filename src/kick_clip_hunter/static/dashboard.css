@@ -333,6 +333,10 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-now { font-size: 16px; font-weight: 600; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ch-of { font-weight: 400; color: var(--text-2); }
 .ch-gap { flex: 1 1 0; }
+/* Adding footage from the stream's VOD: how much, then before or after -
+   as tall as the compact buttons beside it. */
+.footage { display: inline-flex; align-items: center; gap: var(--space-4); }
+.footage-seconds { height: var(--h-compact); }
 /* Volume: a track lit as far as the level, with a lit thumb. */
 .ch-volume { appearance: none; width: 88px; height: var(--h-compact); margin: 0 var(--space-4) 0 calc(-1 * var(--space-4)); background: transparent; cursor: pointer; }
 .ch-volume::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-control); background: linear-gradient(to right, var(--lit) var(--level, 100%), var(--inset) var(--level, 100%)); }

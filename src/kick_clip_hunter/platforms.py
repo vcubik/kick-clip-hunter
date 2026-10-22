@@ -40,6 +40,12 @@ TITLES = {KICK: "Kick", TWITCH: "Twitch", YOUTUBE: "YouTube", TIKTOK: "TikTok"}
 # The platforms whose channels are only ever recorded whole: never tracked
 # for clips, their chat kept with a recording and looked for nothing in.
 RECORDED_ONLY = frozenset({TIKTOK})
+# The platforms that keep a recording of a broadcast as it goes along (its
+# VOD), which stays there once the broadcast is over: what an ad covered can
+# be had from it, and footage a moment's file does not hold, days later too.
+# YouTube keeps a stream that is on to be wound back (see Vod.numbered), but
+# nothing of it in the stream's own form once it is over.
+KEEP_VODS = frozenset({KICK, TWITCH})
 
 # What stands between a channel's name on its platform and the platform's.
 # Neither Kick's names nor Twitch's can have one, nor YouTube's or TikTok's
@@ -158,3 +164,27 @@ class StreamUrls:
     # Whether `live` is the stream as one FLV download that does not end
     # (TikTok's, see flv.py) rather than an HLS playlist.
     flv: bool = False
+
+
+class NoVod(RuntimeError):
+    """There is no recording of a broadcast to take footage of it from - its
+    words say why, as the dashboard says it."""
+
+
+@dataclass(frozen=True)
+class Vod:
+    """Where a broadcast's own recording is: its master playlist, whose
+    segments are footage of the broadcast on its own clock.
+
+    Kick's playlist gives every segment its program date-time. A Twitch
+    broadcast that is over has none in its playlist: `started_at` is when
+    the broadcast began, as Twitch says it, which the segments' lengths are
+    counted on from - to a few seconds, so the picture says exactly where
+    footage is (see vod_footage.py). YouTube keeps no recording, but a stream
+    that is on can be wound back: `numbered` says its playlist is the live
+    one, which lists only its newest segments, and an older one is had by
+    its number in the address of the first listed (`/sq/<number>/`)."""
+
+    master: str
+    started_at: datetime | None = None
+    numbered: bool = False
