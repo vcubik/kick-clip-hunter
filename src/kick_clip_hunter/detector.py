@@ -76,6 +76,7 @@ message_rate booster and how a score is worked out are the same everywhere.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from collections import defaultdict, deque
@@ -586,11 +587,119 @@ _last_moment_at: dict[str, float] = {}
 # made the baseline look shorter, so busier, than it was.
 _history_start: dict[str, float] = {}
 
+# The entry fields that carry a reaction signal: emote_weight, laugh_weight,
+# mention_weight.
+_SIGNALS = (4, 5, 6)
+
+
+def _add_exactly(partials: list[float], value: float) -> None:
+    """Adds `value` to a sum kept exactly as non-overlapping `partials`
+    (Shewchuk's algorithm, the one math.fsum is built on). Taking a value
+    away is adding its negative, and math.fsum(partials) is the sum
+    correctly rounded - the same float however the values came and went,
+    which a plain running total drifts away from."""
+    i = 0
+    for other in partials:
+        if abs(value) < abs(other):
+            value, other = other, value
+        high = value + other
+        low = other - (high - value)
+        if low:
+            partials[i] = low
+            i += 1
+        value = high
+    partials[i:] = [value]
+
+
+def _count(counter: dict, key, step: int) -> None:
+    counter[key] = counter.get(key, 0) + step
+    if not counter[key]:
+        del counter[key]
+
+
+class _Signal:
+    """One reaction signal's running figures over a window: who carries it,
+    in how many messages, and its weight - each key's (a sender, or a sender
+    in one slice of time) strongest message, summed as _reaction_weight and
+    _short_reaction_weight do."""
+
+    def __init__(self) -> None:
+        self.senders: dict[str, int] = {}
+        self.count = 0
+        self._weights: dict[object, dict[float, int]] = {}
+        self._total: list[float] = []
+
+    def change(self, key: object, sender: str, weight: float, step: int) -> None:
+        _count(self.senders, sender, step)
+        self.count += step
+        weights = self._weights.setdefault(key, {})
+        before = max(weights) if weights else 0.0
+        _count(weights, weight, step)
+        after = max(weights) if weights else 0.0
+        if not weights:
+            del self._weights[key]
+        if after != before:
+            _add_exactly(self._total, -before)
+            _add_exactly(self._total, after)
+
+    @property
+    def weight(self) -> float:
+        return math.fsum(self._total)
+
+
+class _Window:
+    """Running figures over a stretch of a channel's held chat, kept up to
+    date a message at a time as messages come into it and leave it - instead
+    of going through all of it again for every message, which on a busy chat
+    is thousands of messages each time. `slice_seconds` is how long one
+    sender counts once for in the reaction weights (None: the whole window,
+    as in the short one)."""
+
+    def __init__(self, slice_seconds: float | None) -> None:
+        self._slice_seconds = slice_seconds
+        self.count = 0
+        self.senders: dict[str, int] = {}
+        self.contents: dict[str, int] = {}
+        self.emote_count = 0
+        self.signals = {index: _Signal() for index in _SIGNALS}
+
+    def add(self, entry: tuple) -> None:
+        self._change(entry, 1)
+
+    def remove(self, entry: tuple) -> None:
+        self._change(entry, -1)
+
+    def _change(self, entry: tuple, step: int) -> None:
+        sender = entry[1]
+        self.count += step
+        _count(self.senders, sender, step)
+        if entry[2]:
+            _count(self.contents, entry[2], step)
+        self.emote_count += entry[3] * step
+        key = sender if self._slice_seconds is None else (sender, int(entry[0] // self._slice_seconds))
+        for index, signal in self.signals.items():
+            if entry[index] > 0:
+                signal.change(key, sender, entry[index], step)
+
+
+class _Windows:
+    """A channel's held chat split the way record_message reads it: the
+    short window (the messages of its last SHORT_WINDOW_SECONDS, oldest
+    first) and the baseline before it."""
+
+    def __init__(self) -> None:
+        self.short_entries: deque = deque()
+        self.short = _Window(None)
+        self.baseline = _Window(SHORT_WINDOW_SECONDS)
+
+
+_windows: dict[str, _Windows] = defaultdict(_Windows)
+
 
 def forget(channel_slug: str | None = None) -> None:
     """Drops what the detector holds for a channel - or for every channel,
     as a restart of the process does: its chat, its cooldown, its history."""
-    for state in (_entries, _last_moment_at, _history_start):
+    for state in (_entries, _windows, _last_moment_at, _history_start):
         if channel_slug is None:
             state.clear()
         else:
@@ -697,7 +806,7 @@ def _reaction_weight(entries: list, index: int) -> float:
             key = (entry[1], int(entry[0] // SHORT_WINDOW_SECONDS))
             if weight > strongest.get(key, 0.0):
                 strongest[key] = weight
-    return sum(strongest.values())
+    return math.fsum(strongest.values())
 
 
 def _short_reaction_weight(entries: list, index: int) -> float:
@@ -707,7 +816,7 @@ def _short_reaction_weight(entries: list, index: int) -> float:
     for entry in entries:
         if entry[index] > strongest.get(entry[1], 0.0):
             strongest[entry[1]] = entry[index]
-    return sum(strongest.values())
+    return math.fsum(strongest.values())
 
 
 def _spike_ratio(
@@ -853,12 +962,22 @@ def record_message(
 
     now = now if now is not None else time.monotonic()
     entries = _entries[channel_slug]
+    windows = _windows[channel_slug]
+    short_cutoff = now - SHORT_WINDOW_SECONDS
+    while windows.short_entries and windows.short_entries[0][0] < short_cutoff:
+        entry = windows.short_entries.popleft()
+        windows.short.remove(entry)
+        windows.baseline.add(entry)
     cutoff = now - BASELINE_WINDOW_SECONDS
     while entries and entries[0][0] < cutoff:
-        entries.popleft()
+        windows.baseline.remove(entries.popleft())
     if not entries:
         _history_start[channel_slug] = now
-    entries.append((now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight))
+    entry = (now, sender, content.strip().lower(), emote_count, emote_weight, laugh_weight, mention_weight)
+    entries.append(entry)
+    windows.short_entries.append(entry)
+    windows.short.add(entry)
+    short, baseline = windows.short, windows.baseline
 
     history_seconds = now - _held_since(channel_slug, entries)
     if history_seconds < BASELINE_WINDOW_SECONDS - SHORT_WINDOW_SECONDS:
@@ -868,18 +987,14 @@ def record_message(
     if last_moment_at is not None and now - last_moment_at < settings.cooldown_seconds:
         return None
 
-    short_cutoff = now - SHORT_WINDOW_SECONDS
-    short = [e for e in entries if e[0] >= short_cutoff]
-
-    short_emote_unique_senders = len({e[1] for e in short if e[4] > 0})
-    short_laugh_unique_senders = len({e[1] for e in short if e[5] > 0})
-    short_mention_unique_senders = len({e[1] for e in short if e[6] > 0})
+    short_emote_unique_senders = len(short.signals[4].senders)
+    short_laugh_unique_senders = len(short.signals[5].senders)
+    short_mention_unique_senders = len(short.signals[6].senders)
     # A signal fires only with at least _dynamic_min_reaction_unique people
     # behind it in the short window, and that is never below this however
     # big or small the baseline is. Most messages arrive with fewer people
-    # reacting than that, and for them nothing below can fire: the minutes
-    # of baseline are not gone through at all. What comes out is the same -
-    # this only spares the work - and it is most of a replay's time.
+    # reacting than that, and for them nothing below can fire. What comes
+    # out is the same - this only spares the work.
     fewest = min(settings.min_absolute_unique, settings.min_reaction_unique_ceiling)
     if not any(
         enabled and senders >= fewest
@@ -891,32 +1006,31 @@ def record_message(
     ):
         return None
 
-    baseline = [e for e in entries if e[0] < short_cutoff]
     baseline_seconds = history_seconds - SHORT_WINDOW_SECONDS
 
-    short_message_count = len(short)
-    short_unique_senders = len({e[1] for e in short})
-    short_unique_contents = len({e[2] for e in short if e[2]})
-    short_emote_count = sum(e[3] for e in short)
-    short_emote_weight = _short_reaction_weight(short, 4)
-    short_laugh_weight = _short_reaction_weight(short, 5)
-    short_laugh_count = sum(1 for e in short if e[5] > 0)
-    short_mention_weight = _short_reaction_weight(short, 6)
-    short_mention_count = sum(1 for e in short if e[6] > 0)
+    # Both windows' figures are kept up to date as messages come and go
+    # (_Window), so reading them costs the same on a busy chat as on a
+    # quiet one; the weights are exact sums (math.fsum), the same whatever
+    # order the messages behind them came and went in.
+    short_message_count = short.count
+    short_unique_senders = len(short.senders)
+    short_unique_contents = len(short.contents)
+    short_emote_count = short.emote_count
+    short_emote_weight = short.signals[4].weight
+    short_laugh_weight = short.signals[5].weight
+    short_laugh_count = short.signals[5].count
+    short_mention_weight = short.signals[6].weight
+    short_mention_count = short.signals[6].count
 
-    baseline_message_count = len(baseline)
-    baseline_unique_senders = len({e[1] for e in baseline})
-    baseline_unique_contents = len({e[2] for e in baseline if e[2]})
-    # Each signal's figures only look at the messages that carry one, in
-    # the same order: a few of the minutes' worth, gone through once each
-    # instead of all of them.
-    reacting = [e for e in baseline if e[4] > 0 or e[5] > 0 or e[6] > 0]
-    baseline_emote_weight = _reaction_weight(reacting, 4)
-    baseline_emote_unique_senders = len({e[1] for e in reacting if e[4] > 0})
-    baseline_laugh_weight = _reaction_weight(reacting, 5)
-    baseline_laugh_unique_senders = len({e[1] for e in reacting if e[5] > 0})
-    baseline_mention_weight = _reaction_weight(reacting, 6)
-    baseline_mention_unique_senders = len({e[1] for e in reacting if e[6] > 0})
+    baseline_message_count = baseline.count
+    baseline_unique_senders = len(baseline.senders)
+    baseline_unique_contents = len(baseline.contents)
+    baseline_emote_weight = baseline.signals[4].weight
+    baseline_emote_unique_senders = len(baseline.signals[4].senders)
+    baseline_laugh_weight = baseline.signals[5].weight
+    baseline_laugh_unique_senders = len(baseline.signals[5].senders)
+    baseline_mention_weight = baseline.signals[6].weight
+    baseline_mention_unique_senders = len(baseline.signals[6].senders)
 
     current_message_rate = short_message_count / SHORT_WINDOW_SECONDS
     baseline_message_rate = baseline_message_count / baseline_seconds if baseline_seconds > 0 else 0.0
