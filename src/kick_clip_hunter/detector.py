@@ -393,7 +393,45 @@ def classify_emote_names(emote_names: list[str]) -> dict[str, float]:
     }
 
 
-def keyword_weights(keywords: Iterable[str], settings: Settings | None = None) -> dict[str, float]:
+class KeywordWeights(dict[str, float]):
+    """A channel's keyword weights (see keyword_weights), indexed so that
+    the highest weight among those a message mentions is found without going
+    through every keyword - a channel listens for hundreds of 7TV names, and
+    trying each of them on each message was most of what a message cost.
+
+    A keyword long enough to be found anywhere (see mention_pattern) is
+    filed under its first MIN_EMOTE_NAME_LENGTH characters, and only those
+    filed under a stretch of the message are tried at that place; the few
+    shorter ones, found as words of their own, are tried one by one. What is
+    found is exactly what mentions() finds. It is not to be changed once
+    made: the index would not follow."""
+
+    def __init__(self, weights: dict[str, float]) -> None:
+        super().__init__(weights)
+        self._by_start: dict[str, list[tuple[str, float]]] = {}
+        self._short: list[tuple[str, float]] = []
+        for keyword, weight in self.items():
+            if len(keyword) >= MIN_EMOTE_NAME_LENGTH:
+                self._by_start.setdefault(keyword[:MIN_EMOTE_NAME_LENGTH], []).append((keyword, weight))
+            else:
+                self._short.append((keyword, weight))
+
+    def highest_mentioned(self, lowered: str) -> float:
+        """The highest weight among the keywords lowercased text mentions,
+        or 0.0 if it mentions none."""
+        best = 0.0
+        filed = self._by_start.get
+        for start in range(len(lowered) - MIN_EMOTE_NAME_LENGTH + 1):
+            for keyword, weight in filed(lowered[start : start + MIN_EMOTE_NAME_LENGTH], ()):
+                if weight > best and lowered.startswith(keyword, start):
+                    best = weight
+        for keyword, weight in self._short:
+            if weight > best and mentions(lowered, keyword):
+                best = weight
+        return best
+
+
+def keyword_weights(keywords: Iterable[str], settings: Settings | None = None) -> KeywordWeights:
     """What a channel's stored emote keywords weigh under its settings: the
     mention weight of a laughing emote or of any other, and nothing at all -
     the keyword is left out - for one the channel was told to ignore.
@@ -403,15 +441,17 @@ def keyword_weights(keywords: Iterable[str], settings: Settings | None = None) -
     the set is fetched, and is not gone over again here.
     """
     settings = settings or recommended()
-    return {
-        name: (
-            settings.emote_mention_laugh_weight
-            if is_laugh_emote_name(name, settings.added_laugh_emote_patterns)
-            else settings.emote_mention_other_weight
-        )
-        for name in keywords
-        if not _is_ignored_emote_name(name, settings)
-    }
+    return KeywordWeights(
+        {
+            name: (
+                settings.emote_mention_laugh_weight
+                if is_laugh_emote_name(name, settings.added_laugh_emote_patterns)
+                else settings.emote_mention_other_weight
+            )
+            for name in keywords
+            if not _is_ignored_emote_name(name, settings)
+        }
+    )
 
 
 # Chat's answer to a streamer's yes/no question is a wall of bare "1"s and
@@ -593,7 +633,8 @@ def classify_message(
     mention_weight is 0.0 if no channel keyword matched, otherwise the
     highest weight among the keywords that did (channel_keyword_weights
     maps each 7TV emote name the channel is listened for to what it weighs
-    there, see keyword_weights).
+    there, see keyword_weights). Weights keyword_weights made are looked up
+    in its index; any others are indexed for this one message.
     """
     settings = settings or recommended()
     if LAUGH_STRONG_PATTERN.search(content):
@@ -604,12 +645,11 @@ def classify_message(
         laugh_weight = 0.0
     laugh_weight = max(laugh_weight, native_laugh_weight(content, settings))
 
-    lowered = content.lower()
-    matched_weights = [
-        weight for keyword, weight in (channel_keyword_weights or {}).items() if mentions(lowered, keyword)
-    ]
-    mention_weight = max(matched_weights) if matched_weights else 0.0
-    return laugh_weight, mention_weight
+    if not channel_keyword_weights:
+        return laugh_weight, 0.0
+    if not isinstance(channel_keyword_weights, KeywordWeights):
+        channel_keyword_weights = KeywordWeights(channel_keyword_weights)
+    return laugh_weight, channel_keyword_weights.highest_mentioned(content.lower())
 
 
 def laugh_emote_names(emote_names: Iterable[str], added_patterns: Iterable[str] = ()) -> list[str]:
