@@ -83,7 +83,6 @@ PLACE_TOLERANCE_SECONDS = 1.0
 _MUTED = re.compile(r"-muted\.\w+$")
 # Where a segment of a live YouTube stream says its number.
 _NUMBER = re.compile(r"/sq/(\d+)/")
-_TIME_BASE = re.compile(r"^#tb 0: (\d+)/(\d+)")
 
 
 class FootageError(RuntimeError):
@@ -215,29 +214,35 @@ def agreed(offsets: list[float]) -> tuple[float, int] | None:
 def keyframes(path: Path) -> list[tuple[float, str]]:
     """When each keyframe of a video file is shown, on the file's own time,
     and its picture (an MD5 of the decoded frame) - only keyframes are
-    decoded, so a minute of 1080p takes a second or two."""
+    decoded, so a minute of 1080p takes a second or two. ffprobe says when
+    they are shown and ffmpeg what they show, each in the same order; where
+    the two do not come to as many, nothing can be said of the file."""
     # fmt: off
-    result = subprocess.run(
+    shown = subprocess.run(
+        [
+            recorder.FFPROBE_BIN, "-v", "error",
+            "-select_streams", "v:0", "-skip_frame", "nokey",
+            "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    pictures = subprocess.run(
         [
             recorder.FFMPEG_BIN, "-v", "error",
-            "-skip_frame", "nokey", "-copyts",
-            "-i", str(path),
-            "-map", "0:v:0", "-fps_mode", "passthrough", "-enc_time_base", "-1",
+            "-skip_frame", "nokey", "-i", str(path),
+            "-map", "0:v:0", "-fps_mode", "passthrough",
             "-f", "framemd5", "-",
         ],
         capture_output=True, text=True, check=True,
     )
     # fmt: on
-    base = 1.0
-    marks = []
-    for line in result.stdout.splitlines():
-        time_base = _TIME_BASE.match(line)
-        if time_base:
-            base = int(time_base.group(1)) / int(time_base.group(2))
-        elif line and not line.startswith("#"):
-            fields = [field.strip() for field in line.split(",")]
-            marks.append((int(fields[2]) * base, fields[-1]))
-    return marks
+    try:
+        times = [float(line.strip().strip(",")) for line in shown.stdout.splitlines() if line.strip().strip(",")]
+    except ValueError:
+        return []
+    hashes = [line.rsplit(",", 1)[-1].strip() for line in pictures.stdout.splitlines() if line and line[0] != "#"]
+    return list(zip(times, hashes, strict=True)) if len(times) == len(hashes) else []
 
 
 def video_start(path: Path) -> float:
