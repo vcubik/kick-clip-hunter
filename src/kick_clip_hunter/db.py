@@ -330,6 +330,15 @@ def get_connection() -> sqlite3.Connection:
     if "subtitles" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN subtitles TEXT")
 
+    # How many distinct people laughed around a moment, from
+    # detector.SHORT_WINDOW_SECONDS before it fired to
+    # detector.KEEP_LAUGHING_SECONDS after (see detector.laughing_people) -
+    # what the queue can be ordered by, since of everything measured it told
+    # a good clip from a poor one best. NULL where it was not counted: an
+    # imported clip, or one stored before it was (scripts/backfill_laughing.py).
+    if "laughing" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN laughing INTEGER")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -717,7 +726,7 @@ _MOMENT_COLUMNS = """
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
     context_before, context_after, downloaded_at,
-    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles
+    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles, laughing
 """
 
 
@@ -745,17 +754,21 @@ def get_recent_moments(
     *,
     unrated: bool = False,
     min_rating: int | None = None,
+    most_laughing: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
-    not rated yet, or only those rated `min_rating` or higher."""
+    not rated yet, or only those rated `min_rating` or higher. With
+    `most_laughing`, the ones the most people laughed around come first
+    instead, those not counted last, and newest first among equals."""
     conn.row_factory = sqlite3.Row
     where, params = _moment_filter(channel_slug, unrated, min_rating)
+    order = "laughing IS NULL, laughing DESC, " if most_laughing else ""
     return conn.execute(
         f"""
         SELECT {_MOMENT_COLUMNS}
         FROM moments
         {where}
-        ORDER BY detected_at DESC, id DESC
+        ORDER BY {order}detected_at DESC, id DESC
         LIMIT ? OFFSET ?
         """,
         (*params, limit, offset),
@@ -1473,6 +1486,26 @@ def update_moment_downloaded(conn: sqlite3.Connection, moment_id: int, downloade
 def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_end: str) -> None:
     conn.execute("UPDATE moments SET window_end = ? WHERE id = ?", (window_end, moment_id))
     conn.commit()
+
+
+def update_moment_laughing(conn: sqlite3.Connection, moment_id: int, laughing: int) -> None:
+    conn.execute("UPDATE moments SET laughing = ? WHERE id = ?", (laughing, moment_id))
+    conn.commit()
+
+
+def get_moments_without_laughing(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Moments the detector made whose laughing was never counted - stored
+    before it was. Imported clips are not among them: no chat set them off.
+    See scripts/backfill_laughing.py."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT id, broadcaster_user_id, channel_slug, window_start
+        FROM moments
+        WHERE laughing IS NULL AND reason != 'manual_import'
+        ORDER BY id
+        """
+    ).fetchall()
 
 
 def update_moment_title(conn: sqlite3.Connection, moment_id: int, title: str | None) -> None:

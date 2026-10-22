@@ -6,7 +6,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
 - Dashboard: `GET /dashboard` is the review page - a queue of moments (unrated, all, or
   best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
   (1-5 rate and move on, J/K move, Space plays, Del and Del again deletes the open
-  moment). Under the clip is the chat trace:
+  moment). Each row shows how many distinct people laughed around the moment (from 10s
+  before it fired to 60s after, `moments.laughing`), and the queue can be ordered by that
+  (`?order=laughing`, "Most laughing first") instead of newest first: of everything
+  measured on the rated moments it told a good clip from a poor one best, far better than
+  the stored score. Moments without a count (imports, or ones from before it was kept until
+  `scripts/backfill_laughing.py` has been run) come last. Under the clip is the chat trace:
   messages a second and how many of them were laughing, on the clip's own time axis, from
   30s before the clip to 60s after it. It is also the scrubber - a timeline over the
   clip's file, which opens with the footage that led up to the clip and runs on into what

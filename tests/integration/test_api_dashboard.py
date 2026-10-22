@@ -1591,7 +1591,8 @@ class TestUntrustedText:
         assert open_moment(page).one("h1").text == name
         assert open_moment(page).attrs["data-channel"] == name
         assert page.one("section", class_="queue-group").one("b").text == name
-        assert [option.text for option in page.find("option", selected=True)] == [name]
+        (channel_filter,) = page.find("select", id="channel-filter")
+        assert [option.text for option in channel_filter.find("option", selected=True)] == [name]
         (row,) = queue_rows(page)
         assert row.attrs["href"] == view.review_url(channel=name, moment=moment_id)
         assert "onmouseover" not in row.attrs and "onmouseover" not in open_moment(page).attrs
@@ -1678,6 +1679,50 @@ class TestPaging:
         monkeypatch.setattr(service.main, "MOMENTS_PAGE_SIZE", 5)
 
         assert (await review(service)).find("nav", class_="queue-pages") == []
+
+
+class TestOrderedByLaughing:
+    @pytest.fixture(autouse=True)
+    def moments_laughed_at_more_and_less(self, service, monkeypatch):
+        monkeypatch.setattr(service.main, "MOMENTS_PAGE_SIZE", 2)
+        self.few = add_moment(detected_at=T0, laughing=3)
+        self.most = add_moment(detected_at=T0 + minutes(1), laughing=15)
+        self.uncounted = add_moment(detected_at=T0 + minutes(2))
+        self.more = add_moment(detected_at=T0 + minutes(3), laughing=8)
+
+    async def test_the_most_laughing_come_first_and_those_not_counted_last(self, service):
+        first = await review(service, order="laughing")
+        second = await review(service, order="laughing", offset=2)
+
+        assert queued(first) + queued(second) == [self.most, self.more, self.few, self.uncounted]
+        assert opened(first) == self.most
+
+    async def test_newest_first_is_what_the_list_is_otherwise(self, service):
+        assert queued(await review(service)) == [self.more, self.uncounted]
+        assert queued(await review(service, order="sideways")) == [self.more, self.uncounted]
+
+    async def test_the_order_stays_while_moving_about_the_list(self, service):
+        page = await review(service, order="laughing")
+
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?order=laughing&moment={self.most}"
+        paging = page.one("nav", class_="queue-pages")
+        assert {link.text: link.attrs["href"] for link in paging.find("a", class_="ch-btn")} == {
+            "Less laughing": "/dashboard?order=laughing&offset=2"
+        }
+        tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
+        assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["all"] == (
+            "/dashboard?show=all&order=laughing"
+        )
+        (order,) = page.find("select", id="order-filter")
+        assert [option.attrs["value"] for option in order.find("option", selected=True)] == ["laughing"]
+
+    async def test_each_row_says_how_many_laughed_where_that_was_counted(self, service):
+        page = await review(service)
+
+        counted, uncounted = queue_rows(page)
+        assert counted.one("span", class_="ch-laughing").text == "8"
+        assert counted.one("span", class_="ch-laughing").attrs["title"] == "8 people laughed around it"
+        assert uncounted.find("span", class_="ch-laughing") == []
 
 
 class TestChannelFilter:

@@ -65,6 +65,9 @@ class Found:
     footage: tuple[float, float]
     # When the clip's first frame was broadcast.
     clip_started_at: datetime
+    # How many people laughed around it, as a moment is stored with that
+    # too (see replay.ReplayedMoment). None where the replay did not count.
+    laughing: int | None = None
 
     @property
     def fired_at(self) -> datetime:
@@ -164,6 +167,7 @@ def find(replayed: Iterable[ReplayedMoment], parts: Sequence[Part], tuning: Tuni
                 clip=clip,
                 footage=footage,
                 clip_started_at=started_at,
+                laughing=moment.laughing,
             )
         )
     return found, missing

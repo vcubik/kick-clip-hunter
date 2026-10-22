@@ -230,16 +230,18 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-group { display: flex; align-items: baseline; gap: var(--space-8); padding: var(--space-12) var(--space-12) 6px; font-size: 14px; line-height: 20px; font-weight: 400; }
 .ch-group b { font-weight: 700; }
 .ch-group span { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
-.ch-row { display: grid; grid-template-columns: 58px 64px minmax(0, 1fr) 12px auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
+.ch-row { display: grid; grid-template-columns: 58px 64px minmax(0, 1fr) auto 12px auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
 .ch-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .ch-row:focus-visible, .ch-tab:focus-visible, .bar-nav a:focus-visible { outline-offset: -2px; }
 .ch-row[aria-current="true"] { background-color: var(--sunk); border-left-color: var(--lit); }
 .ch-row .ch-time { font-size: 14px; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; }
 .ch-row .ch-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Its column is kept when there is nothing in it, so the meters line up. */
-.ch-row .ch-taken { grid-column: 4; display: flex; color: var(--text-2); }
+/* How many people laughed around it - nothing where it was not counted. */
+.ch-row .ch-laughing { grid-column: 4; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.ch-row .ch-taken { grid-column: 5; display: flex; color: var(--text-2); }
 .ch-row .ch-taken[hidden] { display: none; }
-.ch-row .ch-meter { grid-column: 5; }
+.ch-row .ch-meter { grid-column: 6; }
 .ch-row.is-unrated .ch-time, .ch-row.is-unrated .ch-what { font-weight: 700; }
 .ch-row[aria-current="true"] .ch-meter i:not(.is-lit) { background: var(--quiet); }
 /* The shape of chat around the moment, in a well: all messages in `lit`,

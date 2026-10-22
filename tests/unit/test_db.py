@@ -116,7 +116,7 @@ class TestSchema:
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
-            "context_before", "context_after", "downloaded_at", "subtitles",
+            "context_before", "context_after", "downloaded_at", "subtitles", "laughing",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
@@ -1381,6 +1381,7 @@ class TestMoments:
             "stream_type",
             "moment_type",
             "subtitles",
+            "laughing",
         ):
             assert row[column] is None
 
@@ -1414,6 +1415,28 @@ class TestMoments:
         conn.commit()
 
         assert [row["reason"] for row in db.get_recent_moments(conn)] == ["third", "second", "first"]
+
+    def test_the_most_laughing_can_come_first_those_not_counted_last(self, conn):
+        for minute, reason, laughing in [(1, "a", 9), (2, "b", None), (3, "c", 3), (4, "d", 9)]:
+            moment_id = store_moment(conn, reason=reason)
+            conn.execute("UPDATE moments SET detected_at = ? WHERE id = ?", (f"2026-01-01T12:0{minute}:00Z", moment_id))
+            if laughing is not None:
+                db.update_moment_laughing(conn, moment_id, laughing)
+        conn.commit()
+
+        ordered = db.get_recent_moments(conn, most_laughing=True)
+
+        # Newest first among equals, as the list is otherwise.
+        assert [(row["reason"], row["laughing"]) for row in ordered] == [("d", 9), ("a", 9), ("c", 3), ("b", None)]
+        assert [row["reason"] for row in db.get_recent_moments(conn, limit=1, offset=1, most_laughing=True)] == ["a"]
+
+    def test_the_moments_still_to_be_counted_are_the_detectors_without_a_count(self, conn):
+        counted = store_moment(conn)
+        db.update_moment_laughing(conn, counted, 0)
+        store_moment(conn, reason="manual_import")
+        waiting = store_moment(conn)
+
+        assert [row["id"] for row in db.get_moments_without_laughing(conn)] == [waiting]
 
     def test_paging_and_channel_filter(self, conn):
         for number in range(6):
