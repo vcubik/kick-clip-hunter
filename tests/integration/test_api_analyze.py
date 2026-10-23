@@ -650,7 +650,11 @@ class TestTheMessagesOfAPeriod:
             chat_stats.second_words(T0 + timedelta(seconds=1), today),
         ]
         assert page.one("h2", id="an-found").text == "2 messages"
-        assert tabs(page.one("header", class_="an-head").one("nav")) == {"Overview": False, "Messages": True}
+        assert tabs(page.one("header", class_="an-head").one("nav")) == {
+            "Overview": False,
+            "Messages": True,
+            "Shared audience": False,
+        }
 
     async def test_or_in_the_order_they_came(self, service):
         say(1, "alice", "first")
@@ -870,7 +874,11 @@ class TestTheChatAroundAMessage:
         assert page.one("h2", id="an-around").text == (
             f"Chat around {chat_stats.second_words(T0 + timedelta(seconds=2), today)}"
         )
-        assert tabs(page.one("header", class_="an-head").one("nav")) == {"Overview": False, "Messages": True}
+        assert tabs(page.one("header", class_="an-head").one("nav")) == {
+            "Overview": False,
+            "Messages": True,
+            "Shared audience": False,
+        }
 
     async def test_it_reaches_beyond_the_period_that_is_open(self, service):
         say(-30, content="before the period")
@@ -949,3 +957,113 @@ class TestWhatChatWroteIsTextAndNeverMarkup:
 
         assert page.find("script", src=False) == []
         assert page.one("h2", id="an-nobody").text == f"Nobody called {self.PAYLOAD} wrote in this period"
+
+
+def chatters_of(channel: str, owner: int, *names: str, second: float = 0) -> None:
+    """Each of `names` writes once in a channel's chat, `second` after T0."""
+    for name in names:
+        add_chat(channel, name, "hi", T0 + timedelta(seconds=second), owner)
+
+
+def audience_url(channel: str = CHANNEL, **params) -> str:
+    return chat_stats.analyze_url(channel, view=chat_stats.VIEW_AUDIENCE, **params)
+
+
+class TestTheSharedAudience:
+    async def test_it_is_a_view_of_its_own_with_the_channels_shared_with_and_the_map(self, service):
+        chatters_of(CHANNEL, 1, "alice", "bob", "carol", "dave")
+        chatters_of("other_channel", 2, "alice", "Bob", "zed")
+        chatters_of("third_channel", 3, "alice")
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **TEN_MINUTES)
+
+        assert tabs(page.one("header", class_="an-head").one("nav")) == {
+            "Overview": False,
+            "Messages": False,
+            "Shared audience": True,
+        }
+        assert figures(page)["Also elsewhere"] == ("50%", "2 chatters wrote in another")
+        assert table(page, "an-shared") == [
+            ["other_channel", "2", "50%", "67%", "alice bob"],
+            ["third_channel", "1", "25%", "100%", "alice"],
+        ]
+        assert table(page, "an-elsewhere")[0] == ["alice", "2", "other_channel, third_channel", "1"]
+        rows = page.one("table", class_="an-map").one("tbody").find("tr")
+        # The channels in the order of their names, as on the left.
+        assert [row.one("th").text for row in rows] == ["other_channel 3", f"{CHANNEL} 4", "third_channel 1"]
+        assert [cell.text for cell in rows[1].find("td")] == ["50%", "", "25%"]
+        assert "is-current" in rows[1].one("th").classes
+
+    async def test_another_channel_leads_to_its_shared_audience_in_the_same_period(self, service):
+        chatters_of(CHANNEL, 1, "alice")
+        chatters_of("other_channel", 2, "alice")
+        period = chat_stats.Period(T0, T0 + minutes(10))
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **TEN_MINUTES)
+
+        expected = audience_url("other_channel", period=period)
+        assert (
+            page.one("section", aria_labelledby="an-shared").one("tbody").one("th").one("a").attrs["href"] == expected
+        )
+        mapped = page.one("table", class_="an-map").one("tbody").find("tr")[0].one("a")
+        assert mapped.attrs["href"] == expected
+        other = await analyze_at(service, expected)
+        assert table(other, "an-shared")[0][0] == CHANNEL
+
+    async def test_another_period_or_channel_keeps_showing_it(self, service):
+        session(T0)
+
+        page = await analyze(service, channel=CHANNEL, view="audience")
+
+        presets = page.one("aside").one("nav", class_="ch-tabs").find("a")
+        assert presets[0].attrs["href"] == audience_url(preset="day")
+        assert "view=audience" in page.one("a", class_="rec-row").attrs["href"]
+        for form in (page.one("form", class_="queue-filter"), page.one("form", class_="an-range")):
+            assert form.one("input", name="view").attrs["value"] == "audience"
+
+    async def test_the_overview_does_not_carry_the_view_on(self, service):
+        session(T0)
+
+        page = await analyze(service)
+
+        assert "view=" not in page.one("aside").one("nav", class_="ch-tabs").find("a")[0].attrs["href"]
+        assert page.one("form", class_="queue-filter").find("input", name="view") == []
+
+    async def test_a_channel_on_another_platform_is_not_compared(self, service):
+        chatters_of(CHANNEL, 1, "alice")
+        chatters_of("alice@twitch", -1, "alice")
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **TEN_MINUTES)
+
+        assert page.find("table", class_="an-map") == []
+        assert page.one("section", aria_labelledby="an-shared").one("p").text == (
+            "No other Kick channel has chat stored from this period, which leaves nothing to compare with."
+        )
+
+    async def test_chat_bots_are_nobody_s_audience(self, service):
+        chatters_of(CHANNEL, 1, "alice", "Nightbot")
+        chatters_of("other_channel", 2, "nightbot", "zed")
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **TEN_MINUTES)
+
+        assert figures(page)["Chatters"][0] == "1"
+        assert page.one("section", aria_labelledby="an-shared").one("p").text == (
+            "Nobody who wrote here wrote in another channel's chat in this period."
+        )
+
+    async def test_only_the_period_is_compared(self, service):
+        chatters_of(CHANNEL, 1, "alice")
+        chatters_of("other_channel", 2, "alice", second=3600)
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **TEN_MINUTES)
+
+        assert page.find("table", class_="an-map") == []
+        assert figures(page)["Only here"] == ("100%", "1 chatter")
+
+    async def test_a_period_without_chat_says_so(self, service):
+        chatters_of(CHANNEL, 1, "alice")
+        chatters_of("other_channel", 2, "alice", second=3600)
+
+        page = await analyze(service, channel=CHANNEL, view="audience", **between(T0 + minutes(30), T0 + minutes(90)))
+
+        assert page.one("section", aria_labelledby="an-empty").one("h2").text == "No chat in this period"

@@ -4594,11 +4594,52 @@ def _analyze_around(conn, owner: int, today: date, url, message_id: str) -> dict
     }
 
 
-def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, today: date) -> dict:
+def _analyze_audience(conn, channel: dict, channels: list[dict], period: chat_stats.Period, url, channel_url) -> dict:
+    """The audience a channel shares with the others of its platform in a
+    period (see chat_stats.Audience): figures, the channels it shares most
+    with, its chatters who wrote in the most other chats, and the map of
+    what every two of those channels share. `channels` are all that have
+    chat stored, each with the accounts it ignores; `channel_url` leads to
+    another channel's shared audience in the same period. None where the
+    channel had no chatter in the period."""
+    platform = platforms.platform_of(channel["name"])
+    audiences = []
+    for item in channels:
+        if platforms.platform_of(item["name"]) != platform:
+            continue
+        counts = get_chatter_counts(conn, item["id"], period.start, period.end)
+        found = chat_stats.audience(item["name"], counts, item["ignored"])
+        if found.chatters:
+            audiences.append(found)
+    own = next((found for found in audiences if found.channel == channel["name"]), None)
+    if own is None:
+        return None
+    others = [found for found in audiences if found is not own]
+
+    def chatter_url(name: str) -> str:
+        return url(chatter=name)
+
+    shared = chat_stats.shared_channels(own, others, channel_link=channel_url, chatter_link=chatter_url)
+    elsewhere = chat_stats.chatters_elsewhere(own, others, chat_stats.TOP_ROWS, chatter_link=chatter_url)
+    _named(conn, channel["id"], elsewhere, *(row["names"] for row in shared))
+    return {
+        "platform": platforms.TITLES.get(platform, platform),
+        "figures": chat_stats.audience_figures(own, others),
+        "others": len(others),
+        "channels": shared,
+        "elsewhere": elsewhere,
+        "map": chat_stats.audience_map(audiences, own.channel, channel_url) if others else None,
+    }
+
+
+def _analysis(
+    channel: dict, channels: list[dict], words: _ChatWords, asked: _Asked, now: datetime, today: date
+) -> dict:
     """Everything the Analyze page shows of a channel's chat: the periods
-    on offer, the one that is open, and of that either its overview or its
-    messages. Runs in a thread of its own - a pass over a long period takes
-    seconds - so with a connection of its own."""
+    on offer, the one that is open, and of that its overview, its messages
+    or the audience it shares with the other channels (`channels`, all that
+    have chat stored). Runs in a thread of its own - a pass over a long
+    period takes seconds - so with a connection of its own."""
     owner, name = channel["id"], channel["name"]
     stored = chat_stats.whole_minutes(
         datetime.fromisoformat(channel["first"]), datetime.fromisoformat(channel["last"])
@@ -4623,17 +4664,25 @@ def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, to
             newest_session=chat_stats.session_period(sessions[0]) if sessions else None,
         )
 
+        # Messages are what is shown as soon as anything about them is asked.
+        searching = asked.chatter.strip() or asked.text.strip()
+        reading = bool(asked.around or searching or asked.view == chat_stats.VIEW_MESSAGES)
+        # The shared audience is looked at over one period after another, so
+        # another period, or another channel, keeps showing it.
+        sharing = not reading and asked.view == chat_stats.VIEW_AUDIENCE
+        lens = chat_stats.VIEW_AUDIENCE if sharing else chat_stats.VIEW_OVERVIEW
+
         def url(other: chat_stats.Period | None = None, **shown) -> str:
             """The page for this channel and what it is to show: of the
             period that is open, or of another."""
             if other is not None:
+                shown.setdefault("view", lens)
                 return chat_stats.analyze_url(name, period=other, **shown)
             shown.setdefault("top", asked.top)
             return chat_stats.analyze_url(name, preset=preset, period=period, **shown)
 
-        # Messages are what is shown as soon as anything about them is asked.
-        searching = asked.chatter.strip() or asked.text.strip()
-        reading = bool(asked.around or searching or asked.view == chat_stats.VIEW_MESSAGES)
+        def channel_url(other: str) -> str:
+            return chat_stats.analyze_url(other, preset=preset, period=period, view=chat_stats.VIEW_AUDIENCE)
         page = {
             "channel": name,
             "period_words": chat_stats.period_words(period, today),
@@ -4648,7 +4697,7 @@ def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, to
             "presets": [
                 {
                     "label": label,
-                    "href": chat_stats.analyze_url(name, preset=key),
+                    "href": chat_stats.analyze_url(name, preset=key, view=lens),
                     "current": key == preset,
                 }
                 for key, label in chat_stats.preset_labels()
@@ -4656,20 +4705,27 @@ def _analysis(channel: dict, words: _ChatWords, asked: _Asked, now: datetime, to
             "sessions": chat_stats.session_rows(sessions, today, period, url),
             "stored_words": chat_stats.stored_words(stored, today),
             "views": [
-                {"label": "Overview", "href": url(), "current": not reading},
+                {"label": "Overview", "href": url(), "current": not reading and not sharing},
                 {"label": "Messages", "href": url(view=chat_stats.VIEW_MESSAGES), "current": reading},
+                {"label": "Shared audience", "href": url(view=chat_stats.VIEW_AUDIENCE), "current": sharing},
             ],
+            # The view another channel or period is opened in, where it is not
+            # the overview.
+            "lens": lens if sharing else None,
             "chatter": asked.chatter.strip(),
             "text": asked.text.strip(),
             "all_href": chat_stats.analyze_url(name, preset=chat_stats.PRESET_ALL),
             "overview": None,
             "messages": None,
             "around": None,
+            "audience": None,
         }
         if asked.around:
             page["around"] = _analyze_around(conn, owner, today, url, asked.around)
         elif reading:
             page["messages"] = _analyze_messages(conn, owner, period, words, today, url, asked)
+        elif sharing:
+            page["audience"] = _analyze_audience(conn, channel, channels, period, url, channel_url)
         else:
             page["overview"] = _analyze_overview(
                 conn, owner, period, words, today, url, asked.top, _period_before(period, preset, sessions)
@@ -4701,7 +4757,8 @@ async def dashboard_analyze(
     other by its two ends (`from` and `to`, local time); left out, it is
     the channel's newest session. Of that period the page shows the
     overview, or - with `view=messages`, a `chatter` or a text to look for
-    (`q`) - its messages, a page at a time from `offset` on, in `order`.
+    (`q`) - its messages, a page at a time from `offset` on, in `order`,
+    or - with `view=audience` - the audience it shares with other channels.
     `around` is a message to show the chat around instead, and `top` how
     long the overview's tables are.
     """
@@ -4719,6 +4776,8 @@ async def dashboard_analyze(
             keywords = _channel_keywords(conn, chosen["id"])
             patterns = tuple(_tuning(conn, chosen["id"]).detector.added_laugh_emote_patterns)
             words = _ChatWords(tuple(keywords), tuple(detector.laugh_emote_names(keywords, patterns)), patterns)
+        for item in channels:
+            item["ignored"] = _tuning(conn, item["id"]).detector.ignored_senders
     finally:
         conn.close()
 
@@ -4737,7 +4796,7 @@ async def dashboard_analyze(
             top=top if top in (chat_stats.TOP_ROWS, chat_stats.TOP_ROWS_MORE) else chat_stats.TOP_ROWS,
             around=around,
         )
-        context["analysis"] = await asyncio.to_thread(_analysis, chosen, words, asked, _now(), _today())
+        context["analysis"] = await asyncio.to_thread(_analysis, chosen, channels, words, asked, _now(), _today())
     return templates.TemplateResponse(request, "analyze.html", context)
 
 

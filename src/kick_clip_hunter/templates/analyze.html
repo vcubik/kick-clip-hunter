@@ -1,8 +1,9 @@
 {#- The Analyze page: a channel's stored chat in figures (see chat_stats.py).
     On the left whose chat and of which period - a preset, any two times, or
-    one of the sessions the chat came in; beside it either the overview of
-    that period or its messages, which is also where one chatter is looked
-    up. Everything on it is a link or a form, so it needs no script. -#}
+    one of the sessions the chat came in; beside it the overview of that
+    period, its messages, which is also where one chatter is looked up, or
+    the audience the channel shares with others. Everything on it is a link
+    or a form, so it needs no script. -#}
 {% extends "base.html" %}
 {% from "_chat_line.html" import chat_name, chat_text with context %}
 {% from "_macros.html" import pages %}
@@ -80,6 +81,7 @@
         <option value="">No channel has chat stored</option>
         {% endfor %}
       </select>
+      {% if analysis and analysis.lens %}<input type="hidden" name="view" value="{{ analysis.lens }}">{% endif %}
       <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
     </form>
     {% if analysis %}
@@ -90,6 +92,7 @@
     </nav>
     <form class="an-range" method="get" action="/dashboard/analyze">
       <input type="hidden" name="channel" value="{{ analysis.channel }}">
+      {% if analysis.lens %}<input type="hidden" name="view" value="{{ analysis.lens }}">{% endif %}
       <label for="an-from">From</label>
       <input type="datetime-local" class="ch-input" id="an-from" name="from" value="{{ analysis.start }}">
       <label for="an-to">To</label>
@@ -377,6 +380,84 @@
       </div>
       {% if messages.paging %}{{ pages(messages.paging, "Pages of the messages", "Back", "On", "an-pages") }}{% endif %}
     </section>
+
+    {% elif analysis.audience %}
+    {% set audience = analysis.audience %}
+    <p class="section-lead">Who wrote in this chat and in another {{ audience.platform }} channel's in the same period, a name taken for the same person wherever it writes. The chat bots a channel ignores are left out.</p>
+    {{ figures(audience.figures) }}
+
+    {#- On paper, like everything else chat did: a row for each channel's
+        chatters, a column for each channel they may also have written in,
+        and the darker a cell the more of them did. -#}
+    {% if audience.map %}
+    <section aria-labelledby="an-map">
+      <h2 class="an-title" id="an-map">Map of the shared audience</h2>
+      <p class="ch-cap">Each row is a channel's chatters in this period, and a cell what part of them also wrote in the chat of the channel above it.</p>
+      <div class="an-map-scroll">
+        <table class="an-map">
+          <thead>
+            <tr>
+              <td></td>
+              {% for column in audience.map.columns %}
+              <th scope="col"{% if column.current %} class="is-current"{% endif %}><span>{{ column.channel }}</span></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in audience.map.rows %}
+            <tr>
+              <th scope="row"{% if row.current %} class="is-current"{% endif %}>{% if row.href and not row.current %}<a href="{{ row.href }}">{{ row.channel }}</a>{% else %}{{ row.channel }}{% endif %} <span class="ch-meta">{{ row.chatters }}</span></th>
+              {% for cell in row.cells %}
+              {% if cell.self %}<td class="an-self"></td>{% else %}<td{% if cell.dark %} class="is-dark"{% endif %} style="--level: {{ cell.level }}" title="{{ cell.title }}">{{ cell.words }}</td>{% endif %}
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    {#- One under the other: the rows are wide, with names and lists in them. -#}
+    <div class="an-stack">
+      <section aria-labelledby="an-shared">
+        <h2 class="an-title" id="an-shared">Channels it shares chatters with</h2>
+        {% if audience.channels %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Channel</th><th scope="col" class="an-number">Chatters</th><th scope="col" class="an-number">Of its own</th><th scope="col" class="an-number">Of theirs</th><th scope="col">Wrote most here</th></tr>
+          </thead>
+          <tbody>
+            {% for row in audience.channels %}
+            <tr><th scope="row"><a href="{{ row.href }}">{{ row.channel }}</a></th><td class="an-number">{{ row.shared }}</td><td class="an-number">{{ row.of_own }}</td><td class="an-number">{{ row.of_theirs }}</td><td><span class="an-names">{% for name in row.names %}<span>{{ chatter(name) }}</span>{% endfor %}</span></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% elif audience.others %}
+        <p class="ch-meta">Nobody who wrote here wrote in another channel's chat in this period.</p>
+        {% else %}
+        <p class="ch-meta">No other {{ audience.platform }} channel has chat stored from this period, which leaves nothing to compare with.</p>
+        {% endif %}
+      </section>
+
+      <section aria-labelledby="an-elsewhere">
+        <h2 class="an-title" id="an-elsewhere">Seen in most other chats</h2>
+        {% if audience.elsewhere %}
+        <table class="an-table">
+          <thead>
+            <tr><th scope="col">Chatter</th><th scope="col" class="an-number">Chats</th><th scope="col">Where</th><th scope="col" class="an-number">Messages here</th></tr>
+          </thead>
+          <tbody>
+            {% for row in audience.elsewhere %}
+            <tr><th scope="row">{{ chatter(row) }}</th><td class="an-number">{{ row.channels }}</td><td class="ch-meta">{{ row.where }}</td><td class="an-number">{{ row.messages }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="ch-meta">Nobody who wrote here wrote anywhere else in this period.</p>
+        {% endif %}
+      </section>
+    </div>
 
     {% else %}
     <section aria-labelledby="an-empty">

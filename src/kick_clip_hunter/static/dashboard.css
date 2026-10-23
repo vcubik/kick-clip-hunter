@@ -95,6 +95,8 @@
   --w-analysis: 1200px;
   --w-gutter: 44px;
   --w-when: 152px;
+  --w-map-cell: 48px;     /* a cell of the shared-audience map */
+  --h-map-head: 136px;    /* the most a channel's name over a column of it takes */
 
   /* Chat as a chat video draws it (static/chat_video.css), which the Trim
      dialog shows over the picture where it will be drawn into it: on a
@@ -745,7 +747,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .an-page { min-height: 0; overflow-y: auto; padding: var(--space-24) var(--space-36) var(--space-48); }
 .an-in { display: flex; flex-direction: column; gap: var(--space-24); max-width: var(--w-analysis); }
 .an-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-16); }
-.an-head .ch-tabs, .an-found .ch-tabs { flex: none; width: 240px; }
+.an-head .ch-tabs { flex: none; width: 380px; }
+.an-found .ch-tabs { flex: none; width: 240px; }
 .an-search .ch-input { width: 200px; }
 .an-search .an-text { flex: 1 1 200px; max-width: 360px; }
 .an-title { margin-bottom: var(--space-8); font-size: 16px; line-height: 20px; font-weight: 700; }
@@ -808,6 +811,23 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .an-facts dt { font-stretch: var(--width-compact); color: var(--text-2); }
 .an-facts dd { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-16); }
 .an-fact { display: inline-flex; align-items: center; gap: var(--space-4); }
+
+/* The map of the shared audience: chat's, so its cells are on paper, inked
+   as dark as the part of a row's chatters who wrote in a column's chat. */
+.an-map-scroll { overflow-x: auto; }
+.an-stack { display: flex; flex-direction: column; gap: var(--space-24); }
+.an-names { display: flex; flex-wrap: wrap; gap: 0 var(--space-12); }
+.an-map { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.an-map thead th { padding: 0 0 var(--space-4); vertical-align: bottom; font-weight: 400; color: var(--text-2); }
+.an-map thead th span { display: inline-block; max-height: var(--h-map-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; writing-mode: vertical-rl; transform: rotate(180deg); }
+.an-map tbody th { padding: 0 var(--space-12) 0 var(--space-4); text-align: left; white-space: nowrap; font-weight: 700; }
+.an-map th.is-current { background: var(--sunk); color: var(--text); }
+.an-map a { text-decoration: none; }
+.an-map a:hover { text-decoration: underline; }
+.an-map td { width: var(--w-map-cell); min-width: var(--w-map-cell); height: var(--h-tab); border: 1px solid var(--grid); text-align: center; color: var(--ink); background: color-mix(in srgb, var(--ink) calc(var(--level, 0) * 100%), var(--paper)); }
+.an-map td.is-dark { color: var(--paper); }
+.an-map td.an-self { background: var(--grid); }
+.an-map thead td { border: 0; background: none; }
 
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 
