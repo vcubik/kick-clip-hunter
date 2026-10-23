@@ -577,6 +577,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* Download chat and what it says while its video is made sit in the line
    as if they were in it themselves. */
 .rec-chat-file { display: contents; }
+.rec-chat-colour { width: var(--h-control); height: var(--h-compact); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--inset); cursor: pointer; }
+.rec-chat-colour:disabled { opacity: 0.45; cursor: not-allowed; }
 .rec-chat-words { font-size: 13px; font-stretch: var(--width-compact); color: var(--text-2); }
 .rec-chat-words:empty { display: none; }
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import logging.handlers
 import math
@@ -3796,12 +3797,23 @@ _recording_chat_files: dict[int, dict] = {}
 RECORDING_CHAT_FILE_BYTES_PER_SECOND = 100_000
 
 
-def _recording_chat_file_paths(file: Path) -> tuple[Path, Path]:
-    """Where the chat video of a recording's file is kept, and where it is
+def _recording_chat_file_paths(file: Path) -> tuple[Path, Path, Path]:
+    """Where the chat video of a recording's file is kept, where it is
     written while it is made - so that one cut short is never taken for
-    it."""
+    it - and where the colour it was made on is noted."""
     chat = file.with_name(chat_video.video_name(file.name))
-    return chat, chat.with_name(f"{chat.stem}.part{chat.suffix}")
+    return chat, chat.with_name(f"{chat.stem}.part{chat.suffix}"), chat.with_name(f"{chat.stem}.json")
+
+
+def _recording_chat_file_background_of(record: Path) -> str:
+    """The colour the chat video of a recording was made on, as noted
+    beside it: the Trim dialog's first colour for one made before that was
+    noted, or whose note can't be read."""
+    try:
+        noted = json.loads(record.read_text(encoding="utf-8")).get("background")
+        return clip_trim.chat_background(noted) or clip_trim.DEFAULT_CHAT_BACKGROUND
+    except (OSError, ValueError, AttributeError, clip_trim.TrimError):
+        return clip_trim.DEFAULT_CHAT_BACKGROUND
 
 
 def _recording_chat_file(conn, row, parts: list[stream_recording.Part], file: Path | None) -> dict:
@@ -3811,27 +3823,40 @@ def _recording_chat_file(conn, row, parts: list[stream_recording.Part], file: Pa
     known = _recording_chat_files.get(recording_id, {})
     state = known.get("state", dashboard_view.CHAT_FILE_NONE)
     download_url = None
+    background = None
     if state != dashboard_view.CHAT_FILE_MAKING and file is not None:
-        download_url = _stream_url(_recording_chat_file_paths(file)[0])
+        chat, _partial, record = _recording_chat_file_paths(file)
+        download_url = _stream_url(chat)
         if download_url:
             state = dashboard_view.CHAT_FILE_READY
+            background = _recording_chat_file_background_of(record)
     return {
         "url": f"/recordings/{recording_id}/chat_video",
         "page_url": f"/dashboard/recordings/{recording_id}/chat_video",
         "state": state,
         "busy": state == dashboard_view.CHAT_FILE_MAKING,
         "download_url": download_url,
+        # The colour the video there was made on - None while there is none -
+        # and the one the page offers to begin with.
+        "background": background,
+        "colour": background or clip_trim.DEFAULT_CHAT_BACKGROUND,
         "chat": bool(parts) and _recording_has_chat(conn, row, parts),
         "words": dashboard_view.chat_file_words(state, known.get("done")),
     }
 
 
 async def _recording_chat_file_background(
-    recording_id: int, channel: str, lines: list[dict], duration: float, chat: Path, partial: Path
+    recording_id: int,
+    channel: str,
+    lines: list[dict],
+    duration: float,
+    background: str,
+    paths: tuple[Path, Path, Path],
 ) -> None:
     # Off the event loop, and as a tracked task, like the chat of a cut
     # (see _trim_chat_background): minutes for a long recording.
     what = f"stream recording {recording_id}"
+    chat, partial, record = paths
     try:
         partial.unlink(missing_ok=True)
         progress = _making(_recording_chat_files, recording_id, dashboard_view.CHAT_FILE_MAKING)
@@ -3840,10 +3865,11 @@ async def _recording_chat_file_background(
             chat_video.lines_from(lines, 0.0),
             duration,
             partial,
-            clip_trim.DEFAULT_CHAT_BACKGROUND,
+            background,
             progress,
         )
         partial.replace(chat)
+        record.write_text(json.dumps({"background": background}), encoding="utf-8")
     except _GivenUp:
         partial.unlink(missing_ok=True)
         _recording_chat_files.pop(recording_id, None)
@@ -5988,17 +6014,30 @@ def _chat_file_answer(recording_id: int) -> dict:
 
 
 @app.post("/recordings/{recording_id}/chat_video")
-async def make_recording_chat_video(recording_id: int):
+async def make_recording_chat_video(recording_id: int, request: Request):
     """Starts making the chat of a whole recording as a video of its own,
-    on a colour, unless it is there or being made already (see
-    _recording_chat_file). Lines are placed as beside the recording: by its
-    parts, with the channel's chat delay."""
+    on a colour - `chat_background` ("#rrggbb") if it is posted, the Trim
+    dialog's first colour if not - unless it is being made already, or is
+    there on that colour (see _recording_chat_file); one there on another
+    colour is made anew in its place. Lines are placed as beside the
+    recording: by its parts, with the channel's chat delay."""
+    try:
+        asked = await request.json() if await request.body() else {}
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="Expected chat_background as JSON.")
+    try:
+        background = clip_trim.chat_background(asked.get("chat_background")) or clip_trim.DEFAULT_CHAT_BACKGROUND
+    except clip_trim.TrimError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     conn = get_connection()
     try:
         row, parts, file = _recording_with_file(conn, recording_id, "make chat for")
-        chat, partial = _recording_chat_file_paths(file)
+        paths = _recording_chat_file_paths(file)
+        chat, _partial, record = paths
         making = _recording_chat_files.get(recording_id, {}).get("state") == dashboard_view.CHAT_FILE_MAKING
-        if making or chat.exists():
+        if making or (chat.exists() and _recording_chat_file_background_of(record) == background):
             return {"recording_id": recording_id, **_recording_chat_file(conn, row, parts, file)}
         whole = stream_recording.length(parts)
         lines = _recording_chat_lines(conn, row, parts, 0.0, whole, RECORDING_CHAT_VIDEO_LIMIT + 1)
@@ -6024,7 +6063,7 @@ async def make_recording_chat_video(recording_id: int):
             ),
         )
     _recording_chat_files[recording_id] = {"state": dashboard_view.CHAT_FILE_MAKING, "done": 0.0}
-    _track_task(_recording_chat_file_background(recording_id, row["channel_slug"], lines, whole, chat, partial))
+    _track_task(_recording_chat_file_background(recording_id, row["channel_slug"], lines, whole, background, paths))
     return _chat_file_answer(recording_id)
 
 
