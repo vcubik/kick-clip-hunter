@@ -12,9 +12,11 @@ moments are stored with a timestamp, stream-elapsed offset, and the chat snippet
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
 whole stream can also be recorded on request, with its chat - and a TikTok channel is
 watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). A bot
-can write in a channel's chat - when a recording starts or ends, when a clip was made - and
-take commands there from its streamer and moderators (start or stop a recording, say how
-things stand); it is off for every channel until that channel's settings switch it on. And
+can write in a channel's chat - when the stream starts, a recording starts or ends, a moment
+is caught, a clip was made, a message of its own every so often, in words the settings may
+choose - and take commands there from its streamer and moderators (start or stop a recording,
+say how things stand, list the commands); it is off until the settings, for all channels or
+for one, switch it on. And
 the service can tell whoever runs it what happens - a clip saved, a recording started or
 saved, something on the Health page that needs a look, a summary of each day - in a Telegram
 chat, a Discord channel or both (`notify.py`), once `.env` says where. See [README.md](README.md) for the roadmap.
@@ -126,7 +128,7 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
   `get_connection()`, chat stored a batch per commit
 - `detector.py` — the heuristic engine; its docstring is how detection works
 - `tuning.py` — everything the Settings page can set, globally and per channel (pure); also clip
-  commands and the bot's switches and commands
+  commands and the bot's switches, messages and commands
 - `replay.py` — stored chat replayed through the detector (behind `replay_chat.py`, the Settings
   trial and moments in a recording)
 - `main.py` — the FastAPI app: webhook receiver, chat intake, dashboard routes, background tasks

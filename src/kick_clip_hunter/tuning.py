@@ -10,17 +10,20 @@ settings for all channels in everything it was not given a value of its own
 for, and everything nobody set follows the code.
 
 A few settings are a channel's alone (`Setting.per_channel`: the messages
-that ask for a clip, and what the bot does in its chat). Those are not on
-offer for all channels, and what a channel has of them holds whether or not
-it goes by its own settings in the rest.
+that ask for a clip or the bot for something). Those are not on offer for
+all channels, and what a channel has of them holds whether or not it goes
+by its own settings in the rest. What the bot tells of in chat, and in what
+words, can be set for all channels and for one (`Setting.either_way`): a
+channel's own value of those holds either way too - the bot is asked into a
+chat channel by channel, whatever detection goes by there.
 
 Three things are in this module:
 
 * `Tuning` - everything the service does for a channel that a setting can
   change: the detector's settings, how long a moment stays open, how its
   clip is cut around it, which messages in chat ask for a clip outright,
-  and whether the bot writes in the channel's chat and what it is asked
-  there (see chat_bot.py). `recommended()` is what the constants say, read
+  and whether the bot writes in the channel's chat, what it tells of there
+  and in what words, and what it is asked there (see chat_bot.py). `recommended()` is what the constants say, read
   where they are kept (detector.py, recorder.py, and the moment session's
   below) at the time it is called, and `buffer_seconds` how much of the
   stream its recorder keeps for its clips;
@@ -40,6 +43,7 @@ from __future__ import annotations
 
 import json
 import math
+import string
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -80,10 +84,16 @@ MOMENT_SESSION_MAX_SECONDS = 60
 DYNAMIC_POST_ROLL_SECONDS = 10
 
 # The commands the bot takes in a channel's chat (see chat_bot.py): start a
-# recording of the stream, stop it, say how things stand.
+# recording of the stream, stop it, say how things stand, say what the
+# commands are.
 RECORD = "record"
 STOP = "stop"
 STATUS = "status"
+HELP = "help"
+
+# How often the bot says the channel's message of its own while the stream
+# is on, in minutes, where nothing else was set.
+BOT_REPEAT_MINUTES = 30
 
 
 @dataclass(frozen=True)
@@ -109,15 +119,32 @@ class Tuning:
     clip_commands: frozenset[str] = frozenset()
     clip_command_from_anyone: bool = False
     # The bot in chat: whether it writes in the channel's chat at all, and
-    # whether it says there when a clip was made - and the messages (whole,
-    # lowercased) the channel's streamer or one of its moderators asks it
-    # with: to start a recording of the stream, to stop it, to say how
-    # things stand. Off, and none, to begin with.
+    # what it tells of there by itself - the stream starting, a recording of
+    # it starting and ending, a moment caught, a clip made - and the
+    # messages (whole, lowercased) the channel's streamer or one of its
+    # moderators asks it with: to start a recording of the stream, to stop
+    # it, to say how things stand, to say what the commands are. Of what it
+    # tells of, only recordings to begin with; no command.
     bot_writes: bool = False
+    bot_tells_live: bool = False
+    bot_tells_recordings: bool = True
+    bot_tells_moments: bool = False
     bot_tells_clips: bool = False
     record_commands: frozenset[str] = frozenset()
     stop_commands: frozenset[str] = frozenset()
     status_commands: frozenset[str] = frozenset()
+    help_commands: frozenset[str] = frozenset()
+    # What the bot says of each, in words the channel chose - with what is
+    # in braces filled in (chat_bot.worded) - or "" for its own. And a
+    # message of the channel's own it says every so often while the stream
+    # is on: none to begin with.
+    bot_live_message: str = ""
+    bot_started_message: str = ""
+    bot_ended_message: str = ""
+    bot_moment_message: str = ""
+    bot_clip_message: str = ""
+    bot_repeat_message: str = ""
+    bot_repeat_minutes: int = BOT_REPEAT_MINUTES
 
     def is_clip_command(self, content: str) -> bool:
         """Whether a chat message is one of the channel's clip commands.
@@ -127,13 +154,14 @@ class Tuning:
 
     def bot_command(self, content: str) -> str | None:
         """Which of the bot's commands a chat message is (RECORD, STOP,
-        STATUS), if it is one of the channel's - compared whole, like a clip
-        command. A message is in one list at the most (see `check`)."""
+        STATUS, HELP), if it is one of the channel's - compared whole, like a
+        clip command. A message is in one list at the most (see `check`)."""
         said = content.strip().lower()
         for command, messages in (
             (RECORD, self.record_commands),
             (STOP, self.stop_commands),
             (STATUS, self.status_commands),
+            (HELP, self.help_commands),
         ):
             if said in messages:
                 return command
@@ -190,8 +218,9 @@ def buffer_seconds(tuned: Tuning) -> float:
 
 # -- the settings on offer ---------------------------------------------------
 
-# What a setting's value is: a whole number, a number, on or off, or a list -
-# of parts of emote names, of whole messages, or of accounts' names. A list is kept lowercased
+# What a setting's value is: a whole number, a number, on or off, a message
+# the bot writes, or a list - of parts of emote names, of whole messages, or
+# of accounts' names. A list is kept lowercased
 # and in alphabetical order, so two that hold the same things are equal. It
 # is posted as what it holds, item by item - the page adds them one at a
 # time - never as text for the service to split: then a message can have a
@@ -199,6 +228,7 @@ def buffer_seconds(tuned: Tuning) -> float:
 WHOLE = "whole"
 NUMBER = "number"
 SWITCH = "switch"
+TEXT = "text"
 WORDS = "words"
 PHRASES = "phrases"
 NAMES = "names"
@@ -206,7 +236,7 @@ LISTS = (WORDS, PHRASES, NAMES)
 # The lists that are taken as sets of what they hold.
 SETS = (PHRASES, NAMES)
 
-Value = bool | int | float | tuple[str, ...]
+Value = bool | int | float | str | tuple[str, ...]
 
 # A setting's field of the detector's settings is written with this in front.
 DETECTOR = "detector."
@@ -220,17 +250,22 @@ PHRASE_MAX_LENGTH = 100
 # A YouTube channel's name can be this long; Kick's and Twitch's are shorter.
 NAME_MAX_LENGTH = 100
 LIST_MAX_ITEMS = 50
+# A message the bot writes: as long as a chat takes, on Kick and on Twitch
+# (chat_bot.MAX_LENGTH) - what fills in its braces can take it past that,
+# and then it is cut short.
+TEXT_MAX_LENGTH = 500
 # What the field an item is added from says while it is empty.
 LIST_PROMPTS = {WORDS: "Part of an emote's name", PHRASES: "A whole message", NAMES: "An account's name"}
 
 # The sections of the page, in the order they come: key, heading, and what is
-# said under it. The first two are on a channel's page only (see
+# said under it. The first is on a channel's page only (see
 # Setting.per_channel).
 MOMENTS = "moments"
 SIGNALS = "signals"
 CLIPS = "clips"
 COMMANDS = "commands"
 BOT = "bot"
+MESSAGES = "messages"
 GROUPS = (
     (
         COMMANDS,
@@ -242,9 +277,16 @@ GROUPS = (
     (
         BOT,
         "The bot in chat",
-        "The bot can write in the channel's chat, and listens there to the commands below - from the channel's "
-        "streamer and its moderators, nobody else. Each channel has its own, whether or not it goes by its own "
-        "settings in the rest.",
+        "The bot can write in a channel's chat - what it tells of by itself, and its answers to the commands the "
+        "channel's streamer and moderators post there, nobody else's. What a channel is given of its own here "
+        "holds whether or not it goes by its own settings in the rest; the commands are set channel by channel.",
+    ),
+    (
+        MESSAGES,
+        "What the bot says",
+        "Each message in words of your own. Left empty, it is the bot's own, shown in its field. A word in braces "
+        "is filled in as the message goes out; a brace by itself is written twice. What a channel is given of its "
+        "own here holds whether or not it goes by its own settings in the rest.",
     ),
     (
         MOMENTS,
@@ -272,7 +314,10 @@ class Setting:
     front). `advanced` ones are folded away on the page. A `per_channel`
     one is set for each channel by itself: it is not on offer for all
     channels, and a channel's value holds whether or not the channel goes
-    by its own settings in the rest."""
+    by its own settings in the rest - as does an `either_way` one's, which
+    can be set for all channels as well. A message the bot writes (TEXT)
+    may have in braces the words of `fills`, and is `built_in` - an example
+    of the bot's own words - while it is left empty."""
 
     name: str
     group: str
@@ -285,6 +330,9 @@ class Setting:
     unit: str = ""
     advanced: bool = False
     per_channel: bool = False
+    either_way: bool = False
+    fills: tuple[str, ...] = ()
+    built_in: str = ""
 
 
 _WINDOW = detector.SHORT_WINDOW_SECONDS
@@ -534,18 +582,40 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         "bot_writes", BOT, SWITCH,
         "Write in chat",
-        "The bot says in chat when a recording of the stream starts and when it ends, and answers the commands "
-        "below. Off, it writes nothing there, and the commands are carried out without an answer.",
+        "The bot says in chat what is switched on below, and answers the commands. Off, it writes nothing there, "
+        "and the commands are carried out without an answer.",
         ("bot_writes",),
-        per_channel=True,
+        either_way=True,
+    ),
+    Setting(
+        "bot_tells_live", BOT, SWITCH,
+        "Say when the stream starts",
+        "Once the channel is seen live - not for a stream that was on already when the service started.",
+        ("bot_tells_live",),
+        either_way=True,
+    ),
+    Setting(
+        "bot_tells_recordings", BOT, SWITCH,
+        "Say when a recording starts and ends",
+        "A recording of the whole stream: when it starts, whoever started it, and when it ends, why and how much "
+        "of the stream it holds.",
+        ("bot_tells_recordings",),
+        either_way=True,
+    ),
+    Setting(
+        "bot_tells_moments", BOT, SWITCH,
+        "Say when a moment is caught",
+        "As soon as chat sets one off or a clip is asked for, before its clip is cut. One that chat set off can "
+        "still be thrown away once it closes, if too few people laughed around it.",
+        ("bot_tells_moments",),
+        either_way=True,
     ),
     Setting(
         "bot_tells_clips", BOT, SWITCH,
         "Say when a clip is made",
-        "Once a clip's file is saved, the bot says so in chat, and how far into the stream the clip is. Only while "
-        "it writes in chat.",
+        "Once a clip's file is saved, the bot says so in chat, and how far into the stream the clip is.",
         ("bot_tells_clips",),
-        per_channel=True,
+        either_way=True,
     ),
     Setting(
         "record_commands", BOT, PHRASES,
@@ -571,11 +641,77 @@ SETTINGS: tuple[Setting, ...] = (
         ("status_commands",),
         per_channel=True,
     ),
+    Setting(
+        "help_commands", BOT, PHRASES,
+        "Messages that ask for the commands",
+        "The same, !commands for one. The bot answers with the channel's commands, and what each does.",
+        ("help_commands",),
+        per_channel=True,
+    ),
+    Setting(
+        "bot_live_message", MESSAGES, TEXT,
+        "When the stream starts",
+        "Said where the bot says when the stream starts.",
+        ("bot_live_message",),
+        either_way=True, fills=("channel",), built_in="Watching chat for clips this stream.",
+    ),
+    Setting(
+        "bot_started_message", MESSAGES, TEXT,
+        "When a recording starts",
+        "Also when the stream is not on yet, and is recorded from when it starts.",
+        ("bot_started_message",),
+        either_way=True, fills=("channel",), built_in="Recording the stream from now on.",
+    ),
+    Setting(
+        "bot_ended_message", MESSAGES, TEXT,
+        "When a recording ends",
+        "{reason} is why it ended, as a sentence - \"The stream is over.\" for one - and {length} how much of the "
+        "stream it holds.",
+        ("bot_ended_message",),
+        either_way=True, fills=("channel", "reason", "length"),
+        built_in="Recording stopped. 1 hour 5 minutes of the stream recorded.",
+    ),
+    Setting(
+        "bot_moment_message", MESSAGES, TEXT,
+        "When a moment is caught",
+        "{stream_time} is how far into the stream, as 1:23:45 - empty where that is not known - and {by} who "
+        "asked for a clip, empty where chat set the moment off.",
+        ("bot_moment_message",),
+        either_way=True, fills=("channel", "stream_time", "by"), built_in="Moment caught at 1:23:45 into the stream.",
+    ),
+    Setting(
+        "bot_clip_message", MESSAGES, TEXT,
+        "When a clip is made",
+        "{length} is how long the clip is, {stream_time} how far into the stream chat reacted - empty where that "
+        "is not known.",
+        ("bot_clip_message",),
+        either_way=True, fills=("channel", "length", "stream_time"),
+        built_in="Clip saved: 45 seconds, at 1:23:45 into the stream.",
+    ),
+    Setting(
+        "bot_repeat_message", MESSAGES, TEXT,
+        "Every so often",
+        "A message of your own, said again and again while the stream is on - a link, a rule of the chat. Left "
+        "empty, nothing is.",
+        ("bot_repeat_message",),
+        either_way=True, fills=("channel",), built_in="Nothing",
+    ),
+    Setting(
+        "bot_repeat_minutes", MESSAGES, WHOLE,
+        "How often",
+        "The message above, every this many minutes - the first time this long after the stream started.",
+        ("bot_repeat_minutes",),
+        least=5, most=240, unit="minutes", either_way=True,
+    ),
 )
 
 BY_NAME: dict[str, Setting] = {setting.name: setting for setting in SETTINGS}
 # The settings that are a channel's alone.
 PER_CHANNEL = frozenset(setting.name for setting in SETTINGS if setting.per_channel)
+# The settings of which a channel's own value holds whether or not it goes by
+# its own settings in the rest: those that are a channel's alone, and the
+# bot's that can be set for all channels too.
+EITHER_WAY = frozenset(setting.name for setting in SETTINGS if setting.per_channel or setting.either_way)
 
 # Pairs of settings that only make sense one way round: the first may not be
 # more than the second - or, where the third says so, has to be less.
@@ -588,7 +724,7 @@ RULES = (
 )
 # The lists of messages that are commands. A message can be one command at
 # the most: in two lists, it would be carried out as whichever came first.
-COMMAND_LISTS = ("clip_commands", "record_commands", "stop_commands", "status_commands")
+COMMAND_LISTS = ("clip_commands", "record_commands", "stop_commands", "status_commands", "help_commands")
 
 
 # -- values ------------------------------------------------------------------
@@ -616,9 +752,14 @@ def shared(given: Mapping[str, Value]) -> dict[str, Value]:
 
 
 def per_channel(given: Mapping[str, Value]) -> dict[str, Value]:
-    """Those of the given values that are a channel's alone: what is in
-    force of a channel's own while it goes by the settings for all channels."""
+    """Those of the given values that are a channel's alone."""
     return {name: value for name, value in given.items() if name in PER_CHANNEL}
+
+
+def either_way(given: Mapping[str, Value]) -> dict[str, Value]:
+    """Those of the given values that hold of a channel's own either way:
+    what is in force of them while it goes by the settings for all channels."""
+    return {name: value for name, value in given.items() if name in EITHER_WAY}
 
 
 def values(for_all: Mapping[str, Value], own: Mapping[str, Value] | None = None) -> dict[str, Value]:
@@ -670,6 +811,27 @@ def _items(setting: Setting, raw: object) -> list[str]:
     return [item.strip().lower() for item in raw if item.strip()]
 
 
+def fills_words(setting: Setting) -> str:
+    """What a message may have in braces, as the page says it."""
+    return ", ".join(f"{{{name}}}" for name in setting.fills)
+
+
+def _check_fills(setting: Setting, text: str) -> None:
+    """Raises a ValueError, in words for the page, if what a message has in
+    braces is not all words it can fill in - nothing more in them than the
+    word, and every brace of its own written twice."""
+    label = f'"{setting.label}"'
+    try:
+        parts = list(string.Formatter().parse(text))
+    except ValueError:
+        raise ValueError(f"{label}: a brace that is not around a word is written twice, {{{{ or }}}}.") from None
+    for _, name, spec, conversion in parts:
+        if name is None:
+            continue
+        if name not in setting.fills or spec or conversion:
+            raise ValueError(f"{label}: {{{name}}} is not a word it fills in. It fills in {fills_words(setting)}.")
+
+
 def clean(name: str, raw: object) -> Value:
     """A value as it was posted or stored, as the value the setting takes -
     or a ValueError that says, in words for the page, why it can't be."""
@@ -682,6 +844,16 @@ def clean(name: str, raw: object) -> Value:
         if not isinstance(raw, bool):
             raise ValueError(f"{label} has to be on or off.")
         return raw
+
+    if setting.kind == TEXT:
+        if not isinstance(raw, str):
+            raise ValueError(f"{label} has to be a message.")
+        # One line, as a chat message is.
+        text = " ".join(raw.split())
+        if len(text) > TEXT_MAX_LENGTH:
+            raise ValueError(f"{label} can be {TEXT_MAX_LENGTH} characters long at the most.")
+        _check_fills(setting, text)
+        return text
 
     if setting.kind in LISTS:
         items = sorted(set(_items(setting, raw)))
@@ -771,20 +943,26 @@ def words(setting: Setting, value: Value) -> str:
         return "On" if value else "Off"
     if setting.kind in LISTS:
         return ", ".join(value)
+    if setting.kind == TEXT:
+        return value
     return _number_words(value)
 
 
 def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) -> dict[str, Any]:
     numeric = setting.kind in (WHOLE, NUMBER)
+    text = setting.kind == TEXT
+    caption = setting.caption
+    if text:
+        caption = f"{caption} It fills in {fills_words(setting)}."
     field = {
         "name": setting.name,
         "kind": setting.kind,
         "label": setting.label,
-        "caption": setting.caption,
+        "caption": caption,
         "value": words(setting, value),
         "on": value is True,
         "rest": words(setting, rest),
-        "rest_words": f"{rest_label}: {words(setting, rest) or 'none'}",
+        "rest_words": f"{rest_label}: {words(setting, rest) or ('its own words' if text else 'none')}",
         "at_rest": value == rest,
         # What may be typed into the field, for its tooltip.
         "range_words": _range_words(setting).capitalize() if numeric else None,
@@ -804,6 +982,10 @@ def _form_field(setting: Setting, value: Value, rest: Value, rest_label: str) ->
             most_items=LIST_MAX_ITEMS,
             prompt=LIST_PROMPTS[setting.kind],
         )
+    if text:
+        # Typed whole into a field of its own, which shows the bot's own
+        # words while it is empty.
+        field.update(longest=TEXT_MAX_LENGTH, prompt=setting.built_in)
     return field
 
 
@@ -821,8 +1003,11 @@ def form(
 
     The settings that are a channel's alone are in a channel's form only
     (`for_channel`), where what they would be if left alone is what is
-    recommended; a section of nothing else says so (`per_channel`), since
-    it can be set whether or not the channel goes by its own settings."""
+    recommended. A section of nothing but those and the ones that hold of a
+    channel's own either way says so (`either_way`), since it can be set
+    whether or not the channel goes by its own settings. On a channel's
+    page those come first, being what can be set there whatever it goes by;
+    for all channels, after detection's, which is what the page is for."""
     sections = []
     for key, title, lead in GROUPS:
         offered = [setting for setting in SETTINGS if setting.group == key and (for_channel or not setting.per_channel)]
@@ -847,8 +1032,10 @@ def form(
                 "advanced": advanced,
                 "advanced_set": any(not field["at_rest"] for field in advanced),
                 "set_count": sum(not field["at_rest"] for field in fields),
-                "per_channel": all(setting.per_channel for setting in offered),
+                "either_way": all(setting.name in EITHER_WAY for setting in offered),
             }
         )
+    if not for_channel:
+        sections.sort(key=lambda section: section["either_way"])
     return sections
 

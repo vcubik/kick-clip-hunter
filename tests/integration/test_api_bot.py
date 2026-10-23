@@ -374,6 +374,125 @@ class TestWhatItSaysUnasked:
 
         assert service.api.chat_written == []
 
+    async def test_nor_one_that_has_it_say_nothing_of_recordings(self, service, channel):
+        await set_up(service, bot_writes=True, bot_tells_recordings=False, **COMMANDS)
+
+        await service.client.post(f"/channels/{CHANNEL}/recording/start")
+        await service.settle()
+        await ask(service, "!record start")
+
+        # An answer to a command is said all the same.
+        assert written(service) == ["Already recording, from when the stream starts."]
+
+    async def test_in_the_channels_own_words_where_it_set_them(self, service, channel):
+        await set_up(
+            service,
+            bot_writes=True,
+            bot_started_message="REC on for {channel}",
+            bot_ended_message="{reason} Kept: {length}. {{bye}}",
+        )
+
+        await service.client.post(f"/channels/{CHANNEL}/recording/start")
+        await service.client.post(f"/channels/{CHANNEL}/recording/stop")
+        await service.settle()
+
+        assert written(service) == [f"REC on for {CHANNEL}", "Recording stopped. Kept: nothing. {bye}"]
+
+
+class TestAMomentCaught:
+    @pytest.fixture(autouse=True)
+    def into_the_stream(self, service, monkeypatch):
+        async def stream_elapsed(channel, broadcaster_user_id):
+            return 5025
+
+        monkeypatch.setattr(service.main, "_stream_elapsed_seconds", stream_elapsed)
+
+    async def test_a_clip_asked_for_is_said_where_that_is_switched_on(self, service, channel):
+        await set_up(service, bot_writes=True, bot_tells_moments=True, clip_commands=["!clip"])
+
+        await ask(service, "!clip")
+
+        assert len(service.moments()) == 1
+        assert written(service) == ["Clip asked for by the_streamer at 1:23:45 into the stream."]
+
+    async def test_one_chat_set_off_too_in_the_channels_own_words(self, service, channel):
+        service.warm_up(CHANNEL)
+        await set_up(service, bot_writes=True, bot_tells_moments=True, bot_moment_message="LOL at {stream_time}{by}")
+
+        await service.crowd_laughs(CHANNEL, people=12)
+        await service.settle()
+
+        assert written(service) == ["LOL at 1:23:45"]
+
+    async def test_and_nowhere_else(self, service, channel):
+        await set_up(service, bot_writes=True, clip_commands=["!clip"])
+
+        await ask(service, "!clip")
+
+        assert len(service.moments()) == 1
+        assert service.api.chat_written == []
+
+
+class TestTheCommands:
+    async def test_asked_for_it_says_the_channels_commands(self, service, channel):
+        await set_up(service, bot_writes=True, clip_commands=["!clip"], help_commands=["!commands"], **COMMANDS)
+
+        await ask(service, "!commands", identity=MODERATOR, sender="a_mod")
+
+        assert written(service) == [
+            "Commands: !clip - a clip; !record start - start recording; !record stop - stop recording; "
+            "!status - how things stand; !commands - these commands."
+        ]
+
+
+class TestWhatItSaysByItself:
+    def live(self, since: datetime | None) -> None:
+        recording_manager._looks[CHANNEL] = Look(at=datetime.now(timezone.utc), live_since=since)
+
+    async def test_a_stream_that_starts_is_said_once_and_one_already_on_is_not(self, service, channel):
+        await set_up(service, bot_writes=True, bot_tells_live=True)
+        began = datetime.now(timezone.utc)
+        self.live(began - timedelta(hours=1))
+        service.main._bot_round(began)  # on when the service started
+        self.live(None)
+        service.main._bot_round(began)
+
+        self.live(began)
+        service.main._bot_round(began)
+        service.main._bot_round(began + timedelta(minutes=1))
+        await service.settle()
+
+        assert written(service) == ["Watching chat for clips this stream."]
+
+    async def test_its_own_message_comes_every_so_often_while_the_stream_is_on(self, service, channel):
+        await set_up(service, bot_writes=True, bot_repeat_message="Follow {channel}!", bot_repeat_minutes=10)
+        began = datetime.now(timezone.utc)
+        self.live(None)
+        service.main._bot_round(began + timedelta(minutes=30))
+        self.live(began)
+
+        for minutes in (5, 10, 15, 21):
+            service.main._bot_round(began + timedelta(minutes=minutes))
+            await service.settle()
+
+        # Due ten minutes into the stream, and ten minutes after that - which
+        # the bot, its clock running in seconds here, takes for the same
+        # message written again just now and leaves out.
+        assert written(service) == [f"Follow {CHANNEL}!"]
+        assert service.main._repeated_at[USER_ID] == began + timedelta(minutes=21)
+
+    async def test_nothing_is_said_by_itself_without_writing_in_chat(self, service, channel):
+        await set_up(service, bot_tells_live=True, bot_repeat_message="Hi")
+        began = datetime.now(timezone.utc)
+        self.live(None)
+        service.main._bot_round(began)
+        self.live(began)
+
+        service.main._bot_round(began + timedelta(hours=1))
+        await service.settle()
+
+        assert service.api.chat_written == []
+
 
 class TestAClipSaved:
     @pytest.fixture
@@ -670,19 +789,68 @@ class TestOnThePages:
         assert note.text == health.YOUTUBE_WORDS
         assert note.find("a") == []
 
-    async def test_the_page_for_all_channels_has_no_such_section(self, service, channel):
+    async def test_the_page_for_all_channels_has_its_switches_and_messages_but_no_commands(self, service, channel):
         page = await page_at(service, "/dashboard/settings")
 
-        assert "The bot in chat" not in [heading.text for heading in page.find("h2")]
+        headings = [heading.text for heading in page.find("h2")]
+        assert "The bot in chat" in headings
+        assert "What the bot says" in headings
+        assert page.find(data_setting="bot_writes") != []
+        assert page.find(data_setting="record_commands") == []
         assert page.find("p", class_="set-bot") == []
+
+    async def test_a_message_is_a_field_that_shows_the_bots_own_words_while_it_is_empty(self, service, channel):
+        await set_up(service, bot_clip_message="Clipped at {stream_time}")
+
+        page = await page_at(service, f"/dashboard/settings?channel={CHANNEL}")
+
+        clip = page.one("input", data_setting="bot_clip_message")
+        assert (clip.attrs["data-kind"], clip.attrs["value"]) == ("text", "Clipped at {stream_time}")
+        live = page.one("input", data_setting="bot_live_message")
+        assert (live.attrs["value"], live.attrs["placeholder"]) == ("", "Watching chat for clips this stream.")
+        # A channel that goes by the settings for all channels can set them.
+        pane = page.one("fieldset", data_section_pane="messages")
+        assert "disabled" not in pane.attrs
+        assert "disabled" in page.one("fieldset", data_section_pane="moments").attrs
 
 
 class TestItsSettings:
-    async def test_they_are_each_channels_own(self, service, channel):
-        response = await service.client.post("/tuning", json={"values": {"bot_writes": True}})
+    async def test_the_commands_are_each_channels_own(self, service, channel):
+        response = await service.client.post("/tuning", json={"values": {"record_commands": ["!rec"]}})
 
         assert response.status_code == 400
-        assert response.json()["detail"] == '"Write in chat" is set for each channel by itself.'
+        assert response.json()["detail"] == '"Messages that start a recording" is set for each channel by itself.'
+
+    async def test_what_it_does_set_for_all_channels_holds_for_a_channel_with_none_of_its_own(self, service, channel):
+        response = await service.client.post("/tuning", json={"values": {"bot_writes": True}})
+        assert response.status_code == 200
+
+        await service.client.post(f"/channels/{CHANNEL}/recording/start")
+        await service.settle()
+
+        assert written(service) == ["Recording the stream from now on."]
+
+    async def test_a_channels_own_holds_over_it_whichever_way_its_own_settings_are_switched(self, service, channel):
+        await service.client.post("/tuning", json={"values": {"bot_writes": True}})
+        await set_up(service, bot_writes=False)
+        service.watch("another_channel", broadcaster_user_id=42)
+
+        await service.client.post(f"/channels/{CHANNEL}/recording/start")
+        await service.client.post("/channels/another_channel/recording/start")
+        await service.settle()
+
+        assert service.api.written_in(42) == ["Recording the stream from now on."]
+        assert written(service) == []
+
+    async def test_a_message_with_a_word_it_does_not_fill_in_is_turned_down(self, service, channel):
+        response = await service.client.post(
+            f"/channels/{CHANNEL}/tuning", json={"values": {"bot_live_message": "Live: {streamer}"}}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == (
+            '"When the stream starts": {streamer} is not a word it fills in. It fills in {channel}.'
+        )
 
     async def test_a_message_cannot_be_two_commands(self, service, channel):
         response = await service.client.post(

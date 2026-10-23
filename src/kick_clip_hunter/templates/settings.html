@@ -8,10 +8,12 @@
     it were left alone - what is recommended, or for a channel what all
     channels have. A list is what it holds, a rectangle an item: an item is
     added from the field beside it, one at a time, and taken out by its
-    cross. A channel that goes by the settings for all channels is shown
-    those, locked - all but the sections that are a channel's alone, which
-    come first and can be set either way: a clip on command, and the bot in
-    chat. Beside the bot's is as whom it writes on the channel's platform.
+    cross. A message the bot writes is typed whole into a field under its
+    name, which shows the bot's own words while it is empty. A channel that
+    goes by the settings for all channels is shown those, locked - all but
+    the sections that hold of a channel's own either way, which come first:
+    a clip on command, the bot in chat, and what the bot says. Beside the
+    bot's is as whom it writes on the channel's platform.
     The page for all channels has one tab more, for what is the service's:
     where notifications go and what they tell of. -#}
 {% extends "base.html" %}
@@ -58,6 +60,14 @@
     {%- for item in field.entries %}{{ chip(item) }}{% endfor -%}
   </ul>
   <p class="status-line" role="status" data-status></p>
+  {%- elif field.kind == "text" -%}
+  <label class="set-name" for="set-{{ field.name }}">{{ field.label }}</label>
+  <span class="set-value">
+    <span></span>
+    <span></span>
+    <button type="button" class="set-rest" data-rest="{{ field.rest }}" title="{{ field.rest_words }}"{% if field.at_rest %} disabled{% endif %}>{{ field.rest_words }}</button>
+  </span>
+  <input type="text" class="ch-input set-text" id="set-{{ field.name }}" value="{{ field.value }}" maxlength="{{ field.longest }}" placeholder="{{ field.prompt }}" autocomplete="off" data-setting="{{ field.name }}" data-kind="text">
   {%- else -%}
   <label class="set-name" for="set-{{ field.name }}">{{ field.label }}</label>
   <span class="set-value">
@@ -99,11 +109,11 @@
       {% endif %}
       <p class="set-whose">
         {%- if not channel -%}
-        These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code. The messages that ask for a clip, and what the bot does in chat, are set channel by channel: choose one above.{% if own_words %} {{ own_words }}{% endif %}
+        These hold for every channel, in everything a channel was not given a value of its own for. A setting left as recommended follows the code. The messages that ask for a clip or the bot for something are set channel by channel: choose one above.{% if own_words %} {{ own_words }}{% endif %}
         {%- elif own -%}
         {{ channel }} goes by these settings. Whatever is the same as for all channels keeps following them.
         {%- else -%}
-        {{ channel }} goes by the settings for all channels, which are shown locked. Switch its own settings on to change any of them for this channel only. What asks for a clip on command, and what the bot does in chat, is the channel's own either way.
+        {{ channel }} goes by the settings for all channels, which are shown locked. Switch its own settings on to change any of them for this channel only. What asks for a clip on command, what the bot does in chat and what it says there is the channel's own either way.
         {%- endif -%}
       </p>
       <p class="status-line" role="status" data-status></p>
@@ -124,7 +134,7 @@
   <form class="set-form" data-tuning="{{ save_url }}" data-trial="{{ trial_url }}" data-status-scope novalidate>
     <div class="set-panes">
       {% for section in sections %}
-      {%- set locked = not (editable or section.per_channel) %}
+      {%- set locked = not (editable or section.either_way) %}
       <fieldset class="set-fields" data-section-pane="{{ section.key }}"{% if section.key != shown %} hidden{% endif %}{% if locked %} disabled{% endif %}>
         <section role="tabpanel" id="set-pane-{{ section.key }}" aria-labelledby="set-tab-{{ section.key }}">
           <h2 class="title">{{ section.title }}</h2>

@@ -439,17 +439,33 @@ class TestTheBuffer:
 class TestWhatIsAChannelsAlone:
     COMMANDS: ClassVar = {"clip_commands": ("!clip",), "clip_command_from_anyone": True}
 
-    def test_the_clip_commands_and_the_bot_are_and_nothing_else_is(self):
+    def test_the_commands_are_and_nothing_else_is(self):
         assert tuning.PER_CHANNEL == {
             "clip_commands",
             "clip_command_from_anyone",
-            "bot_writes",
-            "bot_tells_clips",
             "record_commands",
             "stop_commands",
             "status_commands",
+            "help_commands",
         }
         assert {item.name for item in tuning.SETTINGS if item.per_channel} == tuning.PER_CHANNEL
+
+    def test_what_the_bot_does_and_says_holds_of_a_channels_own_either_way_too(self):
+        bots = {item.name for item in tuning.SETTINGS if item.group in (tuning.BOT, tuning.MESSAGES)}
+
+        assert tuning.EITHER_WAY == tuning.PER_CHANNEL | bots
+        assert tuning.either_way({"bot_writes": True, "record_commands": ("!rec",), "reacting_share": 0.2}) == {
+            "bot_writes": True,
+            "record_commands": ("!rec",),
+        }
+
+    def test_what_the_bot_does_and_says_can_be_set_for_all_channels_and_a_channels_own_holds_over_it(self):
+        for_all = {"bot_writes": True, "bot_clip_message": "Clipped!"}
+
+        assert tuning.shared(for_all) == for_all
+        assert (tuning.tuned(for_all).bot_writes, tuning.tuned(for_all).bot_clip_message) == (True, "Clipped!")
+        mine = tuning.tuned(for_all, {"bot_writes": False, "bot_clip_message": ""})
+        assert (mine.bot_writes, mine.bot_clip_message) == (False, "")
 
     def test_given_values_are_told_apart(self):
         given = {**self.COMMANDS, "reacting_share": 0.2}
@@ -523,6 +539,68 @@ class TestTheBot:
         assert tuned.bot_command("!clip") is None
         assert not tuned.is_clip_command("!status")
 
+    def test_it_tells_of_recordings_and_nothing_else_by_itself_and_has_no_words_of_its_own_until_set_to(self):
+        recommended = tuning.recommended()
+
+        assert recommended.bot_tells_recordings is True
+        assert (recommended.bot_tells_live, recommended.bot_tells_moments) == (False, False)
+        messages = [item.name for item in tuning.SETTINGS if item.kind == tuning.TEXT]
+        assert [getattr(recommended, name) for name in messages] == [""] * len(messages)
+        assert recommended.bot_repeat_minutes == tuning.BOT_REPEAT_MINUTES
+
+    def test_a_message_asking_for_the_commands_is_one_of_them(self):
+        tuned = tuning.tuned({}, {"help_commands": tuning.clean("help_commands", ["!Commands"])})
+
+        assert tuned.bot_command(" !commands ") == tuning.HELP
+
+    def test_it_cannot_be_another_command_too(self):
+        every = tuning.values({}, {"help_commands": ("!status",), "status_commands": ("!status",)})
+
+        with pytest.raises(ValueError, match="!status"):
+            tuning.check(every)
+
+
+class TestTheBotsMessages:
+    def test_one_is_kept_as_one_line_as_it_was_typed(self):
+        assert tuning.clean("bot_live_message", "  We are LIVE,\n  {channel}!  ") == "We are LIVE, {channel}!"
+        assert tuning.clean("bot_live_message", "") == ""
+
+    def test_it_may_fill_in_the_words_it_names_and_braces_written_twice(self):
+        typed = "{reason} {length} on {channel} {{not a word}}"
+
+        assert tuning.clean("bot_ended_message", typed) == typed
+
+    @pytest.mark.parametrize(
+        "typed",
+        ["Clip of {lenght}", "At {stream_time} by {by}", "{}", "{0}", "{channel!r}", "{channel:>9}", "{channel.x}"],
+    )
+    def test_a_word_it_does_not_fill_in_is_turned_down_saying_which_it_does(self, typed):
+        with pytest.raises(ValueError, match=r"It fills in \{channel\}, \{length\}, \{stream_time\}\."):
+            tuning.clean("bot_clip_message", typed)
+
+    @pytest.mark.parametrize("typed", ["a { b", "a } b", "{channel"])
+    def test_a_brace_by_itself_is_turned_down(self, typed):
+        with pytest.raises(ValueError, match="written twice"):
+            tuning.clean("bot_live_message", typed)
+
+    def test_one_too_long_for_a_chat_or_that_is_no_text_is_turned_down(self):
+        with pytest.raises(ValueError, match=str(tuning.TEXT_MAX_LENGTH)):
+            tuning.clean("bot_repeat_message", "x" * (tuning.TEXT_MAX_LENGTH + 1))
+        with pytest.raises(ValueError, match="has to be a message"):
+            tuning.clean("bot_repeat_message", 5)
+
+    def test_one_survives_being_stored_and_read_back(self):
+        given = {"bot_moment_message": 'Caught at {stream_time} "{by}"', "bot_repeat_minutes": 15}
+
+        assert tuning.stored(tuning.encoded(given)) == given
+
+    def test_every_one_names_what_it_fills_in_and_has_its_own_words_to_show(self):
+        for item in tuning.SETTINGS:
+            if item.kind == tuning.TEXT:
+                assert "channel" in item.fills
+                assert item.built_in
+                assert item.either_way
+
 
 class TestWhatIsStored:
     def test_only_what_differs_from_what_it_would_be_anyway(self):
@@ -592,28 +670,65 @@ class TestOnThePage:
             item.name for group, *_ in tuning.GROUPS for item in tuning.SETTINGS if item.group == group
         ]
 
-    def test_what_is_a_channels_alone_comes_first_in_it_as_sections_of_their_own(self):
-        commands, bot, *others = self.form(own={})
+    def test_what_holds_of_a_channels_own_either_way_comes_first_in_it_as_sections_of_their_own(self):
+        commands, bot, messages, *others = self.form(own={})
 
         assert (commands["key"], commands["title"]) == (tuning.COMMANDS, "A clip on command")
         assert [field["name"] for field in commands["fields"]] == ["clip_commands", "clip_command_from_anyone"]
         assert (bot["key"], bot["title"]) == (tuning.BOT, "The bot in chat")
         assert [field["name"] for field in bot["fields"]] == [
             "bot_writes",
+            "bot_tells_live",
+            "bot_tells_recordings",
+            "bot_tells_moments",
             "bot_tells_clips",
             "record_commands",
             "stop_commands",
             "status_commands",
+            "help_commands",
         ]
-        assert commands["per_channel"] is bot["per_channel"] is True
-        assert [section["per_channel"] for section in others] == [False] * len(others)
+        assert (messages["key"], messages["title"]) == (tuning.MESSAGES, "What the bot says")
+        assert [field["name"] for field in messages["fields"]] == [
+            "bot_live_message",
+            "bot_started_message",
+            "bot_ended_message",
+            "bot_moment_message",
+            "bot_clip_message",
+            "bot_repeat_message",
+            "bot_repeat_minutes",
+        ]
+        assert commands["either_way"] is bot["either_way"] is messages["either_way"] is True
+        assert [section["either_way"] for section in others] == [False] * len(others)
 
-    def test_and_is_not_in_the_form_for_all_channels_at_all(self):
+    def test_what_is_a_channels_alone_is_not_in_the_form_for_all_channels_at_all(self):
         form = self.form()
 
-        assert [section["title"] for section in form] == [title for _key, title, _lead in tuning.GROUPS[2:]]
+        # The bot's sections come after detection's there.
+        assert [section["key"] for section in form] == [
+            *(key for key, _title, _lead in tuning.GROUPS[3:]),
+            tuning.BOT,
+            tuning.MESSAGES,
+        ]
         assert not tuning.PER_CHANNEL & self.fields(form).keys()
         assert self.fields(form).keys() == {item.name for item in tuning.SETTINGS if not item.per_channel}
+        assert [field["name"] for field in form[-2]["fields"]] == [
+            "bot_writes",
+            "bot_tells_live",
+            "bot_tells_recordings",
+            "bot_tells_moments",
+            "bot_tells_clips",
+        ]
+
+    def test_a_message_is_its_words_and_left_empty_says_it_is_the_bots_own(self):
+        fields = self.fields(self.form({"bot_clip_message": "Clipped at {stream_time}!"}, own={}))
+
+        clip, live = fields["bot_clip_message"], fields["bot_live_message"]
+        assert (clip["kind"], clip["value"], clip["at_rest"]) == (tuning.TEXT, "Clipped at {stream_time}!", True)
+        assert clip["rest_words"] == "All channels: Clipped at {stream_time}!"
+        assert (live["value"], live["rest_words"]) == ("", "All channels: its own words")
+        assert live["prompt"] == setting("bot_live_message").built_in
+        assert live["longest"] == tuning.TEXT_MAX_LENGTH
+        assert clip["caption"].endswith("It fills in {channel}, {length}, {stream_time}.")
 
     def test_left_alone_it_is_what_is_recommended_whatever_all_channels_were_given(self):
         fields = self.fields(self.form({"clip_commands": ("!old",)}, own={"clip_command_from_anyone": True}))
@@ -702,12 +817,14 @@ class TestOnThePage:
         touched = self.form({"sustain_fraction": 0.5})
 
         assert [section["advanced_set"] for section in untouched] == [False] * len(untouched)
-        assert [section["advanced_set"] for section in touched] == [True] + [False] * (len(touched) - 1)
+        assert {section["key"] for section in touched if section["advanced_set"]} == {tuning.MOMENTS}
 
     def test_a_section_counts_its_settings_that_are_set_folded_away_or_not(self):
         form = self.form({"reacting_share": 0.25, "sustain_fraction": 0.5, "ignored_messages": ("!join",)})
 
         assert {section["key"]: section["set_count"] for section in form} == {
+            tuning.BOT: 0,
+            tuning.MESSAGES: 0,
             tuning.MOMENTS: 2,
             tuning.SIGNALS: 1,
             tuning.CLIPS: 0,
