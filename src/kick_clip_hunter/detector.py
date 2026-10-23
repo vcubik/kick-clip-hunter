@@ -829,6 +829,15 @@ def _spike_ratio(
     short-window count is, so rare-but-real signals (like laugh) can still
     fire from a cold baseline instead of being compared against an
     unreachably small absolute rate.
+
+    That fallback is stricter than a warm baseline: a signal that showed up
+    even once in the baseline gives a ratio far above any multiplier, so
+    there the floor alone decides, while a cold one has to reach the
+    multiplier times the floor - six laughing people instead of three at
+    the recommended values. It is kept as it is on purpose: on a replay of
+    all stored chat (~111 h, thirteen channels) a cold baseline passing the
+    ratio outright fired 583 moments instead of 581, none of the two rated -
+    a baseline is almost never cold except right as a channel's chat begins.
     """
     if short_count < min_absolute:
         return None
