@@ -1,8 +1,9 @@
 """The chat of a whole stream that was kept whole, as a video of its own:
 Download chat, beside the recording's Download on the Recordings page.
 
-Made the first time it is asked for, on the colour the Trim dialog starts
-out with, as long as the recording, with its lines placed as they are
+Made the first time it is asked for, on the colour picked beside it (the
+one the Trim dialog starts out with unless another is), as long as the
+recording, with its lines placed as they are
 beside the recording; kept next to the recording's file and removed with
 it. What a chat video looks like frame by frame is chat_video.py's, gone
 through in tests/integration/test_chat_video.py; here it is what this one
@@ -12,18 +13,19 @@ is made of and how it is offered.
 from __future__ import annotations
 
 import logging
+import subprocess
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import chat_trace, chat_video, recording_manager, stream_recording
+from kick_clip_hunter import chat_trace, chat_video, clip_trim, recording_manager, stream_recording
 from kick_clip_hunter import dashboard_view as view
 from tests.support.browser import FakeBrowser
 from tests.support.data import T0, add_chat, add_stream_recording, stream_recordings
 from tests.support.html import parse
-from tests.support.media import require_ffmpeg, video_stream
+from tests.support.media import FFMPEG, require_ffmpeg, video_stream
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -61,8 +63,33 @@ def chat_of(file: Path) -> Path:
     return file.with_name(chat_video.video_name(file.name))
 
 
-async def ask(service, recording_id: int):
-    return await service.client.post(f"/recordings/{recording_id}/chat_video")
+def noted_of(file: Path) -> Path:
+    """Where the colour its chat video was made on is noted."""
+    return chat_of(file).with_suffix(".json")
+
+
+def corner(video: Path) -> list[int]:
+    """The red, green and blue of the top left pixel of a video's first
+    frame - where, with no chat yet, there is only what is behind it."""
+    # fmt: off
+    result = subprocess.run(
+        [
+            FFMPEG, "-v", "error", "-i", str(video), "-frames:v", "1",
+            "-vf", "crop=2:2:0:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ],
+        check=True, capture_output=True,
+    )
+    # fmt: on
+    return list(result.stdout[:3])
+
+
+def colour(written: str) -> list[int]:
+    return [int(written[index : index + 2], 16) for index in (1, 3, 5)]
+
+
+async def ask(service, recording_id: int, background=None):
+    body = {} if background is None else {"json": {"chat_background": background}}
+    return await service.client.post(f"/recordings/{recording_id}/chat_video", **body)
 
 
 async def state(service, recording_id: int) -> dict:
@@ -98,6 +125,8 @@ class TestMakingIt:
             "state": "making",
             "busy": True,
             "download_url": None,
+            "background": None,
+            "colour": clip_trim.DEFAULT_CHAT_BACKGROUND,
             "chat": True,
             "words": view.chat_file_words(view.CHAT_FILE_MAKING, 0.0),
         }
@@ -116,8 +145,13 @@ class TestMakingIt:
         # On a colour, not see-through: tens of megabytes an hour, not gigabytes.
         assert stream["codec_name"] == "h264"
         assert int(stream["nb_frames"]) == pytest.approx(SECONDS * chat_video.FPS, abs=2)
-        # Only it is left beside the recording.
-        assert sorted(path.name for path in file.parent.iterdir()) == sorted([file.name, chat_of(file).name])
+        # With no colour asked for, the one the Trim dialog starts out with.
+        assert corner(chat_of(file)) == pytest.approx(colour(clip_trim.DEFAULT_CHAT_BACKGROUND), abs=3)
+        assert now["background"] == now["colour"] == clip_trim.DEFAULT_CHAT_BACKGROUND
+        # Only it, and the colour it is on, are left beside the recording.
+        assert sorted(path.name for path in file.parent.iterdir()) == sorted(
+            [file.name, chat_of(file).name, noted_of(file).name]
+        )
 
     async def test_its_lines_are_placed_as_beside_the_recording(self, service, browser):
         recording_id, _file = recording(
@@ -147,6 +181,52 @@ class TestMakingIt:
         await service.settle()
         made = chat_of(file).stat().st_mtime_ns
         assert (await ask(service, recording_id)).json()["state"] == "ready"
+        await service.settle()
+        assert len(browser.pages) == 1 and chat_of(file).stat().st_mtime_ns == made
+
+    async def test_it_is_made_on_the_colour_asked_for(self, service, browser):
+        recording_id, file = recording()
+        said_at(1)
+
+        await ask(service, recording_id, "#0A2540")
+        await service.settle()
+
+        assert corner(chat_of(file)) == pytest.approx([10, 37, 64], abs=3)
+        now = await state(service, recording_id)
+        assert (now["state"], now["background"], now["colour"]) == ("ready", "#0a2540", "#0a2540")
+
+    async def test_asking_for_another_colour_makes_it_anew_in_its_place(self, service, browser):
+        recording_id, file = recording()
+        said_at(1)
+        await ask(service, recording_id, "#0a2540")
+        await service.settle()
+        browser.hold()
+
+        again = await ask(service, recording_id, "#00ff00")
+
+        # What is there is not offered while the one in its place is made.
+        assert (again.json()["state"], again.json()["download_url"]) == ("making", None)
+        browser.release()
+        await service.settle()
+        assert len(browser.pages) == 2
+        assert corner(chat_of(file)) == pytest.approx([0, 255, 0], abs=6)
+        now = await state(service, recording_id)
+        assert (now["state"], now["background"]) == ("ready", "#00ff00")
+        assert sorted(path.name for path in file.parent.iterdir()) == sorted(
+            [file.name, chat_of(file).name, noted_of(file).name]
+        )
+
+    async def test_one_made_before_its_colour_was_noted_is_taken_as_on_the_first_colour(self, service, browser):
+        recording_id, file = recording()
+        said_at(1)
+        await ask(service, recording_id)
+        await service.settle()
+        noted_of(file).unlink()
+        made = chat_of(file).stat().st_mtime_ns
+
+        now = (await ask(service, recording_id, clip_trim.DEFAULT_CHAT_BACKGROUND)).json()
+
+        assert (now["state"], now["background"]) == ("ready", clip_trim.DEFAULT_CHAT_BACKGROUND)
         await service.settle()
         assert len(browser.pages) == 1 and chat_of(file).stat().st_mtime_ns == made
 
@@ -237,6 +317,28 @@ class TestWhatIsRefused:
         assert (await ask(service, recording_id)).status_code == 200
         await service.settle()
 
+    @pytest.mark.parametrize("background", ["navy", "#000; background: url(//example.com)", 7])
+    async def test_nor_on_what_is_not_a_colour(self, service, browser, background):
+        recording_id, file = recording()
+        said_at(1)
+
+        response = await ask(service, recording_id, background)
+
+        assert response.status_code == 400 and "chat_background" in response.json()["detail"]
+        assert browser.pages == [] and not chat_of(file).exists()
+
+    @pytest.mark.parametrize("body", ["not json", "[1, 2]"])
+    async def test_nor_when_what_is_posted_is_not_an_object(self, service, browser, body):
+        recording_id, _file = recording()
+        said_at(1)
+
+        response = await service.client.post(
+            f"/recordings/{recording_id}/chat_video", content=body, headers={"Content-Type": "application/json"}
+        )
+
+        assert response.status_code == 400
+        assert browser.pages == []
+
     async def test_nor_one_without_its_file(self, service, browser):
         recording_id, _file = recording(file=False)
 
@@ -267,6 +369,10 @@ class TestOnThePage:
         # Asking is the script's to do.
         assert button.text == "Download chat" and "hidden" in button.attrs
         assert place.find("a") == []
+        # And so is picking the colour, beside it.
+        picker = place.one("input", data_chat_file_colour=True)
+        assert picker.attrs["type"] == "color" and "hidden" in picker.attrs
+        assert picker.attrs["value"] == clip_trim.DEFAULT_CHAT_BACKGROUND
 
     async def test_once_it_is_there_it_is_a_link_to_it(self, service, browser):
         recording_id, file = recording()
@@ -280,12 +386,38 @@ class TestOnThePage:
         assert link.text == "Download chat" and "download" in link.attrs
         assert link.attrs["href"].startswith(f"/streams/{CHANNEL}/{chat_of(file).name}?v=")
 
+    async def test_the_colour_beside_it_is_the_one_it_was_made_on(self, service, browser):
+        recording_id, _file = recording()
+        said_at(1)
+        await ask(service, recording_id, "#0a2540")
+        await service.settle()
+
+        place = (await page_of(service, recording_id)).one("div", class_="rec-file").one(data_rec_chat_file=True)
+
+        # The script makes it anew if another one is picked.
+        assert place.one("a", data_chat_file_ready=True).attrs["data-background"] == "#0a2540"
+        assert place.one("input", data_chat_file_colour=True).attrs["value"] == "#0a2540"
+
+    async def test_the_colour_cannot_be_changed_while_it_is_made(self, service, browser):
+        recording_id, _file = recording()
+        said_at(1)
+        browser.hold()
+        await ask(service, recording_id)
+        await async_wait_until(lambda: browser.pages, "the chat to reach the browser")
+
+        shown = parse((await service.client.get(f"/dashboard/recordings/{recording_id}/chat_video")).text)
+
+        assert "disabled" in shown.one("input", data_chat_file_colour=True).attrs
+        browser.release()
+        await service.settle()
+
     async def test_a_recording_without_chat_offers_none(self, service):
         recording_id, _file = recording()
 
         page = await page_of(service, recording_id)
 
-        assert page.one("div", class_="rec-file").one(data_rec_chat_file=True).find("button") == []
+        place = page.one("div", class_="rec-file").one(data_rec_chat_file=True)
+        assert place.find("button") == [] and place.find("input") == []
 
 
 class TestDeletingTheRecording:
@@ -298,7 +430,7 @@ class TestDeletingTheRecording:
 
         assert (await service.client.post(f"/recordings/{recording_id}/delete")).status_code == 200
 
-        assert not file.exists() and not chat_of(file).exists()
+        assert not file.exists() and not chat_of(file).exists() and not noted_of(file).exists()
 
     async def test_it_is_not_deleted_while_its_chat_video_is_made(self, service, browser):
         recording_id, file = recording()

@@ -73,11 +73,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   the file marked on it, and a scrubber like the one under a clip. The page comes without
   it and the script fetches it (`GET /dashboard/recordings/{id}/trace`), because counting
   the chat of a whole stream takes a second or two. Download chat, beside Download, is the
-  recording's chat as a video of its own as long as the recording, on the Trim dialog's
-  default colour (H.264, tens of megabytes an hour): made the first time it is asked for
-  (`POST /recordings/{id}/chat_video`, a tracked background task; the page polls
-  `GET /dashboard/recordings/{id}/chat_video` and downloads it once it is there), kept as
-  `<recording>_chat.mov` beside the file and removed with it. Trim, beside Download, opens the same
+  recording's chat as a video of its own as long as the recording, on the colour picked
+  beside it (the Trim dialog's default colour to begin with, then the last one picked;
+  H.264, tens of megabytes an hour): made the first time it is asked for
+  (`POST /recordings/{id}/chat_video` with `chat_background`, a tracked background task;
+  the page polls `GET /dashboard/recordings/{id}/chat_video` and downloads it once it is
+  there), kept as `<recording>_chat.mov` beside the file, with the colour it was made on in
+  `<recording>_chat.json`, and removed with it. Picking another colour than that makes it
+  anew in its place. Trim, beside Download, opens the same
   dialog as on the review page over the recording's file (see `clip_trim.py`). Under those is
   "Moments": "Find moments" replays the recording's chat through the detector under the
   channel's settings as they are saved and lists what would have been a moment (see
