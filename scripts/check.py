@@ -21,7 +21,11 @@ def steps(pytest_arguments: list[str]) -> list[tuple[str, list[str]]]:
     return [
         ("lint", [*python, "ruff", "check", "."]),
         ("test formatting", [*python, "ruff", "format", "--check", "tests"]),
-        ("tests", [*python, "pytest", "--cov", "--cov-report=term-missing:skip-covered", *pytest_arguments]),
+        # In parallel, one worker per CPU (pytest-xdist), as in CI.
+        (
+            "tests",
+            [*python, "pytest", "-n", "auto", "--cov", "--cov-report=term-missing:skip-covered", *pytest_arguments],
+        ),
     ]
 
 

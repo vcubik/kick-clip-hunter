@@ -60,8 +60,17 @@ _sandbox: Path | None = None
 def pytest_configure(config: pytest.Config) -> None:
     """Runs before collection, i.e. before any test module imports the app."""
     global _sandbox
+    if _is_xdist_controller(config):
+        # Under `-n`, the process started from the command line only hands
+        # tests out and runs none. Its workers start in its working
+        # directory, and pytest-cov puts every worker's coverage data there:
+        # entering a sandbox here would have them all write into, and clean
+        # up, one directory that is not where the report is put together.
+        # Each worker sets up a sandbox of its own below.
+        return
     _sandbox = Path(tempfile.mkdtemp(prefix="kick-clip-hunter-tests-"))
-    os.chdir(_sandbox)
+    if not _is_xdist_worker():
+        os.chdir(_sandbox)
 
     # config.py reads these when the app is imported. Set here they also win
     # over a developer's real .env, which python-dotenv never lets override
@@ -95,6 +104,24 @@ def pytest_configure(config: pytest.Config) -> None:
     from kick_clip_hunter import db
 
     db.DB_PATH = _sandbox / "data" / "kick_clip_hunter.db"
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionstart(session: pytest.Session) -> None:
+    # A worker under `-n` enters its sandbox only now, still before anything
+    # is collected: pytest-cov starts measuring in a worker at session start,
+    # with the settings it finds in the working directory - pyproject.toml in
+    # the repository, not an empty sandbox.
+    if _is_xdist_worker() and _sandbox is not None:
+        os.chdir(_sandbox)
+
+
+def _is_xdist_worker() -> bool:
+    return "PYTEST_XDIST_WORKER" in os.environ
+
+
+def _is_xdist_controller(config: pytest.Config) -> bool:
+    return not _is_xdist_worker() and bool(getattr(config.option, "numprocesses", None))
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
