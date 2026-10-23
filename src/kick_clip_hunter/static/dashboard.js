@@ -2179,40 +2179,58 @@
 
   // Download chat, beside a recording's Download: its chat as a video of
   // its own, made the first time it is asked for, on the colour chosen
-  // beside it - and made anew when another colour is chosen than the one
-  // there was made on. That takes minutes, so the button is fetched again
+  // beside it or see-through - and made anew when it is chosen otherwise
+  // than the one there was made. That takes minutes, so the button is fetched again
   // every couple of seconds while it is made, and the video is downloaded
   // once it is there - if it was asked for on this page.
 
   const CHAT_FILE_POLL_MS = 2000;
-  // The colour last chosen is where to begin for a recording whose chat
-  // video is not made yet, where the browser lets the page remember it.
+  // The colour last chosen, and whether it was on one at all, are where to
+  // begin for a recording whose chat video is not made yet, where the
+  // browser lets the page remember them.
   const CHAT_FILE_COLOUR_KEY = "clip-hunter-recording-chat-colour";
+  const CHAT_FILE_ON_COLOUR_KEY = "clip-hunter-recording-chat-on-colour";
   let chatFileWatch = null;
   let chatFileAsked = null;
 
   function dressChatFile() {
-    const colour = one("[data-chat-file-colour]");
-    if (!colour) return;
-    colour.hidden = false;
+    const look = one("[data-chat-file-look]");
+    if (!look) return;
+    look.hidden = false;
     if (one("[data-chat-file-ready]")) return;
+    const onColour = one("[data-chat-file-on-colour]", look);
+    const colour = one("[data-chat-file-colour]", look);
     try {
       const kept = localStorage.getItem(CHAT_FILE_COLOUR_KEY);
       if (kept && /^#[0-9a-f]{6}$/i.test(kept)) colour.value = kept;
+      const keptOn = localStorage.getItem(CHAT_FILE_ON_COLOUR_KEY);
+      if (keptOn !== null) onColour.checked = keptOn !== "no";
     } catch {
-      // no storage here: the first colour stands
+      // no storage here: the first choice stands
     }
+    paintChatFileLook(onColour);
   }
 
-  function chatFileColour(control) {
-    return one("[data-chat-file-colour]", control.closest("[data-rec-chat-file]"));
+  // The colour can be picked only for a video on a colour.
+  function paintChatFileLook(onColour) {
+    const colour = one("[data-chat-file-colour]", onColour.closest("[data-chat-file-look]"));
+    colour.disabled = onColour.disabled || !onColour.checked;
   }
 
-  // The video there is downloaded - unless another colour is chosen than
-  // it was made on, which makes it anew.
+  // The colour chosen for the chat video beside a control, "" for a
+  // see-through one - or null where there is nothing to choose.
+  function chatFileBackground(control) {
+    const look = one("[data-chat-file-look]", control.closest("[data-rec-chat-file]"));
+    if (!look) return null;
+    if (!one("[data-chat-file-on-colour]", look).checked) return "";
+    return one("[data-chat-file-colour]", look).value.toLowerCase();
+  }
+
+  // The video there is downloaded - unless it is chosen otherwise than it
+  // was made, which makes it anew.
   function chatFileReady(link, event) {
-    const colour = chatFileColour(link);
-    if (!colour || colour.value.toLowerCase() === link.dataset.background) return;
+    const background = chatFileBackground(link);
+    if (background === null || background === link.dataset.background) return;
     event.preventDefault();
     makeChatFile(link);
   }
@@ -2253,10 +2271,13 @@
 
   async function makeChatFile(button) {
     const place = button.closest("[data-rec-chat-file]");
-    const colour = chatFileColour(button);
+    const background = chatFileBackground(button);
     button.disabled = true;
-    if (colour) keepTrimChoice(CHAT_FILE_COLOUR_KEY, colour.value);
-    const response = await post(place.dataset.url, colour ? { chat_background: colour.value } : undefined);
+    if (background !== null) {
+      keepTrimChoice(CHAT_FILE_ON_COLOUR_KEY, background ? "yes" : "no");
+      if (background) keepTrimChoice(CHAT_FILE_COLOUR_KEY, background);
+    }
+    const response = await post(place.dataset.url, background === null ? undefined : { chat_background: background || null });
     if (!response || !response.ok) {
       button.disabled = false;
       say(button, response ? await problem(response, "Could not make the chat video.") : "Could not reach the service.");
@@ -3052,6 +3073,7 @@
       paintTrim(trimOf(target));
     }
     else if (target.matches("[data-trim-background]")) paintTrimBackground(trimOf(target));
+    else if (target.matches("[data-chat-file-on-colour]")) paintChatFileLook(target);
     else if (target.matches("[data-chat-delay-slider]")) shiftChat(target);
     else if (target.matches("[data-footage-seconds]")) keepFootageSeconds(target);
     else if (target.matches("[data-submit-on-change]")) target.form.requestSubmit();
