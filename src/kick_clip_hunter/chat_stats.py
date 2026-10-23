@@ -18,6 +18,8 @@ before, or for a session the session before - in how many messages and
 chatters it had (`change_words`). Chatters are told apart by the badges
 they have in the channel now (`badge_groups`), and the words chat used are
 counted apart from the little words every sentence has (`STOP_WORDS`).
+And who wrote in a channel's chat is set against who wrote in the other
+channels' in the same period - the audience they share (`Audience`).
 
 Emotes are counted as the dashboard draws them (dashboard_view.chat_parts):
 Kick's own are in the message itself, a 7TV emote is a word spelled exactly
@@ -50,7 +52,7 @@ from .dashboard_view import (
     sentence_case,
     stream_time_words,
 )
-from .detector import is_laughing, mention_pattern
+from .detector import is_laughing, mention_pattern, sender_key
 
 Row = Mapping[str, Any]
 Emotes = Mapping[str, tuple[str, int, int]]
@@ -84,6 +86,7 @@ SESSION_MESSAGE_LIMIT = 100_000
 # search into.
 VIEW_OVERVIEW = "overview"
 VIEW_MESSAGES = "messages"
+VIEW_AUDIENCE = "audience"
 ORDER_NEWEST = "newest"
 ORDER_OLDEST = "oldest"
 
@@ -195,9 +198,9 @@ def analyze_url(
 ) -> str:
     """The Analyze page for a channel and a period - a preset by its name,
     or any other by its two ends - and what is shown of it: the overview,
-    or its messages, narrowed to a chatter or to a text, or the chat around
-    one message (`around`, its id). Whatever is at its default is left
-    out."""
+    its messages, narrowed to a chatter or to a text, the chat around one
+    message (`around`, its id), or the audience it shares with other
+    channels. Whatever is at its default is left out."""
     query: dict[str, Any] = {"channel": channel}
     if preset:
         query["period"] = preset
@@ -211,7 +214,7 @@ def analyze_url(
         query["chatter"] = chatter
     if text:
         query["q"] = text
-    if view == VIEW_MESSAGES and not chatter and not text:
+    if view != VIEW_OVERVIEW and not chatter and not text:
         query["view"] = view
     if order != ORDER_NEWEST:
         query["order"] = order
@@ -1027,6 +1030,197 @@ def badge_groups(kept: Collected, identities: Mapping[str, chat_identity.Identit
         for label in [label for label, _types in BADGE_GROUPS] + [EVERYONE_ELSE]
         if chatters[label]
     ]
+
+
+# -- the audience channels share ------------------------------------------------
+#
+# Who wrote in a channel's chat also writes elsewhere: the same name in the
+# chat of another watched channel is, as a rule, the same person. Names are
+# compared only between channels of one platform - an account on Kick and
+# one of the same name on Twitch are two accounts, which may belong to two
+# people - and as detector.sender_key writes them. The chat bots a channel
+# ignores (Settings) are left out: a bot in every chat is nobody's audience.
+
+# How many of the chatters two channels share are named in a row of the list
+# of channels.
+SHARED_NAMES = 3
+# How dark a cell of the map is drawn (see audience_map) from which on what
+# it says is written in the paper's colour.
+MAP_DARK_LEVEL = 0.55
+
+
+@dataclass(frozen=True)
+class Audience:
+    """Who wrote in one channel's chat in a period: each chatter by their
+    sender_key, with the name they wrote under and how many messages."""
+
+    channel: str
+    chatters: Mapping[str, tuple[str, int]]
+
+
+def audience(channel: str, counts: Iterable[tuple[str, int]], ignored: Iterable[str] = ()) -> Audience:
+    """A channel's audience in a period from who wrote how many messages
+    there (db.get_chatter_counts), leaving out the accounts it ignores
+    (`ignored`, as sender_key writes them). Two spellings of one name are
+    one chatter, under the spelling that wrote more."""
+    left_out = frozenset(ignored)
+    chatters: dict[str, tuple[str, int]] = {}
+    for name, count in counts:
+        key = sender_key(name)
+        if not key or key in left_out:
+            continue
+        shown, before = chatters.get(key, (name, 0))
+        chatters[key] = (shown if before >= count else name, before + count)
+    return Audience(channel, chatters)
+
+
+def _shared(one: Audience, other: Audience) -> set[str]:
+    return one.chatters.keys() & other.chatters.keys()
+
+
+def audience_figures(own: Audience, others: Iterable[Audience]) -> list[dict[str, Any]]:
+    """The figures at the top of a channel's shared audience: how many
+    chatters it had, how many of them wrote in another channel's chat too,
+    and how many in more than one other."""
+    elsewhere: Counter[str] = Counter()
+    for other in others:
+        elsewhere.update(_shared(own, other))
+    chatters = len(own.chatters)
+    seen, several = len(elsewhere), sum(1 for count in elsewhere.values() if count > 1)
+    return [
+        _figure("Chatters", whole_words(chatters), "wrote in this channel's chat"),
+        _figure("Also elsewhere", share_words(seen, chatters), f"{counted_words(seen, 'chatter')} wrote in another"),
+        _figure("In several", share_words(several, chatters), f"{counted_words(several, 'chatter')} in two or more"),
+        _figure("Only here", share_words(chatters - seen, chatters), counted_words(chatters - seen, "chatter")),
+    ]
+
+
+def shared_channels(
+    own: Audience,
+    others: Iterable[Audience],
+    *,
+    channel_link: Callable[[str], str] | None = None,
+    chatter_link: Callable[[str], str] | None = None,
+) -> list[dict[str, Any]]:
+    """The channels a channel shares chatters with, the most shared first:
+    how many, what part of this channel's chatters and of the other's that
+    is, and who of them wrote most here. A channel it shares nobody with is
+    left out."""
+    rows = []
+    for other in others:
+        shared = _shared(own, other)
+        if not shared:
+            continue
+        busiest = sorted(shared, key=lambda key: (-own.chatters[key][1], key))[:SHARED_NAMES]
+        rows.append(
+            {
+                "channel": other.channel,
+                "href": channel_link(other.channel) if channel_link else None,
+                "count": len(shared),
+                "shared": whole_words(len(shared)),
+                "of_own": share_words(len(shared), len(own.chatters)),
+                "of_theirs": share_words(len(shared), len(other.chatters)),
+                "names": [
+                    {
+                        "name": own.chatters[key][0],
+                        "href": chatter_link(own.chatters[key][0]) if chatter_link else None,
+                    }
+                    for key in busiest
+                ],
+            }
+        )
+    rows.sort(key=lambda row: (-row["count"], row["channel"].lower()))
+    return rows
+
+
+def chatters_elsewhere(
+    own: Audience,
+    others: Iterable[Audience],
+    limit: int,
+    *,
+    chatter_link: Callable[[str], str] | None = None,
+) -> list[dict[str, Any]]:
+    """This channel's chatters who wrote in the most other channels' chats,
+    the most first and among those the most active here: which channels,
+    and how many messages they wrote here."""
+    where: dict[str, list[str]] = {}
+    for other in others:
+        for key in _shared(own, other):
+            where.setdefault(key, []).append(other.channel)
+    ranked = sorted(where, key=lambda key: (-len(where[key]), -own.chatters[key][1], key))[:limit]
+    return [
+        {
+            "name": own.chatters[key][0],
+            "href": chatter_link(own.chatters[key][0]) if chatter_link else None,
+            "channels": whole_words(len(where[key])),
+            "where": ", ".join(sorted(where[key], key=str.lower)),
+            "messages": whole_words(own.chatters[key][1]),
+        }
+        for key in ranked
+    ]
+
+
+def _cell_words(share: float) -> str:
+    """A share as a cell of the map has room for: a whole percentage, or
+    that it is under one."""
+    if share <= 0:
+        return ""
+    return "<1%" if share < 0.01 else f"{round(share * 100)}%"
+
+
+def audience_map(
+    audiences: list[Audience], current: str, link: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """The audience every pair of channels shares, as a table: a row for
+    each channel and a column for each, and in a cell what part of the row
+    channel's chatters also wrote in the column channel's chat. How dark a
+    cell is drawn (`level`, 0 to 1) goes with the square root of that part
+    against the largest on the map, so that small overlaps still show next
+    to a large one. Every one of `audiences` has a chatter; `current` is
+    the channel the page is about."""
+    shares = {
+        (row.channel, column.channel): len(_shared(row, column)) / len(row.chatters)
+        for row in audiences
+        for column in audiences
+        if row is not column
+    }
+    largest = max(shares.values(), default=0)
+    rows = []
+    for row in audiences:
+        cells = []
+        for column in audiences:
+            if row is column:
+                cells.append({"self": True, "words": "", "level": "0", "dark": False, "title": ""})
+                continue
+            share = shares[row.channel, column.channel]
+            shared = len(_shared(row, column))
+            level = math.sqrt(share / largest) if largest else 0.0
+            cells.append(
+                {
+                    "self": False,
+                    "words": _cell_words(share),
+                    "level": number_words(level, 2),
+                    "dark": level > MAP_DARK_LEVEL,
+                    "title": (
+                        f"{counted_words(shared, 'chatter')} of {row.channel}'s "
+                        f"{whole_words(len(row.chatters))} ({share_words(shared, len(row.chatters))}) "
+                        f"also wrote in {column.channel}'s chat"
+                    ),
+                }
+            )
+        rows.append(
+            {
+                "channel": row.channel,
+                "href": link(row.channel) if link else None,
+                "current": row.channel == current,
+                "chatters": whole_words(len(row.chatters)),
+                "cells": cells,
+            }
+        )
+    return {
+        "columns": [{"channel": item.channel, "current": item.channel == current} for item in audiences],
+        "rows": rows,
+    }
 
 
 def chatter_emotes(kept: Collected, limit: int = CHATTER_EMOTES) -> list[dict[str, Any]]:

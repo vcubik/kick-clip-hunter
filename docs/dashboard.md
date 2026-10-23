@@ -100,7 +100,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   now, and the words used most, the little words of Czech, Slovak and English left out) or its messages, a page at a time (numbered pages above and under them, as under the review
   queue and the list of recordings - `dashboard_view.pages`), which is where a chatter or a
   text is searched for: a chatter that is found gets figures of their own, and every
-  message leads to the chat around it. The page is links and forms and needs no script.
+  message leads to the chat around it. The third view, Shared audience (`view=audience`,
+  which another period or channel keeps), sets the period's chatters against those of the
+  other channels of the same platform in the same period (`chat_stats.Audience`): how many
+  also wrote elsewhere, the channels shared with most, the chatters seen in the most other
+  chats, and a map - a table of every two of those channels on chart paper, a cell the part
+  of the row channel's chatters who also wrote in the column channel's chat. A name is
+  taken for the same person wherever it writes, only within one platform; the accounts a
+  channel ignores (Settings) are left out. The page is links and forms and needs no script.
   `GET /dashboard/settings` is where
   detection and clips are tuned: one form of settings (see `tuning.py`), for all channels
   or - chosen in the pane on the left - for one of the watchlist's, which goes by its own

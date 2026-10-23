@@ -999,3 +999,121 @@ class TestSessions:
 
     def test_a_shorter_period_that_begins_with_it_is_not_the_session(self):
         assert [row["current"] for row in self.rows(Period(local(19, 18, 43), local(19, 20)))] == [False, False]
+
+
+def audience_of(channel: str, *names: str) -> chat_stats.Audience:
+    """A channel's audience: each name wrote as many messages as its place
+    in the list from the end - the first wrote most."""
+    return chat_stats.audience(channel, [(name, len(names) - place) for place, name in enumerate(names)])
+
+
+class TestTheSharedAudience:
+    def test_a_name_in_any_case_and_with_an_at_is_one_chatter_under_the_spelling_that_wrote_more(self):
+        found = chat_stats.audience(CHANNEL, [("Alice", 2), ("alice", 5), ("@ALICE", 1), ("bob", 1)])
+
+        assert found.chatters == {"alice": ("alice", 8), "bob": ("bob", 1)}
+
+    def test_the_accounts_a_channel_ignores_and_nameless_senders_are_left_out(self):
+        found = chat_stats.audience(CHANNEL, [("Nightbot", 40), ("", 3), ("alice", 1)], detector.IGNORED_SENDERS)
+
+        assert list(found.chatters) == ["alice"]
+
+    def test_the_figures_tell_who_wrote_elsewhere_in_one_other_chat_or_several(self):
+        own = audience_of("here", "alice", "bob", "carol", "dave")
+        others = [audience_of("one", "alice", "bob"), audience_of("two", "alice", "zed")]
+
+        figures = {
+            figure["label"]: (figure["value"], figure["caption"]) for figure in chat_stats.audience_figures(own, others)
+        }
+
+        assert figures == {
+            "Chatters": ("4", "wrote in this channel's chat"),
+            "Also elsewhere": ("50%", "2 chatters wrote in another"),
+            "In several": ("25%", "1 chatter in two or more"),
+            "Only here": ("50%", "2 chatters"),
+        }
+
+    def test_the_channels_shared_with_come_the_most_shared_first_and_none_shared_with_is_left_out(self):
+        own = audience_of("here", "alice", "bob", "carol", "dave")
+        others = [
+            audience_of("few", "dave", "x", "y", "z"),
+            audience_of("many", "dave", "bob", "alice"),
+            audience_of("none", "zed"),
+        ]
+
+        rows = chat_stats.shared_channels(
+            own, others, channel_link=lambda name: f"/to/{name}", chatter_link=lambda name: f"/who/{name}"
+        )
+
+        assert [(row["channel"], row["shared"], row["of_own"], row["of_theirs"]) for row in rows] == [
+            ("many", "3", "75%", "100%"),
+            ("few", "1", "25%", "25%"),
+        ]
+        assert rows[0]["href"] == "/to/many"
+        # Who of them wrote most here, the most active first.
+        assert rows[0]["names"] == [
+            {"name": "alice", "href": "/who/alice"},
+            {"name": "bob", "href": "/who/bob"},
+            {"name": "dave", "href": "/who/dave"},
+        ]
+
+    def test_only_a_few_of_the_shared_are_named(self):
+        names = [f"viewer{number}" for number in range(chat_stats.SHARED_NAMES + 2)]
+
+        (row,) = chat_stats.shared_channels(audience_of("here", *names), [audience_of("there", *names)])
+
+        assert [name["name"] for name in row["names"]] == names[: chat_stats.SHARED_NAMES]
+        assert row["href"] is None
+
+    def test_the_chatters_in_most_other_chats_come_first_and_the_most_active_here_among_equals(self):
+        own = audience_of("here", "alice", "bob", "carol", "dave")
+        others = [audience_of("Beta", "carol", "bob"), audience_of("alpha", "carol", "dave")]
+
+        rows = chat_stats.chatters_elsewhere(own, others, 2)
+
+        assert [(row["name"], row["channels"], row["where"], row["messages"]) for row in rows] == [
+            ("carol", "2", "alpha, Beta", "2"),
+            ("bob", "1", "Beta", "3"),
+        ]
+
+
+class TestTheMapOfTheSharedAudience:
+    def test_a_cell_is_the_part_of_the_row_channel_s_chatters_who_wrote_in_the_column_channel_s_chat(self):
+        big = audience_of("big", *(f"viewer{number}" for number in range(200)))
+        small = audience_of("small", "viewer0", "viewer1", "own")
+        other = audience_of("other", "nobody")
+
+        drawn = chat_stats.audience_map([big, small, other], "small", lambda name: f"/to/{name}")
+
+        assert [column["channel"] for column in drawn["columns"]] == ["big", "small", "other"]
+        assert [column["current"] for column in drawn["columns"]] == [False, True, False]
+        cells = {row["channel"]: [cell["words"] for cell in row["cells"]] for row in drawn["rows"]}
+        assert cells == {"big": ["", "1%", ""], "small": ["67%", "", ""], "other": ["", "", ""]}
+        assert [row["chatters"] for row in drawn["rows"]] == ["200", "3", "1"]
+        assert drawn["rows"][0]["href"] == "/to/big"
+        assert drawn["rows"][0]["cells"][1]["title"] == "2 chatters of big's 200 (1%) also wrote in small's chat"
+
+    def test_a_channel_s_own_cell_is_marked_and_says_nothing(self):
+        drawn = chat_stats.audience_map([audience_of("one", "alice"), audience_of("two", "alice")], "one")
+
+        assert [cell["self"] for cell in drawn["rows"][0]["cells"]] == [True, False]
+        assert drawn["rows"][0]["cells"][0]["words"] == ""
+
+    def test_the_largest_part_is_drawn_darkest_and_a_smaller_one_by_the_square_root(self):
+        one = audience_of("one", "a", "b", "c", "d")
+        two = audience_of("two", "a", "b", "c", "d")
+        three = audience_of("three", "a")
+
+        drawn = chat_stats.audience_map([one, two, three], "one")
+
+        levels = {row["channel"]: [cell["level"] for cell in row["cells"]] for row in drawn["rows"]}
+        # All of one's chatters wrote in two's chat, a quarter in three's.
+        assert levels["one"] == ["0", "1", "0.5"]
+        assert [cell["dark"] for cell in drawn["rows"][0]["cells"]] == [False, True, False]
+
+    def test_a_part_under_one_percent_is_still_said(self):
+        many = audience_of("many", *(f"viewer{number}" for number in range(300)))
+
+        drawn = chat_stats.audience_map([many, audience_of("few", "viewer0")], "few")
+
+        assert drawn["rows"][0]["cells"][1]["words"] == "<1%"
