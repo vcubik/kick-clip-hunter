@@ -81,7 +81,8 @@ YouTube stream
   laughing and the detected moments marked, the busiest minutes, the most active chatters, the
   most used emotes, what was said and who was addressed most. A chatter can be looked up, with
   everything they wrote and what there is to say of them, and any message read in the chat
-  around it.
+  around it. A channel can also be watched for its chat alone: every message of it is kept for
+  these figures, and no clip is looked for in it nor any of its video kept.
 - **Talks in chat, where it is asked to.** A channel can have the bot write in its chat - when
   a recording of its stream starts and ends, and, if wanted, when a clip of it was made - and
   take commands there from its streamer and moderators: start a recording, stop it, say how

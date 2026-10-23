@@ -68,7 +68,7 @@ async def test_a_stream_is_recorded_whole_and_played_back_with_its_chat(
 ):
     # A channel that is on the watchlist and live, but not tracked for clips.
     service.watch(CHANNEL)
-    await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+    await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
     server = live_stream(hls, recording, ts_segments, seconds=40)
 
     async with recording_loop(service, monkeypatch):
@@ -197,7 +197,7 @@ async def test_a_channel_recorded_always_has_every_stream_kept_without_anyone_st
     # A channel that is neither live nor tracked for clips, set to be
     # recorded always.
     service.watch(CHANNEL, live=False)
-    await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+    await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
 
     async with recording_loop(service, monkeypatch):
         switched = await service.client.post(f"/channels/{CHANNEL}/always_record?enabled=1")

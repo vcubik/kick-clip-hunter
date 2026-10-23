@@ -48,8 +48,13 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
-  Tracking switch, which is about looking for clips and nothing else (a TikTok channel has none:
-  "Recorded only"; `POST /channels/{slug}/tracking` refuses to switch it on), and the button that
+  Tracking - Off, Chat or Clips, one of the three lit (`POST /channels/{slug}/tracking`, `what`
+  `off`, `chat` or `clips`): Clips looks for clips while the channel is live, which keeps its chat
+  too; Chat keeps its chat and nothing more - stored like a tracked channel's, for the Analyze page,
+  never seen by the detector, nothing recorded for it - while its platform is still asked whether
+  it is live, so that "Right now" can say "Live, chat only" (no lamp: no stream is coming in) and
+  the Health page can tell its chat gone quiet; Off keeps nothing (a TikTok channel has none of
+  them: "Recorded only", and the route refuses anything but `off` for one) - and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
   how much has been recorded so far - and its "Always record" switch, with which a
   recording is started by itself whenever the channel goes live. Remove, at the end of its

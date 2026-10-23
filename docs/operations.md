@@ -34,8 +34,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   ("Sign in to confirm you're not a bot") and HTTP 429s.
 - A TikTok channel is `handle@tiktok` (its handle in small letters) and asked about by its
   handle, so a renamed handle is not followed until the channel is added again; its
-  TikTok user id is kept as its `platform_user_id`. It is never tracked for clips - added
-  with tracking off, the switch refused - only recorded: by hand or with "Always record".
+  TikTok user id is kept as its `platform_user_id`. It is never tracked, for clips or for its
+  chat alone - added with tracking off, anything else refused - only recorded: by hand or with
+  "Always record".
   Its chat is read only while a recording of it runs, a few seconds after the recording
   starts, through TikTokLive and Euler Stream; a connection Euler Stream will not sign
   (TikTokLive's `SignAPIError`, e.g. `RATE_LIMIT`) is tried again later and later, and

@@ -498,28 +498,62 @@ class TestAddingAChannel:
 
 
 class TestChannelTracking:
+    def stored(self, service, slug: str) -> tuple[int, int]:
+        """What the channel's row says: tracked for clips, for chat alone."""
+        ((clips, chat_only),) = service.rows("SELECT tracking_enabled, chat_only FROM streamers WHERE slug = ?", slug)
+        return clips, chat_only
+
     async def test_pausing_and_resuming_one_channel(self, service):
         add_streamer("channel_a", 1)
         add_streamer("channel_b", 2)
 
-        paused = await service.client.post("/channels/channel_a/tracking?enabled=0")
+        paused = await service.client.post("/channels/channel_a/tracking?what=off")
 
-        assert paused.json() == {"slug": "channel_a", "tracking_enabled": False}
+        assert paused.json() == {"slug": "channel_a", "tracking": "off"}
         assert service.main._is_channel_tracked("channel_a") is False
         assert service.main._is_channel_tracked("channel_b") is True
 
-        resumed = await service.client.post("/channels/channel_a/tracking?enabled=1")
+        resumed = await service.client.post("/channels/channel_a/tracking?what=clips")
 
-        assert resumed.json() == {"slug": "channel_a", "tracking_enabled": True}
+        assert resumed.json() == {"slug": "channel_a", "tracking": "clips"}
         assert service.main._is_channel_tracked("channel_a") is True
 
+    async def test_a_channel_can_be_tracked_for_its_chat_alone(self, service):
+        add_streamer("channel_a", 1)
+
+        response = await service.client.post("/channels/channel_a/tracking?what=chat")
+
+        assert response.json() == {"slug": "channel_a", "tracking": "chat"}
+        assert self.stored(service, "channel_a") == (0, 1)
+        assert service.main._is_channel_tracked("channel_a") is False
+        assert service.main._is_chat_only("channel_a") is True
+
+    @pytest.mark.parametrize(("what", "stored"), [("clips", (1, 0)), ("off", (0, 0))])
+    async def test_chat_alone_gives_way_to_clips_or_nothing(self, service, what, stored):
+        add_streamer("channel_a", 1)
+        await service.client.post("/channels/channel_a/tracking?what=chat")
+
+        await service.client.post(f"/channels/channel_a/tracking?what={what}")
+
+        assert self.stored(service, "channel_a") == stored
+        assert service.main._is_chat_only("channel_a") is False
+
+    async def test_anything_else_to_track_is_refused_and_changes_nothing(self, service):
+        add_streamer("channel_a", 1)
+
+        response = await service.client.post("/channels/channel_a/tracking?what=everything")
+
+        assert response.status_code == 400
+        assert self.stored(service, "channel_a") == (1, 0)
+
     async def test_an_unknown_channel_is_a_404(self, service):
-        response = await service.client.post("/channels/nobody/tracking?enabled=0")
+        response = await service.client.post("/channels/nobody/tracking?what=off")
 
         assert response.status_code == 404
 
     async def test_a_channel_that_is_not_on_the_watchlist_is_not_tracked(self, service):
         assert service.main._is_channel_tracked("nobody") is False
+        assert service.main._is_chat_only("nobody") is False
 
     async def test_the_watchlist_the_recording_loop_sees_is_the_stored_one(self, service):
         add_streamer("channel_a", 1)
@@ -527,29 +561,36 @@ class TestChannelTracking:
 
         assert service.main._watchlist_slugs() == ["channel_a", "channel_b"]
 
-    async def test_a_tiktok_channel_cannot_be_tracked_only_recorded(self, service, tiktok):
+    @pytest.mark.parametrize("what", ["clips", "chat"])
+    async def test_a_tiktok_channel_cannot_be_tracked_only_recorded(self, service, tiktok, what):
         tiktok.add_channel("new_channel")
         await service.client.post("/channels", params={"slug": "new_channel@tiktok"})
 
-        refused = await service.client.post("/channels/new_channel@tiktok/tracking?enabled=1")
-        paused = await service.client.post("/channels/new_channel@tiktok/tracking?enabled=0")
+        refused = await service.client.post(f"/channels/new_channel@tiktok/tracking?what={what}")
+        paused = await service.client.post("/channels/new_channel@tiktok/tracking?what=off")
 
         assert refused.status_code == 409
-        assert refused.json()["detail"] == "TikTok channels are only recorded: no clips are looked for in them."
+        assert refused.json()["detail"] == (
+            "TikTok channels are only recorded: their chat is read while they are, and no clips are looked for in them."
+        )
         # Off it is, and off it may be said to be.
-        assert paused.json() == {"slug": "new_channel@tiktok", "tracking_enabled": False}
+        assert paused.json() == {"slug": "new_channel@tiktok", "tracking": "off"}
         assert service.main._is_channel_tracked("new_channel@tiktok") is False
+        assert service.main._is_chat_only("new_channel@tiktok") is False
 
     async def test_a_tiktok_channel_is_never_taken_for_tracked_whatever_is_stored(self, service):
         conn = db.get_connection()
         try:
             db.add_platform_streamer(conn, "tiktok", "6800000000123", "new_channel@tiktok")
+            conn.execute("UPDATE streamers SET chat_only = 1")
+            conn.commit()
         finally:
             conn.close()
 
         # Added some other way than through the watchlist, with tracking on.
         assert service.rows("SELECT tracking_enabled FROM streamers")[0][0] == 1
         assert service.main._is_channel_tracked("new_channel@tiktok") is False
+        assert service.main._is_chat_only("new_channel@tiktok") is False
 
 
 class TestShutdown:

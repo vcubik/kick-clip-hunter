@@ -1580,6 +1580,21 @@
     say(group, "");
   }
 
+  // The same for a choice of a few: pressing an option that is not lit
+  // makes it the one that holds.
+  async function choose(option) {
+    if (option.getAttribute("aria-pressed") === "true") return;
+    const group = option.closest("[data-choice]");
+    const value = encodeURIComponent(option.dataset.value);
+    const response = await post(`${group.dataset.choice}?${group.dataset.choiceName}=${value}`);
+    if (!response || !response.ok) {
+      say(group, "Could not save the change. Try again.");
+      return;
+    }
+    for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === option));
+    say(group, "");
+  }
+
   async function addChannel(form) {
     const name = form.elements.slug.value.trim();
     if (!name) return;
@@ -2770,6 +2785,7 @@
     ["[data-transcript-go]", playLine],
     ["[data-footage-side]", addFootage],
     ["[data-switch] button", flip],
+    ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
     ["[data-chip-add]", addFromButton],
     ["[data-chip-remove]", removeItem],

@@ -67,9 +67,13 @@ def recorders(monkeypatch) -> dict[str, StandInRecorder]:
     return registry
 
 
-async def run_loop_until(condition, what: str, *, slugs, enabled=lambda: True, tracked=lambda slug: True) -> None:
+async def run_loop_until(
+    condition, what: str, *, slugs, enabled=lambda: True, tracked=lambda slug: True, chat_only=lambda slug: False
+) -> None:
     """Runs the real loop until `condition` holds, then cancels it."""
-    task = asyncio.create_task(recording_manager.run_forever(lambda: list(slugs), enabled, tracked))
+    task = asyncio.create_task(
+        recording_manager.run_forever(lambda: list(slugs), enabled, tracked, chat_only=chat_only)
+    )
     try:
         await async_wait_until(condition, what)
     finally:
@@ -83,7 +87,10 @@ async def run_a_few_rounds(kick_api, **kwargs) -> None:
     rounds = len(kick_api.calls("GET", "/channels")) + 3 * max(len(kwargs["slugs"]), 1)
     task = asyncio.create_task(
         recording_manager.run_forever(
-            lambda: list(kwargs["slugs"]), kwargs.get("enabled", lambda: True), kwargs.get("tracked", lambda slug: True)
+            lambda: list(kwargs["slugs"]),
+            kwargs.get("enabled", lambda: True),
+            kwargs.get("tracked", lambda slug: True),
+            chat_only=kwargs.get("chat_only", lambda slug: False),
         )
     )
     try:
@@ -289,6 +296,34 @@ class TestPausing:
         assert recorders["paused"].stops == 1
         # Not even the liveness check is spent on a paused channel.
         assert {query["slug"] for query in kick_api.calls("GET", "/channels")} == {"tracked"}
+
+    async def test_a_channel_tracked_for_its_chat_alone_is_looked_at_and_never_recorded(self, kick_api, recorders):
+        kick_api.add_channel("chatty", 1, is_live=True)
+        kick_api.add_channel("tracked", 2, is_live=True)
+        recorders["chatty"] = StandInRecorder(active=True)
+        recorders["tracked"] = StandInRecorder()
+
+        await run_loop_until(
+            lambda: recorders["tracked"].ticks >= 2 and recorders["chatty"].stops,
+            "the tracked channel to tick and the other to stop",
+            slugs=["chatty", "tracked"],
+            tracked=lambda slug: slug == "tracked",
+            chat_only=lambda slug: slug == "chatty",
+        )
+
+        assert recorders["chatty"].ticks == 0
+        # Whether it is live is what the dashboard, the Health page and the
+        # bot go by.
+        assert recording_manager.looks()["chatty"].live_since is not None
+
+    async def test_with_watching_off_a_channel_tracked_for_its_chat_alone_is_not_looked_at(self, kick_api, recorders):
+        kick_api.add_channel("chatty", 1, is_live=True)
+        recorders["chatty"] = StandInRecorder()
+
+        await run_a_few_rounds(kick_api, slugs=["chatty"], enabled=lambda: False, chat_only=lambda slug: True)
+
+        assert kick_api.calls("GET", "/channels") == []
+        assert "chatty" not in recording_manager.looks()
 
 
 class TestOneChannelFailing:

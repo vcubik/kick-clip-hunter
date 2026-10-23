@@ -191,6 +191,22 @@ class TestLifespan:
 
         assert not any(recorder.is_active for recorder in recording_manager._recorders.values())
 
+    async def test_a_channel_tracked_for_its_chat_alone_is_looked_at_and_never_recorded(self, service, monkeypatch):
+        # Live, so a recorder ticked for it would open a browser - which
+        # fails the test.
+        monkeypatch.setattr(recording_manager, "TICK_INTERVAL_SECONDS", 0.01)
+        service.watch("chatty_channel", live=True)
+        await service.client.post("/channels/chatty_channel/tracking?what=chat")
+
+        async with service.main.lifespan(service.main.app):
+            await async_wait_until(
+                lambda: len(service.api.calls("GET", "/channels")) >= 2, "two rounds of liveness checks"
+            )
+            now = (await service.client.get("/recordings/status")).json()["now"]
+
+        assert now["channels"]["chatty_channel"] == {"live": False, "words": "Live, chat only"}
+        assert not any(recorder.is_active for recorder in recording_manager._recorders.values())
+
 
 class TestTwitchChat:
     """Set up for Twitch, the service reads the chat of the Twitch channels

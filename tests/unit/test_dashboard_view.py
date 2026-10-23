@@ -671,6 +671,10 @@ class TestTheServiceInWords:
             # Its recording is waiting for the stream; nothing is coming in.
             ({"live": False, "recorded": True}, "Not live"),
             ({"live": False, "looked_at": False}, "Not watched"),
+            # Tracked for its chat alone: its chat is coming in, no stream.
+            ({"live": False, "chat_live": True}, "Live, chat only"),
+            # Recorded all the same, its stream is coming in after all.
+            ({"live": True, "recorded": True, "chat_live": True}, "Recording"),
         ],
     )
     def test_the_lamp_itself(self, state, words):
@@ -709,8 +713,9 @@ class TestTheServiceInWords:
     def test_watching_switched_off_explains_the_silence(self):
         assert self.state(watching=False) == "Watching is off. Nothing new arrives until you turn it on."
 
-    def test_so_does_every_channel_being_paused(self):
-        assert self.state(tracked=0) == "Tracking is off for every channel on the watchlist."
+    def test_so_does_no_channel_being_tracked_for_clips(self):
+        # Tracked for nothing, or for their chat alone: no moment comes of them.
+        assert self.state(tracked=0) == "No channel on the watchlist is tracked for clips."
 
     def test_a_shutdown_comes_before_everything_else(self):
         assert self.state(recording=2, shutting_down=True) == (
@@ -1216,6 +1221,28 @@ class TestRecordingAlwaysInWords:
         )
         assert view.ALWAYS_RECORD_WORDS[False].format(channel="some_channel") == (
             "Streams of some_channel are recorded only when you start a recording."
+        )
+
+
+class TestTrackingInWords:
+    @pytest.mark.parametrize(
+        ("clips", "chat_only", "tracked_for"),
+        [
+            (True, False, view.TRACKING_CLIPS),
+            (False, True, view.TRACKING_CHAT),
+            (False, False, view.TRACKING_OFF),
+            # Never stored so - clips keep the chat too, and win.
+            (True, True, view.TRACKING_CLIPS),
+        ],
+    )
+    def test_what_a_channel_is_tracked_for_is_read_from_its_two_switches(self, clips, chat_only, tracked_for):
+        assert view.tracking(clips, chat_only) == tracked_for
+
+    def test_the_choice_goes_from_nothing_to_the_most(self):
+        assert view.TRACKING_CHOICES == (
+            (view.TRACKING_OFF, "Off"),
+            (view.TRACKING_CHAT, "Chat"),
+            (view.TRACKING_CLIPS, "Clips"),
         )
 
 

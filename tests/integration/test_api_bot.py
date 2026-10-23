@@ -146,7 +146,7 @@ class TestARecordingOnCommand:
 
     async def test_the_switches_have_no_say_in_it(self, service, channel):
         await set_up(service, bot_writes=True, **COMMANDS)
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
         await service.client.post("/settings/watching?enabled=0")
 
         await ask(service, "!record start")
@@ -287,7 +287,7 @@ class TestHowThingsStand:
 
     async def test_of_a_channel_that_is_not_tracked(self, service, channel):
         await set_up(service, bot_writes=True, **COMMANDS)
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
 
         await ask(service, "!status")
 

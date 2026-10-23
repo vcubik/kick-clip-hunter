@@ -732,7 +732,7 @@ class TestAClipOnCommand:
     async def test_a_channel_that_is_not_tracked_gets_no_clip(self, service):
         service.watch(CHANNEL)
         await set_up(service, clip_commands=["!clip"])
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
 
         await service.chat(CHANNEL, "the_streamer", "!clip", identity=STREAMER)
 

@@ -17,6 +17,10 @@ say over it. Which streams are kept that way right now is held here, and the
 loop is what notices that such a recording is over - the stream has been
 gone for a while, or the disk is running out - and reports it.
 
+A channel tracked for its chat alone is looked at too - whether it is live,
+which the dashboard, the Health page and the bot go by - but its recorder
+does not run for that: its chat comes in without it.
+
 A channel can also be set to be recorded always. The loop then looks at
 whether it is live like at any channel it records, tracked or not, and
 reports when it is and nothing is keeping its stream - which is when a
@@ -108,8 +112,9 @@ class Look:
     trouble: str | None = None
 
 
-# By channel, for the channels the loop looks at. One it has stopped looking
-# at - tracking off, watching paused - has none.
+# By channel, for the channels the loop looks at - tracked for clips or for
+# their chat alone, or recorded. One it has stopped looking at - tracking
+# off, watching paused - has none.
 _looks: dict[str, Look] = {}
 # When the loop last got through all of its channels.
 _round_finished_at: datetime | None = None
@@ -355,16 +360,18 @@ async def _see_to(
     always: bool,
     stream_is_on: StreamIsOn | None,
     buffer_seconds: BufferSeconds | None = None,
+    chat: bool = False,
 ) -> None:
     """One channel's turn in a round: its recorder is ticked if the channel
     is live and its stream is wanted - for clips (`tracked`) or whole - and
-    stopped if it is running for nothing. A channel that is recorded
-    `always` and turns out to be live with nothing keeping its stream is
-    reported first, so that what is started for it gets this round's tick.
-    Before a tick the recorder is told how far back to keep its buffer
-    (`buffer_seconds`), which the tick prunes it to."""
+    stopped if it is running for nothing. A channel tracked for its `chat`
+    alone is looked at, whether it is live, and no more. A channel that is
+    recorded `always` and turns out to be live with nothing keeping its
+    stream is reported first, so that what is started for it gets this
+    round's tick. Before a tick the recorder is told how far back to keep its
+    buffer (`buffer_seconds`), which the tick prunes it to."""
     recorder = _get_recorder(slug)
-    if not (tracked or always or slug in _stream_recordings):
+    if not (tracked or chat or always or slug in _stream_recordings):
         # Tracking paused for this one channel - same teardown as the
         # global pause, scoped to it. Not even the liveness check is spent.
         _looks.pop(slug, None)
@@ -398,6 +405,7 @@ async def run_forever(
     stream_is_on: StreamIsOn | None = None,
     look_failed: LookFailed | None = None,
     buffer_seconds: BufferSeconds | None = None,
+    chat_only: Callable[[str], bool] = lambda slug: False,
 ) -> None:
     """Drives the recorders until cancelled. `stream_recording_over` is
     told, with the channel and why, when a stream recording should be ended;
@@ -410,7 +418,9 @@ async def run_forever(
     platform no longer knows it by that name, which it may have changed.
     `buffer_seconds` says, by channel, how far back its recorder keeps the
     stream for clips; without it every buffer reaches as far as any clip
-    could need (recorder.BUFFER_RETENTION_SECONDS)."""
+    could need (recorder.BUFFER_RETENTION_SECONDS). `chat_only` says which
+    channels that are not tracked for clips are tracked for their chat
+    alone: looked at, while watching is on, and never recorded for that."""
     global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:
@@ -439,12 +449,14 @@ async def run_forever(
                 del _looks[slug]
             for slug in slugs:
                 try:
+                    tracked = watching and is_channel_tracked(slug)
                     await _see_to(
                         slug,
-                        tracked=watching and is_channel_tracked(slug),
+                        tracked=tracked,
                         always=slug in always,
                         stream_is_on=stream_is_on,
                         buffer_seconds=buffer_seconds,
+                        chat=watching and not tracked and chat_only(slug),
                     )
                 except Exception as error:
                     logger.exception("[%s] recording tick failed", slug)

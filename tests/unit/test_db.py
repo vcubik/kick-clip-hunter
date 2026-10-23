@@ -685,6 +685,69 @@ class TestChannelsRecordedAlways:
         assert (row["slug"], row["tracking_enabled"], row["always_record"]) == ("old_channel", 0, 0)
 
 
+class TestChannelsTrackedForTheirChatAlone:
+    def tracked_for(self, conn, slug: str) -> tuple[int, int]:
+        row = db.get_streamer_by_slug(conn, slug)
+        return row["tracking_enabled"], row["chat_only"]
+
+    def test_a_new_channel_is_tracked_for_clips_not_for_its_chat_alone(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        assert self.tracked_for(conn, "some_channel") == (1, 0)
+        assert [row["chat_only"] for row in db.get_streamers(conn)] == [0]
+        assert db.get_streamer_by_id(conn, 1)["chat_only"] == 0
+
+    def test_it_is_set_for_one_channel_and_turns_tracking_for_clips_off(self, conn):
+        db.add_streamer(conn, 1, "chatty")
+        db.add_streamer(conn, 2, "tracked")
+
+        db.set_streamer_tracking(conn, 1, False, chat_only=True)
+
+        assert self.tracked_for(conn, "chatty") == (0, 1)
+        assert self.tracked_for(conn, "tracked") == (1, 0)
+
+    @pytest.mark.parametrize(("clips", "chat_only", "stored"), [(True, False, (1, 0)), (False, False, (0, 0))])
+    def test_clips_or_nothing_set_it_back(self, conn, clips, chat_only, stored):
+        db.add_streamer(conn, 1, "chatty")
+        db.set_streamer_tracking(conn, 1, False, chat_only=True)
+
+        db.set_streamer_tracking(conn, 1, clips, chat_only=chat_only)
+
+        assert self.tracked_for(conn, "chatty") == stored
+
+    def test_never_both_at_once_clips_keep_the_chat_anyway(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        db.set_streamer_tracking(conn, 1, True, chat_only=True)
+
+        assert self.tracked_for(conn, "some_channel") == (1, 0)
+
+    def test_a_watchlist_from_before_there_was_such_a_thing_keeps_its_tracking(self, tmp_path, monkeypatch):
+        path = tmp_path / "older.db"
+        older = sqlite3.connect(path)
+        older.execute(
+            "CREATE TABLE streamers (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "broadcaster_user_id INTEGER UNIQUE NOT NULL, slug TEXT UNIQUE NOT NULL, "
+            "added_at TEXT NOT NULL DEFAULT '2026-01-01', tracking_enabled INTEGER NOT NULL DEFAULT 1)"
+        )
+        older.execute("INSERT INTO streamers (broadcaster_user_id, slug) VALUES (7, 'tracked')")
+        older.execute("INSERT INTO streamers (broadcaster_user_id, slug, tracking_enabled) VALUES (8, 'paused', 0)")
+        older.commit()
+        older.close()
+        monkeypatch.setattr(db, "DB_PATH", path)
+
+        connection = db.get_connection()
+        try:
+            rows = db.get_streamers(connection)
+        finally:
+            connection.close()
+
+        assert [(row["slug"], row["tracking_enabled"], row["chat_only"]) for row in rows] == [
+            ("tracked", 1, 0),
+            ("paused", 0, 0),
+        ]
+
+
 class TestChatIdentities:
     MOD = '[{"text":"Moderator","type":"moderator"}]'
 
