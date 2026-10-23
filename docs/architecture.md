@@ -15,7 +15,9 @@ Watchlist (streamers, each on its platform - see platforms.py)
     -> TikTok (recorded only): TikTokLive + the Euler Stream sign server -> the chat of a
        TikTok channel's room while its stream is being recorded, kept and judged by nothing
     -> each message as a ChatMessage -> _take_chats (stored a batch at a time)
-    -> Detection engine (rolling window per channel; see detector.py)
+    -> Detection engine (rolling window per channel; see detector.py) - not the chat of
+       a channel tracked for its chat alone, nor of an untracked one kept with its
+       recording: that is stored and judged by nothing
     -> SQLite: streamers, chat_messages, moments, channel_keywords, channel_emotes,
        channel_badges, chat_identities, tuning, stream_recordings
     -> recording_manager ticks a ChannelRecorder per live watched channel (downloading
@@ -55,9 +57,10 @@ Module map (`src/kick_clip_hunter/`):
   `LiveStatus`, `StreamUrls` (with `expires_at` for addresses that run out, `flv` for a
   stream that is one FLV download rather than a playlist),
   `StreamUrlError` are the shapes in which a platform's answers come back. `RECORDED_ONLY`
-  is the platforms whose channels are only ever recorded whole - TikTok's: never tracked
-  for clips (`main._is_channel_tracked`, the tracking switch refused, `_take_chats` judging
-  none of their chat, whatever is stored)
+  is the platforms whose channels are only ever recorded whole - TikTok's: never tracked,
+  for clips or for their chat alone (`main._is_channel_tracked`, `main._tracking_of`, the
+  tracking route refusing anything but off, `_take_chats` judging none of their chat,
+  whatever is stored)
 - `streams.py` — what is asked of a channel's platform, sent to the one its name says:
   whether it is live and since when (`live_status` - Kick's API, Helix, YouTube's own or
   TikTok's own), where its stream is (`stream_urls` - `kick_stream.py`, `twitch_stream.py`,
@@ -296,7 +299,10 @@ Module map (`src/kick_clip_hunter/`):
   detection to clip extraction. Every chat message, from either platform, goes through
   `_take_chats`: dropped while watching or the channel's tracking is off (unless its
   stream is being recorded whole), stored with its sender's identity, then counted by the
-  detector one by one (`_detect`), which may open a moment session. Kick's webhook hands
+  detector one by one (`_detect`), which may open a moment session - unless the channel is
+  tracked for its chat alone (`streamers.chat_only`, set by `POST /channels/{slug}/tracking`
+  with `what=chat`; `_tracking_of` reads it with `tracking_enabled`), whose chat is stored
+  and judged by nothing, as a recorded channel's is. Kick's webhook hands
   it one message at a time, Twitch's reader (`_twitch_reader`, see `twitch_chat.py`),
   YouTube's (`_youtube_reader`, see `youtube_chat.py`) and TikTok's (`_tiktok_reader`, see
   `tiktok_chat.py`; only while a TikTok stream is recorded, and judged by nothing) a batch. A stream recording is started and stopped through `POST
@@ -708,7 +714,10 @@ Module map (`src/kick_clip_hunter/`):
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips
   (and watching is on), or its stream is being kept whole - which the switches have no
-  say over. The streams kept whole right now are held here, and the loop is what notices
+  say over. A channel tracked for its chat alone (`main._is_chat_only`, while watching is
+  on) is looked at too - whether it is live, which the watchlist's "Right now", the Health
+  page and the bot go by - but no recorder runs for that: its chat comes in without one.
+  The streams kept whole right now are held here, and the loop is what notices
   that such a recording is over (no footage for `STREAM_END_GRACE_SECONDS`, the disk
   running out, footage that can no longer be written) and reports it to `main.py`. It is
   woken when a recording is asked for, so that one does not wait half a minute for the

@@ -8,6 +8,17 @@
 </span>
 {%- endmacro %}
 
+{#- A choice of one of a few, laid out like a switch: the lit option is the
+    state. `options` are (value, words) pairs; the script posts the value
+    of the one that was pressed to `url`, as `name`. -#}
+{% macro choice(label, url, name, options, chosen) -%}
+<span class="ch-switch" role="group" aria-label="{{ label }}" data-choice="{{ url }}" data-choice-name="{{ name }}">
+  {%- for value, words in options %}
+  <button type="button" aria-pressed="{{ 'true' if value == chosen else 'false' }}" data-value="{{ value }}">{{ words }}</button>
+  {%- endfor %}
+</span>
+{%- endmacro %}
+
 {#- A rating as five small segments, the way a queue row shows it. -#}
 {% macro meter(rating, words) -%}
 <span class="ch-meter" role="img" aria-label="{{ words }}">

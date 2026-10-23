@@ -376,7 +376,7 @@ class TestChatWhileRecording:
 
     async def test_chat_is_kept_though_the_channel_is_not_tracked(self, service):
         service.watch(CHANNEL)
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
         await start(service)
 
         response = await service.chat(CHANNEL, "alice", "hello", identity={"username_color": "#00ff00", "badges": []})
@@ -403,7 +403,7 @@ class TestChatWhileRecording:
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
         entries = len(detector._entries[CHANNEL])
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
         await start(service)
 
         await service.crowd_laughs(CHANNEL, people=20)
@@ -425,7 +425,7 @@ class TestChatWhileRecording:
 
     async def test_a_message_delivered_twice_is_kept_once(self, service):
         service.watch(CHANNEL)
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
         await start(service)
         payload = {
             "message_id": "the-same-message",
@@ -443,7 +443,7 @@ class TestChatWhileRecording:
 
     async def test_once_the_recording_is_over_the_switches_decide_again(self, service):
         service.watch(CHANNEL)
-        await service.client.post(f"/channels/{CHANNEL}/tracking?enabled=0")
+        await service.client.post(f"/channels/{CHANNEL}/tracking?what=off")
         await start(service)
         await service.chat(CHANNEL, "alice", "kept")
         await stop(service)
@@ -456,7 +456,7 @@ class TestChatWhileRecording:
     async def test_a_recording_of_one_channel_keeps_no_other_channels_chat(self, service):
         service.watch(CHANNEL)
         service.watch("other_channel")
-        await service.client.post("/channels/other_channel/tracking?enabled=0")
+        await service.client.post("/channels/other_channel/tracking?what=off")
         await start(service)
 
         response = await service.chat("other_channel", "bob", "hello")
@@ -750,6 +750,9 @@ class TestAChannelRecordedAlways:
             service.main._look_failed,
             # ...and how far back each channel's recorder keeps its stream.
             service.main._buffer_seconds,
+            # ...and which channels are tracked for their chat alone: looked
+            # at, never recorded for that.
+            service.main._is_chat_only,
         ]
 
 

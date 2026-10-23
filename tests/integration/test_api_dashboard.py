@@ -252,6 +252,21 @@ class TestTheBarAcrossTheTop:
         assert bar.one("span", class_="ch-lamp-rec").text == "Live"
         assert bar.one("span", class_="bar-meta").text == "1 of 2 channels"
 
+    async def test_a_channel_tracked_for_its_chat_alone_counts_without_lighting_the_lamp(self, service, monkeypatch):
+        add_streamer("channel_a", 1)
+        add_streamer("chatty_channel", 2, chat_only=True)
+        now = datetime.now(timezone.utc)
+        monkeypatch.setitem(
+            recording_manager._looks, "chatty_channel", recording_manager.Look(at=now, live_since=now - minutes(5))
+        )
+
+        bar = (await review(service)).one("header", class_="bar")
+
+        # Its chat is coming in, but no stream is.
+        assert bar.one("span", class_="ch-lamp").text == "Live, chat only"
+        assert "ch-lamp-rec" not in bar.one("span", class_="ch-lamp").classes
+        assert bar.one("span", class_="bar-meta").text == "1 of 2 channels"
+
     async def test_the_watching_switch_reflects_what_was_set(self, service):
         await service.client.post("/settings/watching?enabled=0")
 
@@ -265,6 +280,7 @@ class TestWatchlist:
     async def test_lists_every_watched_channel_with_what_it_is_doing(self, service, monkeypatch, today):
         add_streamer("first_channel", 111)
         add_streamer("second_channel", 222, tracking=False)
+        add_streamer("third_channel", 333, chat_only=True)
         monkeypatch.setitem(recording_manager._recorders, "first_channel", RunningRecorder())
 
         page = await channels(service)
@@ -273,22 +289,41 @@ class TestWatchlist:
         # The fifth cell is the channel's stream recording (see
         # test_api_recordings.py).
         assert [cells[:4] for cells in self.rows(page)] == [
-            ["first_channel", added, "Live", "Off On"],
-            ["second_channel", added, "Not watched", "Off On"],
+            ["first_channel", added, "Live", "Off Chat Clips"],
+            ["second_channel", added, "Not watched", "Off Chat Clips"],
+            ["third_channel", added, "Not live", "Off Chat Clips"],
         ]
         states = switch_states(page)
-        assert (states["Tracking first_channel"], states["Tracking second_channel"]) == ("On", "Off")
+        assert [states[f"Tracking {slug}"] for slug in ("first_channel", "second_channel", "third_channel")] == [
+            "Clips",
+            "Off",
+            "Chat",
+        ]
 
     async def test_a_tracked_channel_that_is_not_live_says_so(self, service):
         add_streamer("first_channel", 111)
 
         assert self.rows(await channels(service))[0][2] == "Not live"
 
+    async def test_a_channel_tracked_for_its_chat_alone_says_so_while_it_is_live(self, service, monkeypatch):
+        add_streamer("first_channel", 111, chat_only=True)
+        now = datetime.now(timezone.utc)
+        monkeypatch.setitem(
+            recording_manager._looks, "first_channel", recording_manager.Look(at=now, live_since=now - minutes(5))
+        )
+
+        page = await channels(service)
+
+        assert self.rows(page)[0][2] == "Live, chat only"
+        # The lamp is for a stream coming in.
+        assert page.one("td", data_now="first_channel").find("span", class_="ch-lamp") == []
+
     async def test_with_watching_off_no_channel_is_watched(self, service):
         add_streamer("first_channel", 111)
+        add_streamer("second_channel", 222, chat_only=True)
         await service.client.post("/settings/watching?enabled=0")
 
-        assert self.rows(await channels(service))[0][2] == "Not watched"
+        assert [cells[2] for cells in self.rows(await channels(service))] == ["Not watched", "Not watched"]
 
     async def test_the_columns_say_what_each_control_is_for(self, service):
         add_streamer("first_channel", 111)
@@ -299,20 +334,26 @@ class TestWatchlist:
             "Channel",
             "Added",
             "Right now",
-            "Clip tracking",
+            "Tracking",
             "Always record",
             "Stream recording",
             "Remove",
         ]
 
-    async def test_each_tracking_switch_posts_to_its_own_channel(self, service):
+    async def test_each_tracking_choice_posts_to_its_own_channel_what_it_is_tracked_for(self, service):
         add_streamer("first_channel", 111)
 
-        page = await channels(service)
+        choice = (await channels(service)).one("span", aria_label="Tracking first_channel")
 
-        assert page.one("span", aria_label="Tracking first_channel").attrs["data-switch"] == (
-            "/channels/first_channel/tracking"
+        assert (choice.attrs["data-choice"], choice.attrs["data-choice-name"]) == (
+            "/channels/first_channel/tracking",
+            "what",
         )
+        assert [button.attrs["data-value"] for button in choice.find("button")] == [
+            view.TRACKING_OFF,
+            view.TRACKING_CHAT,
+            view.TRACKING_CLIPS,
+        ]
 
     async def test_the_analysis_switches_reflect_what_was_set(self, service):
         await service.client.post("/settings/sound_events?enabled=1")

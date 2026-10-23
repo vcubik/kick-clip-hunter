@@ -247,6 +247,26 @@ def _is_channel_tracked(slug: str) -> bool:
         conn.close()
 
 
+def _tracking_of(row) -> str:
+    """What a watched channel is tracked for (dashboard_view.TRACKING_*). A
+    channel of a platform whose channels are only recorded is tracked for
+    nothing, whatever is stored."""
+    if row["platform"] in platforms.RECORDED_ONLY:
+        return dashboard_view.TRACKING_OFF
+    return dashboard_view.tracking(bool(row["tracking_enabled"]), bool(row["chat_only"]))
+
+
+def _is_chat_only(slug: str) -> bool:
+    """Whether a channel is tracked for its chat alone: the recording loop
+    looks at whether it is live, and records nothing of it for that."""
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        return row is not None and _tracking_of(row) == dashboard_view.TRACKING_CHAT
+    finally:
+        conn.close()
+
+
 def _always_recorded_slugs() -> list[str]:
     """The channels whose every stream is kept whole (see
     _record_stream_by_itself). None while the service is shutting down."""
@@ -1150,6 +1170,7 @@ async def lifespan(app: FastAPI):
                 _record_stream_by_itself,
                 _look_failed,
                 _buffer_seconds,
+                _is_chat_only,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -2950,26 +2971,39 @@ def _right_now(streamers) -> dict:
     this, and kept saying it while a stream is being recorded (see
     recordings_status)."""
     tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
-    # A channel is looked at for either reason: it is tracked for clips, or
-    # its stream is being kept whole - or will be once it is on. One whose
-    # recording was ended is not looked at for that until its next stream.
+    # A channel is looked at for any of these reasons: it is tracked for
+    # clips, or for its chat alone, or its stream is being kept whole - or
+    # will be once it is on. One whose recording was ended is not looked at
+    # for that until its next stream.
+    chat_only = {row["slug"] for row in streamers if _tracking_of(row) == dashboard_view.TRACKING_CHAT}
     whole_streams = set(recording_manager.stream_recordings())
     awaited = {
         row["slug"] for row in streamers if row["always_record"] and not recording_manager.is_held_off(row["slug"])
     }
     live = set(recording_manager.recording_channels())
     watching = _flags.get("watching_enabled", True)
+    # No stream comes in of a channel tracked for its chat alone, only its
+    # chat - while its platform says it is live.
+    seen_live = {slug for slug, look in recording_manager.looks().items() if look.live_since is not None}
+    chatting = (chat_only & seen_live) - live if watching else set()
     return {
         "live": bool(live),
-        "words": dashboard_view.now_words(live=bool(live), recorded=bool(live & whole_streams)),
-        "count": dashboard_view.channel_count_words(len(live), len(tracked | whole_streams | awaited)),
+        "words": dashboard_view.now_words(
+            live=bool(live), recorded=bool(live & whole_streams), chat_live=bool(chatting)
+        ),
+        "count": dashboard_view.channel_count_words(
+            len(live | chatting), len(tracked | chat_only | whole_streams | awaited)
+        ),
         "channels": {
             slug: {
                 "live": slug in live,
                 "words": dashboard_view.now_words(
                     live=slug in live,
                     recorded=slug in whole_streams,
-                    looked_at=slug in whole_streams or slug in awaited or (watching and slug in tracked),
+                    looked_at=(
+                        slug in whole_streams or slug in awaited or (watching and slug in tracked | chat_only)
+                    ),
+                    chat_live=slug in chatting,
                 ),
             }
             for slug in (row["slug"] for row in streamers)
@@ -3346,8 +3380,8 @@ async def dashboard_channels(request: Request):
                         "platform_user_id": row["platform_user_id"],
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
-                        "tracking_enabled": bool(row["tracking_enabled"]),
-                        # Never tracked: there is no switch for it.
+                        "tracking": _tracking_of(row),
+                        # Never tracked: there is no choice for it.
                         "recorded_only": row["platform"] in platforms.RECORDED_ONLY,
                         "always_record": bool(row["always_record"]),
                         # Its stream being kept whole, or the last such
@@ -3360,6 +3394,7 @@ async def dashboard_channels(request: Request):
                     }
                     for row in context["streamers"]
                 ],
+                "tracking_choices": dashboard_view.TRACKING_CHOICES,
                 "analysis_settings": [
                     {
                         "name": name,
@@ -5695,23 +5730,34 @@ async def add_channel(slug: str):
 
 
 @app.post("/channels/{slug}/tracking")
-async def set_channel_tracking(slug: str, enabled: int = 1):
-    value = bool(enabled)
+async def set_channel_tracking(slug: str, what: str):
+    """Sets what a channel is tracked for (dashboard_view.TRACKING_*):
+    clips, its chat alone - kept, and judged by nothing - or nothing. A
+    recording of its stream keeps its chat whatever this says."""
+    if what not in dict(dashboard_view.TRACKING_CHOICES):
+        raise HTTPException(status_code=400, detail=f"unknown tracking {what!r}")
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
-        if row["platform"] in platforms.RECORDED_ONLY and value:
+        if row["platform"] in platforms.RECORDED_ONLY and what != dashboard_view.TRACKING_OFF:
             title = platforms.TITLES[row["platform"]]
             raise HTTPException(
-                status_code=409, detail=f"{title} channels are only recorded: no clips are looked for in them."
+                status_code=409,
+                detail=f"{title} channels are only recorded: their chat is read while they are, and no clips are "
+                "looked for in them.",
             )
-        set_streamer_tracking(conn, row["broadcaster_user_id"], value)
+        set_streamer_tracking(
+            conn,
+            row["broadcaster_user_id"],
+            what == dashboard_view.TRACKING_CLIPS,
+            chat_only=what == dashboard_view.TRACKING_CHAT,
+        )
     finally:
         conn.close()
-    logger.info("tracking for %s -> %s", slug, "on" if value else "off")
-    return {"slug": slug, "tracking_enabled": value}
+    logger.info("tracking for %s -> %s", slug, what)
+    return {"slug": slug, "tracking": what}
 
 
 @app.post("/channels/{slug}/chat_delay")
@@ -6608,6 +6654,7 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
     watching = _flags.get("watching_enabled", True)
     taken: list[tuple[int, ChatMessage, bool]] = []
     tracked: dict[int, bool] = {}
+    chat_only: dict[int, bool] = {}
     watched: dict[int, bool] = {}
     conn = get_connection()
     try:
@@ -6639,10 +6686,15 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
                     and platforms.platform_of(message.channel) not in platforms.RECORDED_ONLY
                     and (streamer is None or bool(streamer["tracking_enabled"]))
                 )
+                # Tracked for its chat alone: kept like a tracked channel's,
+                # and judged by nothing.
+                chat_only[owner] = (
+                    watching and streamer is not None and _tracking_of(streamer) == dashboard_view.TRACKING_CHAT
+                )
             if not watched[owner] and not kept_whole:
                 statuses[index] = "not on the watchlist"
                 continue
-            if not tracked[owner] and not kept_whole:
+            if not (tracked[owner] or chat_only[owner] or kept_whole):
                 # Tracking paused for this one channel - same drop as the
                 # global pause, scoped to it.
                 statuses[index] = "channel tracking disabled"
@@ -6669,8 +6721,8 @@ async def _take_in(messages: Sequence[ChatMessage], asked: list[tuple[ChatMessag
 
         for index, message, judged in fresh:
             if not judged:
-                # Kept to go with the recording of the stream. Nobody is
-                # looking for moments in it.
+                # Kept for itself, or to go with the recording of the
+                # stream. Nobody is looking for moments in it.
                 statuses[index] = "stored"
                 continue
             await _detect(conn, message)
