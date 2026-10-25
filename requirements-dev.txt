@@ -8,6 +8,7 @@
 
 pytest
 pytest-cov
+pytest-xdist   # `-n auto`: the suite on every CPU at once (CI, scripts/check.py)
 anyio   # its pytest plugin runs the async tests (already a FastAPI dependency)
 # Pinned, unlike everything else: a new release can add lint rules or change
 # formatting, and CI should only go red for something in this repository.

@@ -40,6 +40,7 @@ Useful variations:
 | To... | Run |
 |---|---|
 | run everything CI runs (lint, formatting, tests with coverage) | `python scripts/check.py` |
+| run the suite on every CPU at once (pytest-xdist; what CI and `check.py` do) | `python -m pytest -n auto` |
 | run one file | `python -m pytest tests/unit/test_detector_firing.py` |
 | run the tests matching a phrase | `python -m pytest -k "straggler"` |
 | run only the fast, single-module tests | `python -m pytest tests/unit` |
@@ -443,7 +444,7 @@ tries to step outside:
 | While working on one module | That module's test file (`python -m pytest tests/unit/test_recorder_buffer.py`) | seconds |
 | Before opening a pull request for a small change | Lint (`python -m ruff check`, `python -m ruff format --check tests`) and the test files for what was changed; CI runs the rest | seconds |
 | Before opening a pull request for a larger change (the recorder, the detector, several modules at once) | Everything CI will run: `python scripts/check.py` | a few minutes |
-| On every push and pull request | Automatically, in CI: lint, then the suite with coverage on Windows and on Linux | a few minutes |
+| On every push and pull request | Automatically, in CI: lint, then the suite with coverage on Windows and on Linux (not for a pull request that changes only Markdown) | a few minutes |
 | Every Monday | Automatically, in CI: the same run against whatever the unpinned dependencies have become | - |
 | After changing a detector threshold or weight | The suite, then [`replay_chat.py`](#checking-a-detector-change-against-a-real-stream) on a recent stream, before and after | seconds |
 | After touching the recorder, the stream-URL capture, the webhook endpoint or the tunnel - and before relying on the service for a stream that matters | The suite, then the [live checklist](#what-is-not-automated---the-live-checklist) | ten minutes, on a live channel |
@@ -464,6 +465,13 @@ and on demand:
   `requirements-dev.txt`, runs the whole suite with coverage, fails under 90 %, and publishes the
   coverage table to the run summary. `REQUIRE_FFMPEG=1` turns "ffmpeg missing, skipping" into a
   failure there, so the clip tests can never be silently skipped in CI.
+  The suite runs in parallel, one worker per CPU (`-n auto`, pytest-xdist); every worker sets up a
+  sandbox of its own, and the process that hands the tests out stays where pytest was started,
+  which is where pytest-cov gathers the workers' coverage data.
+- **changes** - whether a pull request needs the suite at all. One that changes only Markdown
+  (`docs/`, the README, CLAUDE.md) cannot break a test, so its test jobs report success without
+  running it. They are not left out with `paths-ignore`, because they are required checks on
+  `master`, and a required check that never reports keeps the pull request from being merged.
 
 ## What is not automated - the live checklist
 
