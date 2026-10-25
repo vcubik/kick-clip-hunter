@@ -1,21 +1,24 @@
 {#- Download chat, beside a recording's Download: the recording's chat as a
     video as long as the recording, on a colour, to put next to its picture
-    in an editor. Made the first time it is asked for, which only the
+    in an editor - or see-through, to lay over it. Made the first time it is asked for, which only the
     script can ask, so the button shows once it is there; once the video is
-    there it is a plain link. The colour is chosen beside it (the script's
-    too): with another one than the video there was made on, the link makes
-    it anew on that colour instead. While it is being made the script
+    there it is a plain link. Whether it is on a colour, and which, is
+    chosen beside it (the script's too): chosen otherwise than the video
+    there was made, the link makes it anew that way instead. While it is being made the script
     fetches this again every couple of seconds
     (/dashboard/recordings/<id>/chat_video) and puts it in its own place -
     and once it is there, downloads it for whoever asked. -#}
 <span class="rec-chat-file" data-rec-chat-file data-status-scope data-url="{{ chat_file.url }}" data-page="{{ chat_file.page_url }}"{% if chat_file.busy %} data-busy{% endif %}>
   {% if chat_file.download_url %}
-  <a class="ch-btn ch-btn-compact" href="{{ chat_file.download_url }}" download title="The recording's chat as a video of its own, as long as the recording" data-background="{{ chat_file.background }}" data-chat-file-ready>Download chat</a>
+  <a class="ch-btn ch-btn-compact" href="{{ chat_file.download_url }}" download title="The recording's chat as a video of its own, as long as the recording" data-background="{{ chat_file.background or '' }}" data-chat-file-ready>Download chat</a>
   {% elif chat_file.chat %}
   <button type="button" class="ch-btn ch-btn-compact" hidden title="Makes the recording's chat into a video of its own, as long as the recording, and downloads it" data-make-chat-file{% if chat_file.busy %} disabled{% endif %}>Download chat</button>
   {% endif %}
   {% if chat_file.download_url or chat_file.chat %}
-  <input type="color" class="rec-chat-colour" value="{{ chat_file.colour }}" aria-label="Colour behind the chat" title="The colour behind the chat in its video" hidden{% if chat_file.busy %} disabled{% endif %} data-chat-file-colour>
+  <span class="rec-chat-look" hidden data-chat-file-look>
+    <label class="ch-check" title="Without one the video is see-through, to lay over the recording: every frame of it whole, a few gigabytes for an hour of a busy chat"><input type="checkbox"{% if not chat_file.see_through %} checked{% endif %}{% if chat_file.busy %} disabled{% endif %} data-chat-file-on-colour> on a background</label>
+    <input type="color" class="rec-chat-colour" value="{{ chat_file.colour }}" aria-label="Colour behind the chat" title="The colour behind the chat in its video"{% if chat_file.busy or chat_file.see_through %} disabled{% endif %} data-chat-file-colour>
+  </span>
   {% endif %}
   <span class="rec-chat-words" role="status" data-status>{{ chat_file.words }}</span>
 </span>

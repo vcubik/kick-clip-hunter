@@ -2,8 +2,8 @@
 Download chat, beside the recording's Download on the Recordings page.
 
 Made the first time it is asked for, on the colour picked beside it (the
-one the Trim dialog starts out with unless another is), as long as the
-recording, with its lines placed as they are
+one the Trim dialog starts out with unless another is) or see-through, as
+long as the recording, with its lines placed as they are
 beside the recording; kept next to the recording's file and removed with
 it. What a chat video looks like frame by frame is chat_video.py's, gone
 through in tests/integration/test_chat_video.py; here it is what this one
@@ -87,8 +87,14 @@ def colour(written: str) -> list[int]:
     return [int(written[index : index + 2], 16) for index in (1, 3, 5)]
 
 
-async def ask(service, recording_id: int, background=None):
-    body = {} if background is None else {"json": {"chat_background": background}}
+# Asked for with nothing said of what is behind the chat.
+UNSAID = object()
+
+
+async def ask(service, recording_id: int, background=UNSAID):
+    """Asks for the chat video; a `background` of None asks for it
+    see-through."""
+    body = {} if background is UNSAID else {"json": {"chat_background": background}}
     return await service.client.post(f"/recordings/{recording_id}/chat_video", **body)
 
 
@@ -126,6 +132,7 @@ class TestMakingIt:
             "busy": True,
             "download_url": None,
             "background": None,
+            "see_through": False,
             "colour": clip_trim.DEFAULT_CHAT_BACKGROUND,
             "chat": True,
             "words": view.chat_file_words(view.CHAT_FILE_MAKING, 0.0),
@@ -215,6 +222,42 @@ class TestMakingIt:
         assert sorted(path.name for path in file.parent.iterdir()) == sorted(
             [file.name, chat_of(file).name, noted_of(file).name]
         )
+
+    async def test_it_is_made_see_through_when_asked_for_on_no_colour(self, service, browser):
+        recording_id, file = recording()
+        said_at(1)
+
+        await ask(service, recording_id, None)
+        await service.settle()
+
+        stream = video_stream(chat_of(file))
+        assert (stream["codec_name"], stream["pix_fmt"]) == ("prores", "yuva444p12le")
+        assert int(stream["nb_frames"]) == pytest.approx(SECONDS * chat_video.FPS, abs=2)
+        now = await state(service, recording_id)
+        assert (now["state"], now["background"], now["see_through"]) == ("ready", None, True)
+        # The page offers the first colour, should it be wanted on one after all.
+        assert now["colour"] == clip_trim.DEFAULT_CHAT_BACKGROUND
+        made = chat_of(file).stat().st_mtime_ns
+        assert (await ask(service, recording_id, None)).json()["state"] == "ready"
+        await service.settle()
+        assert len(browser.pages) == 1 and chat_of(file).stat().st_mtime_ns == made
+
+    @pytest.mark.parametrize(("first", "then"), [(None, "#00ff00"), ("#00ff00", None)])
+    async def test_one_see_through_or_on_a_colour_is_made_anew_when_asked_for_the_other_way(
+        self, service, browser, first, then
+    ):
+        recording_id, file = recording()
+        said_at(1)
+        await ask(service, recording_id, first)
+        await service.settle()
+
+        assert (await ask(service, recording_id, then)).json()["state"] == "making"
+        await service.settle()
+
+        assert len(browser.pages) == 2
+        assert video_stream(chat_of(file))["codec_name"] == ("prores" if then is None else "h264")
+        now = await state(service, recording_id)
+        assert (now["background"], now["see_through"]) == (then, then is None)
 
     async def test_one_made_before_its_colour_was_noted_is_taken_as_on_the_first_colour(self, service, browser):
         recording_id, file = recording()
@@ -317,6 +360,21 @@ class TestWhatIsRefused:
         assert (await ask(service, recording_id)).status_code == 200
         await service.settle()
 
+    async def test_nor_a_see_through_one_without_the_far_larger_room_it_takes(self, service, browser, monkeypatch):
+        recording_id, _file = recording()
+        said_at(1)
+        main = service.main
+        assert main.RECORDING_CHAT_FILE_SEE_THROUGH_BYTES_PER_SECOND > main.RECORDING_CHAT_FILE_BYTES_PER_SECOND
+        room = recording_manager.MIN_FREE_BYTES + SECONDS * main.RECORDING_CHAT_FILE_SEE_THROUGH_BYTES_PER_SECOND
+        monkeypatch.setattr(stream_recording, "free_bytes", lambda: int(room) - 1)
+
+        response = await ask(service, recording_id, None)
+
+        assert response.status_code == 409 and "disk is too full" in response.json()["detail"]
+        # On a colour it fits.
+        assert (await ask(service, recording_id)).status_code == 200
+        await service.settle()
+
     @pytest.mark.parametrize("background", ["navy", "#000; background: url(//example.com)", 7])
     async def test_nor_on_what_is_not_a_colour(self, service, browser, background):
         recording_id, file = recording()
@@ -369,9 +427,14 @@ class TestOnThePage:
         # Asking is the script's to do.
         assert button.text == "Download chat" and "hidden" in button.attrs
         assert place.find("a") == []
-        # And so is picking the colour, beside it.
-        picker = place.one("input", data_chat_file_colour=True)
-        assert picker.attrs["type"] == "color" and "hidden" in picker.attrs
+        # And so is picking the colour, beside it - or none, for a
+        # see-through one.
+        look = place.one(data_chat_file_look=True)
+        assert "hidden" in look.attrs
+        on_colour = look.one("input", data_chat_file_on_colour=True)
+        assert on_colour.attrs["type"] == "checkbox" and "checked" in on_colour.attrs
+        picker = look.one("input", data_chat_file_colour=True)
+        assert picker.attrs["type"] == "color" and "disabled" not in picker.attrs
         assert picker.attrs["value"] == clip_trim.DEFAULT_CHAT_BACKGROUND
 
     async def test_once_it_is_there_it_is_a_link_to_it(self, service, browser):
@@ -397,6 +460,19 @@ class TestOnThePage:
         # The script makes it anew if another one is picked.
         assert place.one("a", data_chat_file_ready=True).attrs["data-background"] == "#0a2540"
         assert place.one("input", data_chat_file_colour=True).attrs["value"] == "#0a2540"
+        assert "checked" in place.one("input", data_chat_file_on_colour=True).attrs
+
+    async def test_a_see_through_one_is_shown_as_on_no_background(self, service, browser):
+        recording_id, _file = recording()
+        said_at(1)
+        await ask(service, recording_id, None)
+        await service.settle()
+
+        place = (await page_of(service, recording_id)).one("div", class_="rec-file").one(data_rec_chat_file=True)
+
+        assert place.one("a", data_chat_file_ready=True).attrs["data-background"] == ""
+        assert "checked" not in place.one("input", data_chat_file_on_colour=True).attrs
+        assert "disabled" in place.one("input", data_chat_file_colour=True).attrs
 
     async def test_the_colour_cannot_be_changed_while_it_is_made(self, service, browser):
         recording_id, _file = recording()
@@ -408,6 +484,7 @@ class TestOnThePage:
         shown = parse((await service.client.get(f"/dashboard/recordings/{recording_id}/chat_video")).text)
 
         assert "disabled" in shown.one("input", data_chat_file_colour=True).attrs
+        assert "disabled" in shown.one("input", data_chat_file_on_colour=True).attrs
         browser.release()
         await service.settle()
 

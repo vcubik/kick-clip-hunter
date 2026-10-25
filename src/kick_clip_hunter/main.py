@@ -3847,38 +3847,43 @@ def _recording_trim_dialog(conn, row, parts: list[stream_recording.Part], video_
 # -- the chat of a whole recording ---------------------------------------------
 #
 # Beside a recording's Download is Download chat: its chat as a video as long
-# as the recording, on the colour the Trim dialog starts out with, to put next
-# to the picture in an editor. It is made the first time it is asked for -
+# as the recording, to put next to the picture in an editor - on a colour,
+# the one the Trim dialog starts out with unless another is picked - or
+# see-through, to lay over it. It is made the first time it is asked for -
 # chat is laid out once (see chat_video.py), so an hour of stream takes a few
 # minutes - and kept next to the recording's file, which it is removed with.
-# Not see-through: that would take gigabytes an hour (see
-# clip_trim.CHAT_VIDEO_MAX_SECONDS), where on a colour it is tens of megabytes.
+# On a colour it is tens of megabytes an hour; see-through, every frame is
+# whole and it is gigabytes (see clip_trim.CHAT_VIDEO_MAX_SECONDS), which the
+# disk is checked for before it is begun.
 
 # Where making it stands, by recording, while it is made or after it failed.
 # Once it is there, the file says so.
 _recording_chat_files: dict[int, dict] = {}
 
 # What the chat video of a recording is taken to need of the disk, a second
-# of the recording - a busy chat on a colour comes to about 20 kB, measured.
+# of the recording - a busy chat on a colour comes to about 20 kB, measured;
+# see-through, three to five megabytes (see clip_trim.CHAT_VIDEO_MAX_SECONDS).
 RECORDING_CHAT_FILE_BYTES_PER_SECOND = 100_000
+RECORDING_CHAT_FILE_SEE_THROUGH_BYTES_PER_SECOND = 5_000_000
 
 
 def _recording_chat_file_paths(file: Path) -> tuple[Path, Path, Path]:
     """Where the chat video of a recording's file is kept, where it is
     written while it is made - so that one cut short is never taken for
-    it - and where the colour it was made on is noted."""
+    it - and where the colour it was made on, if any, is noted."""
     chat = file.with_name(chat_video.video_name(file.name))
     return chat, chat.with_name(f"{chat.stem}.part{chat.suffix}"), chat.with_name(f"{chat.stem}.json")
 
 
-def _recording_chat_file_background_of(record: Path) -> str:
+def _recording_chat_file_background_of(record: Path) -> str | None:
     """The colour the chat video of a recording was made on, as noted
-    beside it: the Trim dialog's first colour for one made before that was
-    noted, or whose note can't be read."""
+    beside it - None for one made see-through - and the Trim dialog's first
+    colour for one made before that was noted, or whose note can't be
+    read."""
     try:
-        noted = json.loads(record.read_text(encoding="utf-8")).get("background")
-        return clip_trim.chat_background(noted) or clip_trim.DEFAULT_CHAT_BACKGROUND
-    except (OSError, ValueError, AttributeError, clip_trim.TrimError):
+        noted = json.loads(record.read_text(encoding="utf-8"))
+        return clip_trim.chat_background(noted["background"])
+    except (OSError, ValueError, LookupError, TypeError, clip_trim.TrimError):
         return clip_trim.DEFAULT_CHAT_BACKGROUND
 
 
@@ -3890,21 +3895,25 @@ def _recording_chat_file(conn, row, parts: list[stream_recording.Part], file: Pa
     state = known.get("state", dashboard_view.CHAT_FILE_NONE)
     download_url = None
     background = None
+    see_through = False
     if state != dashboard_view.CHAT_FILE_MAKING and file is not None:
         chat, _partial, record = _recording_chat_file_paths(file)
         download_url = _stream_url(chat)
         if download_url:
             state = dashboard_view.CHAT_FILE_READY
             background = _recording_chat_file_background_of(record)
+            see_through = background is None
     return {
         "url": f"/recordings/{recording_id}/chat_video",
         "page_url": f"/dashboard/recordings/{recording_id}/chat_video",
         "state": state,
         "busy": state == dashboard_view.CHAT_FILE_MAKING,
         "download_url": download_url,
-        # The colour the video there was made on - None while there is none -
-        # and the one the page offers to begin with.
+        # The colour the video there was made on - None while there is none,
+        # or it was made see-through - and the one the page offers to begin
+        # with.
         "background": background,
+        "see_through": see_through,
         "colour": background or clip_trim.DEFAULT_CHAT_BACKGROUND,
         "chat": bool(parts) and _recording_has_chat(conn, row, parts),
         "words": dashboard_view.chat_file_words(state, known.get("done")),
@@ -3916,7 +3925,7 @@ async def _recording_chat_file_background(
     channel: str,
     lines: list[dict],
     duration: float,
-    background: str,
+    background: str | None,
     paths: tuple[Path, Path, Path],
 ) -> None:
     # Off the event loop, and as a tracked task, like the chat of a cut
@@ -6142,10 +6151,12 @@ def _chat_file_answer(recording_id: int) -> dict:
 async def make_recording_chat_video(recording_id: int, request: Request):
     """Starts making the chat of a whole recording as a video of its own,
     on a colour - `chat_background` ("#rrggbb") if it is posted, the Trim
-    dialog's first colour if not - unless it is being made already, or is
-    there on that colour (see _recording_chat_file); one there on another
-    colour is made anew in its place. Lines are placed as beside the
-    recording: by its parts, with the channel's chat delay."""
+    dialog's first colour if nothing is - or see-through, if it is posted
+    as null; unless it is being made already, or is there as asked (see
+    _recording_chat_file). One there on another colour, or see-through when
+    a colour is asked for or the other way round, is made anew in its
+    place. Lines are placed as beside the recording: by its parts, with the
+    channel's chat delay."""
     try:
         asked = await request.json() if await request.body() else {}
     except ValueError:
@@ -6153,7 +6164,11 @@ async def make_recording_chat_video(recording_id: int, request: Request):
     if not isinstance(asked, dict):
         raise HTTPException(status_code=400, detail="Expected chat_background as JSON.")
     try:
-        background = clip_trim.chat_background(asked.get("chat_background")) or clip_trim.DEFAULT_CHAT_BACKGROUND
+        background = (
+            clip_trim.chat_background(asked["chat_background"])
+            if "chat_background" in asked
+            else clip_trim.DEFAULT_CHAT_BACKGROUND
+        )
     except clip_trim.TrimError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     conn = get_connection()
@@ -6178,7 +6193,9 @@ async def make_recording_chat_video(recording_id: int, request: Request):
                 "Cut a stretch of it out with Trim and take its chat with it."
             ),
         )
-    takes = whole * RECORDING_CHAT_FILE_BYTES_PER_SECOND
+    takes = whole * (
+        RECORDING_CHAT_FILE_BYTES_PER_SECOND if background else RECORDING_CHAT_FILE_SEE_THROUGH_BYTES_PER_SECOND
+    )
     if recording_manager.room_left() - takes < recording_manager.MIN_FREE_BYTES:
         raise HTTPException(
             status_code=409,
