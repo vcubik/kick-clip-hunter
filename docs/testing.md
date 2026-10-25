@@ -127,7 +127,8 @@ The suite follows the pipeline. For each stage, the question it answers and wher
 Is a delivery only accepted when Kick signed it (wrong key, changed body, replayed under another id or
 timestamp, missing header - all rejected)? Is an accepted message stored once however often it is
 redelivered, classified, and handed to the detector for the right channel? Are messages dropped while
-watching is off, while one channel's tracking is off, or once shutdown was requested?
+watching is off, while one channel's tracking is off, or once shutdown was requested? Is the chat of a
+channel tracked for its chat alone stored with its chatters and never handed to the detector?
 
 **2. Storage** - `unit/test_db.py`
 Does a fresh database get the full schema, and does a database left by any earlier version of the
@@ -499,6 +500,7 @@ only test the fake:
 | A stream recording of real length | The suite records and saves seconds of synthetic footage. Hours of a real stream - gigabytes on disk, a file made in minutes, a player moving about in it - are step 11 below. |
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. What the Health page makes of Tailscale's answers is tested; that those answers are still what Tailscale prints is step 1 below. |
 | `static/dashboard.js` - the Health page: fetching it again every few seconds, the Check now button | As for the rest of the script: the page and the endpoint the button calls are tested, the script is checked by hand (step 1 below). |
+| `static/dashboard.js` - a channel's Tracking choice (Off, Chat, Clips) on the Channels page | As for the rest of the script: the choice the page renders and the route it posts to are tested, the script is checked by hand (step 21 below). |
 | Telegram's actual Bot API and Discord's actual webhooks: a note on a phone, a clip as a video in a chat, an embed in a channel | `FakeTelegram` and `FakeDiscord` encode what Telegram and Discord document (October 2026: `sendMessage` and `sendVideo` in HTML, 50 MB a video; an execute-webhook with `payload_json` and `files[0]`, 20 MB a file on a server without boosts; 429 with how long to wait). What a note looks like there, and that the limits still hold, is step 19 below. |
 
 Run this on a live channel after changing any of the above, or the code right next to it:
@@ -692,7 +694,7 @@ Run this on a live channel after changing any of the above, or the code right ne
    YouTube says of it, and nothing is beside "Health" in the bar.
 17. **Record a TikTok stream.** Add a live TikTok channel on the Channels page by a link to its
    page, `tiktok.com/@<handle>`: it is listed as `<handle>@tiktok` with its TikTok user id in the
-   tooltip, "Recorded only" where its Tracking switch would be. Start recording it. No browser
+   tooltip, "Recorded only" where its Tracking choice would be. Start recording it. No browser
    window opens: within half a minute the log says `recording started`, VOD not available, and no
    `could not be copied into MPEG-TS` follows; within a few seconds of the recording the log says
    `tiktok chat: reading the chat of <handle>@tiktok`, and the Health page's TikTok part says its
@@ -749,6 +751,14 @@ Run this on a live channel after changing any of the above, or the code right ne
    status line says why not and the file is as it was. With the Kick channel live, the log's
    `recording started` line may say `VOD not available`: within a minute or two it should say
    `the stream's VOD was found on a later look`, and the Health page's VOD column "Found".
+21. **Keep a channel's chat alone.** On the Channels page set a live Kick channel's Tracking to
+   Chat: "Chat" is lit at once, without a reload, and the log says `tracking for <channel> ->
+   chat`. Within half a minute its recorder has stopped - the Health page lists no footage for it
+   - no browser window opens for it from then on, and its chat keeps arriving in the log. A
+   reload says "Live, chat only" under "Right now", without a lamp, and the bar counts it among
+   the live channels. The Analyze page counts what it says from then on; no moment of it lands in
+   the queue however hard its chat laughs. Set it back to Clips: the next round starts its
+   recorder again (`recording started`).
 
 ## Checking a detector change against a real stream
 

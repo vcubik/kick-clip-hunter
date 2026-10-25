@@ -19,12 +19,14 @@ def minutes(count: float) -> timedelta:
     return timedelta(minutes=count)
 
 
-def add_streamer(slug: str, broadcaster_user_id: int, *, tracking: bool = True) -> None:
+def add_streamer(slug: str, broadcaster_user_id: int, *, tracking: bool = True, chat_only: bool = False) -> None:
+    """A Kick channel on the watchlist, tracked for clips - or for nothing,
+    or with `chat_only` for its chat alone."""
     conn = db.get_connection()
     try:
         db.add_streamer(conn, broadcaster_user_id, slug)
-        if not tracking:
-            db.set_streamer_tracking(conn, broadcaster_user_id, False)
+        if not tracking or chat_only:
+            db.set_streamer_tracking(conn, broadcaster_user_id, False, chat_only=chat_only)
     finally:
         conn.close()
 

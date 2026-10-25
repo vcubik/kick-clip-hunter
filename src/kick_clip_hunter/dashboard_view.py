@@ -684,21 +684,26 @@ def empty_queue_words(show: str, channel: str | None, newest: datetime | None, t
 # -- the service ------------------------------------------------------------
 
 
-def now_words(*, live: bool, recorded: bool = False, looked_at: bool = True) -> str:
+def now_words(*, live: bool, recorded: bool = False, looked_at: bool = True, chat_live: bool = False) -> str:
     """What a channel is doing right now, in a word or two - and, in the top
     bar, the service as a whole. "Live" is a channel whose stream is coming
     in; "Recording" is kept for one whose stream is also being kept whole
-    (`recorded`), so that the word means one thing. A channel nothing is
-    coming in from is not live as far as the service can tell - or, if it is
-    neither tracked nor recorded (`looked_at`), simply not looked at."""
+    (`recorded`), so that the word means one thing. Of a channel tracked for
+    its chat alone no stream comes in, only its chat - while its platform
+    says it is live (`chat_live`). A channel nothing is coming in from is
+    not live as far as the service can tell - or, if it is neither tracked
+    nor recorded (`looked_at`), simply not looked at."""
     if live:
         return "Recording" if recorded else "Live"
+    if chat_live:
+        return "Live, chat only"
     return "Not live" if looked_at else "Not watched"
 
 
 def channel_count_words(recording: int, tracked: int) -> str:
     """The words beside the lamp in the top bar: how many of the channels
-    that are looked at are live (`recording`: their streams are coming in)."""
+    that are looked at are live (`recording`: their streams are coming in,
+    or for a channel tracked for its chat alone, its chat)."""
     if tracked == 0:
         return "No channels watched"
     if recording:
@@ -718,7 +723,7 @@ def service_words(*, recording: int, tracked: int, watchlist: int, watching: boo
     if not watching:
         return "Watching is off. Nothing new arrives until you turn it on."
     if tracked == 0:
-        return "Tracking is off for every channel on the watchlist."
+        return "No channel on the watchlist is tracked for clips."
 
     lands = "the moment lands in the queue"
     if tracked == 1:
@@ -823,6 +828,24 @@ def recording_stopped_words(kept: bool, always: bool) -> str:
     off."""
     words = RECORDING_STOPPED_WORDS[kept]
     return f"{words} The channel's next stream is recorded again." if always else words
+
+
+# What a channel on the watchlist can be tracked for, as its row on the
+# Channels page offers it (the value posted, and the word on its button):
+# nothing, its chat alone - kept, and judged by nothing - or clips, which
+# keeps its chat too.
+TRACKING_OFF = "off"
+TRACKING_CHAT = "chat"
+TRACKING_CLIPS = "clips"
+TRACKING_CHOICES = ((TRACKING_OFF, "Off"), (TRACKING_CHAT, "Chat"), (TRACKING_CLIPS, "Clips"))
+
+
+def tracking(clips: bool, chat_only: bool) -> str:
+    """What a channel is tracked for, from the two switches it is stored as
+    (see db.set_streamer_tracking): clips win."""
+    if clips:
+        return TRACKING_CLIPS
+    return TRACKING_CHAT if chat_only else TRACKING_OFF
 
 
 def kept_words(moments: int, recordings: int) -> str:

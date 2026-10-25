@@ -336,7 +336,7 @@ class TestChatIdentities:
 
     async def test_with_tracking_off_nothing_is_kept_of_the_chatter_either(self, service):
         service.watch(CHANNEL)
-        await service.client.post(f"/channels/{CHANNEL}/tracking", params={"enabled": "0"})
+        await service.client.post(f"/channels/{CHANNEL}/tracking", params={"what": "off"})
 
         await service.chat(CHANNEL, "alice", "hello", identity=MOD)
 
@@ -365,7 +365,7 @@ class TestPausing:
     async def test_a_channel_with_tracking_off_is_dropped_while_others_carry_on(self, service):
         service.watch("paused_channel")
         service.watch("active_channel")
-        await service.client.post("/channels/paused_channel/tracking?enabled=0")
+        await service.client.post("/channels/paused_channel/tracking?what=off")
 
         paused = await service.chat("paused_channel", "alice", "xDDD")
         active = await service.chat("active_channel", "bob", "xDDD")
@@ -390,6 +390,76 @@ class TestPausing:
 
         assert response.json() == {"status": "watching disabled"}
         assert service.chat_log() == []
+
+
+class TestChatAlone:
+    """A channel tracked for its chat alone has every message kept, as a
+    tracked channel's is - and nothing looked for in it."""
+
+    async def track(self, service, what: str, channel: str = CHANNEL) -> None:
+        response = await service.client.post(f"/channels/{channel}/tracking", params={"what": what})
+        assert response.status_code == 200, response.text
+
+    async def test_its_chat_is_kept_with_who_wrote_it(self, service):
+        service.watch(CHANNEL)
+        await self.track(service, "chat")
+
+        response = await service.chat(CHANNEL, "alice", "hello", identity=MOD)
+
+        assert response.json() == {"status": "stored"}
+        assert service.chat_log() == [(CHANNEL, "alice", "hello")]
+        assert [row["username"] for row in service.rows("SELECT username FROM chat_identities")] == ["alice"]
+
+    async def test_nobody_looks_for_moments_in_it(self, service):
+        service.watch(CHANNEL)
+        service.warm_up(CHANNEL)
+        entries = len(detector._entries[CHANNEL])
+        await self.track(service, "chat")
+
+        await service.crowd_laughs(CHANNEL, people=20)
+
+        assert service.moments() == []
+        assert len(detector._entries[CHANNEL]) == entries
+        assert len(service.chat_log()) == 20
+
+    async def test_with_watching_off_it_is_dropped_like_any_other(self, service):
+        service.watch(CHANNEL)
+        await self.track(service, "chat")
+        await service.client.post("/settings/watching?enabled=0")
+
+        response = await service.chat(CHANNEL, "alice", "hello")
+
+        assert response.json() == {"status": "watching disabled"}
+        assert service.chat_log() == []
+
+    async def test_tracked_for_clips_again_it_is_looked_for_moments_in_again(self, service):
+        service.watch(CHANNEL)
+        await self.track(service, "chat")
+        await self.track(service, "clips")
+
+        response = await service.chat(CHANNEL, "alice", "hello")
+
+        assert response.json() == {"status": "received"}
+        assert CHANNEL in detector._entries
+
+    async def test_each_message_of_a_batch_goes_by_what_its_channel_is_tracked_for(self, service):
+        tracked = service.watch("tracked_channel")
+        chatty = service.watch("chatty_channel")
+        paused = service.watch("paused_channel")
+        await self.track(service, "chat", "chatty_channel")
+        await self.track(service, "off", "paused_channel")
+
+        statuses = await service.main._take_chats(
+            [
+                batch_message("tracked_channel", tracked, "alice", "one", 1),
+                batch_message("chatty_channel", chatty, "bob", "two", 2),
+                batch_message("paused_channel", paused, "carol", "three", 3),
+            ]
+        )
+
+        assert statuses == ["received", "stored", "channel tracking disabled"]
+        assert [channel for channel, _, _ in service.chat_log()] == ["tracked_channel", "chatty_channel"]
+        assert "chatty_channel" not in detector._entries
 
 
 class TestStoredTimes:
@@ -467,7 +537,7 @@ class TestChatInBatches:
     async def test_each_message_of_a_batch_is_judged_by_its_own_channel(self, service):
         tracked = service.watch("tracked_channel")
         paused = service.watch("paused_channel")
-        await service.client.post("/channels/paused_channel/tracking?enabled=0")
+        await service.client.post("/channels/paused_channel/tracking?what=off")
 
         statuses = await service.main._take_chats(
             [

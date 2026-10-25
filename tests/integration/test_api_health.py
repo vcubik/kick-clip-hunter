@@ -210,7 +210,7 @@ class TestWebhooks:
 
     async def test_so_did_chat_of_a_channel_whose_tracking_is_off(self, service):
         user_id = service.watch("channel_a")
-        await service.client.post("/channels/channel_a/tracking?enabled=0")
+        await service.client.post("/channels/channel_a/tracking?what=off")
 
         response = await service.chat("channel_a", "viewer", "hello")
 
@@ -273,6 +273,22 @@ class TestWebhooks:
         assert said(page, "webhooks").startswith("Nothing has arrived from Kick since the service started")
         assert page.one("h1").text == "Webhooks need a look."
         assert flag(await page_at(service, "/dashboard")) == "1 problem"
+
+    async def test_so_it_is_while_a_channel_tracked_for_its_chat_alone_is_live(self, service, monkeypatch):
+        # Its chat is all that is kept of it, so its silence is noticed too.
+        add_streamer("channel_a", 7, chat_only=True)
+        long = health.CHAT_SILENT_SECONDS + 60
+        monkeypatch.setattr(service.main, "_started_at", ago(seconds=long))
+        monkeypatch.setitem(
+            recording_manager._looks, "channel_a", recording_manager.Look(at=ago(), live_since=ago(seconds=long))
+        )
+
+        page = await page_at(service)
+
+        assert in_trouble(page, "webhooks")
+        ((channel, now, chat, note),) = table(page, "webhooks")
+        assert (channel, now, chat) == ("channel_a", "Live, chat only", "Nothing yet")
+        assert note.startswith("Quiet for")
 
     async def test_one_delivery_is_enough_to_end_that(self, service, monkeypatch):
         service.watch("channel_a")

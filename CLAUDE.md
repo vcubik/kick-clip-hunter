@@ -11,7 +11,9 @@ viral/funny moments from chat activity (message-rate spikes, emote/keyword frequ
 moments are stored with a timestamp, stream-elapsed offset, and the chat snippet around
 them, and a clip is automatically cut from a rolling local recording buffer. A channel's
 whole stream can also be recorded on request, with its chat - and a TikTok channel is
-watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). A bot
+watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). Any
+other channel can be tracked for its chat alone instead of for clips: its chat stored, never
+judged, nothing recorded for it (`streamers.chat_only`, "Chat" on the Channels page). A bot
 can write in a channel's chat - when the stream starts, a recording starts or ends, a moment
 is caught, a clip was made, a message of its own every so often, in words the settings may
 choose - and take commands there from its streamer and moderators (start or stop a recording,

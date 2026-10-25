@@ -358,6 +358,14 @@ def get_connection() -> sqlite3.Connection:
     if "always_record" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN always_record INTEGER NOT NULL DEFAULT 0")
 
+    # Whether a channel that is not tracked for clips has its chat kept all
+    # the same - chat alone, stored and judged by nothing, for what can be
+    # read from it afterwards. Off to begin with. A channel tracked for clips
+    # has its chat kept anyway, and never has this on as well (see
+    # set_streamer_tracking).
+    if "chat_only" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN chat_only INTEGER NOT NULL DEFAULT 0")
+
     # Which platform a channel is on, and its id there (see platforms.py).
     # Every channel from before there were others is on Kick, where that id
     # is the one it is kept by here as well.
@@ -565,7 +573,7 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
     channels of that one."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, own_tuning, always_record,"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, own_tuning, always_record,"
         " platform, platform_user_id"
         " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
         (platform, platform),
@@ -575,7 +583,8 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled, own_tuning, always_record, platform, platform_user_id"
+        "SELECT broadcaster_user_id, tracking_enabled, chat_only, own_tuning, always_record, platform,"
+        " platform_user_id"
         " FROM streamers WHERE slug = ?",
         (slug,),
     ).fetchone()
@@ -586,7 +595,8 @@ def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sq
     under - for what starts from its chat, which may spell it otherwise."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, tracking_enabled, own_tuning, always_record, platform, platform_user_id"
+        "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, own_tuning, always_record, platform,"
+        " platform_user_id"
         " FROM streamers WHERE broadcaster_user_id = ?",
         (broadcaster_user_id,),
     ).fetchone()
@@ -655,10 +665,15 @@ def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id:
     return bool(row[0]) if row else True
 
 
-def set_streamer_tracking(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+def set_streamer_tracking(
+    conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool, *, chat_only: bool = False
+) -> None:
+    """Sets what a channel is tracked for: clips (`enabled`, which keeps its
+    chat too), its chat alone (`chat_only`), or nothing. Never both: clips
+    win."""
     conn.execute(
-        "UPDATE streamers SET tracking_enabled = ? WHERE broadcaster_user_id = ?",
-        (1 if enabled else 0, broadcaster_user_id),
+        "UPDATE streamers SET tracking_enabled = ?, chat_only = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, 1 if chat_only and not enabled else 0, broadcaster_user_id),
     )
     conn.commit()
 

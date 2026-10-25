@@ -164,7 +164,9 @@ class TestTheControlBesideAChannel:
             (await channels(service)).one("section", aria_labelledby="watchlist-title").one("p", class_="section-lead")
         )
 
-        assert "Tracking looks for clips" in lead.text
+        assert "Tracking a channel for clips looks for them" in lead.text
+        # ...and what tracking it for its chat alone is, which is no recording.
+        assert "Tracking it for chat keeps its messages and nothing more - no clips, no video" in lead.text
         assert "whole stream and its chat, tracked or not" in lead.text
         assert "Recordings page" in lead.text
 
