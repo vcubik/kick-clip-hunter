@@ -110,6 +110,27 @@ October 2026:
   matter - a moment's file was found two seconds off Kick's VOD clock, and Twitch's has
   none - so the file is found in the VOD by its pictures.
 
+**A moment's clip cut from the VOD in the first place, and a link to it there
+(`vod_footage.cut`, `streams.watch_link`)** - for a channel tracked for moments, of which no
+stream comes in. Seen in October 2026:
+- With no file to find, the stretch is taken by the VOD's clock; seconds off the live
+  stream's, as above - well inside a clip's pre-roll and the footage around it.
+- Kick's VOD of a stream that is on is listed (`is_live`), public and with its `source`,
+  even on a channel that keeps its VODs for subscribers only: there, once the stream is over,
+  the same VOD is listed as `subscriber_only` without an address. Such a channel's clips can
+  be cut only while its stream is on - which choosing Moments for it says.
+- kick.com's own page of a VOD is `kick.com/<slug>/videos/<id>`, where `<id>` is not the
+  `video.uuid` the list above gives (`kick.com/video/<uuid>` and `/<slug>/videos/<uuid>`
+  are "page not found") but the id the site's newer API lists: `web.kick.com/api/v1/channels/
+  <channel id>/videos` (the channel's id on the site - `id` of `/api/v2/channels/<slug>`,
+  not its user id), plain HTTP, no token, answers with `data`: per stream `id`, `start_time`
+  and `end_time` (ISO, UTC; no end while it is on), `is_live`, `duration` (s), `status`
+  (`public` or `sub_only`) and `original_expires_at` (a month after it began) - and no
+  address of its footage. The page's player starts at `?t=<seconds>` (its own share button
+  writes the same), counted from the VOD's start.
+- Twitch: `twitch.tv/videos/<id>?t=1h2m3s`, the past broadcast of a stream that is on as
+  well.
+
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`
   (body `{"duration": 180}`, cuts a 180s source buffer *server-side* — not a client-side

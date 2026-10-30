@@ -1,6 +1,7 @@
 """What the service asks a channel's platform about its stream: whether it is
-live and since when, where the stream is, and where the recording of a
-stream of it is (its VOD). Each question goes to the platform the channel's
+live and since when, where the stream is, where the recording of a stream
+of it is (its VOD) - and where a person watches that recording, and what
+keeps one from being had. Each question goes to the platform the channel's
 name says it is on (see platforms.py).
 """
 
@@ -111,3 +112,30 @@ def vod_at(channel: str, when: datetime) -> Vod:
     if platform == platforms.YOUTUBE:
         return youtube_stream.vod_at(login, when)
     raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream.")
+
+
+async def watch_link(channel: str, when: datetime) -> str:
+    """Where a person watches the channel's stream that was on at `when`,
+    from then on: its VOD's page on the platform, with the time to start at -
+    on Kick and Twitch, which keep a VOD once a stream is over. Raises
+    NoVod, in words that say why, where there is none."""
+    platform, login = platforms.split(channel)
+    if platform == platforms.KICK:
+        return await kick_stream.watch_link_at(login, when)
+    if platform == platforms.TWITCH:
+        return await twitch_stream.watch_link_at(login, when)
+    raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream once it is over.")
+
+
+async def vod_trouble(channel: str) -> str | None:
+    """What would keep a clip of a moment from being cut from the channel's
+    VOD once its stream is over, by what its platform lists of the channel's
+    VODs, in words: it keeps none, keeps them for its subscribers only, or
+    from the public. None where nothing seen does - or the platform could
+    not be asked, which is no sign either way."""
+    platform, login = platforms.split(channel)
+    if platform == platforms.KICK:
+        return await kick_stream.vod_trouble(login)
+    if platform == platforms.TWITCH:
+        return await twitch_stream.vod_trouble(login)
+    return f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream once it is over."

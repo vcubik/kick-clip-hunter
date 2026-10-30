@@ -21,6 +21,10 @@ API_BASE = "https://api.kick.com/public/v1"
 # - its subscriber badges and its streams' VODs, among other things - and
 # needs no token.
 SITE_API_BASE = "https://kick.com/api/v2"
+# The newer API the site's pages ask as well, by a channel's id on the site
+# (`id` of get_site_channel): its videos by the ids the site's own addresses
+# carry, which the older one does not give. No token either.
+WEB_API_BASE = "https://web.kick.com/api/v1"
 
 _token_cache: dict[str, float | str] = {}
 
@@ -146,6 +150,24 @@ async def get_videos(slug: str) -> list[dict]:
         response.raise_for_status()
         videos = response.json()
     return videos if isinstance(videos, list) else []
+
+
+async def get_site_videos(channel_id: int) -> list[dict]:
+    """A channel's newest streams as the site's newer API lists them, by the
+    channel's id on the site, newest first - each with the id its page on
+    kick.com is addressed by (`id`: kick.com/<channel.slug>/videos/<id>),
+    when it began and ended (`start_time`, `end_time`, ISO in UTC; no end
+    while it is on, `is_live`) and who may watch it (`status`: "public", or
+    "sub_only" for the channel's subscribers). No address of its footage:
+    that is get_videos'."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{WEB_API_BASE}/channels/{channel_id}/videos", headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        videos = response.json()
+    found = videos.get("data") if isinstance(videos, dict) else None
+    return found if isinstance(found, list) else []
 
 
 async def get_user(token: str) -> dict:

@@ -339,6 +339,16 @@ def get_connection() -> sqlite3.Connection:
     if "laughing" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN laughing INTEGER")
 
+    # A moment of a channel tracked for moments: no clip is cut of it as it
+    # is found, only from its stream's VOD once it is asked for (see
+    # streamers.moments_only). And where it is watched on its platform - its
+    # stream's VOD, from a little before it - where that was found; NULL
+    # otherwise.
+    if "clip_on_request" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN clip_on_request INTEGER NOT NULL DEFAULT 0")
+    if "watch_url" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN watch_url TEXT")
+
     # Per-channel pause switch, independent of the global watching toggle -
     # lets one noisy/offline channel be paused without touching the rest of
     # the watchlist. Defaults to on so existing rows keep behaving as before.
@@ -365,6 +375,14 @@ def get_connection() -> sqlite3.Connection:
     # set_streamer_tracking).
     if "chat_only" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN chat_only INTEGER NOT NULL DEFAULT 0")
+
+    # Whether a channel tracked for clips has them made only when asked for:
+    # its moments are found in its chat and told of, and no stream of it
+    # comes in for them - a moment's clip is cut from the stream's VOD
+    # afterwards (see main._cut_from_vod_background). Off to begin with, and
+    # never on without tracking_enabled (see set_streamer_tracking).
+    if "moments_only" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN moments_only INTEGER NOT NULL DEFAULT 0")
 
     # Which platform a channel is on, and its id there (see platforms.py).
     # Every channel from before there were others is on Kick, where that id
@@ -573,8 +591,8 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
     channels of that one."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, own_tuning, always_record,"
-        " platform, platform_user_id"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, moments_only, own_tuning,"
+        " always_record, platform, platform_user_id"
         " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
         (platform, platform),
     ).fetchall()
@@ -583,8 +601,8 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled, chat_only, own_tuning, always_record, platform,"
-        " platform_user_id"
+        "SELECT broadcaster_user_id, tracking_enabled, chat_only, moments_only, own_tuning, always_record,"
+        " platform, platform_user_id"
         " FROM streamers WHERE slug = ?",
         (slug,),
     ).fetchone()
@@ -595,8 +613,8 @@ def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sq
     under - for what starts from its chat, which may spell it otherwise."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, own_tuning, always_record, platform,"
-        " platform_user_id"
+        "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, moments_only, own_tuning, always_record,"
+        " platform, platform_user_id"
         " FROM streamers WHERE broadcaster_user_id = ?",
         (broadcaster_user_id,),
     ).fetchone()
@@ -666,14 +684,25 @@ def get_streamer_tracking_enabled(conn: sqlite3.Connection, broadcaster_user_id:
 
 
 def set_streamer_tracking(
-    conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool, *, chat_only: bool = False
+    conn: sqlite3.Connection,
+    broadcaster_user_id: int,
+    enabled: bool,
+    *,
+    chat_only: bool = False,
+    moments_only: bool = False,
 ) -> None:
     """Sets what a channel is tracked for: clips (`enabled`, which keeps its
-    chat too), its chat alone (`chat_only`), or nothing. Never both: clips
-    win."""
+    chat too) - made as they are found, or only when asked for
+    (`moments_only`) - its chat alone (`chat_only`), or nothing. Never chat
+    alone and clips both: clips win."""
     conn.execute(
-        "UPDATE streamers SET tracking_enabled = ?, chat_only = ? WHERE broadcaster_user_id = ?",
-        (1 if enabled else 0, 1 if chat_only and not enabled else 0, broadcaster_user_id),
+        "UPDATE streamers SET tracking_enabled = ?, chat_only = ?, moments_only = ? WHERE broadcaster_user_id = ?",
+        (
+            1 if enabled else 0,
+            1 if chat_only and not enabled else 0,
+            1 if moments_only and enabled else 0,
+            broadcaster_user_id,
+        ),
     )
     conn.commit()
 
@@ -741,7 +770,8 @@ _MOMENT_COLUMNS = """
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
     context_before, context_after, downloaded_at,
-    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles, laughing
+    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles, laughing,
+    clip_on_request, watch_url
 """
 
 
@@ -1340,17 +1370,19 @@ def insert_moment(
     keyword_hits: int,
     stream_elapsed_seconds: int | None = None,
     detected_at: str | None = None,
+    clip_on_request: bool = False,
 ) -> int:
     """Stores a moment and returns its id. It is detected now unless
     `detected_at` says when - for one found afterwards, in the chat of a
-    stream that was kept whole (see recording_moments.py)."""
+    stream that was kept whole (see recording_moments.py). `clip_on_request`:
+    its clip is cut only when asked for, from its stream's VOD."""
     cursor = conn.execute(
         """
         INSERT INTO moments
             (broadcaster_user_id, channel_slug, window_start, window_end, reason, score,
              message_count, baseline_message_rate, current_message_rate, emote_count, keyword_hits,
-             stream_elapsed_seconds, detected_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+             stream_elapsed_seconds, clip_on_request, detected_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
         """,
         (
             broadcaster_user_id,
@@ -1365,6 +1397,7 @@ def insert_moment(
             emote_count,
             keyword_hits,
             stream_elapsed_seconds,
+            1 if clip_on_request else 0,
             detected_at,
         ),
     )
@@ -1505,6 +1538,13 @@ def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_en
 
 def update_moment_laughing(conn: sqlite3.Connection, moment_id: int, laughing: int) -> None:
     conn.execute("UPDATE moments SET laughing = ? WHERE id = ?", (laughing, moment_id))
+    conn.commit()
+
+
+def update_moment_watch_url(conn: sqlite3.Connection, moment_id: int, watch_url: str) -> None:
+    """Records where a moment is watched on its platform: its stream's VOD,
+    from a little before it."""
+    conn.execute("UPDATE moments SET watch_url = ? WHERE id = ?", (watch_url, moment_id))
     conn.commit()
 
 

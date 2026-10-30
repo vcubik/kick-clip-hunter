@@ -750,9 +750,9 @@ class TestAChannelRecordedAlways:
             service.main._look_failed,
             # ...and how far back each channel's recorder keeps its stream.
             service.main._buffer_seconds,
-            # ...and which channels are tracked for their chat alone: looked
-            # at, never recorded for that.
-            service.main._is_chat_only,
+            # ...and which channels are tracked through their chat alone - for
+            # the chat, or for moments: looked at, never recorded for that.
+            service.main._is_tracked_by_chat,
         ]
 
 

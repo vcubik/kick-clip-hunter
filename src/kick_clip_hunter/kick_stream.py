@@ -18,11 +18,21 @@ plain HTTP, no browser (it answers one, as of October 2026) - and which is
 also where footage of a stream that is over is found (see vod_footage.py).
 A VOD's address carries no token and does not run out: one from weeks ago
 still plays, as long as the channel keeps it.
+
+Where a person watches a VOD is another matter: kick.com's pages address a
+VOD by an id the list vod_at asks does not give, only the site's newer API
+(web.kick.com), by the channel's id on the site. `watch_link_at` asks that
+one for the page of the stream a moment was in, with the time to start at
+(`?t=<seconds>`, which the page's player goes to), and `vod_trouble` what
+it lists of a channel's VODs: whether they stay public once a stream is
+over - a channel can keep them for its subscribers only from then on.
 """
 
 import asyncio
 import time
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 from patchright.sync_api import sync_playwright
@@ -39,6 +49,12 @@ MAX_WAIT_SECONDS = 15
 VOD_SLACK_SECONDS = 60
 # What kick.com says of a VOD it keeps for the channel's subscribers only.
 SUBSCRIBERS_ONLY = "subscriber_only"
+# Where the site is, and what its newer API says of a VOD anyone may watch
+# and of one kept for the channel's subscribers once its stream is over
+# (while it is on, anyone may).
+SITE = "https://kick.com"
+SITE_PUBLIC = "public"
+SITE_SUBSCRIBERS_ONLY = "sub_only"
 
 
 def _vod_url(page, channel_slug: str) -> str | None:
@@ -108,17 +124,12 @@ def _began(video: dict) -> datetime | None:
     return began if began.tzinfo is not None else began.replace(tzinfo=timezone.utc)
 
 
-def covering(videos: list, when: datetime) -> dict | None:
-    """Which of the streams kick.com lists `when` was in: the one whose time
-    it lies in, or failing that the nearest that begins or ends no more than
-    VOD_SLACK_SECONDS from it - one that is on reaching to now. None if none
-    does. Pure."""
+def _nearest(spans: Iterable[tuple[datetime, datetime | None, dict]], when: datetime) -> dict | None:
+    """Of streams with when each began and ended (None while it is on), the
+    one `when` was in, or failing that the nearest that begins or ends no
+    more than VOD_SLACK_SECONDS from it. Pure."""
     best: tuple[float, dict] | None = None
-    for video in videos:
-        began = _began(video) if isinstance(video, dict) else None
-        if began is None:
-            continue
-        ended = None if video.get("is_live") else began + timedelta(milliseconds=video.get("duration") or 0)
+    for began, ended, video in spans:
         if when < began:
             outside = (began - when).total_seconds()
         elif ended is not None and when > ended:
@@ -128,6 +139,99 @@ def covering(videos: list, when: datetime) -> dict | None:
         if outside <= VOD_SLACK_SECONDS and (best is None or outside < best[0]):
             best = (outside, video)
     return best[1] if best else None
+
+
+def covering(videos: list, when: datetime) -> dict | None:
+    """Which of the streams kick.com lists `when` was in: the one whose time
+    it lies in, or failing that the nearest that begins or ends no more than
+    VOD_SLACK_SECONDS from it - one that is on reaching to now. None if none
+    does. Pure."""
+    spans = []
+    for video in videos:
+        began = _began(video) if isinstance(video, dict) else None
+        if began is not None:
+            ended = None if video.get("is_live") else began + timedelta(milliseconds=video.get("duration") or 0)
+            spans.append((began, ended, video))
+    return _nearest(spans, when)
+
+
+def _site_time(text: object) -> datetime | None:
+    """A time as the site's newer API writes it: ISO, in UTC."""
+    try:
+        moment = datetime.fromisoformat(str(text or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def site_covering(videos: list, when: datetime) -> dict | None:
+    """The same as `covering`, of the streams the site's newer API lists
+    (kick_client.get_site_videos), which says when each one ended rather
+    than how long it ran. Pure."""
+    spans = []
+    for video in videos:
+        began = _site_time(video.get("start_time")) if isinstance(video, dict) else None
+        if began is not None:
+            ended = None if video.get("is_live") else (_site_time(video.get("end_time")) or began)
+            spans.append((began, ended, video))
+    return _nearest(spans, when)
+
+
+def watch_link(slug: str, video_id: str, seconds: float) -> str:
+    """Where a VOD is watched on kick.com from `seconds` into it: the
+    address of its page there, with the time its player starts at - whole
+    seconds, as the page's own share button writes it. Pure."""
+    return f"{SITE}/{quote(slug)}/videos/{quote(video_id)}?t={max(int(seconds), 0)}"
+
+
+async def _site_videos(slug: str) -> list:
+    """The channel's newest streams as the site's newer API lists them."""
+    channel = await kick_client.get_site_channel(slug)
+    return await kick_client.get_site_videos(int(channel["id"]))
+
+
+async def watch_link_at(slug: str, when: datetime) -> str:
+    """Where the channel's stream that was on at `when` is watched on
+    kick.com from then on: its VOD's page - of a stream that is on as well,
+    which the page plays from its start. Asked of the site's newer API,
+    which knows the ids those pages are addressed by (the list vod_at asks
+    does not). Raises NoVod, saying why, where there is none."""
+    try:
+        videos = await _site_videos(slug)
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+        raise NoVod(f"Kick could not be asked for the channel's VODs ({type(error).__name__}).") from error
+    video = site_covering(videos, when)
+    began = _site_time(video.get("start_time")) if video else None
+    if video is None or began is None or not video.get("id"):
+        raise NoVod(
+            "Kick lists no VOD of that stream: the channel keeps none, it was deleted, "
+            "or it is older than the streams Kick lists."
+        )
+    channel = video.get("channel")
+    page = channel.get("slug") if isinstance(channel, dict) and channel.get("slug") else slug.lower()
+    return watch_link(str(page), str(video["id"]), (when - began).total_seconds())
+
+
+async def vod_trouble(slug: str) -> str | None:
+    """What would keep a clip from being cut from the channel's VODs once a
+    stream is over, by what the site's newer API lists of its streams, in
+    words - None where nothing seen does, or it could not be asked."""
+    try:
+        videos = await _site_videos(slug)
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        return None
+    if not videos:
+        return "Kick lists no VODs of this channel: if it keeps none, no moment's clip can be cut."
+    over = [video for video in videos if isinstance(video, dict) and not video.get("is_live")]
+    status = over[0].get("status") if over else SITE_PUBLIC
+    if status == SITE_SUBSCRIBERS_ONLY:
+        return (
+            "Kick keeps this channel's VODs for its subscribers only once a stream is over: "
+            "a moment's clip can be cut only while its stream is still on."
+        )
+    if status != SITE_PUBLIC:
+        return "Kick keeps this channel's VODs from the public: no moment's clip can be cut."
+    return None
 
 
 def vod_at(channel_slug: str, when: datetime) -> Vod:

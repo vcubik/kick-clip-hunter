@@ -10,6 +10,10 @@ both (`Telegram`, `Discord` - each a `Destination`):
 - a clip was saved: whose, how long, how far into the stream, what chat
   said most - and, where that is switched on and it fits, the clip itself,
   without the footage around it (`clip_note`);
+- a moment was caught on a channel tracked for moments, whose clips are cut
+  only when asked for: how far into the stream, what chat said most, and a
+  link to it in the stream's VOD, to watch it there before asking
+  (`moment_note`);
 - a recording of a whole stream started, was saved - why it ended, how long
   it runs, how big it is - could not be saved, or ended before it had any
   footage (`recording_*_note`);
@@ -101,15 +105,24 @@ RETRY_SECONDS = 30
 
 # What a note is about.
 CLIP = "clip"
+MOMENT = "moment"
 RECORDING = "recording"
 HEALTH = "health"
 DAILY = "daily"
 TEST = "test"
 
 # The colour of a Discord embed, by what it tells of: the dashboard's
-# marker for a moment, its lamp for a recording, the red pen for trouble,
-# the grid's green for trouble that is over, its paper for the day's summary.
-COLOURS = {CLIP: 0xFFEB57, RECORDING: 0xFF4A3D, HEALTH: 0xA6CCB7, DAILY: 0xF4F1E8, TEST: 0xEDEDED}
+# marker for a moment (with its clip or still without one), its lamp for a
+# recording, the red pen for trouble, the grid's green for trouble that is
+# over, its paper for the day's summary.
+COLOURS = {
+    CLIP: 0xFFEB57,
+    MOMENT: 0xFFEB57,
+    RECORDING: 0xFF4A3D,
+    HEALTH: 0xA6CCB7,
+    DAILY: 0xF4F1E8,
+    TEST: 0xEDEDED,
+}
 TROUBLE_COLOUR = 0xCF2E2E
 
 
@@ -117,7 +130,9 @@ TROUBLE_COLOUR = 0xCF2E2E
 class Note:
     """One notification: what it is about (`kind`), its title and the few
     lines under it, the channel it is of, where on the dashboard it leads -
-    and whether what it tells of is trouble."""
+    and whether what it tells of is trouble. `elsewhere` is where else it
+    leads, each place with the words its link says: a moment in its
+    stream's VOD."""
 
     kind: str
     title: str
@@ -125,6 +140,7 @@ class Note:
     channel: str | None = None
     link: str | None = None
     trouble: bool = False
+    elsewhere: tuple[tuple[str, str], ...] = ()
 
     def plus(self, line: str) -> Note:
         """The same note with one line more."""
@@ -157,13 +173,43 @@ def clip_note(
     words), or that it was asked for in chat."""
     into = stream_time_words(stream_seconds)
     lines = [f"{sentence_case(length_words(seconds))}{f', {into} into the stream' if into else ''}."]
-    if commanded:
-        lines.append("Asked for in chat.")
-    elif said:
-        lines.append(f"Chat: {said}")
-    elif reasons:
-        lines.append(f"Set off by {list_words(list(reasons))}.")
+    lines.extend(_reaction_lines(said, reasons, commanded))
     return Note(CLIP, "Clip saved", tuple(lines), channel=channel, link=link)
+
+
+def _reaction_lines(said: str | None, reasons: Sequence[str], commanded: bool) -> list[str]:
+    """What chat reacted with, as a note says it: that it was asked for in
+    chat, or what chat said most, or what set the detector off."""
+    if commanded:
+        return ["Asked for in chat."]
+    if said:
+        return [f"Chat: {said}"]
+    if reasons:
+        return [f"Set off by {list_words(list(reasons))}."]
+    return []
+
+
+def moment_note(
+    channel: str,
+    stream_seconds: int | None,
+    *,
+    said: str | None = None,
+    reasons: Sequence[str] = (),
+    commanded: bool = False,
+    watch: tuple[str, str] | None = None,
+    link: str | None = None,
+) -> Note:
+    """A moment of a channel tracked for moments: no clip has been cut of
+    it - one is, from the stream's VOD, once it is asked for on the
+    dashboard (`link`). How far into the stream chat reacted, what it
+    reacted with (as clip_note says it), and where the moment is watched in
+    the stream's VOD (`watch`: the link's words and its address), where
+    that was found."""
+    into = stream_time_words(stream_seconds)
+    lines = [f"{sentence_case(into)} into the stream." if into else "Chat reacted."]
+    lines.extend(_reaction_lines(said, reasons, commanded))
+    lines.append("No clip has been cut: ask for one on the dashboard." if link else "No clip has been cut yet.")
+    return Note(MOMENT, "Moment caught", tuple(lines), channel=channel, link=link, elsewhere=(watch,) if watch else ())
 
 
 # Who started a recording.
@@ -402,10 +448,13 @@ def telegram_api(api_url: str) -> str:
 
 def telegram_text(note: Note) -> str:
     """A note as Telegram's HTML: the channel and the title in bold, the
-    lines under them, and the link."""
+    lines under them, and the links - where else it leads, then the
+    dashboard."""
     title = html.escape(note.title, quote=False)
     head = f"<b>{html.escape(note.channel, quote=False)}</b> · {title}" if note.channel else f"<b>{title}</b>"
     body = [html.escape(_line(line), quote=False) for line in note.lines]
+    for words, address in note.elsewhere:
+        body.append(f'<a href="{html.escape(address)}">{html.escape(words, quote=False)}</a>')
     if note.link:
         body.append(f'<a href="{html.escape(note.link)}">Open on the dashboard</a>')
     return "\n".join([head, *body])
@@ -501,11 +550,13 @@ def discord_escape(text: str) -> str:
 
 def discord_payload(note: Note) -> dict[str, Any]:
     """A note as a Discord webhook takes it: one embed - its author the
-    channel, its title the link - and nobody mentioned, whatever chat
-    said."""
+    channel, its title the link to the dashboard, where else it leads as
+    links under its lines - and nobody mentioned, whatever chat said."""
+    lines = [discord_escape(_line(line)) for line in note.lines]
+    lines.extend(f"[{discord_escape(words)}]({address})" for words, address in note.elsewhere)
     embed: dict[str, Any] = {
         "title": note.title[:DISCORD_TITLE_MAX],
-        "description": "\n".join(discord_escape(_line(line)) for line in note.lines)[:DISCORD_DESCRIPTION_MAX],
+        "description": "\n".join(lines)[:DISCORD_DESCRIPTION_MAX],
         "color": TROUBLE_COLOUR if note.trouble else COLOURS.get(note.kind, COLOURS[TEST]),
     }
     if note.channel:

@@ -38,6 +38,10 @@ YouTube stream
 - **Cuts the clip.** When a moment fires, a clip of about 35 seconds is cut around it - longer if
   new people keep joining the reaction - into one video file that also holds the 30 seconds before
   it and the 60 seconds after, as context.
+- **Or only tells you, and cuts the clip later.** A Kick or Twitch channel can be tracked for
+  moments instead: they are found in its chat alone - nothing of its stream is downloaded - and
+  each one is sent to Telegram or Discord with a link to it in the stream's VOD. The clip of one
+  that is worth it is cut from the VOD when asked for on the dashboard, days later too.
 - **Lets you review.** The dashboard queues the moments that are not rated yet and opens one at a
   time: the clip, a trace of what chat did around it - which doubles as the scrubber - the chat
   itself replayed in step with the picture, and a 1-5 rating, tags and a note, all reachable from

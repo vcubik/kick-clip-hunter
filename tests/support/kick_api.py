@@ -3,9 +3,12 @@
 `FakeKickApi` answers the same endpoints, with the same response shapes, as
 Kick's public API (token, channel lookup, event subscriptions, webhook public
 key), the channel lookup of kick.com's own API (for subscriber badges) and
-its list of a channel's streams with their VODs, and 7TV's emote-set lookup. It plugs in as an `httpx` transport, so the
-real client code runs unmodified - request building, auth headers, status
-handling and JSON parsing are all exercised; only the network is replaced.
+its list of a channel's streams with their VODs - and the same list as the
+site's newer API (web.kick.com) gives it, with the ids its pages are
+addressed by - and 7TV's emote-set lookup. It plugs in as an `httpx`
+transport, so the real client code runs unmodified - request building, auth
+headers, status handling and JSON parsing are all exercised; only the
+network is replaced.
 
 It is also the account the bot writes in Kick's chat as: Kick's OAuth 2.1
 flow with PKCE - the consent page a browser is sent to (`consent`, which a
@@ -20,7 +23,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 import httpx
@@ -99,6 +102,29 @@ def kick_video(
         "is_live": live,
         "source": source if status == "public" else "",
         "video": {"uuid": f"video-{int(started.timestamp())}", "status": status},
+    }
+
+
+def site_video_id(video: dict) -> str:
+    """The id the site's pages address a stream's VOD by, of one listed with
+    kick_video - which kick.com's older list does not give."""
+    return f"site-{video['video']['uuid']}"
+
+
+def site_video(video: dict, channel: FakeChannel) -> dict:
+    """A stream listed with kick_video, as the site's newer API lists it:
+    with the id its page is addressed by, when it began and ended (in ISO,
+    UTC; no end while it is on) and who may watch it."""
+    began = datetime.strptime(video["start_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    ended = None if video["is_live"] else began + timedelta(milliseconds=video["duration"])
+    return {
+        "id": site_video_id(video),
+        "is_live": video["is_live"],
+        "start_time": began.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end_time": ended.strftime("%Y-%m-%dT%H:%M:%SZ") if ended else None,
+        "duration": video["duration"] // 1000,
+        "status": "public" if video["video"]["status"] == "public" else "sub_only",
+        "channel": {"id": channel.broadcaster_user_id + 1, "slug": channel.slug.lower(), "username": channel.slug},
     }
 
 
@@ -380,6 +406,16 @@ class FakeKickApi:
                     return httpx.Response(500, json={"message": "Internal Server Error"})
                 self.subscribed.append(body["broadcaster_user_id"])  # type: ignore[index]
                 return httpx.Response(200, json={"data": [{"name": "chat.message.sent", "version": 1}]})
+
+        if request.url.host == "web.kick.com" and path.startswith("/api/v1/channels/") and path.endswith("/videos"):
+            # By the channel's id on the site (see _site_channel_json).
+            wanted = path.split("/")[-2]
+            channel = next((c for c in self.channels.values() if str(c.broadcaster_user_id + 1) == wanted), None)
+            if channel is None:
+                return httpx.Response(400, json={"data": {"type": "Bad Request"}})
+            return httpx.Response(
+                200, json={"data": [site_video(video, channel) for video in channel.videos], "message": "Success"}
+            )
 
         if request.url.host == "kick.com" and path.startswith("/api/v2/channels/") and path.endswith("/videos"):
             wanted = path.split("/")[-2].lower()

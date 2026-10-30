@@ -39,6 +39,18 @@ taken, and said. Twitch silences the sound of a stretch with music it may
 not play ("-muted" in a segment's address): a file whose own stretch is
 silenced in the VOD is not made, as the clip would lose its sound; silenced
 footage among what is added is taken, and said.
+
+A moment of a channel tracked for moments has no file at all to begin with:
+no stream of it comes in, and its clip is cut from the VOD only once it is
+asked for (`cut`), days later too. There are no pictures to find then, and
+the clocks have to do: the stretch the clip's file is to hold, worked out
+from when chat reacted as the recorder works it out, is taken from the VOD
+by the times of its segments - a clock seen up to a few seconds off the
+live stream's that the framing is tuned on, which a clip framed with
+seconds to spare and footage either side of it takes in its stride. Adding
+footage to it later finds the file by its pictures, as above. Nothing has
+to wait for the stream to be over, only for the VOD to reach the end of the
+stretch (VOD_BEHIND_SECONDS).
 """
 
 from __future__ import annotations
@@ -79,6 +91,10 @@ LEAST_SECONDS = 0.5
 # from where the recording's clock put it before the new file is taken to
 # have gone wrong.
 PLACE_TOLERANCE_SECONDS = 1.0
+# How far behind a stream that is on its VOD may run: a stretch is cut from
+# it only once this long has passed since the stretch's end. Kick's was seen
+# 10-24 s behind, in segments of 12.5 s.
+VOD_BEHIND_SECONDS = 45
 # Where a segment of Twitch's whose sound was silenced says so.
 _MUTED = re.compile(r"-muted\.\w+$")
 # Where a segment of a live YouTube stream says its number.
@@ -458,6 +474,84 @@ def lengthen(
         added_after=added_after,
         muted=any(piece.muted for piece in chosen),
         short=added_before < before - LEAST_SECONDS or added_after < after - LEAST_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class Cut:
+    """A stretch of a broadcast cut from its recording as a file of its own:
+    when its first frame was broadcast, on the recording's clock, and how
+    long it runs. `muted`: some of it has no sound - the VOD silenced it.
+    `short`: the VOD holds less of the stretch than was asked for, at
+    either end."""
+
+    path: Path
+    started_at: datetime
+    seconds: float
+    muted: bool = False
+    short: bool = False
+
+    @property
+    def ended_at(self) -> datetime:
+        return self.started_at + timedelta(seconds=self.seconds)
+
+
+def cut(
+    vod: Vod,
+    start: datetime,
+    end: datetime,
+    output: Path,
+    progress: Callable[[str, float | None], None] | None = None,
+) -> Cut:
+    """The broadcast from `start` to `end`, on the recording's own clock, as
+    a file of its own, cut from the recording: the segments that hold the
+    stretch joined as the recorder joins them, and cut on the last frame a
+    cut can begin on at or before `start` - nothing re-encoded. Written to
+    `output`. `progress` is told what is being done, and how much of the
+    footage has been fetched; it may raise to give up. Raises FootageError,
+    in words that say why, where the recording holds none of the stretch."""
+    tell = progress or (lambda _what, _done: None)
+    work = output.with_name(f".{output.stem}.footage")
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        with httpx.Client(follow_redirects=True) as client:
+            kept = _Kept(client, work)
+            tell(FINDING, None)
+            playlist = _playlist(client, vod)
+            if vod.numbered:
+                chosen = numbered(playlist, start, end)
+            else:
+                chosen = covering(pieces(playlist, vod.started_at), start, end)
+            if not chosen:
+                raise FootageError(
+                    "The VOD holds nothing of the stream at that time: it does not reach that far, or no longer does."
+                )
+            tell(FETCHING, 0.0)
+            for number, piece in enumerate(chosen, start=1):
+                kept.segment(piece)
+                tell(FETCHING, number / len(chosen))
+            tell(JOINING, None)
+            whole = work / "whole.mp4"
+            _join(kept, chosen, whole)
+        whole_length = recorder.probe_duration(whole) or 0.0
+        begins = max((start - chosen[0].started_at).total_seconds(), 0.0)
+        ends = min((end - chosen[0].started_at).total_seconds(), whole_length)
+        if ends - begins < LEAST_SECONDS:
+            raise FootageError("The VOD holds next to nothing of the stream at that time.")
+        cut_from, seconds = recorder.trim_clip(whole, begins, ends, output)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    started_at = chosen[0].started_at + timedelta(seconds=cut_from)
+    return Cut(
+        path=output,
+        started_at=started_at,
+        seconds=seconds,
+        muted=any(piece.muted for piece in chosen),
+        short=(
+            started_at > start + timedelta(seconds=LEAST_SECONDS)
+            or started_at + timedelta(seconds=seconds) < end - timedelta(seconds=LEAST_SECONDS)
+        ),
     )
 
 

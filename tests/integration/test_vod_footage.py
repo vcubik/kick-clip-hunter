@@ -302,3 +302,109 @@ class TestTellingHowFarItHasGot:
         with pytest.raises(GivenUp):
             vod_footage.lengthen(moment_file, second(FIRST), Vod(vod.master_url), 4, 3, longer(moment_file), give_up)
         assert sorted(path.name for path in moment_file.parent.iterdir()) == ["moment_7.mp4"]
+
+
+class TestCuttingAStretchFromTheVod:
+    """The clip of a moment of a channel tracked for moments has no file to
+    find in the VOD: the stretch is had by the VOD's clock alone, and cut on
+    the last frame a cut can begin on at or before where it was asked to."""
+
+    def cut_file(self, tmp_path: Path) -> Path:
+        return tmp_path / "clips" / "moment_9.mp4"
+
+    def test_the_stretch_is_the_broadcasts_own_footage_from_when_it_was_asked(self, tmp_path, vod, ts_segments):
+        made = vod_footage.cut(Vod(vod.master_url), second(12), second(23), self.cut_file(tmp_path))
+
+        assert made.started_at == second(12)
+        assert made.seconds == pytest.approx(11, abs=TOLERANCE)
+        assert made.ended_at == second(12) + timedelta(seconds=made.seconds)
+        assert (made.short, made.muted) == (False, False)
+        # Its first picture is the one broadcast at that second.
+        assert pictures(made.path)[0][1] == pictures(ts_segments[12])[0][1]
+        assert probe(made.path) == {"duration": pytest.approx(made.seconds, abs=0.05), "streams": ["audio", "video"]}
+        assert decodes_cleanly(made.path)
+
+    def test_it_begins_on_the_last_frame_a_cut_can_begin_on_before_what_was_asked(self, tmp_path, vod):
+        # Keyframes come every second: 12.5 s begins at 12 s.
+        made = vod_footage.cut(Vod(vod.master_url), second(12.5), second(20), self.cut_file(tmp_path))
+
+        assert made.started_at == second(12)
+        assert made.short is False
+
+    def test_only_the_segments_it_needs_are_fetched_and_nothing_else_is_left(self, tmp_path, vod):
+        output = self.cut_file(tmp_path)
+
+        vod_footage.cut(Vod(vod.master_url), second(12), second(23), output)
+
+        # The VOD's segments 10-15, 15-20 and 20-25.
+        assert sorted(vod.segment_requests()) == [2, 3, 4]
+        assert sorted(path.name for path in output.parent.iterdir()) == [output.name]
+
+    def test_a_vod_without_times_of_its_own_is_counted_on_from_when_its_broadcast_began(
+        self, tmp_path, hls, ts_segments
+    ):
+        timeline = vod_timeline(ts_segments)
+        server = hls(timeline, published=len(timeline), window=len(timeline), program_date_time=False)
+
+        made = vod_footage.cut(
+            Vod(server.master_url, started_at=START), second(12), second(23), self.cut_file(tmp_path)
+        )
+
+        assert made.started_at == second(12)
+
+    def test_a_vod_that_does_not_reach_as_far_gives_what_it_has_and_says_so(self, tmp_path, hls, ts_segments):
+        timeline = vod_timeline(ts_segments)
+        server = hls(timeline, published=5, window=len(timeline), stream_start=START)  # reaches 25 s
+
+        made = vod_footage.cut(Vod(server.master_url), second(15), second(40), self.cut_file(tmp_path))
+
+        assert made.seconds == pytest.approx(10, abs=TOLERANCE)
+        assert made.short is True
+
+    def test_a_stretch_the_vod_holds_nothing_of_is_an_error_and_leaves_nothing(self, tmp_path, vod):
+        output = self.cut_file(tmp_path)
+
+        with pytest.raises(FootageError, match="holds nothing of the stream at that time"):
+            vod_footage.cut(Vod(vod.master_url), second(60), second(90), output)
+        assert not output.parent.exists() or list(output.parent.iterdir()) == []
+
+    def test_silenced_footage_is_taken_and_said(self, tmp_path, hls, ts_segments):
+        timeline = vod_timeline(ts_segments, muted={3})  # 15-20 s
+        server = hls(timeline, published=len(timeline), window=len(timeline), stream_start=START)
+
+        made = vod_footage.cut(Vod(server.master_url), second(12), second(23), self.cut_file(tmp_path))
+
+        assert made.muted is True
+
+    def test_a_youtube_stream_that_is_on_is_wound_back_by_number(self, tmp_path, hls, ts_segments):
+        timeline = [Segment(path.read_bytes(), duration=1.0) for path in ts_segments]
+        live = hls(
+            timeline, published=len(timeline), window=3, stream_start=START, numbered=True, program_date_time_once=True
+        )
+
+        made = vod_footage.cut(Vod(live.master_url, numbered=True), second(12), second(20), self.cut_file(tmp_path))
+
+        assert made.started_at == second(12)
+        assert made.seconds == pytest.approx(8, abs=TOLERANCE)
+
+    def test_fragmented_mp4_is_joined_after_its_initialization_segment(self, tmp_path, hls):
+        init, pieces = make_fmp4_segments(tmp_path / "vod", count=8, seconds_each=5.0)
+        timeline = [Segment(piece.read_bytes(), duration=5.0, title="") for piece in pieces]
+        server = hls(timeline, published=len(timeline), window=len(timeline), stream_start=START, init=init)
+
+        made = vod_footage.cut(Vod(server.master_url), second(10), second(20), self.cut_file(tmp_path))
+
+        assert made.started_at == second(10)
+        assert made.seconds == pytest.approx(10, abs=TOLERANCE)
+        assert decodes_cleanly(made.path)
+
+    def test_each_step_is_told(self, tmp_path, vod):
+        told = []
+
+        vod_footage.cut(
+            Vod(vod.master_url), second(12), second(23), self.cut_file(tmp_path), lambda *step: told.append(step)
+        )
+
+        assert told[0] == (vod_footage.FINDING, None)
+        assert [done for what, done in told if what == vod_footage.FETCHING][-1] == 1.0
+        assert told[-1] == (vod_footage.JOINING, None)

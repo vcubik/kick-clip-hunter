@@ -289,9 +289,9 @@ class TestWatchlist:
         # The fifth cell is the channel's stream recording (see
         # test_api_recordings.py).
         assert [cells[:4] for cells in self.rows(page)] == [
-            ["first_channel", added, "Live", "Off Chat Clips"],
-            ["second_channel", added, "Not watched", "Off Chat Clips"],
-            ["third_channel", added, "Not live", "Off Chat Clips"],
+            ["first_channel", added, "Live", "Off Chat Moments Clips"],
+            ["second_channel", added, "Not watched", "Off Chat Moments Clips"],
+            ["third_channel", added, "Not live", "Off Chat Moments Clips"],
         ]
         states = switch_states(page)
         assert [states[f"Tracking {slug}"] for slug in ("first_channel", "second_channel", "third_channel")] == [
@@ -352,6 +352,7 @@ class TestWatchlist:
         assert [button.attrs["data-value"] for button in choice.find("button")] == [
             view.TRACKING_OFF,
             view.TRACKING_CHAT,
+            view.TRACKING_MOMENTS,
             view.TRACKING_CLIPS,
         ]
 

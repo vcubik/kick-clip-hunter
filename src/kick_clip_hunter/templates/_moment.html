@@ -13,8 +13,13 @@
       <p class="moment-when">{{ moment.when }}</p>
     </div>
     <input type="text" class="ch-input moment-name" value="{{ moment.title }}" maxlength="{{ moment.title_max }}" aria-label="Name of this moment" placeholder="Name this moment" autocomplete="off" data-title>
-    {% if moment.stream_time %}
-    <p class="moment-clock"><span class="counter">{{ moment.stream_time }}</span> <span>into the stream</span></p>
+    {#- Where the moment is watched on its platform: its stream's VOD, from
+        where its clip begins. -#}
+    {% if moment.stream_time or moment.watch %}
+    <p class="moment-clock">
+      {%- if moment.stream_time %}<span class="counter">{{ moment.stream_time }}</span> <span>into the stream</span>{% endif %}
+      {%- if moment.watch %} <a href="{{ moment.watch.url }}" target="_blank" rel="noopener noreferrer" data-watch>{{ moment.watch.words }}</a>{% endif -%}
+    </p>
     {% endif %}
   </header>
 
@@ -58,6 +63,16 @@
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Full screen" data-fullscreen>
       <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"></path></svg>
     </button>
+  </div>
+  {% elif moment.on_request %}
+  {#- No stream of the channel comes in: the clip is cut from the stream's
+      VOD once it is asked for here. The script posts, says how far that
+      has got, and opens the moment again once the clip is there. Shown
+      once the script is there. -#}
+  {% set asked = moment.on_request %}
+  <div class="no-clip on-request" data-vod-clip="{{ asked.url }}"{% if asked.busy %} data-busy{% endif %}>
+    <p>No clip has been cut of this moment yet: its channel is tracked for moments, so a clip is cut from the stream's VOD once you ask for it.</p>
+    <button type="button" class="ch-btn ch-btn-primary" title="Cuts the clip, with the footage around it, from the stream's VOD" hidden data-vod-clip-go{% if asked.busy %} disabled{% endif %}>Cut the clip</button>
   </div>
   {% elif moment.clip_state == "pending" %}
   <p class="no-clip">The clip is still being cut. That takes about two minutes.</p>
@@ -130,7 +145,7 @@
     <span class="ch-cap">exactly this</span>
     <textarea class="ch-input note" rows="1" aria-label="Note" placeholder="Note: what makes it good or bad?" data-note>{{ moment.notes }}</textarea>
   </div>
-  <p class="status-line" role="status" data-status>{% if moment.footage and moment.footage.busy %}{{ moment.footage.words }}{% endif %}</p>
+  <p class="status-line" role="status" data-status>{% if moment.footage and moment.footage.busy %}{{ moment.footage.words }}{% elif moment.on_request %}{{ moment.on_request.words }}{% endif %}</p>
 
   <div class="ch-tags" role="group" aria-label="Kind of moment">
     <span>Moment</span>

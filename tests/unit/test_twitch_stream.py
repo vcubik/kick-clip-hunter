@@ -202,6 +202,66 @@ class TestFindingAPastBroadcast:
             twitch_stream.vod_at("some_channel", BEGAN)
 
 
+class TestWhereAPastBroadcastIsWatched:
+    @pytest.mark.parametrize(
+        ("seconds", "written"), [(3725.9, "1h2m5s"), (59, "0h0m59s"), (36000, "10h0m0s"), (-3, "0h0m0s")]
+    )
+    def test_the_time_is_written_as_twitch_writes_it(self, seconds, written):
+        assert twitch_stream.watch_link("777", seconds) == f"https://www.twitch.tv/videos/777?t={written}"
+
+    @pytest.mark.anyio
+    async def test_the_one_a_time_was_in_is_linked_to_from_then(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "9h58m16s"),
+            past_broadcast("666", "2026-10-15T08:39:13Z", "17h3m33s"),
+        ]
+
+        link = await twitch_stream.watch_link_at("some_channel", BEGAN + timedelta(hours=6, seconds=5))
+
+        assert link == "https://www.twitch.tv/videos/777?t=6h0m5s"
+
+    @pytest.mark.anyio
+    async def test_a_time_no_past_broadcast_holds_has_none(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h")
+        ]
+
+        with pytest.raises(NoVod, match="Twitch lists no past broadcast of that stream"):
+            await twitch_stream.watch_link_at("some_channel", BEGAN - timedelta(hours=2))
+
+    @pytest.mark.anyio
+    async def test_without_twitch_set_up_there_is_none(self, kick_api):
+        with pytest.raises(NoVod, match="Twitch"):
+            await twitch_stream.watch_link_at("some_channel", BEGAN)
+
+
+@pytest.mark.anyio
+class TestWhatKeepsAClipFromBeingCutFromAPastBroadcast:
+    async def test_a_channel_keeping_public_past_broadcasts_has_nothing_in_the_way(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h")
+        ]
+
+        assert await twitch_stream.vod_trouble("some_channel") is None
+
+    async def test_a_channel_keeping_none_is_said(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101")
+
+        assert (await twitch_stream.vod_trouble("some_channel")).startswith(
+            "Twitch lists no past broadcasts of this channel"
+        )
+
+    async def test_one_keeping_them_from_the_public_is_said(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h", viewable="private")
+        ]
+
+        assert "from the public" in await twitch_stream.vod_trouble("some_channel")
+
+    async def test_twitch_not_set_up_says_nothing_either_way(self, kick_api):
+        assert await twitch_stream.vod_trouble("some_channel") is None
+
+
 @pytest.mark.parametrize(
     ("helix", "seconds"), [("9h58m16s", 35896), ("43m50s", 2630), ("59s", 59), ("1h", 3600), ("", 0), (None, 0)]
 )

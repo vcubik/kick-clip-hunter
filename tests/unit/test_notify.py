@@ -67,6 +67,35 @@ class TestWhatItSays:
 
         assert note.lines == ("30 seconds, 0:01:00 into the stream.", "Asked for in chat.")
 
+    def test_a_moment_without_a_clip_says_where_it_is_and_leads_to_it_in_the_vod(self):
+        note = notify.moment_note(
+            "some_channel",
+            5025,
+            said="KEKW x31",
+            watch=("Watch on Kick", "https://kick.com/some_channel/videos/v1?t=4990"),
+            link="http://pc:8000/dashboard?moment=7",
+        )
+
+        assert note == Note(
+            notify.MOMENT,
+            "Moment caught",
+            ("1:23:45 into the stream.", "Chat: KEKW x31", "No clip has been cut: ask for one on the dashboard."),
+            channel="some_channel",
+            link="http://pc:8000/dashboard?moment=7",
+            elsewhere=(("Watch on Kick", "https://kick.com/some_channel/videos/v1?t=4990"),),
+        )
+
+    def test_a_moment_found_in_no_vod_and_with_no_dashboard_to_go_to_says_so(self):
+        note = notify.moment_note("some_channel", None, reasons=["laughing"])
+
+        assert note.lines == ("Chat reacted.", "Set off by laughing.", "No clip has been cut yet.")
+        assert (note.link, note.elsewhere) == (None, ())
+
+    def test_a_moment_asked_for_in_chat_says_so(self):
+        note = notify.moment_note("some_channel", 60, said="!clip x2", commanded=True)
+
+        assert note.lines[:2] == ("0:01:00 into the stream.", "Asked for in chat.")
+
     @pytest.mark.parametrize(
         ("started_by", "asked_by", "live", "lines"),
         [
@@ -301,6 +330,27 @@ class TestOnTelegram:
         assert message["links"] == ["http://pc:8000/dashboard?a=1&b=2"]
         assert message["shown"].endswith("Open on the dashboard")
 
+    async def test_where_else_it_leads_comes_before_the_dashboard(self, telegram, sleeps):
+        note = Note(
+            notify.MOMENT,
+            "Moment caught",
+            ("1:23:45 into the stream.",),
+            channel="some_channel",
+            link="http://pc:8000/dashboard?moment=7",
+            elsewhere=(("Watch on Kick", "https://kick.com/some_channel/videos/v1?t=4990&a=<b>"),),
+        )
+
+        await self.telegram(sleeps).send(note)
+
+        (message,) = telegram.sent
+        assert message["links"] == [
+            "https://kick.com/some_channel/videos/v1?t=4990&a=<b>",
+            "http://pc:8000/dashboard?moment=7",
+        ]
+        assert message["shown"] == (
+            "some_channel · Moment caught\n1:23:45 into the stream.\nWatch on Kick\nOpen on the dashboard"
+        )
+
     async def test_what_chat_wrote_is_shown_as_it_was_written(self, telegram, sleeps):
         note = Note(notify.CLIP, "Clip saved", ('<b>bold</b> & <script> "hi"',), channel="<a>_channel")
 
@@ -402,6 +452,22 @@ class TestOnDiscord:
                 "url": "http://pc/x",
             }
         ]
+
+    def test_where_else_it_leads_is_a_link_under_its_lines(self):
+        note = Note(
+            notify.MOMENT,
+            "Moment caught",
+            ("1:23:45 into the stream.",),
+            link="http://pc/x",
+            elsewhere=(("Watch on Twitch", "https://www.twitch.tv/videos/777?t=1h23m10s"),),
+        )
+
+        (embed,) = notify.discord_payload(note)["embeds"]
+
+        assert embed["description"] == (
+            "1:23:45 into the stream.\n[Watch on Twitch](https://www.twitch.tv/videos/777?t=1h23m10s)"
+        )
+        assert (embed["url"], embed["color"]) == ("http://pc/x", notify.COLOURS[notify.MOMENT])
 
     async def test_trouble_is_in_red(self, discord, sleeps):
         await self.discord(sleeps).send(notify.health_note("the disk", False, "Only 2 GB is free.", True))

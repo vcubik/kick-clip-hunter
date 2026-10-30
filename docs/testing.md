@@ -196,6 +196,22 @@ with the clip's stretch silenced refused, nothing left behind either way? Throug
 the file replaced in its place with the clip where it was, the Trim dialog's cut moved with it,
 the player's address changed with the file, and is nothing else made of the moment meanwhile?
 
+**6b. A channel tracked for moments** - `integration/test_api_moments_on_request.py`, the
+`TestCuttingAStretchFromTheVod` class of `integration/test_vod_footage.py`, and in
+`unit/test_kick_stream.py`, `unit/test_twitch_stream.py`, `unit/test_streams.py`,
+`unit/test_notify.py`, `unit/test_db.py` and `unit/test_dashboard_view.py`
+Is Moments offered and taken only for a platform whose VODs stay once a stream is over, does
+choosing it say what the platform lists of the channel's VODs (subscribers only, none) and run no
+recorder for the channel - only the look at whether it is live? Is a moment caught in its chat
+kept without a clip, with the link to it in the VOD (kick.com's page by the id the site's newer
+API lists, Twitch's with its time) from where its clip would begin, and told of with that link
+and the dashboard's - or without the link where no VOD is listed? With the real ffmpeg: is a
+stretch cut from a VOD by its clock, from the last frame a cut can begin on, in fragmented MP4
+and from a YouTube stream wound back too, with what the VOD lacks or silenced said? Through the
+service: is the clip cut once asked for - stored where in the file the clip is, played by the
+page - and refused while chat still reacts, said when no VOD is to be had, waited for while the
+VOD is behind, given up at shutdown, and the moment kept from removal meanwhile?
+
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
 Does each of the four steps run only when its switch is on, store its result, and fail without
@@ -759,6 +775,19 @@ Run this on a live channel after changing any of the above, or the code right ne
    the live channels. The Analyze page counts what it says from then on; no moment of it lands in
    the queue however hard its chat laughs. Set it back to Clips: the next round starts its
    recorder again (`recording started`).
+22. **Track a channel for moments.** On the Channels page set a live Kick channel that keeps its
+   VODs public to Moments: "Moments" is lit and the row's status line stays empty (on a channel
+   whose VODs are for subscribers only it says so). Within half a minute its recorder has
+   stopped and no browser window opens for it; "Right now" says "Live, chat only". When its chat
+   laughs, the log shows `MOMENT detected`, `moment N closed` and `moment N kept - its clip is
+   cut from the VOD once asked for`, and nothing is cut. Telegram/Discord get "Moment caught"
+   with "Watch on Kick": it opens the VOD on kick.com a little before the moment (check it lands
+   within some seconds of where chat reacted). The queue has the moment without a clip, its chat
+   and trace beside it, "Watch on Kick" beside the stream time and "Cut the clip": pressed right
+   away it says it waits for the VOD, then counts up while it fetches, then opens the moment with
+   its clip - the reaction inside the clip, with footage before and after it; Trim, Add before /
+   after and Transcribe work on it as on any clip. Do the same with a Twitch channel, and with a
+   moment some days old after the stream is over.
 
 ## Checking a detector change against a real stream
 

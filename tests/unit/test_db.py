@@ -117,6 +117,7 @@ class TestSchema:
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
             "context_before", "context_after", "downloaded_at", "subtitles", "laughing",
+            "clip_on_request", "watch_url",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
@@ -721,6 +722,32 @@ class TestChannelsTrackedForTheirChatAlone:
         db.set_streamer_tracking(conn, 1, True, chat_only=True)
 
         assert self.tracked_for(conn, "some_channel") == (1, 0)
+
+    def test_clips_are_made_when_asked_for_only_where_that_is_set(self, conn):
+        db.add_streamer(conn, 1, "asked")
+        db.add_streamer(conn, 2, "cut")
+
+        db.set_streamer_tracking(conn, 1, True, moments_only=True)
+
+        assert (db.get_streamer_by_slug(conn, "asked")["moments_only"], self.tracked_for(conn, "asked")) == (1, (1, 0))
+        assert [row["moments_only"] for row in db.get_streamers(conn)] == [1, 0]
+        assert db.get_streamer_by_id(conn, 2)["moments_only"] == 0
+
+    @pytest.mark.parametrize(("clips", "chat_only"), [(True, False), (False, True), (False, False)])
+    def test_any_other_tracking_sets_them_back_to_being_made_as_found(self, conn, clips, chat_only):
+        db.add_streamer(conn, 1, "some_channel")
+        db.set_streamer_tracking(conn, 1, True, moments_only=True)
+
+        db.set_streamer_tracking(conn, 1, clips, chat_only=chat_only)
+
+        assert db.get_streamer_by_slug(conn, "some_channel")["moments_only"] == 0
+
+    def test_without_clips_there_is_nothing_to_make_when_asked_for(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        db.set_streamer_tracking(conn, 1, False, chat_only=True, moments_only=True)
+
+        assert db.get_streamer_by_slug(conn, "some_channel")["moments_only"] == 0
 
     def test_a_watchlist_from_before_there_was_such_a_thing_keeps_its_tracking(self, tmp_path, monkeypatch):
         path = tmp_path / "older.db"
@@ -1478,6 +1505,21 @@ class TestMoments:
         conn.commit()
 
         assert [row["reason"] for row in db.get_recent_moments(conn)] == ["third", "second", "first"]
+
+    def test_a_moment_has_its_clip_cut_as_it_is_found_unless_it_is_to_be_asked_for(self, conn):
+        found = store_moment(conn)
+        asked = store_moment(conn, clip_on_request=True)
+
+        assert db.get_moment(conn, found)["clip_on_request"] == 0
+        assert db.get_moment(conn, asked)["clip_on_request"] == 1
+
+    def test_where_a_moment_is_watched_is_kept_with_it(self, conn):
+        moment_id = store_moment(conn)
+        assert db.get_moment(conn, moment_id)["watch_url"] is None
+
+        db.update_moment_watch_url(conn, moment_id, "https://kick.com/some_channel/videos/v1?t=12")
+
+        assert db.get_moment(conn, moment_id)["watch_url"] == "https://kick.com/some_channel/videos/v1?t=12"
 
     def test_the_most_laughing_can_come_first_those_not_counted_last(self, conn):
         for minute, reason, laughing in [(1, "a", 9), (2, "b", None), (3, "c", 3), (4, "d", 9)]:
