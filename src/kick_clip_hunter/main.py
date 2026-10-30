@@ -153,6 +153,7 @@ from .db import (
     update_moment_title,
     update_moment_transcript,
     update_moment_type,
+    update_moment_watch_url,
     update_moment_window_end,
     was_removed,
 )
@@ -237,12 +238,12 @@ def _watchlist_slugs() -> list[str]:
 
 
 def _is_channel_tracked(slug: str) -> bool:
-    if platforms.platform_of(slug) in platforms.RECORDED_ONLY:
-        return False
+    """Whether a channel is tracked for clips cut from its stream as they
+    are found: the recording loop has its stream come in while it is live."""
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, slug)
-        return bool(row["tracking_enabled"]) if row else False
+        return row is not None and _tracking_of(row) == dashboard_view.TRACKING_CLIPS
     finally:
         conn.close()
 
@@ -253,16 +254,18 @@ def _tracking_of(row) -> str:
     nothing, whatever is stored."""
     if row["platform"] in platforms.RECORDED_ONLY:
         return dashboard_view.TRACKING_OFF
-    return dashboard_view.tracking(bool(row["tracking_enabled"]), bool(row["chat_only"]))
+    return dashboard_view.tracking(bool(row["tracking_enabled"]), bool(row["chat_only"]), bool(row["moments_only"]))
 
 
-def _is_chat_only(slug: str) -> bool:
-    """Whether a channel is tracked for its chat alone: the recording loop
-    looks at whether it is live, and records nothing of it for that."""
+def _is_tracked_by_chat(slug: str) -> bool:
+    """Whether a channel is tracked through its chat alone - for the chat
+    itself, or for the moments found in it, whose clips are cut from its
+    VOD when they are asked for: the recording loop looks at whether it is
+    live, and records nothing of it for that."""
     conn = get_connection()
     try:
         row = get_streamer_by_slug(conn, slug)
-        return row is not None and _tracking_of(row) == dashboard_view.TRACKING_CHAT
+        return row is not None and _tracking_of(row) in dashboard_view.TRACKED_BY_CHAT
     finally:
         conn.close()
 
@@ -294,6 +297,7 @@ SETTING_KEYS = {
     "sound_events": "sound_events_enabled",
     "notify_clips": "notify_clips_enabled",
     "notify_clip_videos": "notify_clip_videos_enabled",
+    "notify_moments": "notify_moments_enabled",
     "notify_recordings": "notify_recordings_enabled",
     "notify_health": "notify_health_enabled",
     "notify_daily": "notify_daily_enabled",
@@ -316,6 +320,7 @@ ANALYSIS_SETTINGS = [
 NOTIFY_SETTINGS = [
     ("notify_clips", "Clips"),
     ("notify_clip_videos", "Clip videos"),
+    ("notify_moments", "Moments"),
     ("notify_recordings", "Recordings"),
     ("notify_health", "Problems"),
     ("notify_daily", "Daily summary"),
@@ -329,6 +334,7 @@ SETTING_DEFAULTS = {
     "sound_events_enabled": False,
     "notify_clips_enabled": True,
     "notify_clip_videos_enabled": True,
+    "notify_moments_enabled": True,
     "notify_recordings_enabled": True,
     "notify_health_enabled": True,
     "notify_daily_enabled": True,
@@ -1035,6 +1041,32 @@ async def _notify_of_clip(moment, channel: str, clip_path: Path, extent: "ClipEx
         await _notes().notify(note, video)
 
 
+async def _notify_of_moment(moment) -> None:
+    """Tells of a moment of a channel tracked for moments, no clip of it cut
+    yet: with where it is watched in its stream's VOD, where that was found,
+    and the dashboard, where its clip is asked for."""
+    conn = get_connection()
+    try:
+        said = _queue_activity(conn, [moment]).get(moment["id"], {}).get("said")
+    finally:
+        conn.close()
+    watch = None
+    if moment["watch_url"]:
+        title = platforms.TITLES.get(platforms.platform_of(moment["channel_slug"]), "")
+        watch = (dashboard_view.watch_words(title), moment["watch_url"])
+    await _notes().notify(
+        notify.moment_note(
+            moment["channel_slug"],
+            moment["stream_elapsed_seconds"],
+            said=said,
+            reasons=dashboard_view.reason_words(moment["reason"], main_only=True),
+            commanded=moment["reason"] == dashboard_view.COMMAND_REASON,
+            watch=watch,
+            link=_link(dashboard_view.review_url(moment=moment["id"])),
+        )
+    )
+
+
 async def _keep_telling_of_health() -> None:
     """Looks at the Health page's judgement every HEALTH_NOTE_SECONDS, and
     tells of what changed in it."""
@@ -1170,7 +1202,7 @@ async def lifespan(app: FastAPI):
                 _record_stream_by_itself,
                 _look_failed,
                 _buffer_seconds,
-                _is_chat_only,
+                _is_tracked_by_chat,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -1665,6 +1697,9 @@ class _MomentSession:
     # Asked for in chat, when it was made or while it was open: kept however
     # few laughed.
     asked_for: bool = False
+    # Of a channel tracked for moments as it fired: no clip is cut when it
+    # closes, it is told of, its clip cut from the VOD once asked for.
+    on_request: bool = False
 
 
 # One open moment per channel at a time.
@@ -1759,11 +1794,46 @@ async def _run_moment_session(session: _MomentSession) -> None:
         session.channel, session.moment_id,
         (session.window_end - session.window_start).total_seconds(),
     )
+    if session.on_request:
+        _track_task(_moment_kept(session))
+        return
     _track_task(
         _create_clip_background(
             session.moment_id, session.channel, session.window_start, session.window_end, session.tuned
         )
     )
+
+
+async def _moment_kept(session: _MomentSession) -> None:
+    """What becomes of a moment of a channel tracked for moments once it is
+    kept, in place of its clip being cut: where it is watched in its stream's
+    VOD - from where its clip would begin - is looked up and kept with it,
+    and it is told of where notes of moments go. Its clip is cut from the
+    VOD once it is asked for (POST /moments/{id}/clip)."""
+    first_at = session.tuned.clip_span(session.window_start, session.window_end)[0]
+    try:
+        watch = await streams.watch_link(session.channel, first_at)
+    except NoVod as error:
+        watch = None
+        logger.info("[%s] moment %d is in no VOD to watch it in: %s", session.channel, session.moment_id, error)
+    except Exception:
+        watch = None
+        logger.warning(
+            "[%s] where moment %d is watched could not be found", session.channel, session.moment_id, exc_info=True
+        )
+    conn = get_connection()
+    try:
+        if watch is not None:
+            update_moment_watch_url(conn, session.moment_id, watch)
+        moment = get_moment(conn, session.moment_id)
+    finally:
+        conn.close()
+    if moment is None:
+        # Removed meanwhile.
+        return
+    logger.info("[%s] moment %d kept - its clip is cut from the VOD once asked for", session.channel, session.moment_id)
+    if _notifying("notify_moments"):
+        await _notify_of_moment(moment)
 
 
 # -- streams kept whole --------------------------------------------------------
@@ -2193,9 +2263,12 @@ def _clip_pending_seconds(tuned: tuning.Tuning) -> float:
 
 def _clip_state(row, tuned: tuning.Tuning) -> str:
     """Whether a moment's clip is there to play ("ready"), is still being cut
-    ("pending") or is not coming ("missing")."""
+    ("pending"), is cut once it is asked for ("on_request": a moment of a
+    channel tracked for moments) or is not coming ("missing")."""
     if row["clip_path"]:
         return "ready"
+    if row["clip_on_request"]:
+        return "on_request"
     return "pending" if _moment_age_seconds(row) <= _clip_pending_seconds(tuned) else "missing"
 
 
@@ -2752,6 +2825,140 @@ async def _add_footage_background(
     )
 
 
+# -- a moment's clip cut from its stream's VOD, once it is asked for: of a
+# channel tracked for moments, no stream of which comes in (see
+# vod_footage.cut)
+
+# Moments whose clip is being cut from the VOD right now, and how the last
+# time it was asked for came out, by moment id. A restart forgets it: a
+# moment's clip, once there, is in its row.
+_vod_clips: dict[int, dict] = {}
+VOD_CLIP_BUSY_WORDS = "Its clip is being cut from the stream's VOD. Try again once that is done."
+# A clip of which the VOD holds less than this is none.
+VOD_CLIP_LEAST_SECONDS = 1.0
+# How often waiting for the VOD to reach the end of a moment's footage looks
+# whether the service is shutting down.
+VOD_WAIT_STEP_SECONDS = 1.0
+
+
+def _vod_clip_busy(moment_id: int) -> bool:
+    return _vod_clips.get(moment_id, {}).get("state") in dashboard_view.VOD_CLIP_BUSY
+
+
+def _vod_clip_standing(moment_id: int) -> dict:
+    """Where cutting a moment's clip from its stream's VOD stands, as the
+    page says it."""
+    known = _vod_clips.get(moment_id, {})
+    state = known.get("state", dashboard_view.FOOTAGE_NONE)
+    until = known.get("until")
+    return {
+        "state": state,
+        "busy": state in dashboard_view.VOD_CLIP_BUSY,
+        "words": dashboard_view.vod_clip_words(
+            state,
+            known.get("done"),
+            wait=(until - datetime.now(timezone.utc)).total_seconds() if until else None,
+            short=known.get("short", False),
+            muted=known.get("muted", False),
+            why=known.get("why"),
+        ),
+    }
+
+
+async def _wait_for_vod(moment_id: int, until: datetime) -> None:
+    """Waits until `until`, saying so, while the stream's VOD - which runs
+    some seconds behind a stream that is on - may not reach the end of a
+    moment's footage yet. Raises _GivenUp once the service is shutting
+    down."""
+    while (left := (until - datetime.now(timezone.utc)).total_seconds()) > 0:
+        if _shutdown_requested:
+            raise _GivenUp
+        _vod_clips[moment_id] = {"state": dashboard_view.VOD_CLIP_WAITING, "until": until}
+        await asyncio.sleep(min(left, VOD_WAIT_STEP_SECONDS))
+
+
+async def _cut_from_vod_background(moment_id: int, channel: str, owner: int, window: tuple[datetime, datetime]) -> None:
+    # Waiting for the VOD, finding the moment in it, fetching a couple of
+    # minutes of it and putting them together takes up to a few minutes: off
+    # the event loop where it blocks, and as a tracked task, which gives up
+    # when the service shuts down.
+    def progress(step: str, done: float | None) -> None:
+        if _shutdown_requested:
+            raise _GivenUp
+        _vod_clips[moment_id] = {"state": step, "done": done}
+
+    # Framed as the channel's clips are framed now - what the trace beside
+    # the moment was drawn under, its clip not being there.
+    tuned = _tuning_now(owner)
+    clip_from, clip_to = tuned.clip_span(*window)
+    first = clip_from - timedelta(seconds=tuned.context_before_seconds)
+    last = clip_to + timedelta(seconds=tuned.context_after_seconds)
+    output = CLIPS_DIR / channel / f"moment_{moment_id}.mp4"
+    try:
+        await _wait_for_vod(moment_id, last + timedelta(seconds=vod_footage.VOD_BEHIND_SECONDS))
+        progress(dashboard_view.FOOTAGE_FINDING, None)
+        vod = await asyncio.to_thread(streams.vod_at, channel, clip_from)
+        made = await asyncio.to_thread(vod_footage.cut, vod, first, last, output, progress)
+    except _GivenUp:
+        _vod_clips.pop(moment_id, None)
+        logger.info("[%s] cutting the clip of moment %d given up: shutting down", channel, moment_id)
+        return
+    except (NoVod, vod_footage.FootageError) as error:
+        _vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_FAILED, "why": str(error)}
+        logger.info("[%s] no clip cut of moment %d: %s", channel, moment_id, error)
+        return
+    except Exception:
+        output.unlink(missing_ok=True)
+        _vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_FAILED}
+        logger.exception("[%s] cutting the clip of moment %d from the VOD failed", channel, moment_id)
+        return
+
+    # The clip is as much of what was asked for as the file holds, the
+    # footage either side of it the rest.
+    clip_start, clip_end = max(clip_from, made.started_at), min(clip_to, made.ended_at)
+    clip_seconds = (clip_end - clip_start).total_seconds()
+    if clip_seconds < VOD_CLIP_LEAST_SECONDS:
+        output.unlink(missing_ok=True)
+        _vod_clips[moment_id] = {
+            "state": dashboard_view.FOOTAGE_FAILED,
+            "why": "The VOD holds nothing of the clip itself, only of the footage around it.",
+        }
+        logger.info("[%s] no clip cut of moment %d: the VOD does not hold it", channel, moment_id)
+        return
+    extent = (
+        (clip_start - made.started_at).total_seconds(),
+        clip_seconds,
+        max((made.ended_at - clip_end).total_seconds(), 0.0),
+    )
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is not None:
+            update_moment_clip_path(
+                conn,
+                moment_id,
+                output.relative_to(CLIPS_DIR).as_posix(),
+                clip_start=clip_start.isoformat(),
+                clip_duration=extent[1],
+                context_before=extent[0],
+                context_after=extent[2],
+            )
+    finally:
+        conn.close()
+    if row is None:
+        # Removed meanwhile.
+        output.unlink(missing_ok=True)
+        _vod_clips.pop(moment_id, None)
+        return
+    _vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_DONE, "short": made.short, "muted": made.muted}
+    logger.info(
+        "[%s] clip of moment %d cut from the VOD: %s (%.0f s, with %.0f s before it and %.0f s after)",
+        channel, moment_id, output, extent[1], extent[0], extent[2],
+    )
+    for analyse in _analysis_steps():
+        _track_task(analyse(moment_id, channel, output, extent))
+
+
 def _moment_window(row) -> tuple[datetime, datetime]:
     """When a moment's reaction ran, on chat's clock."""
     return datetime.fromisoformat(row["window_start"]), datetime.fromisoformat(row["window_end"])
@@ -2853,6 +3060,25 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"], versioned=True) if row["clip_path"] else None,
         "clip_state": _clip_state(row, _tuning(conn, row["broadcaster_user_id"])),
+        # Of a moment of a channel tracked for moments that has no clip yet:
+        # where asking for it is, and where that stands.
+        "on_request": (
+            {"url": f"/moments/{row['id']}/clip", **_vod_clip_standing(row["id"])}
+            if row["clip_on_request"] and not row["clip_path"]
+            else None
+        ),
+        # Where the moment is watched on its platform: its stream's VOD,
+        # from where its clip begins - where that was found.
+        "watch": (
+            {
+                "url": row["watch_url"],
+                "words": dashboard_view.watch_words(
+                    platforms.TITLES.get(platforms.platform_of(row["channel_slug"]), "")
+                ),
+            }
+            if row["watch_url"]
+            else None
+        ),
         # How far into its file the clip begins: the footage that led up to
         # it comes first. The page starts the player there.
         "clip_lead": dashboard_view.number_words(row["context_before"] or 0.0, 3),
@@ -2972,18 +3198,19 @@ def _right_now(streamers) -> dict:
     recordings_status)."""
     tracked = {row["slug"] for row in streamers if row["tracking_enabled"]}
     # A channel is looked at for any of these reasons: it is tracked for
-    # clips, or for its chat alone, or its stream is being kept whole - or
-    # will be once it is on. One whose recording was ended is not looked at
-    # for that until its next stream.
-    chat_only = {row["slug"] for row in streamers if _tracking_of(row) == dashboard_view.TRACKING_CHAT}
+    # clips or moments, or for its chat alone, or its stream is being kept
+    # whole - or will be once it is on. One whose recording was ended is not
+    # looked at for that until its next stream.
+    chat_only = {row["slug"] for row in streamers if _tracking_of(row) in dashboard_view.TRACKED_BY_CHAT}
     whole_streams = set(recording_manager.stream_recordings())
     awaited = {
         row["slug"] for row in streamers if row["always_record"] and not recording_manager.is_held_off(row["slug"])
     }
     live = set(recording_manager.recording_channels())
     watching = _flags.get("watching_enabled", True)
-    # No stream comes in of a channel tracked for its chat alone, only its
-    # chat - while its platform says it is live.
+    # No stream comes in of a channel tracked through its chat alone (for
+    # the chat, or for moments), only its chat - while its platform says it
+    # is live.
     seen_live = {slug for slug, look in recording_manager.looks().items() if look.live_since is not None}
     chatting = (chat_only & seen_live) - live if watching else set()
     return {
@@ -3381,6 +3608,8 @@ async def dashboard_channels(request: Request):
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
                         "tracking": _tracking_of(row),
+                        # Moments only where a clip can be cut afterwards.
+                        "tracking_choices": dashboard_view.tracking_choices(row["platform"] in platforms.KEEP_VODS),
                         # Never tracked: there is no choice for it.
                         "recorded_only": row["platform"] in platforms.RECORDED_ONLY,
                         "always_record": bool(row["always_record"]),
@@ -3394,7 +3623,6 @@ async def dashboard_channels(request: Request):
                     }
                     for row in context["streamers"]
                 ],
-                "tracking_choices": dashboard_view.TRACKING_CHOICES,
                 "analysis_settings": [
                     {
                         "name": name,
@@ -4989,6 +5217,8 @@ def _moment_busy(moment_id: int) -> str | None:
         return "This moment is being transcribed. Try again once that is done."
     if _footage_busy(moment_id):
         return FOOTAGE_BUSY_WORDS
+    if _vod_clip_busy(moment_id):
+        return VOD_CLIP_BUSY_WORDS
     return None
 
 
@@ -5002,6 +5232,7 @@ def _remove_moment(conn, row) -> None:
     _trims.pop(row["id"], None)
     _transcripts.pop(row["id"], None)
     _footage.pop(row["id"], None)
+    _vod_clips.pop(row["id"], None)
 
 
 @app.post("/moments/{moment_id}/delete")
@@ -5446,6 +5677,60 @@ async def footage_state(moment_id: int):
     return {"moment_id": moment_id, **_footage_standing(moment_id)}
 
 
+@app.post("/moments/{moment_id}/clip")
+async def cut_moment_clip(moment_id: int):
+    """Starts cutting the clip of a moment of a channel tracked for moments
+    from its stream's VOD (see vod_footage.cut): framed as the channel's
+    clips are framed now, with the footage around it that its settings
+    keep, once the VOD reaches that far. Not while the moment is still
+    open, or whether it is kept still being counted. Asked again while that
+    goes on, nothing more is started."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    if row["clip_path"]:
+        raise HTTPException(status_code=409, detail="The moment has its clip already.")
+    if not row["clip_on_request"]:
+        raise HTTPException(
+            status_code=409, detail="Only a moment of a channel tracked for moments has its clip cut when asked for."
+        )
+    if not _vod_clip_busy(moment_id):
+        if row["laughing"] is None or any(session.moment_id == moment_id for session in _moment_sessions.values()):
+            raise HTTPException(
+                status_code=409,
+                detail="Chat is still reacting to the moment: whether it is kept is known a minute after it fired.",
+            )
+        if (busy := _moment_busy(moment_id)) is not None:
+            raise HTTPException(status_code=409, detail=busy)
+        _vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_FINDING}
+        _track_task(
+            _cut_from_vod_background(
+                moment_id, row["channel_slug"], row["broadcaster_user_id"], _moment_window(row)
+            )
+        )
+    return {"moment_id": moment_id, **_vod_clip_standing(moment_id)}
+
+
+@app.get("/moments/{moment_id}/clip")
+async def moment_clip_state(moment_id: int):
+    """Where cutting a moment's clip from its stream's VOD stands - what the
+    page asks while it goes on."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    return {"moment_id": moment_id, **_vod_clip_standing(moment_id)}
+
+
 @app.post("/moments/{moment_id}/stream_type")
 async def set_moment_stream_type(moment_id: int, value: str = ""):
     valid_values = {v for v, _ in STREAM_TYPES}
@@ -5738,11 +6023,21 @@ async def add_channel(slug: str):
     return result
 
 
+# How long setting a channel to be tracked for moments waits for its
+# platform to say what it lists of the channel's VODs before saying nothing.
+VOD_TROUBLE_SECONDS = 10
+
+
 @app.post("/channels/{slug}/tracking")
 async def set_channel_tracking(slug: str, what: str):
     """Sets what a channel is tracked for (dashboard_view.TRACKING_*):
-    clips, its chat alone - kept, and judged by nothing - or nothing. A
-    recording of its stream keeps its chat whatever this says."""
+    clips, cut from its stream as they are found, or moments, told of and
+    their clips cut from the stream's VOD when asked for - which only a
+    platform that keeps a VOD of a stream once it is over can have - its
+    chat alone - kept, and judged by nothing - or nothing. A recording of
+    its stream keeps its chat whatever this says. Set to moments, it says
+    (`said`) what its platform lists of the channel's VODs that would keep a
+    clip from being cut afterwards, where it lists anything."""
     if what not in dict(dashboard_view.TRACKING_CHOICES):
         raise HTTPException(status_code=400, detail=f"unknown tracking {what!r}")
     conn = get_connection()
@@ -5750,23 +6045,36 @@ async def set_channel_tracking(slug: str, what: str):
         row = get_streamer_by_slug(conn, slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        title = platforms.TITLES[row["platform"]]
         if row["platform"] in platforms.RECORDED_ONLY and what != dashboard_view.TRACKING_OFF:
-            title = platforms.TITLES[row["platform"]]
             raise HTTPException(
                 status_code=409,
                 detail=f"{title} channels are only recorded: their chat is read while they are, and no clips are "
                 "looked for in them.",
             )
+        if row["platform"] not in platforms.KEEP_VODS and what == dashboard_view.TRACKING_MOMENTS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{title} keeps no VOD of a stream once it is over, which a moment's clip would be cut "
+                "from. Track the channel for clips instead.",
+            )
         set_streamer_tracking(
             conn,
             row["broadcaster_user_id"],
-            what == dashboard_view.TRACKING_CLIPS,
+            what in (dashboard_view.TRACKING_CLIPS, dashboard_view.TRACKING_MOMENTS),
             chat_only=what == dashboard_view.TRACKING_CHAT,
+            moments_only=what == dashboard_view.TRACKING_MOMENTS,
         )
     finally:
         conn.close()
     logger.info("tracking for %s -> %s", slug, what)
-    return {"slug": slug, "tracking": what}
+    said = ""
+    if what == dashboard_view.TRACKING_MOMENTS:
+        try:
+            said = await asyncio.wait_for(streams.vod_trouble(slug), VOD_TROUBLE_SECONDS) or ""
+        except Exception:
+            logger.warning("[%s] what its platform keeps of its VODs could not be asked", slug, exc_info=True)
+    return {"slug": slug, "tracking": what, "said": said}
 
 
 @app.post("/channels/{slug}/chat_delay")
@@ -6827,6 +7135,8 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
         # platform's API hiccuped would simply be gone.
         logger.warning("[%s] could not look up the stream's start time", channel, exc_info=True)
         stream_elapsed = None
+    streamer = get_streamer_by_id(conn, message.broadcaster_user_id)
+    on_request = streamer is not None and _tracking_of(streamer) == dashboard_view.TRACKING_MOMENTS
     moment_id = insert_moment(
         conn,
         broadcaster_user_id=message.broadcaster_user_id,
@@ -6841,9 +7151,11 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
         emote_count=spike.emote_count,
         keyword_hits=spike.keyword_hits,
         stream_elapsed_seconds=stream_elapsed,
+        clip_on_request=on_request,
     )
     # Open a moment session: hold it open and extend the clip while the
-    # reaction lasts, then cut one clip covering all of it.
+    # reaction lasts, then cut one clip covering all of it - or, for a
+    # channel tracked for moments, tell of it.
     session = _MomentSession(
         moment_id=moment_id,
         channel=channel,
@@ -6860,6 +7172,7 @@ async def _open_moment_session(conn, message: ChatMessage, spike: detector.Spike
             )
         ),
         asked_for=spike is _COMMANDED,
+        on_request=on_request,
     )
     _moment_sessions[channel] = session
     # Tracked (not just held via _moment_sessions) so there's no gap between

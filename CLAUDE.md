@@ -13,7 +13,10 @@ them, and a clip is automatically cut from a rolling local recording buffer. A c
 whole stream can also be recorded on request, with its chat - and a TikTok channel is
 watched for that alone: recorded, never looked for clips in (`platforms.RECORDED_ONLY`). Any
 other channel can be tracked for its chat alone instead of for clips: its chat stored, never
-judged, nothing recorded for it (`streamers.chat_only`, "Chat" on the Channels page). A bot
+judged, nothing recorded for it (`streamers.chat_only`, "Chat" on the Channels page). A Kick or
+Twitch channel can be tracked for moments instead: found in its chat alone, no stream of it
+coming in, each told of with a link to it in the stream's VOD, and its clip cut from the VOD
+only once asked for on the dashboard (`streamers.moments_only`, "Moments"; `vod_footage.cut`). A bot
 can write in a channel's chat - when the stream starts, a recording starts or ends, a moment
 is caught, a clip was made, a message of its own every so often, in words the settings may
 choose - and take commands there from its streamer and moderators (start or stop a recording,
@@ -149,7 +152,9 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
 - `stream_recording.py` — a whole stream kept as one file
 - `recording_moments.py` — moments found afterwards in a recording's chat
 - `vod_footage.py` — a moment's file made longer from its stream's VOD, days later too (the file
-  found in the VOD by its pictures; `streams.vod_at` says where a stream's VOD is)
+  found in the VOD by its pictures; `streams.vod_at` says where a stream's VOD is) - or, for a
+  channel tracked for moments, its clip cut from the VOD in the first place, by the VOD's clock
+  (`cut`; `streams.watch_link` is where a person watches it)
 - `clip_creator.py` — manual official Kick clips via the site's internal API
 - `transcriber.py`, `audio_events.py`, `frame_encoder.py`, `sound_events.py`, `ml_loading.py` —
   optional per-clip local ML capture (off by default), lazily loaded under one lock

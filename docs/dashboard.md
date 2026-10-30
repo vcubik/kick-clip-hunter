@@ -36,6 +36,18 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   (`?v=`), so a browser never plays its cached copy of the one before. Not offered for an
   imported clip, or one cut before its place on the stream's clock was kept; refused while a
   stretch of the moment is being cut or it is being transcribed, and those wait for it in turn.
+  A moment of a channel tracked for moments has no clip until it is asked for: in the clip's
+  place the page says so, with "Cut the clip" (`POST /moments/{id}/clip`, a tracked background
+  task the page follows as it follows footage being added - `GET /moments/{id}/clip`, its words
+  in the status line - until it opens the moment again with its clip). The clip is cut from the
+  stream's VOD (`vod_footage.cut`), framed as the channel's clips are framed now, once the VOD
+  reaches the end of the moment's footage - which can take a minute while the stream is on, said
+  as "Waiting for the stream's VOD" - and the moment is then like any other; refused until chat
+  has stopped reacting to it (whether it is kept is known a minute after it fired), and the
+  moment is not removed while it goes on. Chat and its trace are there before the clip: the
+  trace is drawn on the stretch the clip would hold. Where the moment's stream's VOD was found
+  when it was caught, "Watch on Kick" / "Watch on Twitch", beside how far into the stream it
+  was, opens it there in a new tab, from where its clip begins (`moments.watch_url`).
   Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
@@ -48,12 +60,21 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   that clip thrown away when it arrives. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
-  Tracking - Off, Chat or Clips, one of the three lit (`POST /channels/{slug}/tracking`, `what`
-  `off`, `chat` or `clips`): Clips looks for clips while the channel is live, which keeps its chat
-  too; Chat keeps its chat and nothing more - stored like a tracked channel's, for the Analyze page,
-  never seen by the detector, nothing recorded for it - while its platform is still asked whether
-  it is live, so that "Right now" can say "Live, chat only" (no lamp: no stream is coming in) and
-  the Health page can tell its chat gone quiet; Off keeps nothing (a TikTok channel has none of
+  Tracking - Off, Chat, Moments or Clips, one of them lit (`POST /channels/{slug}/tracking`,
+  `what` `off`, `chat`, `moments` or `clips`): Clips looks for clips while the channel is live,
+  its stream coming in to cut each one from, which keeps its chat too; Moments looks for them in
+  its chat alone - nothing of its stream comes in - keeps each with where it is watched in the
+  stream's VOD and tells of it (the "Moments" notification), and has its clip cut from the VOD
+  once it is asked for on the review page. Only Kick and Twitch channels are offered it, their
+  VODs staying once a stream is over (`platforms.KEEP_VODS`; the route refuses it for any other),
+  and choosing it says what the platform lists of the channel's VODs that would keep a clip from
+  being cut afterwards - none at all, or kept for subscribers only once a stream is over
+  (`streams.vod_trouble`, the response's `said`, in the row's status line). Chat keeps its chat
+  and nothing more - stored like a tracked channel's, for the Analyze page,
+  never seen by the detector, nothing recorded for it. Of a channel tracked for moments or for
+  its chat its platform is still asked whether it is live, so that "Right now" can say "Live,
+  chat only" (no lamp: no stream is coming in) and the Health page can tell its chat gone quiet;
+  Off keeps nothing (a TikTok channel has none of
   them: "Recorded only", and the route refuses anything but `off` for one) - and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
   how much has been recorded so far - and its "Always record" switch, with which a
@@ -133,8 +154,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   without saving anything. The page for all channels has, before it, a tab for what is the
   service's: Notifications - where they go (a Telegram bot and its chat, with "Find chats" to
   pick it among those that wrote to the bot; a Discord webhook; the dashboard's address for
-  their links), which kinds go out (clips, the clips themselves as videos, recordings,
-  problems, a daily summary; all on to begin with), and a test - saved by a button of its own, not the form's
+  their links), which kinds go out (clips, the clips themselves as videos, moments of channels
+  tracked for moments - with a link to each in the stream's VOD - recordings, problems, a daily
+  summary; all on to begin with), and a test - saved by a button of its own, not the form's
   (`POST /notifications/setup`), holding at once, `.env` holding for what was never set there;
   the token and the webhook are never put on the page. A channel's page begins with what is
   its own whatever it goes by:

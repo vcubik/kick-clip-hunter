@@ -1,5 +1,5 @@
 {#- The watchlist and the controls of the service itself: which channels are
-    watched - for clips, or for their chat alone - and which have their
+    watched - for clips, for moments, or for their chat alone - and which have their
     whole stream recorded, what is done with each new clip, and shutting the
     service down. Where notifications go, and what they tell of, is on the
     Settings page. -#}
@@ -14,7 +14,7 @@
   <section aria-labelledby="watchlist-title" data-status-scope>
     <h2 class="title" id="watchlist-title">Watchlist</h2>
     {% if watchlist %}
-    <p class="section-lead">Tracking a channel for clips looks for them while it is live. Tracking it for chat keeps its messages and nothing more - no clips, no video - for the Analyze page. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. A TikTok channel is only ever recorded. What was kept is on the Recordings page.</p>
+    <p class="section-lead">Tracking a channel for clips looks for them while it is live, its stream coming in to cut each one from. Tracking it for moments finds them in its chat alone - no video comes in - and tells you of each with a link to it in the stream's VOD; its clip is cut from the VOD when you ask for it on the review page (Kick and Twitch only). Tracking it for chat keeps its messages and nothing more - no clips, no video - for the Analyze page. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. A TikTok channel is only ever recorded. What was kept is on the Recordings page.</p>
     <table class="watchlist">
       <thead>
         <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Tracking</th><th scope="col">Always record</th><th scope="col">Stream recording</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
@@ -26,7 +26,7 @@
           <td title="{{ channel.platform }} user id {{ channel.platform_user_id }}">{{ channel.slug }}</td>
           <td class="ch-meta">{{ channel.added }}</td>
           <td data-now="{{ channel.slug }}">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
-          <td>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", tracking_choices, channel.tracking) }}{% endif %}</td>
+          <td>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}{% endif %}</td>
           <td data-always-record>{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
           {#- One button or the other, and what the recording is doing; the
               script keeps both current while there is one. -#}

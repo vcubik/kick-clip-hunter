@@ -30,6 +30,10 @@ without a program date-time, so where footage of it is is counted from
 when the broadcast began, to a few seconds (see vod_footage.py). Where
 Twitch found music in it that it may not play, a segment's address says
 "-muted": its sound is silence.
+
+A person watches a past broadcast at twitch.tv/videos/<id>, from a time
+the address says (`?t=1h2m3s`) - `watch_link_at` gives that of the one a
+moment was in, from when the moment's clip would begin.
 """
 
 from __future__ import annotations
@@ -154,14 +158,11 @@ async def _archive_at(login: str, when: datetime) -> dict | None:
     return covering(archives, when, stream["id"] if stream else None)
 
 
-def vod_at(login: str, when: datetime) -> Vod:
-    """The past broadcast of the channel's stream that was on at `when` -
-    one that is on, or one that is over - with when it began. Blocks while
-    it is asked for; raises NoVod, saying why, where there is none to be
-    had."""
+async def _asked_archive_at(login: str, when: datetime) -> dict:
+    """_archive_at, raising NoVod in words that say why where Helix could
+    not be asked, or lists none."""
     try:
-        # A thread of its own, with no event loop running in it.
-        video = asyncio.run(_archive_at(login, when))
+        video = await _archive_at(login, when)
     except twitch_client.NotSetUp as error:
         raise NoVod(str(error)) from error
     except (httpx.HTTPError, ValueError) as error:
@@ -171,6 +172,54 @@ def vod_at(login: str, when: datetime) -> Vod:
             "Twitch lists no past broadcast of that stream: the channel keeps none, it was deleted, "
             "or it is older than Twitch keeps them."
         )
+    return video
+
+
+def watch_link(video_id: str, seconds: float) -> str:
+    """Where a past broadcast is watched on twitch.tv from `seconds` into
+    it, written as Twitch's own share button writes the time ("1h2m3s").
+    Pure."""
+    whole = max(int(seconds), 0)
+    return f"{VIDEO_URL.format(video_id=video_id)}?t={whole // 3600}h{whole % 3600 // 60}m{whole % 60}s"
+
+
+async def watch_link_at(login: str, when: datetime) -> str:
+    """Where the channel's stream that was on at `when` is watched on
+    twitch.tv from then on: its past broadcast - of a stream that is on as
+    well, which Twitch plays as it goes along. Raises NoVod, saying why,
+    where there is none."""
+    video = await _asked_archive_at(login, when)
+    began = _began(video)
+    if began is None:
+        raise NoVod("Twitch does not say when the past broadcast of that stream began.")
+    return watch_link(str(video["id"]), (when - began).total_seconds())
+
+
+async def vod_trouble(login: str) -> str | None:
+    """What would keep a clip from being cut from the channel's past
+    broadcasts, by its newest one as Helix lists it, in words - None where
+    nothing seen does, or Twitch could not be asked."""
+    try:
+        settings = load_settings()
+        token = await twitch_client.app_token(settings)
+        user = await twitch_client.get_user(login, settings.twitch_client_id, token)
+        archives = await twitch_client.get_archives(user["id"], settings.twitch_client_id, token, 1)
+    except (twitch_client.NotSetUp, httpx.HTTPError, KeyError, ValueError):
+        return None
+    if not archives:
+        return "Twitch lists no past broadcasts of this channel: if it keeps none, no moment's clip can be cut."
+    if archives[0].get("viewable", "public") != "public":
+        return "Twitch keeps this channel's past broadcasts from the public: no moment's clip can be cut."
+    return None
+
+
+def vod_at(login: str, when: datetime) -> Vod:
+    """The past broadcast of the channel's stream that was on at `when` -
+    one that is on, or one that is over - with when it began. Blocks while
+    it is asked for; raises NoVod, saying why, where there is none to be
+    had."""
+    # A thread of its own, with no event loop running in it.
+    video = asyncio.run(_asked_archive_at(login, when))
     if video.get("viewable", "public") != "public":
         raise NoVod("Twitch keeps the past broadcast of that stream from the public.")
     try:

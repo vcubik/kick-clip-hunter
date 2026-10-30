@@ -624,12 +624,13 @@ class TestTheSettingsPage:
         assert [kind.attrs["data-notify-kind"] for kind in kinds] == [
             "notify_clips",
             "notify_clip_videos",
+            "notify_moments",
             "notify_recordings",
             "notify_health",
             "notify_daily",
         ]
         lit = [[half.text for half in kind.find("button") if half.attrs["aria-pressed"] == "true"] for kind in kinds]
-        assert lit == [["On"], ["On"], ["Off"], ["On"], ["On"]]
+        assert lit == [["On"], ["On"], ["On"], ["Off"], ["On"], ["On"]]
         assert "disabled" not in pane.one("button", data_notify_test=True).attrs
         assert page.one("main", data_settings=True).attrs["data-shown"] == "notifications"
 

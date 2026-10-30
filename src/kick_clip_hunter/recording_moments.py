@@ -89,14 +89,6 @@ def chat_span(parts: Sequence[Part]) -> tuple[datetime, datetime]:
     return parts[0].started_at - around, parts[-1].ended_at + around
 
 
-def _clip_asked(window_start: datetime, window_end: datetime, tuning: Tuning) -> tuple[datetime, datetime]:
-    """The stretch of the broadcast a moment's clip is to hold, as the
-    recorder works it out for a live one."""
-    start = window_start - timedelta(seconds=tuning.pre_roll_seconds + tuning.playback_delay_seconds)
-    end = window_end + timedelta(seconds=tuning.post_roll_seconds - tuning.playback_delay_seconds)
-    return start, end
-
-
 def _placed(
     parts: Sequence[Part], start: datetime, end: datetime, tuning: Tuning
 ) -> tuple[tuple[float, float], tuple[float, float], datetime] | None:
@@ -151,7 +143,7 @@ def find(replayed: Iterable[ReplayedMoment], parts: Sequence[Part], tuning: Tuni
         fired = datetime.fromtimestamp(moment.time, timezone.utc)
         window_start = fired - timedelta(seconds=detector.SHORT_WINDOW_SECONDS)
         window_end = fired + timedelta(seconds=moment.extension_seconds)
-        start, end = _clip_asked(window_start, window_end, tuning)
+        start, end = tuning.clip_span(window_start, window_end)
         placed = _placed(parts, start, end, tuning)
         if placed is None:
             if start < recorded[1] and end > recorded[0]:

@@ -82,6 +82,18 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   available)`), which left the clips through their ads without the VOD's footage. A run
   without its VOD looks again over plain HTTP every minute, and logs `the stream's VOD was
   found on a later look` when it finds it; the Health page's VOD column follows.
+- A channel tracked for moments has its clips only as long as its VOD is there to cut them
+  from - Kick's for about a month (`original_expires_at` in the site's list), Twitch's for a
+  week to two months - and only while anyone may watch it: on a Kick channel that keeps its
+  VODs for subscribers only once a stream is over, "Cut the clip" works while the stream is
+  on and fails after (choosing Moments for the channel says so, as far as Kick lists it). A
+  clip of one is cut by the VOD's clock, not found by its pictures: seconds off where the
+  recorder would have cut it, which the pre-roll and the context take in their stride. While
+  the stream is on, "Cut the clip" waits until the VOD has had 45 s to reach the end of the
+  moment's footage (`vod_footage.VOD_BEHIND_SECONDS`) - about two minutes after chat reacted -
+  and the dashboard says so meanwhile. The link to a moment in its VOD is looked up once, as it
+  is kept: Kick lists a stream in the site's newer API from its first minute, so a moment in
+  a stream's very first minute may have none.
 
 - The database is in SQLite's default journal mode, where a statement that is still
   being read holds off every commit - and a chat message that cannot be stored within

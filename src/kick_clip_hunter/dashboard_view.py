@@ -13,6 +13,7 @@ the reviewer would use rather than the detector's ("laughing", not "laugh").
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timedelta
@@ -332,6 +333,58 @@ def footage_words(
     if muted:
         words += " Some of it has no sound: Twitch silenced it in its VOD."
     return words
+
+
+# Where cutting the clip of a moment whose channel is tracked for moments
+# stands - which happens from its stream's VOD, when it is asked for: first
+# waiting for the VOD, which runs some seconds behind a stream that is on,
+# to reach the end of what the clip's file is to hold, then the steps of
+# footage being added (FOOTAGE_*) - and what the page says of each.
+VOD_CLIP_WAITING = "waiting"
+VOD_CLIP_BUSY = FOOTAGE_BUSY | {VOD_CLIP_WAITING}
+VOD_CLIP_WORDS = {
+    FOOTAGE_NONE: "",
+    VOD_CLIP_WAITING: "Waiting for the stream's VOD to reach the end of the moment.",
+    FOOTAGE_FINDING: "Looking for the moment in its stream's VOD.",
+    FOOTAGE_FETCHING: "Fetching the moment's footage from the VOD.",
+    FOOTAGE_JOINING: "Putting the clip together.",
+    FOOTAGE_DONE: "The clip was cut from the stream's VOD.",
+    FOOTAGE_FAILED: "The clip could not be cut. The server log says why.",
+}
+
+
+def vod_clip_words(
+    state: str,
+    done: float | None = None,
+    *,
+    wait: float | None = None,
+    short: bool = False,
+    muted: bool = False,
+    why: str | None = None,
+) -> str:
+    """What the page says of a moment's clip being cut from its stream's
+    VOD. `wait` is how many seconds are left to wait for the VOD, `done` how
+    much of the footage has been fetched, as a share; once it is done,
+    `short` if the VOD held less than the clip's file was to, and `muted` if
+    some of it has no sound. `why` is why it failed, where that can be
+    said."""
+    if state == VOD_CLIP_WAITING and wait is not None:
+        return f"{VOD_CLIP_WORDS[state][:-1]}: {math.ceil(wait)} s."
+    if state == FOOTAGE_FETCHING and done is not None:
+        return f"{VOD_CLIP_WORDS[state][:-1]}: {int(done * 100)} %."
+    if state == FOOTAGE_FAILED and why:
+        return why
+    words = VOD_CLIP_WORDS[state]
+    if state == FOOTAGE_DONE and short:
+        words += " The VOD held less of the stream around it than the clip's file was to."
+    if state == FOOTAGE_DONE and muted:
+        words += " Some of it has no sound: Twitch silenced it in its VOD."
+    return words
+
+
+def watch_words(platform_title: str) -> str:
+    """What a link to a moment in its stream's VOD says."""
+    return f"Watch on {platform_title}"
 
 
 # What a time before the clip is written with: a real minus sign, as the
@@ -832,20 +885,38 @@ def recording_stopped_words(kept: bool, always: bool) -> str:
 
 # What a channel on the watchlist can be tracked for, as its row on the
 # Channels page offers it (the value posted, and the word on its button):
-# nothing, its chat alone - kept, and judged by nothing - or clips, which
-# keeps its chat too.
+# nothing, its chat alone - kept, and judged by nothing - moments, found in
+# its chat and told of, whose clips are cut from the stream's VOD when asked
+# for, or clips, cut from its stream as they are found. Each keeps its chat.
 TRACKING_OFF = "off"
 TRACKING_CHAT = "chat"
+TRACKING_MOMENTS = "moments"
 TRACKING_CLIPS = "clips"
-TRACKING_CHOICES = ((TRACKING_OFF, "Off"), (TRACKING_CHAT, "Chat"), (TRACKING_CLIPS, "Clips"))
+TRACKING_CHOICES = (
+    (TRACKING_OFF, "Off"),
+    (TRACKING_CHAT, "Chat"),
+    (TRACKING_MOMENTS, "Moments"),
+    (TRACKING_CLIPS, "Clips"),
+)
+# What follows a channel through its chat alone, with no stream of it coming
+# in: the recording loop only looks at whether it is live.
+TRACKED_BY_CHAT = frozenset({TRACKING_CHAT, TRACKING_MOMENTS})
 
 
-def tracking(clips: bool, chat_only: bool) -> str:
-    """What a channel is tracked for, from the two switches it is stored as
-    (see db.set_streamer_tracking): clips win."""
+def tracking(clips: bool, chat_only: bool, moments_only: bool = False) -> str:
+    """What a channel is tracked for, from the switches it is stored as (see
+    db.set_streamer_tracking): clips win over chat alone, and made only when
+    asked for they are moments."""
     if clips:
-        return TRACKING_CLIPS
+        return TRACKING_MOMENTS if moments_only else TRACKING_CLIPS
     return TRACKING_CHAT if chat_only else TRACKING_OFF
+
+
+def tracking_choices(keeps_vods: bool) -> tuple[tuple[str, str], ...]:
+    """What a channel's row offers to track it for: moments only where its
+    platform keeps a VOD of a stream once it is over - their clips are cut
+    from there."""
+    return tuple(choice for choice in TRACKING_CHOICES if keeps_vods or choice[0] != TRACKING_MOMENTS)
 
 
 def kept_words(moments: int, recordings: int) -> str:
@@ -1077,6 +1148,10 @@ NOTIFY_CAPTIONS = {
     "notify_clip_videos": (
         "The clip itself goes with it, without the footage around it, where it fits: "
         "Telegram takes up to 50 MB (2000 MB through a Bot API server of your own), Discord 20 MB."
+    ),
+    "notify_moments": (
+        "Each new moment of a channel tracked for moments, with a link to it in the stream's VOD - "
+        "its clip is cut once you ask for it on the dashboard."
     ),
     "notify_recordings": "A recording of a whole stream started, was saved, or could not be.",
     "notify_health": "Something on the Health page needs a look, and when it looks fine again.",

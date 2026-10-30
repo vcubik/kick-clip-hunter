@@ -26,6 +26,9 @@ Watchlist (streamers, each on its platform - see platforms.py)
        its own as it arrives) -> a detected moment cuts a clip from that buffer, path
        stored back on the moment - once its session has closed, and only if enough
        people laughed around it (a moment that falls short is removed)
+    -> a channel tracked for moments has no recorder: its moment is kept with a link to
+       it in the stream's VOD and told of, and its clip is cut from the VOD
+       (vod_footage.cut) only once it is asked for on the dashboard
     -> while a stream recording of the channel runs, the same recorder hands every
        segment on to it as well (stream_recording) -> one video file when it is over
     -> the bot (chat_bot), where a channel has it: a command in its chat starts or stops
@@ -33,9 +36,10 @@ Watchlist (streamers, each on its platform - see platforms.py)
        chat, as do the stream starting, a recording, a moment and a clip where the
        channel has it tell of them - on Kick through the public API as an account signed
        in for it, on Twitch through Helix as the account chat is read as
-    -> notifications (notify), where .env says: a clip saved, a recording started or
-       saved or not, a part of the Health page that needs a look and looks fine again -
-       to a Telegram chat through the Bot API, to a Discord channel through its webhook
+    -> notifications (notify), where .env says: a clip saved, a moment caught on a
+       channel tracked for moments, a recording started or saved or not, a part of the
+       Health page that needs a look and looks fine again - to a Telegram chat through
+       the Bot API, to a Discord channel through its webhook
     -> Web dashboard (Jinja2, embeds the clip video) + CLI scripts for reviewing the
        watchlist and moments
 ```
@@ -67,7 +71,12 @@ Module map (`src/kick_clip_hunter/`):
   `youtube_stream.py` or `tiktok_stream.py`), and where the recording is of the stream it
   had on at a given time (`vod_at`, a `platforms.Vod`, or `NoVod` in words that say why):
   Kick's VOD and Twitch's past broadcast of a stream that is on or one that is over, or the
-  YouTube stream that is on, to be wound back; TikTok keeps none
+  YouTube stream that is on, to be wound back; TikTok keeps none. Also where a person watches
+  that recording from a given time (`watch_link`: the VOD's page on Kick or Twitch with the
+  time to start at - `kick_stream.watch_link_at`, `twitch_stream.watch_link_at`), and what
+  the platform lists of a channel's VODs that would keep a clip from being cut from them once
+  a stream is over (`vod_trouble`: none kept, kept for subscribers only or from the public;
+  None where nothing is seen, or the platform could not be asked)
 - `chat_message.py` — one chat message as the service takes it in, whichever platform it
   came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
   `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id, YouTube's emoji
@@ -79,7 +88,10 @@ Module map (`src/kick_clip_hunter/`):
 - `kick_client.py` — app access token + channel lookup (by slug, or by broadcaster id -
   `get_channel_by_id`, what a renamed channel is called now; `NoSuchChannel` when Kick has
   none) + event subscription; a channel's newest streams with their VODs, from kick.com's
-  own list over plain HTTP (`get_videos`); and, with
+  own list over plain HTTP (`get_videos`), and the same as the site's newer API lists them
+  (`get_site_videos`, `web.kick.com/api/v1/channels/<id>/videos` by the channel's id on the
+  site): with the ids kick.com's VOD pages are addressed by, which the older list does not
+  give, and whether a VOD is public or for subscribers only; and, with
   the user access token of the account the bot writes as, who that account is
   (`get_user`) and a message written in a channel's chat (`send_chat_message`,
   `POST /public/v1/chat`, as type "user": the bot writes in other channels' chat as an
@@ -145,7 +157,8 @@ Module map (`src/kick_clip_hunter/`):
   H.264, which Twitch serves as MPEG-TS. Also the stream's VOD, where the channel keeps
   past broadcasts: the recording Helix lists with the live stream's id, its playlist
   from streamlink - and, by its time, the past broadcast any moment was in, with when it
-  began (`vod_at`; the playlist of one that is over gives no times of its own). Importing
+  began (`vod_at`; the playlist of one that is over gives no times of its own), and where
+  a person watches it from then (`watch_link_at`: `twitch.tv/videos/<id>?t=1h2m3s`). Importing
   streamlink renames the standard log levels in small letters for the whole process; this
   module names them back
 - `twitch_emotes.py` — a Twitch channel's emotes beyond Twitch's own: 7TV's, BetterTTV's
@@ -248,7 +261,9 @@ Module map (`src/kick_clip_hunter/`):
   (`recommended()` is the constants, read when it is called)
 - `tuning.py` — what can be set from the Settings page, for all channels or for one. Pure.
   `Tuning` is everything a setting can change for a channel: the detector's settings, how
-  long a moment stays open, how its clip is framed. `SETTINGS` is the list on offer - what
+  long a moment stays open, how its clip is framed (`framing`, and `clip_span` - the stretch
+  of the broadcast a reaction's clip holds, as the recorder frames one - which the replay of
+  a recording and a clip cut from the VOD go by as well). `SETTINGS` is the list on offer - what
   each is called on the page, what it may be, which fields of a `Tuning` it sets (one
   setting can set two: the lull that ends a moment is also the detector's cooldown) - and
   the rest is values on their way in and out: checked as posted (a list as the items it
@@ -312,7 +327,20 @@ Module map (`src/kick_clip_hunter/`):
   is over in its row. A stretch is cut out of one through `/recordings/{id}/trim`, by the
   same background task that cuts one out of a moment's footage (`_trim_background`). A
   moment's file is made longer from its stream's VOD through `POST /moments/{id}/footage`
-  (`_add_footage_background`, see `vod_footage.py`). `POST /channels/{slug}/always_record` sets whether a channel is
+  (`_add_footage_background`, see `vod_footage.py`). A channel tracked for moments
+  (`streamers.moments_only`, with `tracking_enabled`; `what=moments`, offered only on a
+  platform in `platforms.KEEP_VODS`) has its chat judged as a tracked channel's is, but no
+  recorder (`_is_channel_tracked` is clips only, `_is_tracked_by_chat` what the recording
+  loop only looks at): a moment opened on it is stored as one whose clip is cut on request
+  (`moments.clip_on_request`), and once it is kept `_moment_kept` looks up where it is
+  watched in the stream's VOD, from where its clip would begin (`streams.watch_link`, kept
+  as `moments.watch_url`), and tells of it (`_notify_of_moment`, switch `notify_moments`)
+  instead of cutting a clip. `POST /moments/{id}/clip` cuts it then
+  (`_cut_from_vod_background`): framed as the channel's clips are framed now
+  (`Tuning.clip_span` and the context), after waiting for the VOD to reach the end of it
+  (`vod_footage.VOD_BEHIND_SECONDS` past it, `_wait_for_vod`), with `vod_footage.cut`, and
+  stored as a clip the recorder cut would be - then the analysis steps run on it; where it
+  stands is in memory (`_vod_clips`), as footage being added is. `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
@@ -358,10 +386,13 @@ Module map (`src/kick_clip_hunter/`):
   one a platform delivers twice is carried out once
 - `notify.py` — notifications: what the service tells whoever runs it, in a Telegram chat
   and/or a Discord channel. What a note says, worded for a phone (`clip_note` - how long, how
-  far into the stream, what chat said most or what set it off -, `recording_started_note`,
+  far into the stream, what chat said most or what set it off -, `moment_note` - a moment of
+  a channel tracked for moments, no clip cut yet, with a link to it in the stream's VOD -,
+  `recording_started_note`,
   `recording_saved_note`, `recording_failed_note`, `recording_empty_note`, `health_note`,
   `test_note`), a `Note` (a title, a few lines, the channel, a link to the dashboard by
-  `DASHBOARD_URL`, whether it is trouble), and how it is sent: `Telegram` (Bot API, as the
+  `DASHBOARD_URL`, where else it leads - `elsewhere`, each with the words of its link: before
+  the dashboard's on Telegram, under the lines on Discord - and whether it is trouble), and how it is sent: `Telegram` (Bot API, as the
   bot: `sendMessage` in its HTML, `sendVideo` for a clip - 50 MB at most, 2000 MB through a
   Bot API server of one's own that `TELEGRAM_API_URL` names, `api_url`), `Discord` (the
   channel's webhook, `?wait=true`: an embed - author the channel, the title its link, red
@@ -643,7 +674,10 @@ Module map (`src/kick_clip_hunter/`):
   looking up its stream's VOD inside the same browser; and, over plain HTTP, the VOD of the
   stream a channel had on at any time, from kick.com's list of its streams (`vod_at`, by
   `covering`): an address without a token that works for as long as the channel keeps it,
-  none for a VOD kept for subscribers only
+  none for a VOD kept for subscribers only. Where a person watches that VOD is the site's
+  page of it, by an id only the site's newer API lists (`watch_link_at`, by `site_covering`:
+  `kick.com/<slug>/videos/<id>?t=<seconds>`, which its player starts at), and that list is
+  also what says whether a channel's VODs stay public once a stream is over (`vod_trouble`)
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
   `extract_clip()` to cut a clip from it. A thread per channel polls the live playlist
   (`httpx`) and saves each source MPEG-TS segment untouched, named by its
@@ -709,14 +743,23 @@ Module map (`src/kick_clip_hunter/`):
   player has the file open on Windows (`_put_in_place`) - and the moment's `context_before`
   / `context_after` say where the clip is in it now (`clip_start`, `clip_duration` stay); what
   is kept of the Trim dialog's cut is moved on with it (`_shift_cut_record`). While it runs,
-  the moment is not trimmed, transcribed or removed, and the other way round
+  the moment is not trimmed, transcribed or removed, and the other way round. A moment of a
+  channel tracked for moments has no file to find in the VOD: its clip is cut there in the
+  first place (`cut`, from main.py's `POST /moments/{id}/clip`), the stretch had by the VOD's
+  clock alone - seconds off the live one at most, which a clip framed with seconds to spare
+  and footage either side takes in its stride - and cut on the last frame a cut can begin on
+  at or before it. It waits for nothing but the VOD reaching the end of the stretch
+  (`VOD_BEHIND_SECONDS`); what the VOD does not hold of it is said (`short`), as silenced
+  footage is (`muted`)
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips
   (and watching is on), or its stream is being kept whole - which the switches have no
-  say over. A channel tracked for its chat alone (`main._is_chat_only`, while watching is
-  on) is looked at too - whether it is live, which the watchlist's "Right now", the Health
-  page and the bot go by - but no recorder runs for that: its chat comes in without one.
+  say over. A channel tracked through its chat alone - for the chat itself, or for moments,
+  whose clips are cut from its VOD when asked for (`main._is_tracked_by_chat`, while
+  watching is on) - is looked at too - whether it is live, which the watchlist's "Right
+  now", the Health page and the bot go by - but no recorder runs for that: its chat comes in
+  without one.
   The streams kept whole right now are held here, and the loop is what notices
   that such a recording is over (no footage for `STREAM_END_GRACE_SECONDS`, the disk
   running out, footage that can no longer be written) and reports it to `main.py`. It is

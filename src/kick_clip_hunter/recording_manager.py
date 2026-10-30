@@ -17,9 +17,11 @@ say over it. Which streams are kept that way right now is held here, and the
 loop is what notices that such a recording is over - the stream has been
 gone for a while, or the disk is running out - and reports it.
 
-A channel tracked for its chat alone is looked at too - whether it is live,
-which the dashboard, the Health page and the bot go by - but its recorder
-does not run for that: its chat comes in without it.
+A channel tracked through its chat alone - for the chat itself, or for the
+moments found in it, whose clips are cut from its VOD when asked for - is
+looked at too - whether it is live, which the dashboard, the Health page and
+the bot go by - but its recorder does not run for that: its chat comes in
+without it.
 
 A channel can also be set to be recorded always. The loop then looks at
 whether it is live like at any channel it records, tracked or not, and
@@ -419,8 +421,9 @@ async def run_forever(
     `buffer_seconds` says, by channel, how far back its recorder keeps the
     stream for clips; without it every buffer reaches as far as any clip
     could need (recorder.BUFFER_RETENTION_SECONDS). `chat_only` says which
-    channels that are not tracked for clips are tracked for their chat
-    alone: looked at, while watching is on, and never recorded for that."""
+    channels that are not tracked for clips are tracked through their chat
+    alone - for the chat, or for moments: looked at, while watching is on,
+    and never recorded for that."""
     global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:

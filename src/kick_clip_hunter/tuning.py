@@ -46,6 +46,7 @@ import math
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from . import detector, recorder
@@ -176,6 +177,16 @@ class Tuning:
             "context_before_seconds": self.context_before_seconds,
             "context_after_seconds": self.context_after_seconds,
         }
+
+    def clip_span(self, window_start: datetime, window_end: datetime) -> tuple[datetime, datetime]:
+        """The stretch of the broadcast a moment's clip is to hold, on the
+        stream's clock, for a reaction that ran from `window_start` to
+        `window_end` on chat's: widened by the pre- and post-roll and moved
+        back by the playback delay, as recorder.extract_clip frames one
+        (before it rounds out to whole segments)."""
+        start = window_start - timedelta(seconds=self.pre_roll_seconds + self.playback_delay_seconds)
+        end = window_end + timedelta(seconds=self.post_roll_seconds - self.playback_delay_seconds)
+        return start, end
 
 
 def recommended() -> Tuning:

@@ -8,7 +8,8 @@
 // deletes), has the dialog a stretch of footage is cut out for an editor in
 // - a moment's or a recording's - has a moment's transcript made, follows it
 // as the clip plays and saves what is put right in it, has footage from the
-// stream's VOD added to a moment's file and opens it again, saves the Settings
+// stream's VOD added to a moment's file and opens it again - or, for a
+// moment that has none, its clip cut from there - saves the Settings
 // page's form - whose sections are tabs, and whose lists are added to an
 // item at a time - starts and stops the recording of a whole stream,
 // replays a recording's chat beside it, puts what chat did over all of it
@@ -1494,6 +1495,63 @@
     watchFootage();
   }
 
+  // ---- A clip cut from the VOD -----------------------------------------
+  //
+  // A moment of a channel tracked for moments has no clip until one is
+  // asked for: the service cuts it from the stream's VOD - once the VOD
+  // reaches the end of the moment, which can take a minute while the stream
+  // is on - and the page asks how far it has got meanwhile, then opens the
+  // moment again, with its clip.
+
+  const VOD_CLIP_POLL_MS = 1000;
+  let vodClipWatch = null;
+
+  function setVodClipBusy(group, busy) {
+    group.toggleAttribute("data-busy", busy);
+    for (const button of all("[data-vod-clip-go]", group)) button.disabled = busy;
+  }
+
+  async function cutVodClip(button) {
+    const group = button.closest("[data-vod-clip]");
+    setVodClipBusy(group, true);
+    say(group, "Asking for the clip.");
+    const response = await post(group.dataset.vodClip);
+    if (!group.isConnected) return; // another moment was opened meanwhile
+    if (!response || !response.ok) {
+      setVodClipBusy(group, false);
+      say(group, response ? await problem(response, "Could not cut the clip. Try again.") : "Could not reach the service.");
+      return;
+    }
+    say(group, (await response.json()).words);
+    watchVodClip();
+  }
+
+  function watchVodClip() {
+    clearTimeout(vodClipWatch);
+    vodClipWatch = one("[data-vod-clip][data-busy]") ? setTimeout(checkVodClip, VOD_CLIP_POLL_MS) : null;
+  }
+
+  async function checkVodClip() {
+    const group = one("[data-vod-clip][data-busy]");
+    if (!group) return;
+    let standing = null;
+    try {
+      const response = await fetch(group.dataset.vodClip);
+      if (response.ok) standing = await response.json();
+    } catch {
+      // asked again in a moment
+    }
+    if (!group.isConnected) return;
+    if (standing && !standing.busy) {
+      setVodClipBusy(group, false);
+      if (standing.state === "done") await reopenMoment(group.closest(".moment"), standing.words);
+      else say(group, standing.words);
+      return;
+    }
+    if (standing) say(group, standing.words);
+    watchVodClip();
+  }
+
   // The moment as the service has it now, in place of the one on the page,
   // saying what came of what was asked.
   async function reopenMoment(article, words) {
@@ -1537,11 +1595,12 @@
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
     for (const field of all("[data-note]")) grow(field);
-    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file], [data-footage]")) {
+    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file], [data-footage], [data-vod-clip-go]")) {
       button.hidden = false;
     }
     recallFootageSeconds();
     watchFootage();
+    watchVodClip();
     dressChatFile();
     markFound();
     const article = one(".moment");
@@ -1581,18 +1640,25 @@
   }
 
   // The same for a choice of a few: pressing an option that is not lit
-  // makes it the one that holds.
+  // makes it the one that holds. What the service says of the choice -
+  // why it would not take it, or what to know of it - is said.
   async function choose(option) {
     if (option.getAttribute("aria-pressed") === "true") return;
     const group = option.closest("[data-choice]");
     const value = encodeURIComponent(option.dataset.value);
     const response = await post(`${group.dataset.choice}?${group.dataset.choiceName}=${value}`);
     if (!response || !response.ok) {
-      say(group, "Could not save the change. Try again.");
+      say(group, response ? await problem(response, "Could not save the change. Try again.") : "Could not reach the service.");
       return;
     }
     for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === option));
-    say(group, "");
+    let said = "";
+    try {
+      said = (await response.json()).said || "";
+    } catch {
+      // nothing to say, then
+    }
+    say(group, said);
   }
 
   async function addChannel(form) {
@@ -2805,6 +2871,7 @@
     ["[data-transcribe]", transcribe],
     ["[data-transcript-go]", playLine],
     ["[data-footage-side]", addFootage],
+    ["[data-vod-clip-go]", cutVodClip],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],

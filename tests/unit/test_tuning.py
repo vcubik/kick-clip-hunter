@@ -9,6 +9,7 @@ written against the constants, not against what they happen to be today.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime, timedelta, timezone
 from typing import ClassVar
 
 import pytest
@@ -55,6 +56,15 @@ class TestRecommended:
             "context_before_seconds": recorder.CONTEXT_BEFORE_SECONDS,
             "context_after_seconds": recorder.CONTEXT_AFTER_SECONDS,
         }
+
+    def test_a_clip_holds_the_reaction_widened_by_its_rolls_and_moved_back_onto_the_streams_clock(self):
+        tuned = tuning.recommended()
+        reacted = datetime(2026, 10, 30, 20, 0, 0, tzinfo=timezone.utc)
+
+        start, end = tuned.clip_span(reacted, reacted + timedelta(seconds=25))
+
+        assert start == reacted - timedelta(seconds=tuned.pre_roll_seconds + tuned.playback_delay_seconds)
+        assert end == reacted + timedelta(seconds=25 + tuned.post_roll_seconds - tuned.playback_delay_seconds)
 
 
 class TestTheSettingsOnOffer:

@@ -84,6 +84,43 @@ class TestWhereAStreamsRecordingIs:
             streams.vod_at("some_channel@tiktok", self.WHEN)
 
 
+class TestWhereAStreamsRecordingIsWatched:
+    """Where a person watches the recording of a stream a moment was in,
+    and what keeps a clip from being cut from it, asked of the platform the
+    channel's name says it is on - one that keeps it once the stream is
+    over."""
+
+    WHEN = datetime(2026, 10, 21, 20, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize(
+        ("channel", "module", "login"),
+        [("some_channel", kick_stream, "some_channel"), ("some_channel@twitch", twitch_stream, "some_channel")],
+    )
+    async def test_it_is_asked_of_the_channels_platform_by_its_name_there(self, monkeypatch, channel, module, login):
+        asked = []
+
+        async def watch_link_at(name, when):
+            asked.append((name, when))
+            return "https://x"
+
+        async def vod_trouble(name):
+            asked.append((name, None))
+            return "words"
+
+        monkeypatch.setattr(module, "watch_link_at", watch_link_at)
+        monkeypatch.setattr(module, "vod_trouble", vod_trouble)
+
+        assert await streams.watch_link(channel, self.WHEN) == "https://x"
+        assert await streams.vod_trouble(channel) == "words"
+        assert asked == [(login, self.WHEN), (login, None)]
+
+    @pytest.mark.parametrize(("channel", "title"), [("someone@youtube", "YouTube"), ("someone@tiktok", "TikTok")])
+    async def test_a_platform_that_keeps_none_once_a_stream_is_over_has_none(self, channel, title):
+        with pytest.raises(NoVod, match=f"{title} keeps no VOD of a stream once it is over"):
+            await streams.watch_link(channel, self.WHEN)
+        assert await streams.vod_trouble(channel) == f"{title} keeps no VOD of a stream once it is over."
+
+
 class TestTwitchLiveStatus:
     async def test_a_live_twitch_channel_is_live_since_twitch_says(self, twitch_api):
         twitch_api.add_channel("some_channel", "123", is_live=True, started_at="2026-03-01T20:00:00Z")

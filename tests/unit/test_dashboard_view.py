@@ -1238,12 +1238,71 @@ class TestTrackingInWords:
     def test_what_a_channel_is_tracked_for_is_read_from_its_two_switches(self, clips, chat_only, tracked_for):
         assert view.tracking(clips, chat_only) == tracked_for
 
+    @pytest.mark.parametrize(
+        ("clips", "chat_only", "tracked_for"),
+        [
+            (True, False, view.TRACKING_MOMENTS),
+            # Never stored so: made when asked for or not, clips win.
+            (True, True, view.TRACKING_MOMENTS),
+            # Moments are clips made when asked for: without clips, not.
+            (False, False, view.TRACKING_OFF),
+            (False, True, view.TRACKING_CHAT),
+        ],
+    )
+    def test_clips_made_only_when_asked_for_are_moments(self, clips, chat_only, tracked_for):
+        assert view.tracking(clips, chat_only, moments_only=True) == tracked_for
+
     def test_the_choice_goes_from_nothing_to_the_most(self):
         assert view.TRACKING_CHOICES == (
             (view.TRACKING_OFF, "Off"),
             (view.TRACKING_CHAT, "Chat"),
+            (view.TRACKING_MOMENTS, "Moments"),
             (view.TRACKING_CLIPS, "Clips"),
         )
+
+    def test_moments_are_offered_only_where_the_platform_keeps_vods(self):
+        assert view.tracking_choices(keeps_vods=True) == view.TRACKING_CHOICES
+        assert [value for value, _ in view.tracking_choices(keeps_vods=False)] == [
+            view.TRACKING_OFF,
+            view.TRACKING_CHAT,
+            view.TRACKING_CLIPS,
+        ]
+
+    def test_only_chat_comes_in_of_a_channel_tracked_for_moments_or_for_chat(self):
+        assert view.TRACKED_BY_CHAT == {view.TRACKING_CHAT, view.TRACKING_MOMENTS}
+
+
+class TestAClipCutFromTheVodInWords:
+    def test_waiting_for_the_vod_says_how_long_is_left(self):
+        assert view.vod_clip_words(view.VOD_CLIP_WAITING, wait=24.2) == (
+            "Waiting for the stream's VOD to reach the end of the moment: 25 s."
+        )
+        assert view.vod_clip_words(view.VOD_CLIP_WAITING) == (
+            "Waiting for the stream's VOD to reach the end of the moment."
+        )
+
+    def test_fetching_says_how_far_it_has_got(self):
+        assert view.vod_clip_words(view.FOOTAGE_FETCHING, 0.42) == "Fetching the moment's footage from the VOD: 42 %."
+
+    def test_a_failure_says_why_where_that_is_known(self):
+        assert view.vod_clip_words(view.FOOTAGE_FAILED, why="Kick lists no VOD of that stream.") == (
+            "Kick lists no VOD of that stream."
+        )
+        assert view.vod_clip_words(view.FOOTAGE_FAILED) == "The clip could not be cut. The server log says why."
+
+    def test_done_says_what_the_vod_did_not_have(self):
+        assert view.vod_clip_words(view.FOOTAGE_DONE) == "The clip was cut from the stream's VOD."
+        assert view.vod_clip_words(view.FOOTAGE_DONE, short=True, muted=True) == (
+            "The clip was cut from the stream's VOD. The VOD held less of the stream around it than the clip's "
+            "file was to. Some of it has no sound: Twitch silenced it in its VOD."
+        )
+
+    def test_waiting_is_as_busy_as_the_steps_after_it(self):
+        assert view.VOD_CLIP_BUSY == view.FOOTAGE_BUSY | {view.VOD_CLIP_WAITING}
+        assert view.vod_clip_words(view.FOOTAGE_NONE) == ""
+
+    def test_a_link_to_the_vod_names_the_platform(self):
+        assert view.watch_words("Twitch") == "Watch on Twitch"
 
 
 class TestWhereNotificationsGoInWords:
