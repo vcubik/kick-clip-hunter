@@ -55,6 +55,11 @@ SUBSCRIBERS_ONLY = "subscriber_only"
 SITE = "https://kick.com"
 SITE_PUBLIC = "public"
 SITE_SUBSCRIBERS_ONLY = "sub_only"
+# How much later than the time asked for a link to a VOD on kick.com starts
+# its player: a moment's clip begins well before what chat reacted to, and
+# whoever follows the link wants to get there sooner. Only the link - a
+# clip cut from the VOD is framed as it always is.
+WATCH_LATER_SECONDS = 10
 
 
 def _vod_url(page, channel_slug: str) -> str | None:
@@ -192,8 +197,9 @@ async def _site_videos(slug: str) -> list:
 
 async def watch_link_at(slug: str, when: datetime) -> str:
     """Where the channel's stream that was on at `when` is watched on
-    kick.com from then on: its VOD's page - of a stream that is on as well,
-    which the page plays from its start. Asked of the site's newer API,
+    kick.com from then on - WATCH_LATER_SECONDS later, rather: its VOD's
+    page - of a stream that is on as well, which the page plays from its
+    start. Asked of the site's newer API,
     which knows the ids those pages are addressed by (the list vod_at asks
     does not). Raises NoVod, saying why, where there is none."""
     try:
@@ -209,7 +215,7 @@ async def watch_link_at(slug: str, when: datetime) -> str:
         )
     channel = video.get("channel")
     page = channel.get("slug") if isinstance(channel, dict) and channel.get("slug") else slug.lower()
-    return watch_link(str(page), str(video["id"]), (when - began).total_seconds())
+    return watch_link(str(page), str(video["id"]), (when - began).total_seconds() + WATCH_LATER_SECONDS)
 
 
 async def vod_trouble(slug: str) -> str | None:

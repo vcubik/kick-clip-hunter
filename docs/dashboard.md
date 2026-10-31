@@ -47,7 +47,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   moment is not removed while it goes on. Chat and its trace are there before the clip: the
   trace is drawn on the stretch the clip would hold. Where the moment's stream's VOD was found
   when it was caught, "Watch on Kick" / "Watch on Twitch", beside how far into the stream it
-  was, opens it there in a new tab, from where its clip begins (`moments.watch_url`).
+  was, opens it there in a new tab, from where its clip begins - on Kick 10 s later, nearer to
+  what chat reacted to (`kick_stream.WATCH_LATER_SECONDS`; the clip itself is not moved)
+  (`moments.watch_url`).
   Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a

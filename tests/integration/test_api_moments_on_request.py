@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import dashboard_view, db, detector, recorder, recording_manager, tuning
+from kick_clip_hunter import dashboard_view, db, detector, kick_stream, recorder, recording_manager, tuning
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_moment, moment
 from tests.support.hls import Segment
@@ -178,12 +178,13 @@ class TestAMomentCaught:
         assert (found["clip_on_request"], found["clip_path"]) == (1, None)
         assert found["laughing"] is not None
         # From where its clip would begin: before the reaction by the
-        # pre-roll and the playback delay, into the VOD that began an hour ago.
+        # pre-roll and the playback delay, into the VOD that began an hour ago
+        # - and the link a little later, nearer to what chat reacted to.
         tuned = tuning.recommended()
         first_at = datetime.fromisoformat(found["window_start"]) - timedelta(
             seconds=tuned.pre_roll_seconds + tuned.playback_delay_seconds
         )
-        seconds = int((first_at - notified).total_seconds())
+        seconds = int((first_at - notified).total_seconds()) + kick_stream.WATCH_LATER_SECONDS
         assert found["watch_url"] == f"https://kick.com/{CHANNEL}/videos/{site_video_id(channel.videos[0])}?t={seconds}"
         assert recording_manager._recorders.get(CHANNEL) is None
 

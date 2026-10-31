@@ -333,7 +333,8 @@ Module map (`src/kick_clip_hunter/`):
   recorder (`_is_channel_tracked` is clips only, `_is_tracked_by_chat` what the recording
   loop only looks at): a moment opened on it is stored as one whose clip is cut on request
   (`moments.clip_on_request`), and once it is kept `_moment_kept` looks up where it is
-  watched in the stream's VOD, from where its clip would begin (`streams.watch_link`, kept
+  watched in the stream's VOD, from where its clip would begin (on Kick a little later:
+  `kick_stream.WATCH_LATER_SECONDS`) (`streams.watch_link`, kept
   as `moments.watch_url`), and tells of it (`_notify_of_moment`, switch `notify_moments`)
   instead of cutting a clip. `POST /moments/{id}/clip` cuts it then
   (`_cut_from_vod_background`): framed as the channel's clips are framed now
