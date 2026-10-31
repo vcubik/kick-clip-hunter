@@ -129,7 +129,10 @@ class TestWhereAVodIsWatched:
 
         link = await kick_stream.watch_link_at("Some_Channel", T0 + minutes(60) + timedelta(seconds=5))
 
-        assert link == f"https://kick.com/some_channel/videos/{site_video_id(channel.videos[0])}?t=3605"
+        # A little later than asked: the moment itself comes some way into
+        # its clip.
+        seconds = 3605 + kick_stream.WATCH_LATER_SECONDS
+        assert link == f"https://kick.com/some_channel/videos/{site_video_id(channel.videos[0])}?t={seconds}"
         # By the channel's id on the site, which kick.com's own page of it says.
         assert kick_api.calls("GET", "web.kick.com/api/v1/channels/2/videos") == [{}]
 
@@ -140,7 +143,7 @@ class TestWhereAVodIsWatched:
 
         link = await kick_stream.watch_link_at("some_channel", T0 + minutes(5))
 
-        assert link.endswith(f"/videos/{site_video_id(channel.videos[0])}?t=300")
+        assert link.endswith(f"/videos/{site_video_id(channel.videos[0])}?t={300 + kick_stream.WATCH_LATER_SECONDS}")
 
     @pytest.mark.anyio
     async def test_a_time_no_stream_was_in_has_none(self, kick_api):
