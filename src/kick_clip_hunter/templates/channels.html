@@ -23,7 +23,12 @@
         {% for channel in watchlist %}
         {% set whole = channel.whole_stream %}
         <tr>
-          <td title="{{ channel.platform }} user id {{ channel.platform_user_id }}">{{ channel.slug }}</td>
+          {#- Under its name, what its platform lists of its VODs where that
+              keeps footage from being had from them once a stream is over -
+              which a moment's clip cut when asked for needs - and what it
+              means on hover. -#}
+          <td title="{{ channel.platform }} user id {{ channel.platform_user_id }}">{{ channel.slug }}
+            {%- if channel.vods %}<span class="ch-meta channel-vods" title="{{ channel.vods.said }}" data-vods>{{ channel.vods.words }}</span>{% endif %}</td>
           <td class="ch-meta">{{ channel.added }}</td>
           <td data-now="{{ channel.slug }}">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
           <td>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}{% endif %}</td>

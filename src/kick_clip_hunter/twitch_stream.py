@@ -47,7 +47,7 @@ import httpx
 
 from . import twitch_client
 from .config import load_settings
-from .platforms import NoVod, StreamUrlError, StreamUrls, Vod
+from .platforms import VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
 from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -62,6 +62,12 @@ ARCHIVES_LOOKED_AT = 100
 VOD_SLACK_SECONDS = 120
 _LENGTH = re.compile(r"(\d+)([hms])")
 _UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
+# What keeps a moment's clip from being cut from a channel's past broadcast
+# once its stream is over, by what Helix lists of them (see vod_access).
+VOD_TROUBLE = {
+    VODS_NONE: "Twitch lists no past broadcasts of this channel: if it keeps none, no moment's clip can be cut.",
+    VODS_HIDDEN: "Twitch keeps this channel's past broadcasts from the public: no moment's clip can be cut.",
+}
 
 
 def _master(url: str) -> str | None:
@@ -195,10 +201,11 @@ async def watch_link_at(login: str, when: datetime) -> str:
     return watch_link(str(video["id"]), (when - began).total_seconds())
 
 
-async def vod_trouble(login: str) -> str | None:
-    """What would keep a clip from being cut from the channel's past
-    broadcasts, by its newest one as Helix lists it, in words - None where
-    nothing seen does, or Twitch could not be asked."""
+async def vod_access(login: str) -> str | None:
+    """What Helix lists of the channel's past broadcasts (platforms.VODS_*),
+    by its newest one - None where Twitch could not be asked. Helix tells
+    one kept for subscribers from one kept from everyone by nothing: both
+    are kept from the public."""
     try:
         settings = load_settings()
         token = await twitch_client.app_token(settings)
@@ -207,10 +214,10 @@ async def vod_trouble(login: str) -> str | None:
     except (twitch_client.NotSetUp, httpx.HTTPError, KeyError, ValueError):
         return None
     if not archives:
-        return "Twitch lists no past broadcasts of this channel: if it keeps none, no moment's clip can be cut."
+        return VODS_NONE
     if archives[0].get("viewable", "public") != "public":
-        return "Twitch keeps this channel's past broadcasts from the public: no moment's clip can be cut."
-    return None
+        return VODS_HIDDEN
+    return VODS_PUBLIC
 
 
 def vod_at(login: str, when: datetime) -> Vod:

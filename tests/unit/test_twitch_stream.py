@@ -11,7 +11,7 @@ import pytest
 from streamlink.exceptions import NoPluginError, PluginError
 
 from kick_clip_hunter import streams, twitch_stream
-from kick_clip_hunter.platforms import NoVod, StreamUrlError, StreamUrls, Vod
+from kick_clip_hunter.platforms import VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
 from tests.support.twitch_api import past_broadcast
 
 MASTER = "https://usher.example/api/v2/channel/hls/some_channel.m3u8?sig=abc&token=def"
@@ -236,30 +236,31 @@ class TestWhereAPastBroadcastIsWatched:
 
 
 @pytest.mark.anyio
-class TestWhatKeepsAClipFromBeingCutFromAPastBroadcast:
+class TestWhatTwitchListsOfAChannelsPastBroadcasts:
     async def test_a_channel_keeping_public_past_broadcasts_has_nothing_in_the_way(self, twitch_api):
         twitch_api.add_channel("some_channel", "101").past_broadcasts = [
             past_broadcast("777", "2026-10-16T14:38:15Z", "1h")
         ]
 
-        assert await twitch_stream.vod_trouble("some_channel") is None
+        assert await twitch_stream.vod_access("some_channel") == VODS_PUBLIC
+        assert VODS_PUBLIC not in twitch_stream.VOD_TROUBLE
 
-    async def test_a_channel_keeping_none_is_said(self, twitch_api):
+    async def test_a_channel_keeping_none_has_none(self, twitch_api):
         twitch_api.add_channel("some_channel", "101")
 
-        assert (await twitch_stream.vod_trouble("some_channel")).startswith(
-            "Twitch lists no past broadcasts of this channel"
-        )
+        assert await twitch_stream.vod_access("some_channel") == VODS_NONE
+        assert twitch_stream.VOD_TROUBLE[VODS_NONE].startswith("Twitch lists no past broadcasts of this channel")
 
-    async def test_one_keeping_them_from_the_public_is_said(self, twitch_api):
+    async def test_one_keeping_them_from_the_public_has_them_hidden(self, twitch_api):
         twitch_api.add_channel("some_channel", "101").past_broadcasts = [
             past_broadcast("777", "2026-10-16T14:38:15Z", "1h", viewable="private")
         ]
 
-        assert "from the public" in await twitch_stream.vod_trouble("some_channel")
+        assert await twitch_stream.vod_access("some_channel") == VODS_HIDDEN
+        assert "from the public" in twitch_stream.VOD_TROUBLE[VODS_HIDDEN]
 
     async def test_twitch_not_set_up_says_nothing_either_way(self, kick_api):
-        assert await twitch_stream.vod_trouble("some_channel") is None
+        assert await twitch_stream.vod_access("some_channel") is None
 
 
 @pytest.mark.parametrize(

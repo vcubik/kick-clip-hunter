@@ -1558,8 +1558,9 @@
   }
 
   // The moment as the service has it now, in place of the one on the page,
-  // saying what came of what was asked.
-  async function reopenMoment(article, words) {
+  // saying what came of what was asked - where `near` says, in the moment
+  // that has arrived, if it has that.
+  async function reopenMoment(article, words, near = null) {
     let markup = null;
     try {
       const response = await fetch(`/dashboard/moments/${article.dataset.moment}`);
@@ -1575,7 +1576,7 @@
     }
     article.replaceWith(fresh);
     dress();
-    say(fresh, words);
+    say((near && one(near, fresh)) || fresh, words);
   }
 
   // ---- The VOD played here --------------------------------------------
@@ -1691,7 +1692,7 @@
     const stop = () => {
       if (stopped) return;
       stopped = true;
-      if (box.isConnected) reopenMoment(article, "The VOD stopped playing. Try again.");
+      if (box.isConnected) reopenMoment(article, "The VOD stopped playing. Try again.", "[data-vod-watch]");
       else hls?.destroy();
     };
     if (hls) hls.on(window.Hls.Events.ERROR, (_event, data) => data.fatal && stop());

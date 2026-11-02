@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import kick_stream
-from kick_clip_hunter.platforms import NoVod, Vod
+from kick_clip_hunter.platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, Vod
 from tests.support.kick_api import kick_video, site_video_id
 
 T0 = datetime(2026, 10, 21, 19, 2, 25, tzinfo=timezone.utc)
@@ -175,16 +175,17 @@ class TestWhereAVodIsWatched:
 
 
 @pytest.mark.anyio
-class TestWhatKeepsAClipFromBeingCutFromAVod:
+class TestWhatKickListsOfAChannelsVods:
     async def test_a_channel_whose_vods_stay_public_has_nothing_in_the_way(self, kick_api):
         kick_api.add_channel("some_channel", 1).videos = [
             kick_video(T0, 0, SOURCE, live=True),
             kick_video(T0 - minutes(1440), 3600, SOURCE),
         ]
 
-        assert await kick_stream.vod_trouble("some_channel") is None
+        assert await kick_stream.vod_access("some_channel") == VODS_PUBLIC
+        assert VODS_PUBLIC not in kick_stream.VOD_TROUBLE
 
-    async def test_vods_kept_for_subscribers_once_a_stream_is_over_are_said(self, kick_api):
+    async def test_vods_kept_for_subscribers_once_a_stream_is_over_are_told_apart(self, kick_api):
         # As kick.com lists them: anyone may watch the one of a stream that
         # is still on.
         kick_api.add_channel("some_channel", 1).videos = [
@@ -192,18 +193,33 @@ class TestWhatKeepsAClipFromBeingCutFromAVod:
             kick_video(T0 - minutes(1440), 3600, SOURCE, status="subscriber_only"),
         ]
 
-        assert await kick_stream.vod_trouble("some_channel") == (
+        assert await kick_stream.vod_access("some_channel") == VODS_FOR_SUBSCRIBERS
+        assert kick_stream.VOD_TROUBLE[VODS_FOR_SUBSCRIBERS] == (
             "Kick keeps this channel's VODs for its subscribers only once a stream is over: "
             "a moment's clip can be cut only while its stream is still on."
         )
 
-    async def test_a_channel_kick_lists_no_vods_of_is_said(self, kick_api):
+    async def test_vods_kept_from_anyone_else_are_hidden(self, kick_api):
+        kick_api.add_channel("some_channel", 1).videos = [kick_video(T0, 3600, SOURCE, status="private")]
+
+        assert await kick_stream.vod_access("some_channel") == VODS_HIDDEN
+        assert "from the public" in kick_stream.VOD_TROUBLE[VODS_HIDDEN]
+
+    async def test_a_channel_kick_lists_no_vods_of_has_none(self, kick_api):
         kick_api.add_channel("some_channel", 1)
 
-        assert (await kick_stream.vod_trouble("some_channel")).startswith("Kick lists no VODs of this channel")
+        assert await kick_stream.vod_access("some_channel") == VODS_NONE
+        assert kick_stream.VOD_TROUBLE[VODS_NONE].startswith("Kick lists no VODs of this channel")
+
+    async def test_only_a_stream_that_is_on_tells_nothing_either_way(self, kick_api):
+        # Anyone may watch it while it is on, whatever the channel keeps
+        # afterwards.
+        kick_api.add_channel("some_channel", 1).videos = [kick_video(T0, 0, SOURCE, live=True)]
+
+        assert await kick_stream.vod_access("some_channel") is None
 
     async def test_kick_not_answering_says_nothing_either_way(self, kick_api):
         kick_api.add_channel("some_channel", 1)
         kick_api.failures["web.kick.com"] = 503
 
-        assert await kick_stream.vod_trouble("some_channel") is None
+        assert await kick_stream.vod_access("some_channel") is None

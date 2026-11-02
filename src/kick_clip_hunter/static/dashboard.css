@@ -427,11 +427,15 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
    behind a picture that is not 16:9. */
 .player { position: relative; aspect-ratio: 16 / 9; background: var(--video); border: 1px solid var(--sunk); }
 .player video { display: block; width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
-/* Where a stream's VOD will play: pressed anywhere, it starts. */
-.player.vod { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+/* Where a stream's VOD will play: pressed anywhere, it starts. What is said
+   of it until it plays is under the button. */
+.player.vod { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-8); cursor: pointer; }
+.player.vod .status-line { max-width: 60ch; margin: 0; padding: 0 var(--space-16); text-align: center; }
+.player.vod .status-line:empty { display: none; }
 .no-clip { padding: var(--space-24) 0; border-top: 1px solid var(--quiet); border-bottom: 1px solid var(--quiet); }
 .on-request { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); }
 .on-request p { max-width: 80ch; }
+.on-request .status-line:empty { display: none; }
 
 .moment-summary { max-width: 80ch; margin-top: var(--space-12); }
 .verdict { display: flex; align-items: flex-start; gap: var(--space-12); margin-top: var(--space-12); }
@@ -626,6 +630,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .watchlist th { height: var(--h-compact); font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
 .watchlist td { height: var(--h-row); border-top: 1px solid var(--quiet); }
 .watchlist td:first-child { font-weight: 700; }
+.watchlist .channel-vods { display: block; font-weight: 400; }
 .watchlist th:nth-last-child(-n+3), .watchlist td:nth-last-child(-n+3) { width: 1%; white-space: nowrap; }
 .watchlist th:last-child, .watchlist td:last-child { padding-right: 0; text-align: right; }
 .add-channel { margin-top: var(--space-16); }

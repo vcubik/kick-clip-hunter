@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
+from .platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE
 from .timeutil import to_local_datetime
 
 # The three lists the review queue offers.
@@ -923,6 +924,18 @@ def kept_words(moments: int, recordings: int) -> str:
     """What came of watching a channel, as the dialog that removes it
     offers to delete it: "3 moments and 1 recording"."""
     return f"{count_words(moments, 'moment')} and {count_words(recordings, 'recording')}"
+
+
+# What a channel's row on the Channels page says of its VODs, by what its
+# platform was last seen to list of them once a stream is over
+# (platforms.VODS_*) - nothing where they stay public, or nothing has been
+# seen yet. A moment's clip cut when asked for comes from them, and so does
+# more of a moment's stream added to its file.
+VOD_ACCESS_WORDS = {
+    VODS_FOR_SUBSCRIBERS: "VODs for subscribers",
+    VODS_HIDDEN: "VODs not public",
+    VODS_NONE: "No VODs listed",
+}
 
 
 # What switching a channel to being recorded always, or back, answers with.

@@ -130,15 +130,27 @@ async def watch_link(channel: str, when: datetime, into: float | None = None) ->
     raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream once it is over.")
 
 
-async def vod_trouble(channel: str) -> str | None:
-    """What would keep a clip of a moment from being cut from the channel's
-    VOD once its stream is over, by what its platform lists of the channel's
-    VODs, in words: it keeps none, keeps them for its subscribers only, or
-    from the public. None where nothing seen does - or the platform could
-    not be asked, which is no sign either way."""
+async def vod_access(channel: str) -> str | None:
+    """What the channel's platform lists of its VODs once a stream is over
+    (platforms.VODS_*): public, kept for its subscribers only or from the
+    public, or none at all. None where the platform could not be asked or
+    lists nothing that tells - which is no sign either way - and of a
+    platform that keeps no VOD of a stream once it is over."""
     platform, login = platforms.split(channel)
     if platform == platforms.KICK:
-        return await kick_stream.vod_trouble(login)
+        return await kick_stream.vod_access(login)
     if platform == platforms.TWITCH:
-        return await twitch_stream.vod_trouble(login)
-    return f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream once it is over."
+        return await twitch_stream.vod_access(login)
+    return None
+
+
+def vod_trouble(channel: str, access: str | None) -> str | None:
+    """What keeps a clip of a moment from being cut from the channel's VOD
+    once its stream is over, in words, by what its platform lists of its
+    VODs (`access`, as vod_access says it) - None where nothing seen does."""
+    platform = platforms.platform_of(channel)
+    if platform == platforms.KICK:
+        return kick_stream.VOD_TROUBLE.get(access)
+    if platform == platforms.TWITCH:
+        return twitch_stream.VOD_TROUBLE.get(access)
+    return None
