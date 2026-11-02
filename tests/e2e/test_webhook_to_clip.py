@@ -30,6 +30,13 @@ pytestmark = [pytest.mark.anyio, pytest.mark.ffmpeg]
 CHANNEL = "some_channel"
 PRE_ROLL, POST_ROLL, DELAY = 3, 2, 1
 CONTEXT_BEFORE, CONTEXT_AFTER = 3, 4
+# How long the test stream has been live as it starts being recorded: what a
+# clip needs of it from before chat reacts - its context, its pre-roll and
+# the detection window, and a second for a clip starting on a whole segment.
+# That leaves the rest of the forty seconds for the time recording the stream
+# and delivering the chat take, which is seconds on a busy machine, and for
+# the clip's post-roll and the context after it.
+STREAM_AGE = CONTEXT_BEFORE + PRE_ROLL + DELAY + detector.SHORT_WINDOW_SECONDS + 1
 
 
 @pytest.fixture
@@ -44,34 +51,41 @@ def scaled_down_clip_geometry(service, monkeypatch):
 
 
 def record_live_stream(hls, recording, ts_segments, *, break_at: int | None = None):
-    """Broadcasts the forty one-second segments as a stream that started 30
-    seconds ago and has the service's recorder follow it to the live edge."""
+    """Broadcasts the forty one-second segments as a stream that started
+    STREAM_AGE seconds ago and has the service's recorder follow it to the
+    live edge. The recorder picks the stream up three segments in, and the
+    rest is broadcast in one go: a segment at a time, recording it takes many
+    seconds longer on a busy machine, and chat reacts that much later."""
     timeline = [Segment(path.read_bytes(), duration=1.0) for path in ts_segments]
     if break_at is not None:
         timeline[break_at].discontinuity = True
-    stream_start = datetime.now(timezone.utc) - timedelta(seconds=30)
-    server = hls(timeline, published=3, stream_start=stream_start)
+    stream_start = datetime.now(timezone.utc) - timedelta(seconds=STREAM_AGE)
+    server = hls(timeline, published=3, window=len(timeline), stream_start=stream_start)
     channel_recorder = recording.of(server, channel=CHANNEL)
     # The service looks recorders up by channel when it cuts a clip.
     recording_manager._recorders[CHANNEL] = channel_recorder
 
     channel_recorder.tick()
-    for published in range(3, len(timeline) + 1):
-        wait_until(
-            lambda published=published: len(channel_recorder._stored_segments()) >= published,
-            f"segment {published} to be recorded",
-        )
-        server.publish()
+    wait_until(lambda: len(channel_recorder._stored_segments()) >= 3, "the stream to be picked up")
+    server.publish_all()
+    wait_until(
+        lambda: len(channel_recorder._stored_segments()) >= len(timeline),
+        "the whole stream to be recorded",
+        timeout=30,
+    )
     return channel_recorder
 
 
 async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     service, hls, recording, ts_segments, scaled_down_clip_geometry, monkeypatch
 ):
-    # A watched channel is live, and its stream is being recorded.
-    service.watch(CHANNEL, live_for_seconds=1800)
+    # A watched channel is live, and its stream is being recorded. (Kick is
+    # told it went live half an hour ago once the recording has caught up:
+    # that takes seconds on a busy machine, which would show in the moment's
+    # stream time below.)
     channel_recorder = record_live_stream(hls, recording, ts_segments)
     assert len(channel_recorder._stored_segments()) == 40
+    service.watch(CHANNEL, live_for_seconds=1800)
     service.warm_up(CHANNEL)
 
     # One analysis step is switched on, to see what it is handed.
@@ -164,7 +178,7 @@ async def test_a_break_in_the_stream_right_before_the_reaction_still_yields_a_pl
     # stream a few seconds before chat reacts. The clip must come out of the
     # footage after the break instead of being a broken file - or none at all.
     service.watch(CHANNEL)
-    channel_recorder = record_live_stream(hls, recording, ts_segments, break_at=22)
+    channel_recorder = record_live_stream(hls, recording, ts_segments, break_at=STREAM_AGE - 8)
     assert len({segment.group for segment in channel_recorder._stored_segments()}) == 2
     service.warm_up(CHANNEL)
 
