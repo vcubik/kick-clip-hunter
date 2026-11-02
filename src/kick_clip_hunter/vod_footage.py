@@ -51,6 +51,11 @@ seconds to spare and footage either side of it takes in its stride. Adding
 footage to it later finds the file by its pictures, as above. Nothing has
 to wait for the stream to be over, only for the VOD to reach the end of the
 stretch (VOD_BEHIND_SECONDS).
+
+Before that, such a moment can be watched in the VOD on the review page,
+whose player plays the VOD's own playlist: `seconds_in` says how far into
+the VOD, as a player counts it, the moment's clip would begin - by the same
+clocks `cut` goes by.
 """
 
 from __future__ import annotations
@@ -192,6 +197,20 @@ def numbered(playlist: recorder._Playlist, first: datetime, last: datetime) -> l
 def covering(found: list[Piece], start: datetime, end: datetime) -> list[Piece]:
     """The segments that overlap [start, end], in order. Pure."""
     return [piece for piece in found if piece.ended_at > start and piece.started_at < end]
+
+
+def position(found: list[Piece], when: datetime) -> float | None:
+    """How far into a recording's footage `when` is, as a player of its
+    playlist counts it: the lengths of the segments before the one that
+    holds it added up, and how far into that one it is - or the start of
+    the next one, where it falls in a gap between two, and of the first
+    where it is before it. None where it is past the last. Pure."""
+    played = 0.0
+    for piece in found:
+        if when < piece.ended_at:
+            return played + max((when - piece.started_at).total_seconds(), 0.0)
+        played += piece.duration
+    return None
 
 
 def nearest_first(found: list[Piece], when: datetime) -> list[Piece]:
@@ -553,6 +572,24 @@ def cut(
             or started_at + timedelta(seconds=seconds) < end - timedelta(seconds=LEAST_SECONDS)
         ),
     )
+
+
+def seconds_in(vod: Vod, when: datetime) -> float:
+    """How far into the recording, as a player of its playlist counts it,
+    `when` on its own clock is (see `position`). Only its playlist is
+    fetched. Raises FootageError, in words that say why, where the recording
+    does not reach that far - or not yet, of a stream that is on."""
+    with httpx.Client(follow_redirects=True) as client:
+        playlist = _playlist(client, vod)
+    at = position(pieces(playlist, vod.started_at), when)
+    if at is None and playlist.ended:
+        raise FootageError("The VOD ends before the moment.")
+    if at is None:
+        raise FootageError(
+            "The VOD does not reach the moment yet: a stream that is on is written to it a little behind. "
+            "Try again in a minute."
+        )
+    return at
 
 
 def _place(path: Path, marks: dict[str, float]) -> float | None:

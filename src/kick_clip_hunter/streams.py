@@ -114,14 +114,17 @@ def vod_at(channel: str, when: datetime) -> Vod:
     raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream.")
 
 
-async def watch_link(channel: str, when: datetime) -> str:
+async def watch_link(channel: str, when: datetime, into: float | None = None) -> str:
     """Where a person watches the channel's stream that was on at `when`,
     from then on: its VOD's page on the platform, with the time to start at -
-    on Kick and Twitch, which keep a VOD once a stream is over. Raises
+    on Kick and Twitch, which keep a VOD once a stream is over. `into` is how
+    far into Kick's VOD `when` is by the VOD's own clock, where the caller
+    has read it (see kick_stream.watch_link_at); Twitch's past broadcast has
+    no clock of its own and is counted from when it began either way. Raises
     NoVod, in words that say why, where there is none."""
     platform, login = platforms.split(channel)
     if platform == platforms.KICK:
-        return await kick_stream.watch_link_at(login, when)
+        return await kick_stream.watch_link_at(login, when, into)
     if platform == platforms.TWITCH:
         return await twitch_stream.watch_link_at(login, when)
     raise NoVod(f"{platforms.TITLES.get(platform, platform)} keeps no VOD of a stream once it is over.")

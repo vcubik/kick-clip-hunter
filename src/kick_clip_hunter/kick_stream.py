@@ -23,7 +23,9 @@ Where a person watches a VOD is another matter: kick.com's pages address a
 VOD by an id the list vod_at asks does not give, only the site's newer API
 (web.kick.com), by the channel's id on the site. `watch_link_at` asks that
 one for the page of the stream a moment was in, with the time to start at
-(`?t=<seconds>`, which the page's player goes to), and `vod_trouble` what
+(`?t=<seconds>`, which the page's player goes to - counted, where it is
+known, by the VOD's own clock, which begins a few seconds before the start
+the site lists), and `vod_trouble` what
 it lists of a channel's VODs: whether they stay public once a stream is
 over - a channel can keep them for its subscribers only from then on.
 """
@@ -195,13 +197,20 @@ async def _site_videos(slug: str) -> list:
     return await kick_client.get_site_videos(int(channel["id"]))
 
 
-async def watch_link_at(slug: str, when: datetime) -> str:
+async def watch_link_at(slug: str, when: datetime, into: float | None = None) -> str:
     """Where the channel's stream that was on at `when` is watched on
     kick.com from then on - WATCH_LATER_SECONDS later, rather: its VOD's
     page - of a stream that is on as well, which the page plays from its
-    start. Asked of the site's newer API,
-    which knows the ids those pages are addressed by (the list vod_at asks
-    does not). Raises NoVod, saying why, where there is none."""
+    start. Asked of the site's newer API, which knows the ids those pages
+    are addressed by (the list vod_at asks does not).
+
+    The page's player counts time as the VOD's playlist does. `into` is how
+    far into it `when` is by the VOD's own clock, where the caller has read
+    the playlist (vod_footage.seconds_in): where the review page's player of
+    the VOD goes, and the clip is cut by. Without it, `when` is counted from
+    the start the site lists for the stream - which the VOD begins a few
+    seconds before, so such a link lands that much earlier. Raises NoVod,
+    saying why, where there is none."""
     try:
         videos = await _site_videos(slug)
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
@@ -215,7 +224,8 @@ async def watch_link_at(slug: str, when: datetime) -> str:
         )
     channel = video.get("channel")
     page = channel.get("slug") if isinstance(channel, dict) and channel.get("slug") else slug.lower()
-    return watch_link(str(page), str(video["id"]), (when - began).total_seconds() + WATCH_LATER_SECONDS)
+    seconds = (when - began).total_seconds() if into is None else into
+    return watch_link(str(page), str(video["id"]), seconds + WATCH_LATER_SECONDS)
 
 
 async def vod_trouble(slug: str) -> str | None:
