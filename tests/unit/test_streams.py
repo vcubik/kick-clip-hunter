@@ -99,7 +99,7 @@ class TestWhereAStreamsRecordingIsWatched:
     async def test_it_is_asked_of_the_channels_platform_by_its_name_there(self, monkeypatch, channel, module, login):
         asked = []
 
-        async def watch_link_at(name, when):
+        async def watch_link_at(name, when, into=None):
             asked.append((name, when))
             return "https://x"
 
@@ -113,6 +113,20 @@ class TestWhereAStreamsRecordingIsWatched:
         assert await streams.watch_link(channel, self.WHEN) == "https://x"
         assert await streams.vod_trouble(channel) == "words"
         assert asked == [(login, self.WHEN), (login, None)]
+
+    async def test_kicks_vod_is_placed_by_its_own_clock_where_the_caller_read_it(self, monkeypatch):
+        placed = []
+
+        async def watch_link_at(name, when, into=None):
+            placed.append(into)
+            return "https://x"
+
+        monkeypatch.setattr(kick_stream, "watch_link_at", watch_link_at)
+
+        await streams.watch_link("some_channel", self.WHEN, 3604.6)
+        await streams.watch_link("some_channel", self.WHEN)
+
+        assert placed == [3604.6, None]
 
     @pytest.mark.parametrize(("channel", "title"), [("someone@youtube", "YouTube"), ("someone@tiktok", "TikTok")])
     async def test_a_platform_that_keeps_none_once_a_stream_is_over_has_none(self, channel, title):

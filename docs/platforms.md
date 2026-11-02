@@ -137,9 +137,9 @@ stream comes in. Seen in October 2026:
   is over. Twitch's (`usher.ttvnw.net`, the segments on CloudFront) answers without that
   header, so no page but Twitch's own can play its past broadcasts.
 - The VOD begins before the start the site lists for its stream: a VOD's first segment was
-  dated 5 s before it (no gaps after). A link counted from that start (`watch_link_at`) lands
-  that much earlier in the footage than the page's player, which goes by the VOD's own clock,
-  as a clip is cut by.
+  dated 5 s before it (no gaps after). So a link to a moment is counted by the VOD's own
+  clock, from its playlist, as the page's player goes and a clip is cut by; counted from the
+  start the site lists - where the playlist can't be read - it lands that much earlier.
 
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`

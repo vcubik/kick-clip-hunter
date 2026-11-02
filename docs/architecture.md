@@ -334,7 +334,8 @@ Module map (`src/kick_clip_hunter/`):
   loop only looks at): a moment opened on it is stored as one whose clip is cut on request
   (`moments.clip_on_request`), and once it is kept `_moment_kept` looks up where it is
   watched in the stream's VOD, from where its clip would begin (on Kick a little later:
-  `kick_stream.WATCH_LATER_SECONDS`) (`streams.watch_link`, kept
+  `kick_stream.WATCH_LATER_SECONDS`, and by the VOD's own clock where its playlist can be
+  read - `_vod_place`, as the page's player goes) (`streams.watch_link`, kept
   as `moments.watch_url`), and tells of it (`_notify_of_moment`, switch `notify_moments`)
   instead of cutting a clip. `POST /moments/{id}/clip` cuts it then
   (`_cut_from_vod_background`): framed as the channel's clips are framed now
@@ -343,8 +344,8 @@ Module map (`src/kick_clip_hunter/`):
   stored as a clip the recorder cut would be - then the analysis steps run on it; where it
   stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
   /moments/{id}/vod` says where the review page plays such a moment from its stream's VOD:
-  the VOD's playlist and how far into it the clip would begin (`vod_footage.seconds_in`) -
-  of a Kick channel's only (`VOD_PLAYED_HERE`). `POST /channels/{slug}/always_record` sets whether a channel is
+  the VOD's playlist and how far into it the clip would begin (`_vod_place`, by
+  `vod_footage.seconds_in`) - of a Kick channel's only (`VOD_PLAYED_HERE`). `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST

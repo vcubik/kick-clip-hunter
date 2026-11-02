@@ -150,21 +150,31 @@ class TestTrackingAChannelForMoments:
 
 
 class TestAMomentCaught:
+    # Kick's VOD was seen to begin five seconds before the start kick.com
+    # lists for its stream.
+    EARLY = timedelta(seconds=5)
+
     @pytest.fixture
-    def notified(self, service, channel, telegram, monkeypatch):
+    def vod(self, hls, channel):
+        """The VOD of the channel's stream that is on, listed by kick.com:
+        the stream began an hour ago, its VOD a little before that."""
+        began = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
+        server = hls(fake_segments(370, duration=10.0), published=370, window=370, stream_start=began - self.EARLY)
+        channel.videos = [kick_video(began, 0, server.master_url, live=True)]
+        return server
+
+    @pytest.fixture
+    def notified(self, service, vod, telegram, monkeypatch):
         """Notes go to Telegram, with links to the dashboard; the channel's
         stream is on, and kick.com lists its VOD."""
         monkeypatch.setenv("DASHBOARD_URL", DASHBOARD)
         monkeypatch.setattr(service.main, "settings", load_settings())
         service.main._notifier = None
-        began = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
-        channel.videos = [kick_video(began, 0, SOURCE, live=True)]
 
         async def no_footage(*args, **kwargs):
             raise AssertionError("no clip is cut of a moment of a channel tracked for moments")
 
         monkeypatch.setattr(recording_manager, "create_clip_for_moment", no_footage)
-        return began
 
     async def react(self, service) -> dict:
         service.warm_up(CHANNEL)
@@ -173,21 +183,38 @@ class TestAMomentCaught:
         (found,) = service.moments()
         return dict(found)
 
-    async def test_it_is_kept_without_a_clip_with_where_it_is_watched_in_the_vod(self, service, notified, channel):
-        found = await self.react(service)
-
-        assert (found["clip_on_request"], found["clip_path"]) == (1, None)
-        assert found["laughing"] is not None
-        # From where its clip would begin: before the reaction by the
-        # pre-roll and the playback delay, into the VOD that began an hour ago
-        # - and the link a little later, nearer to what chat reacted to.
+    def link(self, channel, found: dict, began: datetime) -> str:
+        """The link to the moment's VOD on kick.com, from where its clip
+        would begin - before the reaction by the pre-roll and the playback
+        delay - counted from `began`, and a little later, nearer to what chat
+        reacted to."""
         tuned = tuning.recommended()
         first_at = datetime.fromisoformat(found["window_start"]) - timedelta(
             seconds=tuned.pre_roll_seconds + tuned.playback_delay_seconds
         )
-        seconds = int((first_at - notified).total_seconds()) + kick_stream.WATCH_LATER_SECONDS
-        assert found["watch_url"] == f"https://kick.com/{CHANNEL}/videos/{site_video_id(channel.videos[0])}?t={seconds}"
+        seconds = int((first_at - began).total_seconds()) + kick_stream.WATCH_LATER_SECONDS
+        return f"https://kick.com/{CHANNEL}/videos/{site_video_id(channel.videos[0])}?t={seconds}"
+
+    async def test_it_is_kept_without_a_clip_with_where_it_is_watched_in_the_vod(self, service, notified, vod, channel):
+        found = await self.react(service)
+
+        assert (found["clip_on_request"], found["clip_path"]) == (1, None)
+        assert found["laughing"] is not None
+        # Counted by the VOD's own clock, as the page's player of it and the
+        # clip go: from when the VOD began, not from the start kick.com lists.
+        assert found["watch_url"] == self.link(channel, found, vod.stream_start)
         assert recording_manager._recorders.get(CHANNEL) is None
+        # Its playlist was read, none of its footage.
+        assert vod.segment_requests() == []
+
+    async def test_a_vod_whose_playlist_cannot_be_read_is_linked_to_from_the_start_kick_lists(
+        self, service, notified, vod, channel
+    ):
+        vod.fail_next["/master.m3u8"] = [503, 503]
+
+        found = await self.react(service)
+
+        assert found["watch_url"] == self.link(channel, found, vod.stream_start + self.EARLY)
 
     async def test_it_is_told_of_with_the_vod_and_the_dashboard_to_go_to(self, service, notified, telegram):
         found = await self.react(service)

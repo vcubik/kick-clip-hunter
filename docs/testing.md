@@ -204,7 +204,8 @@ Is Moments offered and taken only for a platform whose VODs stay once a stream i
 choosing it say what the platform lists of the channel's VODs (subscribers only, none) and run no
 recorder for the channel - only the look at whether it is live? Is a moment caught in its chat
 kept without a clip, with the link to it in the VOD (kick.com's page by the id the site's newer
-API lists, Twitch's with its time) from where its clip would begin, and told of with that link
+API lists, Twitch's with its time) from where its clip would begin - on Kick by the VOD's own
+clock, or from the start Kick lists where its playlist can't be read - and told of with that link
 and the dashboard's - or without the link where no VOD is listed? With the real ffmpeg: is a
 stretch cut from a VOD by its clock, from the last frame a cut can begin on, in fragmented MP4
 and from a YouTube stream wound back too, with what the VOD lacks or silenced said? Through the

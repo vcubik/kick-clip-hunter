@@ -137,6 +137,19 @@ class TestWhereAVodIsWatched:
         assert kick_api.calls("GET", "web.kick.com/api/v1/channels/2/videos") == [{}]
 
     @pytest.mark.anyio
+    async def test_a_time_placed_by_the_vods_own_clock_is_linked_to_from_there(self, kick_api):
+        # The VOD begins a few seconds before the start kick.com lists: where
+        # the caller read how far into the VOD the time is, that is where the
+        # page starts.
+        channel = kick_api.add_channel("some_channel", 1)
+        channel.videos = [kick_video(T0, 4 * 3600, SOURCE)]
+
+        link = await kick_stream.watch_link_at("some_channel", T0 + minutes(60), into=3604.6)
+
+        seconds = 3604 + kick_stream.WATCH_LATER_SECONDS
+        assert link == f"https://kick.com/some_channel/videos/{site_video_id(channel.videos[0])}?t={seconds}"
+
+    @pytest.mark.anyio
     async def test_the_stream_that_is_on_is_linked_to_as_well(self, kick_api):
         channel = kick_api.add_channel("some_channel", 1)
         channel.videos = [kick_video(T0, 0, SOURCE, live=True)]
