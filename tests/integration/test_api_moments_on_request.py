@@ -1,8 +1,9 @@
 """A channel tracked for moments, through the service: its moments are found
 in its chat alone - no stream of it comes in - kept with a link to them in
-the stream's VOD and told of, and a moment's clip is cut from the VOD only
-once it is asked for. The VOD is a fake HLS stream that kick.com's fake
-lists point to; the cutting is the real ffmpeg."""
+the stream's VOD and told of, played from the VOD on the review page, and a
+moment's clip is cut from the VOD only once it is asked for. The VOD is a
+fake HLS stream that kick.com's fake lists point to; the cutting is the real
+ffmpeg."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import pytest
 from kick_clip_hunter import dashboard_view, db, detector, kick_stream, recorder, recording_manager, tuning
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_moment, moment
-from tests.support.hls import Segment
+from tests.support.hls import Segment, fake_segments
 from tests.support.html import parse
 from tests.support.kick_api import kick_video, site_video_id
 from tests.support.media import decodes_cleanly, probe, require_ffmpeg
@@ -417,6 +418,103 @@ class TestWhatCanBeAskedFor:
         assert (await service.client.get("/moments/999/clip")).status_code == 404
 
 
+class TestItsVodPlayedOnThePage:
+    # The VOD's clock begins two seconds after the time kick.com gives the
+    # stream, in five-second segments: where a player goes is counted on
+    # the VOD's own clock.
+    VOD_START = START + timedelta(seconds=2)
+
+    @pytest.fixture
+    def vod(self, hls, channel):
+        """Five minutes of the broadcast's VOD, listed by kick.com."""
+        server = hls(fake_segments(60, duration=5.0), published=60, window=60, stream_start=self.VOD_START)
+        channel.videos = [kick_video(START, 3600, server.master_url)]
+        return server
+
+    @pytest.fixture
+    def kept(self, channel) -> int:
+        """A moment of a channel tracked for moments: chat reacted two
+        minutes into the stream."""
+        return add_moment(
+            CHANNEL,
+            broadcaster_user_id=USER_ID,
+            detected_at=START + timedelta(seconds=120),
+            reaction_seconds=4,
+            clip_on_request=1,
+            laughing=9,
+        )
+
+    async def where(self, service, moment_id: int):
+        return await service.client.get(f"/moments/{moment_id}/vod")
+
+    async def test_it_says_where_the_vod_is_and_how_far_into_it_the_clip_would_begin(self, service, vod, kept):
+        response = await self.where(service, kept)
+
+        assert response.status_code == 200, response.text
+        # Framed as the channel's clips are: before the reaction by the
+        # pre-roll and the playback delay.
+        tuned = tuning.recommended()
+        clip_from = START + timedelta(seconds=116 - tuned.pre_roll_seconds - tuned.playback_delay_seconds)
+        assert response.json() == {
+            "moment_id": kept,
+            "source": vod.master_url,
+            "lead": pytest.approx((clip_from - self.VOD_START).total_seconds(), abs=0.001),
+            # Where the link to the VOD on Kick starts.
+            "start": kick_stream.WATCH_LATER_SECONDS,
+        }
+        # Only the playlist was asked for, none of the footage.
+        assert vod.segment_requests() == []
+
+    async def test_a_vod_kept_for_subscribers_says_so(self, service, channel, kept):
+        channel.videos = [kick_video(START, 3600, SOURCE, status="subscriber_only")]
+
+        response = await self.where(service, kept)
+
+        assert (response.status_code, response.json()["detail"]) == (
+            409,
+            "Kick keeps the VOD of that stream for the channel's subscribers only.",
+        )
+
+    async def test_a_vod_that_does_not_reach_the_moment_yet_says_so(self, service, hls, channel, kept):
+        # A stream that is on, written to its VOD up to a minute in.
+        server = hls(fake_segments(60, duration=5.0), published=12, window=60, stream_start=self.VOD_START)
+        channel.videos = [kick_video(START, 0, server.master_url, live=True)]
+
+        response = await self.where(service, kept)
+
+        assert response.status_code == 409
+        assert response.json()["detail"].startswith("The VOD does not reach the moment yet")
+
+    async def test_a_vod_that_ends_before_the_moment_says_so(self, service, hls, channel, kept):
+        server = hls(fake_segments(12, duration=5.0), published=12, window=12, stream_start=self.VOD_START)
+        server.end_stream()
+        channel.videos = [kick_video(START, 3600, server.master_url)]
+
+        response = await self.where(service, kept)
+
+        assert (response.status_code, response.json()["detail"]) == (409, "The VOD ends before the moment.")
+
+    async def test_one_with_its_clip_already_has_it_played_instead(self, service, vod):
+        moment_id = add_moment(CHANNEL, clip_on_request=1, laughing=9, clip_path=f"{CHANNEL}/moment_1.mp4")
+
+        response = await self.where(service, moment_id)
+
+        assert (response.status_code, response.json()["detail"]) == (409, "The moment has its clip already.")
+
+    async def test_twitch_does_not_let_its_vods_be_played_here(self, service):
+        moment_id = add_moment("someone@twitch", broadcaster_user_id=-7, clip_on_request=1, laughing=9)
+
+        response = await self.where(service, moment_id)
+
+        assert (response.status_code, response.json()["detail"]) == (
+            409,
+            "Twitch does not let its VODs be played on this page.",
+        )
+
+    async def test_an_unknown_moment_is_not_found(self, service):
+        assert (await self.where(service, 999)).status_code == 404
+
+
 class TestTheReviewPage:
     async def test_a_moment_without_its_clip_offers_to_cut_it_and_leads_to_the_vod(self, service, channel):
         moment_id = add_moment(
@@ -438,6 +536,37 @@ class TestTheReviewPage:
         assert watch.attrs["target"] == "_blank"
         assert page.find("video", data_clip=True) == []
 
+    async def test_a_kick_moment_without_its_clip_offers_to_play_it_from_the_vod(self, service, channel):
+        moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)
+
+        page = await page_of(service, moment_id)
+
+        # Shown once the script is there, which plays it - and the transport
+        # once the VOD's player is.
+        box = page.one("div", data_vod_watch=f"/moments/{moment_id}/vod")
+        assert "hidden" in box.attrs
+        assert box.one("button", data_vod_watch_go=True).text == "Play from the VOD"
+        assert "hidden" in page.one("div", data_vod_transport=True).attrs
+        # The strip under it goes with the VOD's player as with a clip's.
+        assert page.one("div", data_strip=True).attrs["role"] == "slider"
+        assert page.one("div", data_playhead=True)
+
+    async def test_a_twitch_moment_without_its_clip_has_only_its_link(self, service):
+        moment_id = add_moment(
+            "someone@twitch",
+            broadcaster_user_id=-7,
+            clip_on_request=1,
+            laughing=9,
+            watch_url="https://www.twitch.tv/videos/1?t=0h59m25s",
+        )
+
+        page = await page_of(service, moment_id)
+
+        assert page.find(data_vod_watch=True) == [] and page.find(data_strip=True) == []
+        assert page.find(class_="ch-transport") == []
+        assert page.one("a", data_watch=True).text == "Watch on Twitch"
+        assert page.one("div", data_vod_clip=True)
+
     async def test_a_moment_found_in_no_vod_has_no_link_to_one(self, service, channel):
         moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)
 
@@ -452,3 +581,4 @@ class TestTheReviewPage:
         page = await page_of(service, moment_id)
 
         assert page.find(data_vod_clip=True) == [] and page.find("a", data_watch=True) == []
+        assert page.find(data_vod_watch=True) == []

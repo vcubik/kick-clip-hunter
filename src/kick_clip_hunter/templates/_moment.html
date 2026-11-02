@@ -23,13 +23,30 @@
     {% endif %}
   </header>
 
+  {#- Played on the page: the moment's clip, or - of a moment that has none
+      yet - its stream's VOD, where the platform lets the page play it. -#}
+  {% set playable = moment.clip_url or moment.vod_watch %}
   {% if moment.clip_url %}
   <div class="player">
     {#- The file opens with the footage that led up to the clip; the
         player starts where the clip does. -#}
     <video src="{{ moment.clip_url }}{% if moment.clip_lead != "0" %}#t={{ moment.clip_lead }}{% endif %}" preload="metadata" playsinline data-clip data-lead="{{ moment.clip_lead }}"></video>
   </div>
-  <div class="ch-transport">
+  {% elif moment.vod_watch %}
+  {#- The script asks the service where in the VOD the moment is, puts a
+      player of the VOD's playlist here - one whose clip time is the strip's,
+      as a clip's is - and starts it where the link to the VOD starts.
+      Shown once the script is there. -#}
+  <div class="player vod" hidden data-vod-watch="{{ moment.vod_watch }}">
+    <button type="button" class="ch-btn" title="Plays the stream's VOD here, from where the link to it starts" data-vod-watch-go>
+      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
+      Play from the VOD
+    </button>
+  </div>
+  {% endif %}
+  {% if playable %}
+  {#- The VOD's is shown once its player is there. -#}
+  <div class="ch-transport"{% if not moment.clip_url %} hidden data-vod-transport{% endif %}>
     <button type="button" class="ch-btn ch-btn-icon play" aria-label="Play" data-play>
       <svg class="icon-play" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
       <svg class="icon-pause" aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" fill="currentColor"></path></svg>
@@ -64,7 +81,8 @@
       <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"></path></svg>
     </button>
   </div>
-  {% elif moment.on_request %}
+  {% endif %}
+  {% if moment.on_request %}
   {#- No stream of the channel comes in: the clip is cut from the stream's
       VOD once it is asked for here. The script posts, says how far that
       has got, and opens the moment again once the clip is there. Shown
@@ -74,15 +92,14 @@
     <p>No clip has been cut of this moment yet: its channel is tracked for moments, so a clip is cut from the stream's VOD once you ask for it.</p>
     <button type="button" class="ch-btn ch-btn-primary" title="Cuts the clip, with the footage around it, from the stream's VOD" hidden data-vod-clip-go{% if asked.busy %} disabled{% endif %}>Cut the clip</button>
   </div>
-  {% elif moment.clip_state == "pending" %}
-  <p class="no-clip">The clip is still being cut. That takes about two minutes.</p>
-  {% else %}
-  <p class="no-clip">No clip was saved for this moment.</p>
+  {% elif not moment.clip_url %}
+  <p class="no-clip">{% if moment.clip_state == "pending" %}The clip is still being cut. That takes about two minutes.{% else %}No clip was saved for this moment.{% endif %}</p>
   {% endif %}
 
   {#- What chat did, on the clip's own time axis. With a clip to play it is
       also the scrubber: one timeline over the clip and the footage kept
-      before and after it. -#}
+      before and after it - and so it is over the VOD, where that plays
+      here, whose player it starts where it is pressed. -#}
   {% if moment.strip %}
   {% set strip = moment.strip %}
   <figure class="trace" data-trace data-start="{{ strip.start }}" data-end="{{ strip.end }}" data-clip-seconds="{{ strip.clip_seconds }}">
@@ -96,7 +113,7 @@
     </div>
     {% endif %}
     <div class="ch-strip"
-      {%- if moment.clip_url %} role="slider" tabindex="0" aria-label="Position in the footage" aria-valuemin="{{ strip.start }}" aria-valuemax="{{ strip.end }}" aria-valuenow="0" aria-valuetext="0:00" data-strip{% endif %}
+      {%- if playable %} role="slider" tabindex="0" aria-label="Position in the footage" aria-valuemin="{{ strip.start }}" aria-valuemax="{{ strip.end }}" aria-valuenow="0" aria-valuetext="0:00" data-strip{% endif %}
       {%- if strip.has_chat %} data-all="{{ strip.all_counts }}" data-laugh="{{ strip.laugh_counts }}"{% endif %}>
       <svg aria-hidden="true" viewBox="0 0 {{ strip.width }} {{ strip.top }}" preserveAspectRatio="none">
         <path class="ch-grid" d="{{ strip.grid }}"></path>
@@ -119,7 +136,7 @@
       {% if strip.moment %}
       <span class="ch-note" style="{% if strip.moment.note_right %}right: {{ strip.moment.note_right }}%{% else %}left: {{ strip.moment.note_left }}%{% endif %}">{{ strip.moment.note }}</span>
       {% endif %}
-      {% if moment.clip_url %}
+      {% if playable %}
       <div class="ch-hover" data-hover hidden></div>
       <div class="ch-playhead" style="left: {{ strip.clip_left }}%" data-playhead></div>
       <span class="ch-flag" style="--at: {{ strip.clip_left }}%" data-flag>0:00</span>

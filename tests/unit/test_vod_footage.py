@@ -1,6 +1,7 @@
 """The pure parts of making a moment's file longer from its broadcast's VOD:
 which segments of the recording there are and when each begins, which hold
-a stretch, and in what order to look for the file in them."""
+a stretch, and in what order to look for the file in them - and how far
+into the recording a player has to go for a time on its clock."""
 
 from __future__ import annotations
 
@@ -124,6 +125,30 @@ class TestChoosingSegments:
         order = vod_footage.nearest_first(list(self.PIECES), at(11))
 
         assert order == [piece(10), piece(5), piece(15), piece(0)]
+
+
+class TestWhereAPlayerGoes:
+    """A player counts a recording's time by the lengths of its segments,
+    one after the other, whatever the clock says between them."""
+
+    def test_a_time_in_a_segment_is_the_segments_before_it_and_how_far_into_it(self):
+        assert vod_footage.position([piece(0), piece(5), piece(10)], at(12.5)) == pytest.approx(12.5)
+
+    def test_a_gap_on_the_clock_is_not_counted(self):
+        # The broadcast was off for a minute between the second and the third.
+        found = [piece(0), piece(5), piece(70), piece(75)]
+
+        assert vod_footage.position(found, at(72)) == pytest.approx(12)
+
+    def test_a_time_in_the_gap_is_where_the_footage_after_it_begins(self):
+        assert vod_footage.position([piece(0), piece(5), piece(70)], at(30)) == pytest.approx(10)
+
+    def test_a_time_before_the_first_is_the_start(self):
+        assert vod_footage.position([piece(10), piece(15)], at(4)) == 0.0
+
+    def test_a_time_past_the_last_is_nowhere_in_it(self):
+        assert vod_footage.position([piece(0), piece(5)], at(10)) is None
+        assert vod_footage.position([], at(0)) is None
 
 
 class TestTellingPicturesApart:

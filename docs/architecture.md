@@ -341,7 +341,10 @@ Module map (`src/kick_clip_hunter/`):
   (`Tuning.clip_span` and the context), after waiting for the VOD to reach the end of it
   (`vod_footage.VOD_BEHIND_SECONDS` past it, `_wait_for_vod`), with `vod_footage.cut`, and
   stored as a clip the recorder cut would be - then the analysis steps run on it; where it
-  stands is in memory (`_vod_clips`), as footage being added is. `POST /channels/{slug}/always_record` sets whether a channel is
+  stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
+  /moments/{id}/vod` says where the review page plays such a moment from its stream's VOD:
+  the VOD's playlist and how far into it the clip would begin (`vod_footage.seconds_in`) -
+  of a Kick channel's only (`VOD_PLAYED_HERE`). `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
@@ -751,7 +754,9 @@ Module map (`src/kick_clip_hunter/`):
   and footage either side takes in its stride - and cut on the last frame a cut can begin on
   at or before it. It waits for nothing but the VOD reaching the end of the stretch
   (`VOD_BEHIND_SECONDS`); what the VOD does not hold of it is said (`short`), as silenced
-  footage is (`muted`)
+  footage is (`muted`). For the review page's player of the VOD, `seconds_in` says how far
+  into it, as a player of its playlist counts it, a time on its clock is (`position`: the
+  lengths of the segments before it added up, a gap in the clock not counted)
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips

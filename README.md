@@ -265,7 +265,9 @@ each platform and why](docs/platforms.md), [the operational quirks found along t
 way](docs/operations.md), [setup](docs/setup.md) and [testing](docs/testing.md).
 
 The dashboard is set in [Archivo](https://github.com/Omnibus-Type/Archivo), bundled under the SIL
-Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)).
+Open Font License ([`OFL.txt`](src/kick_clip_hunter/static/fonts/OFL.txt)). It plays a stream's
+VOD with [hls.js](https://github.com/video-dev/hls.js), bundled under the Apache License 2.0
+([`LICENSE`](src/kick_clip_hunter/static/hls/LICENSE)).
 
 ## Limitations
 

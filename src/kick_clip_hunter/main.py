@@ -39,6 +39,7 @@ from . import (
     kick_auth,
     kick_chat,
     kick_client,
+    kick_stream,
     notify,
     platforms,
     recorder,
@@ -2834,6 +2835,10 @@ async def _add_footage_background(
 # moment's clip, once there, is in its row.
 _vod_clips: dict[int, dict] = {}
 VOD_CLIP_BUSY_WORDS = "Its clip is being cut from the stream's VOD. Try again once that is done."
+# The platforms whose VODs the review page plays itself, before a moment's
+# clip is cut: Kick lets a page elsewhere fetch its VODs' playlists and
+# footage (CORS), Twitch does not.
+VOD_PLAYED_HERE = {platforms.KICK}
 # A clip of which the VOD holds less than this is none.
 VOD_CLIP_LEAST_SECONDS = 1.0
 # How often waiting for the VOD to reach the end of a moment's footage looks
@@ -3065,6 +3070,15 @@ def _open_moment(conn, row, today: date) -> dict:
         "on_request": (
             {"url": f"/moments/{row['id']}/clip", **_vod_clip_standing(row["id"])}
             if row["clip_on_request"] and not row["clip_path"]
+            else None
+        ),
+        # Of such a moment, where the page asks where in its stream's VOD it
+        # is, to play it there - on a platform that lets it.
+        "vod_watch": (
+            f"/moments/{row['id']}/vod"
+            if row["clip_on_request"]
+            and not row["clip_path"]
+            and platforms.platform_of(row["channel_slug"]) in VOD_PLAYED_HERE
             else None
         ),
         # Where the moment is watched on its platform: its stream's VOD,
@@ -5729,6 +5743,43 @@ async def moment_clip_state(moment_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
     return {"moment_id": moment_id, **_vod_clip_standing(moment_id)}
+
+
+@app.get("/moments/{moment_id}/vod")
+async def moment_vod(moment_id: int):
+    """Where the page plays a moment that has no clip from its stream's VOD:
+    the VOD's playlist (`source`), how many seconds into it the moment's clip
+    would begin (`lead`) - framed as the channel's clips are framed now, as
+    the strip under it is - and how far into the clip to start (`start`):
+    where the link to the VOD on Kick starts. Only of a Kick channel's
+    moment (VOD_PLAYED_HERE). Asks Kick each time: a VOD can be kept for
+    subscribers once its stream is over, and a stream that is on reaches
+    further every few seconds."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    if row["clip_path"]:
+        raise HTTPException(status_code=409, detail="The moment has its clip already.")
+    platform = platforms.platform_of(row["channel_slug"])
+    if platform not in VOD_PLAYED_HERE:
+        title = platforms.TITLES.get(platform, platform)
+        raise HTTPException(status_code=409, detail=f"{title} does not let its VODs be played on this page.")
+    clip_from = _tuning_now(row["broadcaster_user_id"]).clip_span(*_moment_window(row))[0]
+    try:
+        vod = await asyncio.to_thread(streams.vod_at, row["channel_slug"], clip_from)
+        lead = await asyncio.to_thread(vod_footage.seconds_in, vod, clip_from)
+    except (NoVod, vod_footage.FootageError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {
+        "moment_id": moment_id,
+        "source": vod.master,
+        "lead": round(lead, 3),
+        "start": kick_stream.WATCH_LATER_SECONDS,
+    }
 
 
 @app.post("/moments/{moment_id}/stream_type")

@@ -130,6 +130,16 @@ stream comes in. Seen in October 2026:
   writes the same), counted from the VOD's start.
 - Twitch: `twitch.tv/videos/<id>?t=1h2m3s`, the past broadcast of a stream that is on as
   well.
+- Seen in November 2026: Kick's VOD host (`stream.kick.com`) answers for its playlists and
+  segments with `Access-Control-Allow-Origin: *`, so a page elsewhere can play a VOD - the
+  review page does, with hls.js. Its playlist is an `EVENT` one from the stream's start, in
+  12.5 s segments, each with its program date-time, ended (`#EXT-X-ENDLIST`) once the stream
+  is over. Twitch's (`usher.ttvnw.net`, the segments on CloudFront) answers without that
+  header, so no page but Twitch's own can play its past broadcasts.
+- The VOD begins before the start the site lists for its stream: a VOD's first segment was
+  dated 5 s before it (no gaps after). A link counted from that start (`watch_link_at`) lands
+  that much earlier in the footage than the page's player, which goes by the VOD's own clock,
+  as a clip is cut by.
 
 **2. Manual official clips (`clip_creator.py`, `scripts/create_clip.py`)**
 - Kick's own "Create Clip" button hits `POST /api/internal/v1/livestreams/{livestream_slug}/clips`

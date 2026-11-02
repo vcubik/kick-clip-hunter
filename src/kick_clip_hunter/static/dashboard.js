@@ -9,10 +9,11 @@
 // - a moment's or a recording's - has a moment's transcript made, follows it
 // as the clip plays and saves what is put right in it, has footage from the
 // stream's VOD added to a moment's file and opens it again - or, for a
-// moment that has none, its clip cut from there - saves the Settings
-// page's form - whose sections are tabs, and whose lists are added to an
-// item at a time - starts and stops the recording of a whole stream,
-// replays a recording's chat beside it, puts what chat did over all of it
+// moment that has none, plays the VOD itself and has the clip cut from
+// there - saves the Settings page's form - whose sections are tabs, and
+// whose lists are added to an item at a time - starts and stops the
+// recording of a whole stream, replays a recording's chat beside it, puts
+// what chat did over all of it
 // under it, looks for moments in it, deletes moments and recordings and
 // takes channels off the watchlist, and keeps the Health page saying what
 // holds now.
@@ -259,7 +260,9 @@
   // more than the clip: the footage that led up to it comes first and what
   // followed comes after. Times on the strip are clip time - seconds from
   // the clip's first frame, negative before it - so the player's own time
-  // is clip time plus however long the footage before the clip runs.
+  // is clip time plus however long the footage before the clip runs. A
+  // stream's VOD played in place of a clip not cut yet is such a file too,
+  // hours of it, with the clip somewhere in it.
 
   const SPEEDS = [1, 1.5, 2, 0.5];
   // Kept from one moment to the next - the volume from one visit to the next
@@ -316,7 +319,7 @@
   // there is footage for; a time beyond the footage is taken to its nearest
   // end.
   function goTo(video, time, { play } = {}) {
-    const span = spanOf(video);
+    const span = video && spanOf(video);
     if (!span) return;
     const lead = leadOf(video);
     const last = Number.isFinite(video.duration) ? video.duration - lead : span.end;
@@ -352,10 +355,11 @@
   }
 
   // Brings the transport, the playhead, the chat and the transcript in line
-  // with the player.
+  // with the player - not a VOD's on its way to where it starts, which is
+  // at the start of the VOD meanwhile, hours before the clip.
   function paint(video) {
     const article = video.closest(".moment");
-    if (!article) return;
+    if (!article || video.hasAttribute("data-vod-starting")) return;
     const span = spanOf(video);
     const time = clipTime(video);
     const words = timeWords(time, span);
@@ -468,6 +472,7 @@
 
   function stripKey(strip, event) {
     const video = clipOf(strip);
+    if (!video) return false;
     const span = spanOf(video);
     let time;
     if (event.key === "Home") time = 0;
@@ -1573,6 +1578,130 @@
     say(fresh, words);
   }
 
+  // ---- The VOD played here --------------------------------------------
+  //
+  // A moment that has no clip yet can be watched in its stream's VOD, on a
+  // platform that lets a page elsewhere play it. Asked, the service says
+  // where the VOD's playlist is and how far into it the clip would begin,
+  // and a player of the VOD takes the clip's place: a file whose footage
+  // before the clip runs that long, so the transport, the strip and the
+  // chat go with it as they go with a clip. It starts where the link to the
+  // VOD starts, or where the strip was pressed. The playlist is HLS, which
+  // hls.js plays - loaded the first time it is wanted - and a browser with
+  // no Media Source Extensions only if it plays HLS itself.
+
+  const HLS_SCRIPT = "/static/hls/hls.light.min.js";
+  // What the player takes the connection to carry until it has measured
+  // it: about Kick's 720p. A segment of Kick's VOD runs 12.5 s, so the
+  // first one sets the picture for a while.
+  const VOD_FIRST_GUESS_BPS = 5000000;
+  let hlsLoading = null;
+  let vodHls = null; // hls.js playing the VOD on the page, if it is
+
+  function loadHls() {
+    hlsLoading ??= new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = HLS_SCRIPT;
+      script.onload = () => resolve(window.Hls);
+      script.onerror = () => {
+        hlsLoading = null;
+        reject(new Error("hls.js could not be loaded"));
+      };
+      document.head.append(script);
+    });
+    return hlsLoading;
+  }
+
+  // Lets go of hls.js once its player is gone from the page, which stops
+  // it fetching.
+  function dropVod() {
+    if (vodHls && !vodHls.media?.isConnected) {
+      vodHls.destroy();
+      vodHls = null;
+    }
+  }
+
+  // A player of the VOD's playlist that starts `from` seconds into it, and
+  // the hls.js playing it into the player, if it is not the browser - or
+  // null for a browser that can play it neither way.
+  async function vodPlayer(source, from) {
+    const video = document.createElement("video");
+    video.playsInline = true;
+    const Hls = await loadHls().catch(() => null);
+    if (Hls && Hls.isSupported()) {
+      const hls = new Hls({ startPosition: from, testBandwidth: false, abrEwmaDefaultEstimate: VOD_FIRST_GUESS_BPS });
+      hls.loadSource(source);
+      hls.attachMedia(video);
+      return { video, hls };
+    }
+    if (!video.canPlayType("application/vnd.apple.mpegurl")) return null;
+    video.src = source;
+    video.addEventListener("loadedmetadata", () => (video.currentTime = from), { once: true });
+    return { video, hls: null };
+  }
+
+  // Plays the VOD of a moment in the box its clip would be in: from a clip
+  // time, or from where the link to the VOD starts.
+  async function watchVod(box, at = null) {
+    const button = box && one("[data-vod-watch-go]", box);
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    say(box, "Finding the moment in the stream's VOD.");
+    let found = null;
+    let words = "Could not reach the service.";
+    try {
+      const response = await fetch(box.dataset.vodWatch);
+      if (response.ok) found = await response.json();
+      else words = await problem(response, "Could not find the moment in the VOD. Try again.");
+    } catch {
+      // the words above say so already
+    }
+    const player = found && box.isConnected ? await vodPlayer(found.source, Math.max(found.lead + (at ?? found.start), 0)) : null;
+    if (!box.isConnected) {
+      player?.hls?.destroy();
+      return;
+    }
+    if (!player) {
+      button.disabled = false;
+      say(box, found ? "This browser cannot play the VOD here." : words);
+      return;
+    }
+
+    const { video, hls } = player;
+    const article = box.closest(".moment");
+    // Until it has got to where it starts, the transport is not shown and
+    // nothing is painted from it.
+    video.dataset.clip = "";
+    video.dataset.vod = "";
+    video.dataset.lead = String(found.lead);
+    video.dataset.vodStarting = "";
+    video.addEventListener(
+      "canplay",
+      () => {
+        delete video.dataset.vodStarting;
+        one("[data-vod-transport]", article).hidden = false;
+        say(box, "");
+        paint(video);
+      },
+      { once: true },
+    );
+    // A player that stopped for good leaves the moment as it was before it
+    // was played, saying so.
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (box.isConnected) reopenMoment(article, "The VOD stopped playing. Try again.");
+      else hls?.destroy();
+    };
+    if (hls) hls.on(window.Hls.Events.ERROR, (_event, data) => data.fatal && stop());
+    else video.addEventListener("error", stop);
+    box.replaceChildren(video);
+    vodHls = hls;
+    fit(video);
+    video.play().catch(() => {});
+  }
+
   function keepFootageSeconds(select) {
     try {
       localStorage.setItem(FOOTAGE_SECONDS_KEY, select.value);
@@ -1592,10 +1721,20 @@
     }
   }
 
+  // Gives a player that has just arrived the speed and the volume the last
+  // one had.
+  function fit(video) {
+    video.defaultPlaybackRate = speed;
+    video.playbackRate = speed;
+    video.volume = volume;
+    video.muted = muted;
+  }
+
   // Fits what the script looks after to markup that has just arrived.
   function dress() {
+    dropVod();
     for (const field of all("[data-note]")) grow(field);
-    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file], [data-footage], [data-vod-clip-go]")) {
+    for (const button of all("[data-trim-open], [data-find-moments], [data-make-chat-file], [data-footage], [data-vod-clip-go], [data-vod-watch]")) {
       button.hidden = false;
     }
     recallFootageSeconds();
@@ -1608,10 +1747,7 @@
     watchTranscript();
     const video = one("[data-clip]");
     if (!video) return;
-    video.defaultPlaybackRate = speed;
-    video.playbackRate = speed;
-    video.volume = volume;
-    video.muted = muted;
+    fit(video);
     paint(video);
   }
 
@@ -1894,7 +2030,7 @@
     const news = one("[data-news]");
     if (news) {
       news.dataset.moments = String(Number(news.dataset.moments) - 1);
-      if (one("[data-clip]", article)) news.dataset.clips = String(Number(news.dataset.clips) - 1);
+      if (one("[data-clip]:not([data-vod])", article)) news.dataset.clips = String(Number(news.dataset.clips) - 1);
     }
 
     if (row) {
@@ -2915,6 +3051,8 @@
     ["[data-fullscreen]", (button) => toggleFullScreen(clipOf(button))],
     // In full screen the browser's own controls are showing and already do this.
     ["[data-clip]", (video) => video.controls || togglePlay(video)],
+    // Anywhere in the box the VOD would play in, until it does.
+    ["[data-vod-watch]", (box) => watchVod(box)],
     ["[data-shutdown-open]", () => askToShutDown(true)],
     ["[data-shutdown-cancel]", () => askToShutDown(false)],
     ["[data-shutdown-go]", shutDown],
@@ -2933,12 +3071,16 @@
   });
 
   // Pressing on the strip goes there, and so does dragging along it; a
-  // pointer that is only passing over it gets a readout instead.
+  // pointer that is only passing over it gets a readout instead. Over a VOD
+  // that is not playing yet, pressing it starts it there.
   document.addEventListener("pointerdown", (event) => {
     const strip = event.target.closest("[data-strip]");
     if (!strip || event.button !== 0) return;
     strip.setPointerCapture(event.pointerId);
-    goTo(clipOf(strip), pointOn(strip, event).time);
+    const video = clipOf(strip);
+    const time = pointOn(strip, event).time;
+    if (video) goTo(video, time);
+    else watchVod(one("[data-vod-watch]", strip.closest(".moment")), time);
   });
 
   document.addEventListener("pointermove", (event) => {
@@ -3110,7 +3252,9 @@
     else if (key.length === 1 && key >= "1" && key <= "5") rateFromKeyboard(Number(key));
     else if (key === " " && !target.matches("button, a.ch-btn, a.ch-tab")) {
       event.preventDefault();
-      togglePlay(one("[data-clip]"));
+      const video = one("[data-clip]");
+      if (video) togglePlay(video);
+      else if (one("[data-vod-watch]")) watchVod(one("[data-vod-watch]"));
     }
   });
 

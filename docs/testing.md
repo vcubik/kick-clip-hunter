@@ -210,7 +210,10 @@ stretch cut from a VOD by its clock, from the last frame a cut can begin on, in 
 and from a YouTube stream wound back too, with what the VOD lacks or silenced said? Through the
 service: is the clip cut once asked for - stored where in the file the clip is, played by the
 page - and refused while chat still reacts, said when no VOD is to be had, waited for while the
-VOD is behind, given up at shutdown, and the moment kept from removal meanwhile?
+VOD is behind, given up at shutdown, and the moment kept from removal meanwhile? Before that, is
+where a Kick moment's clip would begin in the VOD said for the page's player - counted by the
+VOD's segments on its own clock, a gap in it not counted - and refused, in words, for a Twitch
+moment, one with its clip, a VOD kept for subscribers and one that does not reach it (yet)?
 
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
@@ -783,7 +786,11 @@ Run this on a live channel after changing any of the above, or the code right ne
    cut from the VOD once asked for`, and nothing is cut. Telegram/Discord get "Moment caught"
    with "Watch on Kick": it opens the VOD on kick.com a little before the moment (check it lands
    within some seconds of where chat reacted). The queue has the moment without a clip, its chat
-   and trace beside it, "Watch on Kick" beside the stream time and "Cut the clip": pressed right
+   and trace beside it, "Watch on Kick" beside the stream time and "Play from the VOD": pressed,
+   the VOD plays in the clip's place from where the link starts, showing the same as kick.com
+   does there; the trace's playhead and the chat follow it, pressing the trace goes there, and
+   opening another moment stops it (no more VOD requests in the browser's network list). Then
+   "Cut the clip": pressed right
    away it says it waits for the VOD, then counts up while it fetches, then opens the moment with
    its clip - the reaction inside the clip, with footage before and after it; Trim, Add before /
    after and Transcribe work on it as on any clip. Do the same with a Twitch channel, and with a

@@ -49,7 +49,15 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   when it was caught, "Watch on Kick" / "Watch on Twitch", beside how far into the stream it
   was, opens it there in a new tab, from where its clip begins - on Kick 10 s later, nearer to
   what chat reacted to (`kick_stream.WATCH_LATER_SECONDS`; the clip itself is not moved)
-  (`moments.watch_url`).
+  (`moments.watch_url`). On Kick the VOD also plays on the page, in the clip's place: "Play
+  from the VOD" - or Space, or pressing the trace, which starts it there - asks where it is
+  (`GET /moments/{id}/vod`: the VOD's playlist, how far into it the clip would begin, framed as
+  the trace is, by `vod_footage.seconds_in`, and where to start - where the link does), and
+  hls.js plays the playlist (`static/hls/`, loaded the first time it is wanted). Its time is
+  clip time, as a clip's is, so the transport, the trace and the chat go with it; it is asked
+  for each time, and a VOD kept for subscribers once its stream is over, or one that does not
+  reach the moment (yet), is said in the status line. Twitch lets no page but its own fetch its
+  VODs, so a Twitch moment has its link only (`main.VOD_PLAYED_HERE`).
   Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
