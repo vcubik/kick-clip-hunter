@@ -138,6 +138,7 @@ from .db import (
     set_streamer_always_record,
     set_streamer_own_tuning,
     set_streamer_tracking,
+    set_vod_access,
     update_moment_audio_events,
     update_moment_clip_duration,
     update_moment_clip_path,
@@ -1207,6 +1208,7 @@ async def lifespan(app: FastAPI):
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
+        asyncio.create_task(_keep_knowing_vod_access()),
         asyncio.create_task(_keep_looking_at_tunnel()),
         asyncio.create_task(_keep_telling_of_health()),
         asyncio.create_task(_keep_summing_up_days()),
@@ -3651,6 +3653,18 @@ async def dashboard_channels(request: Request):
                         "tracking": _tracking_of(row),
                         # Moments only where a clip can be cut afterwards.
                         "tracking_choices": dashboard_view.tracking_choices(row["platform"] in platforms.KEEP_VODS),
+                        # What its platform was last seen to list of its
+                        # VODs, where that keeps footage from being had from
+                        # them once a stream is over - None where it does
+                        # not, or nothing has been seen yet.
+                        "vods": (
+                            {
+                                "words": dashboard_view.VOD_ACCESS_WORDS[row["vod_access"]],
+                                "said": streams.vod_trouble(row["slug"], row["vod_access"]),
+                            }
+                            if row["vod_access"] in dashboard_view.VOD_ACCESS_WORDS
+                            else None
+                        ),
                         # Never tracked: there is no choice for it.
                         "recorded_only": row["platform"] in platforms.RECORDED_ONLY,
                         "always_record": bool(row["always_record"]),
@@ -6103,6 +6117,60 @@ async def add_channel(slug: str):
 # How long setting a channel to be tracked for moments waits for its
 # platform to say what it lists of the channel's VODs before saying nothing.
 VOD_TROUBLE_SECONDS = 10
+# How often the platforms are asked what they list of the watched channels'
+# VODs, and how long what was seen of a channel's is taken to hold - a
+# channel keeps its VODs as it did, as a rule, for months.
+VOD_ACCESS_CHECK_SECONDS = 3600
+VOD_ACCESS_FRESH = timedelta(days=1)
+
+
+def _keep_vod_access(broadcaster_user_id: int, access: str, at: datetime | None = None) -> None:
+    conn = get_connection()
+    try:
+        set_vod_access(conn, broadcaster_user_id, access, at or datetime.now(timezone.utc))
+    finally:
+        conn.close()
+
+
+async def _look_at_vod_access(now: datetime | None = None) -> None:
+    """Asks the platform of each channel on the watchlist that keeps VODs
+    what it lists of them once a stream is over (streams.vod_access) - where
+    what was seen of the channel's is older than VOD_ACCESS_FRESH, or nothing
+    was - and keeps it: the Channels page says where that stands in the way
+    of footage being had from them afterwards. A channel its platform could
+    not be asked about keeps what was seen before, and is asked again the
+    next time."""
+    now = now or datetime.now(timezone.utc)
+    conn = get_connection()
+    try:
+        due = [
+            (row["broadcaster_user_id"], row["slug"], row["vod_access"])
+            for row in get_streamers(conn)
+            if row["platform"] in platforms.KEEP_VODS
+            and (row["vod_access_at"] is None or now - datetime.fromisoformat(row["vod_access_at"]) >= VOD_ACCESS_FRESH)
+        ]
+    finally:
+        conn.close()
+    for broadcaster_user_id, slug, before in due:
+        try:
+            access = await asyncio.wait_for(streams.vod_access(slug), VOD_TROUBLE_SECONDS)
+        except Exception:
+            logger.warning("[%s] what its platform keeps of its VODs could not be asked", slug, exc_info=True)
+            continue
+        if access is None:
+            continue
+        _keep_vod_access(broadcaster_user_id, access, now)
+        if access != before:
+            logger.info("[%s] VODs once a stream is over: %s", slug, access)
+
+
+async def _keep_knowing_vod_access() -> None:
+    while True:
+        try:
+            await _look_at_vod_access()
+        except Exception:
+            logger.exception("could not ask what the platforms keep of the channels' VODs")
+        await asyncio.sleep(VOD_ACCESS_CHECK_SECONDS)
 
 
 @app.post("/channels/{slug}/tracking")
@@ -6114,7 +6182,8 @@ async def set_channel_tracking(slug: str, what: str):
     chat alone - kept, and judged by nothing - or nothing. A recording of
     its stream keeps its chat whatever this says. Set to moments, it says
     (`said`) what its platform lists of the channel's VODs that would keep a
-    clip from being cut afterwards, where it lists anything."""
+    clip from being cut afterwards, where it lists anything - and keeps what
+    it lists, as _look_at_vod_access does."""
     if what not in dict(dashboard_view.TRACKING_CHOICES):
         raise HTTPException(status_code=400, detail=f"unknown tracking {what!r}")
     conn = get_connection()
@@ -6148,9 +6217,13 @@ async def set_channel_tracking(slug: str, what: str):
     said = ""
     if what == dashboard_view.TRACKING_MOMENTS:
         try:
-            said = await asyncio.wait_for(streams.vod_trouble(slug), VOD_TROUBLE_SECONDS) or ""
+            access = await asyncio.wait_for(streams.vod_access(slug), VOD_TROUBLE_SECONDS)
         except Exception:
             logger.warning("[%s] what its platform keeps of its VODs could not be asked", slug, exc_info=True)
+        else:
+            if access is not None:
+                _keep_vod_access(row["broadcaster_user_id"], access)
+            said = streams.vod_trouble(slug, access) or ""
     return {"slug": slug, "tracking": what, "said": said}
 
 

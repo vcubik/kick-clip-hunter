@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from kick_clip_hunter import kick_stream, streams, twitch_client, twitch_stream, youtube_stream
-from kick_clip_hunter.platforms import LiveStatus, NoVod, StreamUrls, Vod
+from kick_clip_hunter.platforms import VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, LiveStatus, NoVod, StreamUrls, Vod
 
 pytestmark = pytest.mark.anyio
 
@@ -103,16 +103,23 @@ class TestWhereAStreamsRecordingIsWatched:
             asked.append((name, when))
             return "https://x"
 
-        async def vod_trouble(name):
+        async def vod_access(name):
             asked.append((name, None))
-            return "words"
+            return VODS_HIDDEN
 
         monkeypatch.setattr(module, "watch_link_at", watch_link_at)
-        monkeypatch.setattr(module, "vod_trouble", vod_trouble)
+        monkeypatch.setattr(module, "vod_access", vod_access)
 
         assert await streams.watch_link(channel, self.WHEN) == "https://x"
-        assert await streams.vod_trouble(channel) == "words"
+        assert await streams.vod_access(channel) == VODS_HIDDEN
         assert asked == [(login, self.WHEN), (login, None)]
+
+    @pytest.mark.parametrize(("channel", "module"), [("some_channel", kick_stream), ("someone@twitch", twitch_stream)])
+    def test_what_keeps_a_clip_from_being_cut_is_said_in_its_platforms_words(self, channel, module):
+        assert streams.vod_trouble(channel, VODS_NONE) == module.VOD_TROUBLE[VODS_NONE]
+        assert streams.vod_trouble(channel, VODS_PUBLIC) is None
+        # Nothing seen says nothing either way.
+        assert streams.vod_trouble(channel, None) is None
 
     async def test_kicks_vod_is_placed_by_its_own_clock_where_the_caller_read_it(self, monkeypatch):
         placed = []
@@ -132,7 +139,8 @@ class TestWhereAStreamsRecordingIsWatched:
     async def test_a_platform_that_keeps_none_once_a_stream_is_over_has_none(self, channel, title):
         with pytest.raises(NoVod, match=f"{title} keeps no VOD of a stream once it is over"):
             await streams.watch_link(channel, self.WHEN)
-        assert await streams.vod_trouble(channel) == f"{title} keeps no VOD of a stream once it is over."
+        # Nothing to ask: no channel of it is tracked for moments.
+        assert await streams.vod_access(channel) is None
 
 
 class TestTwitchLiveStatus:

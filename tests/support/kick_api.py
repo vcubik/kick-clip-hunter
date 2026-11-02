@@ -111,6 +111,11 @@ def site_video_id(video: dict) -> str:
     return f"site-{video['video']['uuid']}"
 
 
+# Who may watch a VOD, as kick.com's older list says it and as the site's
+# newer API does - another word is passed on as it is.
+SITE_STATUS = {"public": "public", "subscriber_only": "sub_only"}
+
+
 def site_video(video: dict, channel: FakeChannel) -> dict:
     """A stream listed with kick_video, as the site's newer API lists it:
     with the id its page is addressed by, when it began and ended (in ISO,
@@ -123,7 +128,7 @@ def site_video(video: dict, channel: FakeChannel) -> dict:
         "start_time": began.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end_time": ended.strftime("%Y-%m-%dT%H:%M:%SZ") if ended else None,
         "duration": video["duration"] // 1000,
-        "status": "public" if video["video"]["status"] == "public" else "sub_only",
+        "status": SITE_STATUS.get(video["video"]["status"], video["video"]["status"]),
         "channel": {"id": channel.broadcaster_user_id + 1, "slug": channel.slug.lower(), "username": channel.slug},
     }
 

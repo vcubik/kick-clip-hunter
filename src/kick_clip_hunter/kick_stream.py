@@ -25,7 +25,7 @@ VOD by an id the list vod_at asks does not give, only the site's newer API
 one for the page of the stream a moment was in, with the time to start at
 (`?t=<seconds>`, which the page's player goes to - counted, where it is
 known, by the VOD's own clock, which begins a few seconds before the start
-the site lists), and `vod_trouble` what
+the site lists), and `vod_access` what
 it lists of a channel's VODs: whether they stay public once a stream is
 over - a channel can keep them for its subscribers only from then on.
 """
@@ -41,7 +41,16 @@ from patchright.sync_api import sync_playwright
 
 from . import kick_client
 from .kick_session import BROWSER_PROFILE_DIR
-from .platforms import NoVod, StreamUrlError, StreamUrls, Vod
+from .platforms import (
+    VODS_FOR_SUBSCRIBERS,
+    VODS_HIDDEN,
+    VODS_NONE,
+    VODS_PUBLIC,
+    NoVod,
+    StreamUrlError,
+    StreamUrls,
+    Vod,
+)
 
 POLL_INTERVAL_SECONDS = 0.5
 MAX_WAIT_SECONDS = 15
@@ -62,6 +71,16 @@ SITE_SUBSCRIBERS_ONLY = "sub_only"
 # whoever follows the link wants to get there sooner. Only the link - a
 # clip cut from the VOD is framed as it always is.
 WATCH_LATER_SECONDS = 10
+# What keeps a moment's clip from being cut from a channel's VOD once its
+# stream is over, by what the site lists of its VODs (see vod_access).
+VOD_TROUBLE = {
+    VODS_NONE: "Kick lists no VODs of this channel: if it keeps none, no moment's clip can be cut.",
+    VODS_FOR_SUBSCRIBERS: (
+        "Kick keeps this channel's VODs for its subscribers only once a stream is over: "
+        "a moment's clip can be cut only while its stream is still on."
+    ),
+    VODS_HIDDEN: "Kick keeps this channel's VODs from the public: no moment's clip can be cut.",
+}
 
 
 def _vod_url(page, channel_slug: str) -> str | None:
@@ -228,26 +247,26 @@ async def watch_link_at(slug: str, when: datetime, into: float | None = None) ->
     return watch_link(str(page), str(video["id"]), seconds + WATCH_LATER_SECONDS)
 
 
-async def vod_trouble(slug: str) -> str | None:
-    """What would keep a clip from being cut from the channel's VODs once a
-    stream is over, by what the site's newer API lists of its streams, in
-    words - None where nothing seen does, or it could not be asked."""
+async def vod_access(slug: str) -> str | None:
+    """What the site's newer API lists of the channel's VODs once a stream
+    is over (platforms.VODS_*), by the newest such stream it lists - None
+    where it could not be asked, or lists only a stream that is on, which is
+    public whatever the channel keeps afterwards."""
     try:
         videos = await _site_videos(slug)
     except (httpx.HTTPError, KeyError, TypeError, ValueError):
         return None
     if not videos:
-        return "Kick lists no VODs of this channel: if it keeps none, no moment's clip can be cut."
+        return VODS_NONE
     over = [video for video in videos if isinstance(video, dict) and not video.get("is_live")]
-    status = over[0].get("status") if over else SITE_PUBLIC
+    if not over:
+        return None
+    status = over[0].get("status")
     if status == SITE_SUBSCRIBERS_ONLY:
-        return (
-            "Kick keeps this channel's VODs for its subscribers only once a stream is over: "
-            "a moment's clip can be cut only while its stream is still on."
-        )
+        return VODS_FOR_SUBSCRIBERS
     if status != SITE_PUBLIC:
-        return "Kick keeps this channel's VODs from the public: no moment's clip can be cut."
-    return None
+        return VODS_HIDDEN
+    return VODS_PUBLIC
 
 
 def vod_at(channel_slug: str, when: datetime) -> Vod:

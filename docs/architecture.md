@@ -74,9 +74,11 @@ Module map (`src/kick_clip_hunter/`):
   YouTube stream that is on, to be wound back; TikTok keeps none. Also where a person watches
   that recording from a given time (`watch_link`: the VOD's page on Kick or Twitch with the
   time to start at - `kick_stream.watch_link_at`, `twitch_stream.watch_link_at`), and what
-  the platform lists of a channel's VODs that would keep a clip from being cut from them once
-  a stream is over (`vod_trouble`: none kept, kept for subscribers only or from the public;
-  None where nothing is seen, or the platform could not be asked)
+  the platform lists of a channel's VODs once a stream is over (`vod_access`, one of
+  `platforms.VODS_*`: public, kept for subscribers only or from the public, or none listed;
+  None where nothing tells, or the platform could not be asked) - and what of that keeps a
+  clip from being cut from them, in the platform's words (`vod_trouble`, from
+  `kick_stream.VOD_TROUBLE` / `twitch_stream.VOD_TROUBLE`)
 - `chat_message.py` — one chat message as the service takes it in, whichever platform it
   came from (`ChatMessage`): its channel, sender, text with the platform's own emotes as
   `[emote:<id>:<name>]` tokens (Twitch's with `twitch.` before the id, YouTube's emoji
@@ -345,7 +347,12 @@ Module map (`src/kick_clip_hunter/`):
   stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
   /moments/{id}/vod` says where the review page plays such a moment from its stream's VOD:
   the VOD's playlist and how far into it the clip would begin (`_vod_place`, by
-  `vod_footage.seconds_in`) - of a Kick channel's only (`VOD_PLAYED_HERE`). `POST /channels/{slug}/always_record` sets whether a channel is
+  `vod_footage.seconds_in`) - of a Kick channel's only (`VOD_PLAYED_HERE`). What a Kick or
+  Twitch channel's platform lists of its VODs once a stream is over (`streams.vod_access`) is
+  asked when the channel is set to be tracked for moments and, of every such channel on the
+  watchlist, again once what was seen is a day old (`_look_at_vod_access`, from the hourly
+  `_keep_knowing_vod_access`), and kept (`streamers.vod_access`, `vod_access_at`) for the
+  Channels page; a platform that could not be asked leaves what was seen before. `POST /channels/{slug}/always_record` sets whether a channel is
   recorded always (`streamers.always_record`); the recording itself is then started by
   `_record_stream_by_itself`, which the recording loop calls. Settings are saved through `POST /tuning` (all channels),
   `POST /channels/{slug}/tuning` (a channel's own) and `POST
@@ -682,7 +689,7 @@ Module map (`src/kick_clip_hunter/`):
   none for a VOD kept for subscribers only. Where a person watches that VOD is the site's
   page of it, by an id only the site's newer API lists (`watch_link_at`, by `site_covering`:
   `kick.com/<slug>/videos/<id>?t=<seconds>`, which its player starts at), and that list is
-  also what says whether a channel's VODs stay public once a stream is over (`vod_trouble`)
+  also what says whether a channel's VODs stay public once a stream is over (`vod_access`)
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
   `extract_clip()` to cut a clip from it. A thread per channel polls the live playlist
   (`httpx`) and saves each source MPEG-TS segment untouched, named by its

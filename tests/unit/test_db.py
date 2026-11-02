@@ -686,6 +686,25 @@ class TestChannelsRecordedAlways:
         assert (row["slug"], row["tracking_enabled"], row["always_record"]) == ("old_channel", 0, 0)
 
 
+class TestWhatAChannelKeepsOfItsVods:
+    def test_nothing_is_known_of_it_to_begin_with(self, conn):
+        db.add_streamer(conn, 1, "some_channel")
+
+        assert [(row["vod_access"], row["vod_access_at"]) for row in db.get_streamers(conn)] == [(None, None)]
+
+    def test_what_was_seen_is_kept_with_when_for_that_channel_alone(self, conn):
+        db.add_streamer(conn, 1, "for_subscribers")
+        db.add_streamer(conn, 2, "other_channel")
+        at = datetime(2026, 11, 2, 19, 30, tzinfo=timezone.utc)
+
+        db.set_vod_access(conn, 1, "subscribers", at)
+
+        assert {row["slug"]: (row["vod_access"], row["vod_access_at"]) for row in db.get_streamers(conn)} == {
+            "for_subscribers": ("subscribers", at.isoformat()),
+            "other_channel": (None, None),
+        }
+
+
 class TestChannelsTrackedForTheirChatAlone:
     def tracked_for(self, conn, slug: str) -> tuple[int, int]:
         row = db.get_streamer_by_slug(conn, slug)

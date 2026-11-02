@@ -35,13 +35,16 @@
   {% elif moment.vod_watch %}
   {#- The script asks the service where in the VOD the moment is, puts a
       player of the VOD's playlist here - one whose clip time is the strip's,
-      as a clip's is - and starts it where the link to the VOD starts.
-      Shown once the script is there. -#}
-  <div class="player vod" hidden data-vod-watch="{{ moment.vod_watch }}">
+      as a clip's is - and starts it where the link to the VOD starts. Until
+      it plays, what is said of it is said here, under the button pressed:
+      the moment's status line is too far down to be seen beside a player
+      this size. Shown once the script is there. -#}
+  <div class="player vod" hidden data-vod-watch="{{ moment.vod_watch }}" data-status-scope>
     <button type="button" class="ch-btn" title="Plays the stream's VOD here, from where the link to it starts" data-vod-watch-go>
       <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
       Play from the VOD
     </button>
+    <p class="status-line" role="status" data-status></p>
   </div>
   {% endif %}
   {% if playable %}
@@ -85,11 +88,15 @@
   {% if moment.on_request %}
   {#- No stream of the channel comes in: the clip is cut from the stream's
       VOD once it is asked for here. The script posts, says how far that
-      has got, and opens the moment again once the clip is there. Shown
-      once the script is there. -#}
+      has got - here, beside the button, as the VOD's box says its own -
+      and opens the moment again once the clip is there. The button is
+      shown once the script is there. -#}
   {% set asked = moment.on_request %}
-  <div class="no-clip on-request" data-vod-clip="{{ asked.url }}"{% if asked.busy %} data-busy{% endif %}>
-    <p>No clip has been cut of this moment yet: its channel is tracked for moments, so a clip is cut from the stream's VOD once you ask for it.</p>
+  <div class="no-clip on-request" data-vod-clip="{{ asked.url }}"{% if asked.busy %} data-busy{% endif %} data-status-scope>
+    <div>
+      <p>No clip has been cut of this moment yet: its channel is tracked for moments, so a clip is cut from the stream's VOD once you ask for it.</p>
+      <p class="status-line" role="status" data-status>{{ asked.words }}</p>
+    </div>
     <button type="button" class="ch-btn ch-btn-primary" title="Cuts the clip, with the footage around it, from the stream's VOD" hidden data-vod-clip-go{% if asked.busy %} disabled{% endif %}>Cut the clip</button>
   </div>
   {% elif not moment.clip_url %}
@@ -162,7 +169,7 @@
     <span class="ch-cap">exactly this</span>
     <textarea class="ch-input note" rows="1" aria-label="Note" placeholder="Note: what makes it good or bad?" data-note>{{ moment.notes }}</textarea>
   </div>
-  <p class="status-line" role="status" data-status>{% if moment.footage and moment.footage.busy %}{{ moment.footage.words }}{% elif moment.on_request %}{{ moment.on_request.words }}{% endif %}</p>
+  <p class="status-line" role="status" data-status>{% if moment.footage and moment.footage.busy %}{{ moment.footage.words }}{% endif %}</p>
 
   <div class="ch-tags" role="group" aria-label="Kind of moment">
     <span>Moment</span>

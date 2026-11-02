@@ -86,7 +86,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   from - Kick's for about a month (`original_expires_at` in the site's list), Twitch's for a
   week to two months - and only while anyone may watch it: on a Kick channel that keeps its
   VODs for subscribers only once a stream is over, "Cut the clip" works while the stream is
-  on and fails after (choosing Moments for the channel says so, as far as Kick lists it). A
+  on and fails after, as "Play from the VOD" does (choosing Moments for the channel says so,
+  as far as Kick lists it, and the Channels page shows it under the channel's name: every
+  Kick and Twitch channel's VODs are asked about once a day). A
   clip of one is cut by the VOD's clock, not found by its pictures: seconds off where the
   recorder would have cut it, which the pre-roll and the context take in their stride. While
   the stream is on, "Cut the clip" waits until the VOD has had 45 s to reach the end of the

@@ -46,6 +46,15 @@ RECORDED_ONLY = frozenset({TIKTOK})
 # YouTube keeps a stream that is on to be wound back (see Vod.numbered), but
 # nothing of it in the stream's own form once it is over.
 KEEP_VODS = frozenset({KICK, TWITCH})
+# What such a platform lists of a channel's VODs once a stream is over,
+# which decides whether footage can still be had from one then: public,
+# kept for the channel's subscribers only (Kick - a stream that is on is
+# public whatever it keeps afterwards), kept from the public otherwise, or
+# none listed at all.
+VODS_PUBLIC = "public"
+VODS_FOR_SUBSCRIBERS = "subscribers"
+VODS_HIDDEN = "hidden"
+VODS_NONE = "none"
 
 # What stands between a channel's name on its platform and the platform's.
 # Neither Kick's names nor Twitch's can have one, nor YouTube's or TikTok's

@@ -394,6 +394,15 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("UPDATE streamers SET platform_user_id = CAST(broadcaster_user_id AS TEXT)")
         conn.commit()
 
+    # What the channel's platform was last seen to list of its VODs once a
+    # stream is over (platforms.VODS_*) - whether footage can still be had
+    # from one then - and when that was seen. NULL until it has been asked
+    # (see main._look_at_vod_access).
+    if "vod_access" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN vod_access TEXT")
+    if "vod_access_at" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN vod_access_at TEXT")
+
     return conn
 
 
@@ -592,7 +601,7 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
     conn.row_factory = sqlite3.Row
     return conn.execute(
         "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, moments_only, own_tuning,"
-        " always_record, platform, platform_user_id"
+        " always_record, platform, platform_user_id, vod_access, vod_access_at"
         " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
         (platform, platform),
     ).fetchall()
@@ -703,6 +712,16 @@ def set_streamer_tracking(
             1 if moments_only and enabled else 0,
             broadcaster_user_id,
         ),
+    )
+    conn.commit()
+
+
+def set_vod_access(conn: sqlite3.Connection, broadcaster_user_id: int, access: str, at: datetime) -> None:
+    """Keeps what a channel's platform was seen to list of its VODs once a
+    stream is over (platforms.VODS_*), at `at`."""
+    conn.execute(
+        "UPDATE streamers SET vod_access = ?, vod_access_at = ? WHERE broadcaster_user_id = ?",
+        (access, at.isoformat(), broadcaster_user_id),
     )
     conn.commit()
 

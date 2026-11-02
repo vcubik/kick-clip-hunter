@@ -149,6 +149,65 @@ class TestTrackingAChannelForMoments:
         assert offered("someone@youtube") == ["off", "chat", "clips"]
 
 
+class TestWhatAChannelKeepsOfItsVods:
+    """What a channel's platform lists of its VODs once a stream is over is
+    kept, and the Channels page says where it keeps footage from being had
+    from them then - a moment's clip cut when asked for among it."""
+
+    SUBSCRIBERS_ONLY = (
+        "Kick keeps this channel's VODs for its subscribers only once a stream is over: "
+        "a moment's clip can be cut only while its stream is still on."
+    )
+
+    async def notes(self, service) -> dict[str, tuple[str, str]]:
+        """What the Channels page says of each channel's VODs, by channel,
+        with its words for it on hover."""
+        page = parse((await service.client.get("/dashboard/channels")).text)
+        return {
+            row.one("button", data_remove_channel=True).attrs["data-remove-channel"]: (note.text, note.attrs["title"])
+            for row in page.find("tr")
+            for note in row.find("span", data_vods=True)
+        }
+
+    async def test_setting_a_channel_to_be_tracked_for_moments_keeps_what_kick_lists(self, service):
+        service.watch(CHANNEL, broadcaster_user_id=USER_ID)
+        service.api.channels[CHANNEL].videos = [kick_video(START, 3600, SOURCE, status="subscriber_only")]
+
+        await track(service, "moments")
+
+        assert await self.notes(service) == {CHANNEL: ("VODs for subscribers", self.SUBSCRIBERS_ONLY)}
+
+    async def test_every_watched_channel_is_asked_about_and_again_once_what_was_seen_is_a_day_old(self, service):
+        service.watch(CHANNEL, broadcaster_user_id=USER_ID)
+        service.api.channels[CHANNEL].videos = [kick_video(START, 3600, SOURCE, status="subscriber_only")]
+        service.watch("other_channel", broadcaster_user_id=USER_ID + 1)
+        service.api.channels["other_channel"].videos = [kick_video(START, 3600, SOURCE)]
+        now = datetime.now(timezone.utc)
+
+        await service.main._look_at_vod_access(now)
+
+        # Nothing where they stay public.
+        assert await self.notes(service) == {CHANNEL: ("VODs for subscribers", self.SUBSCRIBERS_ONLY)}
+
+        service.api.channels[CHANNEL].videos = [kick_video(START, 3600, SOURCE)]
+        await service.main._look_at_vod_access(now + service.main.VOD_ACCESS_FRESH - timedelta(minutes=1))
+        assert await self.notes(service) == {CHANNEL: ("VODs for subscribers", self.SUBSCRIBERS_ONLY)}
+
+        await service.main._look_at_vod_access(now + service.main.VOD_ACCESS_FRESH)
+        assert await self.notes(service) == {}
+
+    async def test_a_channel_kick_does_not_answer_for_keeps_what_was_seen(self, service):
+        service.watch(CHANNEL, broadcaster_user_id=USER_ID)
+        service.api.channels[CHANNEL].videos = [kick_video(START, 3600, SOURCE, status="subscriber_only")]
+        now = datetime.now(timezone.utc)
+        await service.main._look_at_vod_access(now)
+        service.api.failures["web.kick.com"] = 503
+
+        await service.main._look_at_vod_access(now + service.main.VOD_ACCESS_FRESH)
+
+        assert await self.notes(service) == {CHANNEL: ("VODs for subscribers", self.SUBSCRIBERS_ONLY)}
+
+
 class TestAMomentCaught:
     # Kick's VOD was seen to begin five seconds before the start kick.com
     # lists for its stream.
@@ -336,7 +395,8 @@ class TestItsClipCutWhenAskedFor:
         assert (standing["state"], standing["busy"]) == (dashboard_view.FOOTAGE_FAILED, False)
         assert standing["words"].startswith("Kick lists no VOD of that stream")
         assert moment(asked_for)["clip_path"] is None
-        assert (await page_of(service, asked_for)).one("p", data_status=True).text == standing["words"]
+        block = (await page_of(service, asked_for)).one("div", data_vod_clip=True)
+        assert block.one("p", data_status=True).text == standing["words"]
 
     async def test_a_vod_that_holds_only_the_footage_before_the_clip_cuts_none(
         self, service, hls, ts_segments, channel, asked_for
@@ -557,7 +617,8 @@ class TestTheReviewPage:
         block = page.one("div", data_vod_clip=f"/moments/{moment_id}/clip")
         assert "data-busy" not in block.attrs
         assert block.one("button", data_vod_clip_go=True).text == "Cut the clip"
-        assert block.one("p").text.startswith("No clip has been cut of this moment yet")
+        assert block.find("p")[0].text.startswith("No clip has been cut of this moment yet")
+        assert block.one("p", data_status=True).text == ""
         watch = page.one("a", data_watch=True)
         assert (watch.attrs["href"], watch.text) == ("https://kick.com/some_channel/videos/v1?t=3565", "Watch on Kick")
         assert watch.attrs["target"] == "_blank"
@@ -573,10 +634,27 @@ class TestTheReviewPage:
         box = page.one("div", data_vod_watch=f"/moments/{moment_id}/vod")
         assert "hidden" in box.attrs
         assert box.one("button", data_vod_watch_go=True).text == "Play from the VOD"
+        # What is said of it until it plays - why it can't, too - is said in
+        # the box, under the button pressed.
+        assert "data-status-scope" in box.attrs
+        assert box.one("p", data_status=True).text == ""
         assert "hidden" in page.one("div", data_vod_transport=True).attrs
         # The strip under it goes with the VOD's player as with a clip's.
         assert page.one("div", data_strip=True).attrs["role"] == "slider"
         assert page.one("div", data_playhead=True)
+
+    async def test_how_far_cutting_its_clip_has_got_is_said_beside_the_button(self, service, channel):
+        moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)
+        service.main._vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_JOINING}
+
+        page = await page_of(service, moment_id)
+
+        # Not in the moment's own status line, out of sight below a player
+        # of the clip's size.
+        block = page.one("div", data_vod_clip=f"/moments/{moment_id}/clip")
+        assert "data-status-scope" in block.attrs
+        assert block.one("p", data_status=True).text == "Putting the clip together."
+        assert [line.text for line in page.find("p", data_status=True)] == ["", "Putting the clip together.", ""]
 
     async def test_a_twitch_moment_without_its_clip_has_only_its_link(self, service):
         moment_id = add_moment(

@@ -39,7 +39,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   A moment of a channel tracked for moments has no clip until it is asked for: in the clip's
   place the page says so, with "Cut the clip" (`POST /moments/{id}/clip`, a tracked background
   task the page follows as it follows footage being added - `GET /moments/{id}/clip`, its words
-  in the status line - until it opens the moment again with its clip). The clip is cut from the
+  beside the button, under what the page says in the clip's place - until it opens the moment
+  again with its clip). The clip is cut from the
   stream's VOD (`vod_footage.cut`), framed as the channel's clips are framed now, once the VOD
   reaches the end of the moment's footage - which can take a minute while the stream is on, said
   as "Waiting for the stream's VOD" - and the moment is then like any other; refused until chat
@@ -57,8 +58,10 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   hls.js plays the playlist (`static/hls/`, loaded the first time it is wanted). Its time is
   clip time, as a clip's is, so the transport, the trace and the chat go with it; it is asked
   for each time, and a VOD kept for subscribers once its stream is over, or one that does not
-  reach the moment (yet), is said in the status line. Twitch lets no page but its own fetch its
-  VODs, so a Twitch moment has its link only (`main.VOD_PLAYED_HERE`).
+  reach the moment (yet), is said in the box, under the button. Both say what they say where
+  they were pressed: the moment's own status line, under its rating, is out of sight below a
+  player that size. Twitch lets no page but its own fetch its VODs, so a Twitch moment has its
+  link only (`main.VOD_PLAYED_HERE`).
   Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
@@ -80,7 +83,13 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   VODs staying once a stream is over (`platforms.KEEP_VODS`; the route refuses it for any other),
   and choosing it says what the platform lists of the channel's VODs that would keep a clip from
   being cut afterwards - none at all, or kept for subscribers only once a stream is over
-  (`streams.vod_trouble`, the response's `said`, in the row's status line). Chat keeps its chat
+  (`streams.vod_access` and `vod_trouble`, the response's `said`, in the row's status line).
+  What the platform lists is also kept, and asked again of every Kick and Twitch channel on
+  the watchlist once what was seen is a day old (`main._look_at_vod_access`,
+  `streamers.vod_access`): where it keeps footage from being had from the VODs once a stream
+  is over - for a moment's clip cut when asked for, or more of a moment's stream added to its
+  file - the row says so under the channel's name ("VODs for subscribers", "VODs not
+  public", "No VODs listed"), with the platform's words for it on hover. Chat keeps its chat
   and nothing more - stored like a tracked channel's, for the Analyze page,
   never seen by the detector, nothing recorded for it. Of a channel tracked for moments or for
   its chat its platform is still asked whether it is live, so that "Right now" can say "Live,
