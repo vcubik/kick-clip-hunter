@@ -29,13 +29,15 @@
               means on hover. -#}
           <td title="{{ channel.platform }} user id {{ channel.platform_user_id }}">{{ channel.slug }}
             {%- if channel.vods %}<span class="ch-meta channel-vods" title="{{ channel.vods.said }}" data-vods>{{ channel.vods.words }}</span>{% endif %}</td>
-          <td class="ch-meta">{{ channel.added }}</td>
-          <td data-now="{{ channel.slug }}">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
-          <td>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}{% endif %}</td>
-          <td data-always-record>{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
+          {#- Each cell is named after its column (`data-label`) for where the
+              table is a block per channel, the columns' names not shown. -#}
+          <td class="ch-meta" data-label="Added">{{ channel.added }}</td>
+          <td data-now="{{ channel.slug }}" data-label="Right now">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
+          <td data-label="Tracking">{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}{% endif %}</td>
+          <td data-always-record data-label="Always record">{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
           {#- One button or the other, and what the recording is doing; the
               script keeps both current while there is one. -#}
-          <td>
+          <td data-label="Stream recording">
             <span class="rec-control" data-recording="{{ channel.slug }}" data-recording-state="{{ ("running" if whole.running else "saving") if whole else "" }}">
               <span class="ch-meta" data-recording-words>{{ whole.words if whole else "" }}</span>
               <button type="button" class="ch-btn ch-btn-compact" aria-label="Start recording {{ channel.slug }}" data-recording-start{% if whole and whole.running %} hidden{% endif %}>Start recording</button>
