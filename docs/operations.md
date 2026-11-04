@@ -137,7 +137,18 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
 - Kick's webhook config UI occasionally fails to persist a URL change silently. If a
   channel is confirmed live/chatting but no webhooks are arriving, the fix is: toggle
   **Enable Webhooks** off, re-enter the URL, re-enable, save, then refresh the page to
-  confirm the URL actually stuck.
+  confirm the URL actually stuck. Turning **Enable Webhooks** off deletes every event
+  subscription of the app: press "Check now" on the Health page afterwards (or wait for
+  the 10-minute check) so they are made again.
+- Kick has also stopped delivering altogether while everything on this side checked out:
+  after the service had been down for two days, every subscription was gone; once they
+  were made again, Kick listed all of them and watched channels were live, yet for hours
+  not one delivery arrived - none refused for its signature either, and a POST to the
+  public URL reached the app. Re-entering the URL and making the subscriptions again did
+  nothing; it worked again by itself two days later. So when the Health page says nothing
+  arrives but Subscriptions and Tunnel are fine, the cause is on Kick's side: waiting is
+  the fix, and a new Kick app (its keys in `.env`, then a restart) the way to tell whether
+  only this app is affected.
 - The 7TV public API (`7tv.io/v3/users/kick/{broadcaster_user_id}`) has no auth and
   returns a channel's full emote set, including very short names ("lo", "re", "xd") that
   are useless as substring keywords — `MIN_EMOTE_NAME_LENGTH` in `detector.py` filters
