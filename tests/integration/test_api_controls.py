@@ -11,6 +11,7 @@ import pytest
 from kick_clip_hunter import db, detector
 from kick_clip_hunter.db import MOMENT_TYPES, STREAM_TYPES
 from tests.support.data import add_moment, add_streamer, moment
+from tests.support.html import parse
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -407,6 +408,21 @@ class TestAddingAChannel:
         assert 'title="Twitch user id 123">new_channel@twitch<' in page
         assert f'title="YouTube user id {channel_id}">new.channel@youtube<' in page
         assert 'title="Kick user id 555">kick_channel<' in page
+
+    async def test_each_value_of_a_watchlist_row_is_named_as_its_column_is(self, service):
+        # On a phone the watchlist is a block per channel without the row of
+        # column names, so every cell between the name and Remove says what
+        # it is itself.
+        service.watch("kick_channel", 555)
+
+        page = parse((await service.client.get("/dashboard/channels")).text)
+
+        table = page.one("table", class_="watchlist")
+        columns = [header.text for header in table.find("th")]
+        (row,) = table.one("tbody").find("tr")
+        cells = row.find("td")
+        assert len(cells) == len(columns)
+        assert [cell.attrs.get("data-label") for cell in cells[1:-1]] == columns[1:-1]
 
     async def test_a_link_to_a_youtube_channel_adds_that_channel_by_its_handle(self, service, youtube):
         channel_id = youtube.add_channel("New.Channel").channel_id

@@ -208,3 +208,16 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   Recordings page fetches that section again every couple of seconds (`GET
   /dashboard/recordings/{id}/moments`). An empty
   queue is the normal state, so that page then says what the service is doing instead.
+- On a narrow screen: up to 1100 px wide the panes stack and the page scrolls - the queue (or
+  the list of recordings, or Analyze's channel and period) above what is open in it, the chat
+  under that. A moment opened from the queue is then scrolled into view, and so is what the
+  page's address asks for: a moment (`?moment=`, as a notification's link has it), a recording
+  (`?recording=`), or on the Analyze page any channel or period - the script's `showOpen`. Up to
+  640 px (a phone) nothing on a page is wider than the screen: the bar has the pages as tabs in
+  two rows of three, the transport under a clip takes two lines (no volume slider - a phone has
+  its own buttons), the rating keys run across the width, the steps between a trace's ends are
+  left out, the watchlist is a block per channel with each value named in front of it (the
+  cells' `data-label`), and the Trim dialog takes the whole screen. On a touch screen
+  (`pointer: coarse`) the compact controls and tabs grow to 36 and 40 px, the handles and
+  sliders' thumbs to 20 px, a field's words are 16 px so that a phone does not zoom in on it,
+  and the keyboard's keys are not listed (`hover: none`).

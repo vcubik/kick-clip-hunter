@@ -90,6 +90,23 @@
   let opening = 0; // counts requests to open a moment, so only the latest one lands
   let loading = 0; // how many of them are still on their way
 
+  // On a narrow screen - a phone - the list a page opens things from is
+  // above what is open rather than beside it, and what is open can be a
+  // screen or more further down. It is brought into view when a moment is
+  // opened from the queue, and when the page was asked for one thing: a
+  // moment, a recording, a stretch of a channel's chat.
+  function showOpen() {
+    const open = one(".open");
+    const list = one(".queue");
+    if (open && list && open.offsetTop > list.offsetTop) open.scrollIntoView({ block: "start" });
+  }
+
+  function askedForOne() {
+    if (location.hash) return false; // the browser goes there by itself
+    const asked = new URLSearchParams(location.search);
+    return asked.has("moment") || asked.has("recording") || (Boolean(one(".analyze")) && location.search.length > 1);
+  }
+
   // Opens the moment of a queue row beside the queue. The row is an ordinary
   // link to the same thing, which is what happens if this cannot be done.
   async function openMoment(row, { play = false } = {}) {
@@ -116,6 +133,7 @@
     for (const other of rows()) other.removeAttribute("aria-current");
     row.setAttribute("aria-current", "true");
     row.scrollIntoView({ block: "nearest" });
+    showOpen();
     history.replaceState(null, "", row.href);
     dress();
     if (play) one("[data-clip]")?.play().catch(() => {});
@@ -431,7 +449,9 @@
 
   function toggleFullScreen(video) {
     if (document.fullscreenElement) document.exitFullscreen();
-    else video.requestFullscreen?.().catch(() => {});
+    else if (video.requestFullscreen) video.requestFullscreen().catch(() => {});
+    // An iPhone has no full screen for a page, only its own for a video.
+    else video.webkitEnterFullscreen?.();
   }
 
   // ---- The strip as a scrubber ------------------------------------------
@@ -3366,6 +3386,7 @@
   currentRow()?.scrollIntoView({ block: "nearest" });
   if (one("[data-news]")) setInterval(checkForNew, NEWS_INTERVAL_MS);
   one('.rec-row[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+  if (askedForOne()) showOpen();
   if (one("[data-recording-clip]")) paintRecording(one("[data-recording-clip]"));
   loadRecordingTrace();
   watchFound();

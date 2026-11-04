@@ -521,6 +521,7 @@ only test the fake:
 | The public tunnel and the Kick-side webhook configuration | Infrastructure outside the repository. What the Health page makes of Tailscale's answers is tested; that those answers are still what Tailscale prints is step 1 below. |
 | `static/dashboard.js` - the Health page: fetching it again every few seconds, the Check now button | As for the rest of the script: the page and the endpoint the button calls are tested, the script is checked by hand (step 1 below). |
 | `static/dashboard.js` - a channel's Tracking choice (Off, Chat, Clips) on the Channels page | As for the rest of the script: the choice the page renders and the route it posts to are tested, the script is checked by hand (step 21 below). |
+| The pages on a phone: `static/dashboard.css`'s phone and touch sections, and the script bringing what is open into view on a narrow screen and going full screen on an iPhone | There is no browser in the suite. The markup they rely on is tested (the watchlist's cells named as their columns are); how the pages lay out and respond to a finger is checked by hand (step 23 below). |
 | Telegram's actual Bot API and Discord's actual webhooks: a note on a phone, a clip as a video in a chat, an embed in a channel | `FakeTelegram` and `FakeDiscord` encode what Telegram and Discord document (October 2026: `sendMessage` and `sendVideo` in HTML, 50 MB a video; an execute-webhook with `payload_json` and `files[0]`, 20 MB a file on a server without boosts; 429 with how long to wait). What a note looks like there, and that the limits still hold, is step 19 below. |
 
 Run this on a live channel after changing any of the above, or the code right next to it:
@@ -796,6 +797,15 @@ Run this on a live channel after changing any of the above, or the code right ne
    its clip - the reaction inside the clip, with footage before and after it; Trim, Add before /
    after and Transcribe work on it as on any clip. Do the same with a Twitch channel, and with a
    moment some days old after the stream is over.
+23. **Use it from a phone.** Open the dashboard on a phone, at the address `DASHBOARD_URL` gives
+   (over the tailnet). No page scrolls sideways, and the bar has the pages as tabs in two rows of
+   three. On the review page tap a row of the queue: the moment opens and the page scrolls to it.
+   Tapping the clip plays it, dragging along the trace moves through it, and full screen shows it
+   whole (on an iPhone in the phone's own player); the rating keys run across the width. A link
+   from a notification opens on its moment, not on the queue above it. Trim takes the screen, and
+   its handles and the box of chat over the picture move under a finger. On the Channels page
+   each channel is a block of named lines with its controls; on the Settings page tapping into a
+   field does not zoom the page in.
 
 ## Checking a detector change against a real stream
 

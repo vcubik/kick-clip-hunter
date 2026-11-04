@@ -92,9 +92,11 @@
   --w-trim-chat: 300px;
   --w-recording: 340px;
   --w-handle: 12px;
+  --w-thumb: 12px;        /* the thumb of a slider */
   --w-analysis: 1200px;
   --w-gutter: 44px;
   --w-when: 152px;
+  --w-label: 104px;       /* on a phone, the name in front of a value of a channel on the watchlist */
   --w-map-cell: 48px;     /* a cell of the shared-audience map */
   --h-map-head: 136px;    /* the most a channel's name over a column of it takes */
 
@@ -343,17 +345,17 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-volume { appearance: none; width: 88px; height: var(--h-compact); margin: 0 var(--space-4) 0 calc(-1 * var(--space-4)); background: transparent; cursor: pointer; }
 .ch-volume::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-control); background: linear-gradient(to right, var(--lit) var(--level, 100%), var(--inset) var(--level, 100%)); }
 .ch-volume::-moz-range-track { height: 4px; border-radius: var(--radius-control); background: linear-gradient(to right, var(--lit) var(--level, 100%), var(--inset) var(--level, 100%)); }
-.ch-volume::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
-.ch-volume::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-volume::-webkit-slider-thumb { appearance: none; width: var(--w-thumb); height: var(--w-thumb); margin-top: calc((4px - var(--w-thumb)) / 2); border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-volume::-moz-range-thumb { width: var(--w-thumb); height: var(--w-thumb); border: 0; border-radius: var(--radius-dot); background: var(--lit); }
 
 /* A slider with a place it rests at, where a notch is: the middle, unless
    --rest says how far along it is. The notch is under the thumb's centre
    there, which travels a thumb's width less than the slider is wide. */
-.ch-shift { appearance: none; width: 240px; height: var(--h-compact); margin: 0; background: linear-gradient(var(--text-2), var(--text-2)) calc(5px + (100% - 10px) * var(--rest, 0.5)) center / 2px 14px no-repeat; cursor: pointer; }
+.ch-shift { appearance: none; width: 240px; height: var(--h-compact); margin: 0; background: linear-gradient(var(--text-2), var(--text-2)) calc(var(--w-thumb) / 2 - 1px + (100% - var(--w-thumb) + 2px) * var(--rest, 0.5)) center / 2px 14px no-repeat; cursor: pointer; }
 .ch-shift::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-control); background: var(--inset); }
 .ch-shift::-moz-range-track { height: 4px; border-radius: var(--radius-control); background: var(--inset); }
-.ch-shift::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
-.ch-shift::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-shift::-webkit-slider-thumb { appearance: none; width: var(--w-thumb); height: var(--w-thumb); margin-top: calc((4px - var(--w-thumb)) / 2); border: 0; border-radius: var(--radius-dot); background: var(--lit); }
+.ch-shift::-moz-range-thumb { width: var(--w-thumb); height: var(--w-thumb); border: 0; border-radius: var(--radius-dot); background: var(--lit); }
 .ch-shift:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Dialog: one job done over the page, which waits under a shade. Square and
@@ -409,7 +411,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .queue .ch-keys-hint { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); }
 .queue-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
 
-.open { display: grid; min-width: 0; min-height: 0; }
+/* One column, never wider than the page: what is open does not widen it
+   when the panes stack. */
+.open { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; }
 .moment, .recording { display: grid; grid-template-columns: minmax(0, 1fr) var(--w-chat); min-height: 0; }
 
 /* The stage column is as wide as its clip, and the clip as tall as leaves
@@ -857,6 +861,8 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .chat-lines::before { content: none; }
   .stage { overflow: visible; padding: var(--space-16); }
   .stage-in { max-width: none; }
+  .moment-head { flex-wrap: wrap; }
+  .ch-transport { flex-wrap: wrap; row-gap: var(--space-8); height: auto; min-height: var(--h-control); }
   .verdict { flex-wrap: wrap; }
   .note { flex-basis: 100%; }
   .chat { border-left: 0; border-top: 1px solid var(--line); }
@@ -866,7 +872,10 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .trim-foot { flex-wrap: wrap; }
   .trim-foot .trim-said { flex-basis: 100%; }
   .statement, .channels { overflow: visible; padding: var(--space-24) var(--space-16); }
-  .watchlist { display: block; overflow-x: auto; }
+  /* Scrolled sideways inside itself. Positioned, so that the hidden name
+     of its last column - placed absolutely - is in it too, rather than
+     stretching the page as wide as the table. */
+  .watchlist { position: relative; display: block; overflow-x: auto; }
   .health-table { display: block; overflow-x: auto; }
   .set-page, .set-form { display: block; }
   .set-side { overflow: visible; }
@@ -875,4 +884,112 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .an-page { overflow: visible; padding: var(--space-16); }
   .an-head { flex-wrap: wrap; align-items: flex-start; }
   .an-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- Phones: one column, nothing wider than the screen -------------- */
+
+/* What sat side by side on one line wraps or goes under it, a table of
+   controls becomes a block a row, and the one dialog that is a whole job,
+   Trim, takes the screen. */
+@media (max-width: 640px) {
+  /* The bar: the name and shutting down, the pages under them as tabs in
+     two rows of three - every one of them in sight - and under those what
+     the service is doing. */
+  .bar { column-gap: var(--space-12); }
+  .bar-state { display: contents; }
+  .bar-shutdown { margin-left: auto; }
+  .bar-nav { order: 1; flex: 1 1 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+  .bar-nav a { flex-wrap: wrap; justify-content: center; column-gap: var(--space-4); padding: var(--space-2) var(--space-4) 0; border-radius: var(--radius-control); background-color: var(--quiet); line-height: 16px; text-align: center; }
+  .bar-flag:not(:empty) { margin-left: 0; }
+  .bar .ch-lamp, .bar-meta, .bar-switch { order: 2; }
+  .bar-switch { margin-left: auto; }
+  .ch-group { flex-wrap: wrap; }
+  .ch-group b { overflow-wrap: anywhere; }
+
+  /* The open moment: its name on a line of its own; the transport on two
+     lines, more of the stream on the second, without a volume - a phone
+     has its own; the rating keys across the width, what the ends of the
+     scale mean under them. */
+  .moment-head > div { min-width: 0; }
+  .moment-head .title { overflow-wrap: anywhere; }
+  .moment-clock { flex-wrap: wrap; }
+  .moment-name { order: 1; flex: 1 1 100%; max-width: none; margin-right: 0; }
+  .ch-transport { gap: var(--space-8); }
+  .ch-transport .footage { order: 1; flex: 1 1 100%; }
+  .ch-volume { display: none; }
+  /* Under a moment's trace, and the strip Trim cuts on, the ends only: the
+     steps between them would run into each other. */
+  .trace:not(.rec-trace) .ch-axis .is-middle, .trim-track .ch-axis .is-middle { display: none; }
+  .ch-strip .ch-note { white-space: normal; }
+  .verdict { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4) var(--space-12); }
+  .verdict .ch-keys { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .verdict .ch-key { width: auto; }
+  .verdict .ch-cap { grid-row: 2; height: auto; }
+  .verdict .ch-keys + .ch-cap { justify-self: end; }
+  .note { grid-column: 1 / -1; }
+  .on-request { flex-direction: column; align-items: flex-start; gap: var(--space-12); }
+
+  /* Trim: the whole screen; either end of the cut, typed, gets half a line,
+     and chat's slider a line of its own. */
+  .ch-dialog.trim { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: var(--space-12); border: 0; }
+  .trim-range { flex: 1 1 100%; min-width: 0; white-space: normal; }
+  .trim-range label { flex: 1 1 0; min-width: 0; }
+  .trim-time { flex: 1 1 0; width: auto; min-width: 0; }
+  .trim-shift { flex: 1 1 100%; }
+  .trim-shift .ch-shift { flex: 1 1 0; width: auto; min-width: 0; }
+  .trim-shift-words { min-width: 0; }
+
+  /* The watchlist: a block per channel - its name with Remove beside it,
+     then the rest a line each, with what it is in front of it. */
+  .watchlist, .watchlist tbody { display: block; overflow: visible; }
+  .watchlist thead { display: none; }
+  .watchlist tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-8) var(--space-12); padding: var(--space-12) 0; border-top: 1px solid var(--quiet); }
+  .watchlist td, .watchlist td:nth-last-child(-n+3) { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); width: auto; height: auto; padding: 0; border: 0; text-align: left; white-space: normal; }
+  .watchlist td::before { content: attr(data-label); flex: none; width: var(--w-label); font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-2); }
+  .watchlist td:first-child { display: block; grid-column: 1; overflow-wrap: anywhere; }
+  .watchlist td:last-child { grid-column: 2; grid-row: 1; }
+  .watchlist td:first-child::before, .watchlist td:last-child::before { content: none; }
+  .rec-control { flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
+  .rec-control > .ch-meta:empty { display: none; }
+  .add-channel .ch-input { width: 100%; }
+  .settings { grid-template-columns: minmax(0, 1fr) max-content; }
+  .settings .ch-cap { grid-column: 1 / -1; }
+  /* A setting typed in words - a list's next item, where notifications
+     go - has the width for them, and its buttons go under it. */
+  .set-value:has(.set-add) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: var(--space-8); }
+  .set-value .set-add { grid-column: 1 / -1; }
+
+  /* Analyze: its tabs across the width, the figures two abreast, and a
+     message under when it came. */
+  .an-head .ch-tabs { flex: 1 1 100%; width: auto; }
+  .an-search .ch-input { flex: 1 1 100%; width: auto; max-width: none; }
+  .an-search .an-text { flex: 1 1 0; min-width: 0; }
+  .an-figures { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); }
+  .an-line { grid-template-columns: minmax(0, 1fr); }
+  .an-table td { overflow-wrap: anywhere; }
+  .trial-result { display: block; overflow-x: auto; }
+}
+
+/* ---- Touch: what is pressed is big enough for a finger -------------- */
+
+/* The controls that are small for a mouse grow to what a finger can hit,
+   and what is typed into is in words large enough for a phone not to zoom
+   in on the field as it is. */
+@media (pointer: coarse) {
+  :root {
+    --h-compact: 36px;
+    --h-tab: 40px;
+    --w-handle: 20px;
+    --w-thumb: 20px;
+  }
+  .ch-input, .ch-select { font-size: 16px; }
+  .transcript-text { padding-top: 7px; padding-bottom: 7px; }
+  .trim-check input, .ch-check input { width: 20px; height: 20px; }
+  .set-chip-x { width: 32px; height: 32px; }
+}
+
+/* The keys that do something are said only where there is a keyboard to
+   press them on, not on a phone or a tablet. */
+@media (hover: none) {
+  .ch-keys-hint { display: none; }
 }

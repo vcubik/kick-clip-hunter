@@ -38,7 +38,7 @@
     </span>
     {#- Shutting down is asked for twice: this, then the same word again in
         the dialog, next to a sentence that says what it will do. -#}
-    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" data-shutdown-open{% if shutdown_requested %} disabled{% endif %}>{{ "Shutting down" if shutdown_requested else "Shut down" }}</button>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet bar-shutdown" data-shutdown-open{% if shutdown_requested %} disabled{% endif %}>{{ "Shutting down" if shutdown_requested else "Shut down" }}</button>
   </div>
 </header>
 <dialog class="ch-dialog ch-dialog-small" aria-labelledby="shutdown-title" data-shutdown data-status-scope>
