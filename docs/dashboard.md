@@ -62,8 +62,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   for each time, and a VOD kept for subscribers once its stream is over, or one that does not
   reach the moment (yet), is said in the box, under the button. Both say what they say where
   they were pressed: the moment's own status line, under its rating, is out of sight below a
-  player that size. Twitch lets no page but its own fetch its VODs, so a Twitch moment has its
-  link only (`main.VOD_PLAYED_HERE`).
+  player that size. Twitch lets no page but its own fetch its VODs, so a Twitch moment's VOD
+  comes through the service: the playlist the page is given is an address of `GET /vod/relay`,
+  which fetches it from Twitch and writes every address in it as one of its own
+  (`vod_relay.py`); it starts where the clip would begin, as Twitch's link does. A YouTube
+  moment has no VOD to play (`main.VOD_PLAYED_HERE`).
   Beside the clip, on a tab next to its chat, is its transcript
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a

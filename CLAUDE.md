@@ -156,6 +156,8 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
   found in the VOD by its pictures; `streams.vod_at` says where a stream's VOD is) - or, for a
   channel tracked for moments, its clip cut from the VOD in the first place, by the VOD's clock
   (`cut`; `streams.watch_link` is where a person watches it)
+- `vod_relay.py` — a VOD's playlists and footage fetched for the review page where its host
+  allows no other page to (Twitch); only addresses the service signed
 - `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in another repository
   (`REELS_REPO`): clip up into a release, storyboard back, the chosen variant rendered there
 - `clip_creator.py` — manual official Kick clips via the site's internal API
