@@ -176,6 +176,22 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
     size_bytes INTEGER,
     parts TEXT
 );
+
+-- A moment's clip made into a reel by GitHub Actions (see reels.py): where
+-- that stands (`state`), when the step it is in was asked for, the
+-- storyboard that came back (JSON), the variant and hook it was rendered
+-- with, the files kept of it (under the clips folder) and why it failed.
+CREATE TABLE IF NOT EXISTS reels (
+    moment_id INTEGER PRIMARY KEY,
+    state TEXT NOT NULL,
+    asked_at TEXT NOT NULL,
+    storyboard TEXT,
+    contact_path TEXT,
+    variant TEXT,
+    hook TEXT,
+    reel_path TEXT,
+    error TEXT
+);
 """
 
 
@@ -1874,3 +1890,49 @@ def add_channel_rename(conn: sqlite3.Connection, rename: dict) -> None:
     """Remembers one more, and forgets the oldest past
     CHANNEL_RENAMES_KEPT."""
     _store_first(conn, CHANNEL_RENAMES_KEY, rename, CHANNEL_RENAMES_KEPT)
+
+
+# -- reels (see reels.py) ------------------------------------------------------
+
+REEL_FIELDS = ("state", "asked_at", "storyboard", "contact_path", "variant", "hook", "reel_path", "error")
+
+
+def get_reel(conn: sqlite3.Connection, moment_id: int) -> sqlite3.Row | None:
+    """Where a moment's reel stands, or None where none was asked for."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute("SELECT * FROM reels WHERE moment_id = ?", (moment_id,)).fetchone()
+
+
+def get_reels_in(conn: sqlite3.Connection, states: Iterable[str]) -> list[sqlite3.Row]:
+    """The reels in any of these states, oldest moment first."""
+    states = tuple(states)
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        f"SELECT * FROM reels WHERE state IN ({', '.join('?' * len(states))}) ORDER BY moment_id", states
+    ).fetchall()
+
+
+def put_reel(conn: sqlite3.Connection, moment_id: int, **fields: object) -> None:
+    """Stores what is given of a moment's reel (see REEL_FIELDS); a reel
+    asked for the first time needs at least `state` and `asked_at`."""
+    unknown = set(fields) - set(REEL_FIELDS)
+    if unknown:
+        raise ValueError(f"not fields of a reel: {sorted(unknown)}")
+    if get_reel(conn, moment_id) is None:
+        names = ("moment_id", *fields)
+        conn.execute(
+            f"INSERT INTO reels ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})",
+            (moment_id, *fields.values()),
+        )
+    elif fields:
+        conn.execute(
+            f"UPDATE reels SET {', '.join(f'{name} = ?' for name in fields)} WHERE moment_id = ?",
+            (*fields.values(), moment_id),
+        )
+    conn.commit()
+
+
+def delete_reel(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Forgets a moment's reel - its files are the caller's to remove."""
+    conn.execute("DELETE FROM reels WHERE moment_id = ?", (moment_id,))
+    conn.commit()

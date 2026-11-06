@@ -70,7 +70,16 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   that is there alone ("Transcribe the cut", `POST /moments/{id}/trim/subtitles`, followed as the
   dialog follows a cut being made), which takes seconds rather than the whole file's while: its
   lines are the moment's transcript, the tab says which stretch it was heard from and offers
-  "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Delete, under the moment's tags, asks once
+  "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Reel, under
+  the moment's tags where the service is set up for reels (see `reels.py` below), makes the
+  clip into a 9:16 reel by GitHub Actions: "Make a reel" sends the clip and its chat there
+  (`POST /moments/{id}/reel`) and a storyboard comes back minutes later - what is in the clip,
+  two or three variants (one recommended), three hooks and a sheet of frames; a variant and a
+  hook (or words of one's own, `|` breaking the line and `*word*` highlighted) are pressed and
+  "Render" asks for the reel (`POST /moments/{id}/reel/render`, `variant` and `hook`), which
+  plays there once it is back, with a download. While a step goes on the page fetches the
+  section (`GET /dashboard/moments/{id}/reel`) every five seconds; a storyboard and a reel are
+  also told of as notes. "New storyboard" starts over. Delete, under the moment's tags, asks once
   more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut, it is being transcribed or footage is being added to it; one whose

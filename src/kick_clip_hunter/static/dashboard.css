@@ -94,6 +94,7 @@
   --w-handle: 12px;
   --w-thumb: 12px;        /* the thumb of a slider */
   --w-analysis: 1200px;
+  --h-reel: 480px;        /* a rendered reel, 9:16, on the review page */
   --w-gutter: 44px;
   --w-when: 152px;
   --w-label: 104px;       /* on a phone, the name in front of a value of a channel on the watchlist */
@@ -448,6 +449,23 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .verdict + .status-line { margin-bottom: var(--space-4); }
 .ch-tags + .ch-tags { margin-top: var(--space-8); }
 .moment-delete { margin-top: var(--space-12); }
+
+/* A moment's clip made into a reel (_reel.html): its storyboard's variants
+   and hooks are chosen as tags are, a row each. */
+.reel { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
+.reel-head { display: flex; align-items: center; gap: var(--space-12); }
+.reel-head h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
+.reel .status-line:empty { display: none; }
+.reel-board, .reel-done { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); margin-top: var(--space-8); max-width: 80ch; }
+.reel-thoughts { color: var(--text-2); }
+.reel-contact { display: block; max-width: 100%; }
+.reel-video { max-width: 100%; max-height: var(--h-reel); background: var(--video); }
+.reel-options { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
+.reel-option { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; padding: var(--space-8) 10px; border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; text-align: left; }
+.reel-option[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); }
+.reel-option:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.reel-option-head { font-stretch: var(--width-compact); }
+.reel-own { display: flex; flex-direction: column; gap: var(--space-4); margin-top: var(--space-4); }
 
 /* What the per-clip analysis found, when it has run. */
 .analysis { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; }

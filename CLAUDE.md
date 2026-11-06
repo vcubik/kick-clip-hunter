@@ -66,7 +66,7 @@ Read these on demand, not up front:
 - `.env` (gitignored): `KICK_CLIENT_ID`/`KICK_CLIENT_SECRET` (a Kick app); optionally
   `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` (without them no Twitch channel can be watched),
   `KICK_REDIRECT_URI`, `EULER_STREAM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
-  `TELEGRAM_API_URL`, `DISCORD_WEBHOOK_URL`, `DASHBOARD_URL`. YouTube and TikTok need nothing.
+  `TELEGRAM_API_URL`, `DISCORD_WEBHOOK_URL`, `DASHBOARD_URL`, `REELS_REPO`/`REELS_GITHUB_TOKEN`. YouTube and TikTok need nothing.
   Notifications can also be set up on the Settings page (that wins over `.env`).
 - One-time sign-ins: `scripts/twitch_login.py` (the Twitch account chat is read and the bot
   writes as, device flow), `scripts/kick_login.py` (a real browser window, for clip creation), the
@@ -155,6 +155,8 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
   found in the VOD by its pictures; `streams.vod_at` says where a stream's VOD is) - or, for a
   channel tracked for moments, its clip cut from the VOD in the first place, by the VOD's clock
   (`cut`; `streams.watch_link` is where a person watches it)
+- `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in another repository
+  (`REELS_REPO`): clip up into a release, storyboard back, the chosen variant rendered there
 - `clip_creator.py` — manual official Kick clips via the site's internal API
 - `transcriber.py`, `audio_events.py`, `frame_encoder.py`, `sound_events.py`, `ml_loading.py` —
   optional per-clip local ML capture (off by default), lazily loaded under one lock
@@ -217,8 +219,8 @@ The rest is in [docs/operations.md](docs/operations.md).
   place for experiments while it does (a restart would pick them up); use a copy.
 - A behaviour change comes with a test that would fail without it; a bug gets a failing test
   first. Fake at the boundary with the fakes in `tests/support/` (fake Kick, Twitch, EventSub,
-  YouTube, TikTok, HLS/FLV servers, Telegram, Discord, `WebhookSigner`, `ChatSim`, the `service`
-  fixture - listed in docs/testing.md) rather than patching the service's own functions, and
+  YouTube, TikTok, HLS/FLV servers, Telegram, Discord, GitHub, `WebhookSigner`, `ChatSim`, the
+  `service` fixture - listed in docs/testing.md) rather than patching the service's own functions, and
   never `sleep` - pass the clock in or use `wait_until`.
 - Detector tests are written against `detector.py`'s constants, not their current values, so
   retuning a threshold doesn't break them. If a tuning change does fail a test, it changed a

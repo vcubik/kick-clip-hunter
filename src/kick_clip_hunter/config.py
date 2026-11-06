@@ -35,6 +35,17 @@ class Settings:
     telegram_api_url: str = ""
     discord_webhook_url: str = ""
     dashboard_url: str = ""
+    # The repository whose GitHub Actions make a moment's clip into a reel
+    # (`owner/name`, see reels.py), and a token that may write its contents
+    # - and read its Actions, to notice a run that failed. No reels without
+    # both.
+    reels_repo: str = ""
+    reels_github_token: str = ""
+
+    @property
+    def reels(self) -> bool:
+        """Whether the service is set up to have reels made."""
+        return bool(self.reels_repo and self.reels_github_token)
 
     @property
     def twitch(self) -> bool:
@@ -57,4 +68,6 @@ def load_settings() -> Settings:
         telegram_api_url=os.environ.get("TELEGRAM_API_URL", "").strip(),
         discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", "").strip(),
         dashboard_url=os.environ.get("DASHBOARD_URL", "").strip(),
+        reels_repo=os.environ.get("REELS_REPO", "").strip(),
+        reels_github_token=os.environ.get("REELS_GITHUB_TOKEN", "").strip(),
     )

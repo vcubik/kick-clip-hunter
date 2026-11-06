@@ -741,6 +741,22 @@ Module map (`src/kick_clip_hunter/`):
   that had one - looks for it again over plain HTTP (`streams.vod_at`) every
   `VOD_LOOKUP_SECONDS`, from the loop's ticks and when a clip through an ad needs it
   (`_look_for_vod`, one look at a time); the Health page's "VOD" follows.
+- `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in a repository of the
+  reel tooling's own (`REELS_REPO`, reached with `REELS_GITHUB_TOKEN`), since transcribing and
+  rendering need more than the machine the service runs on. Its module docstring is the full
+  story: the moment's file and `context.json` (credit, name and note, where the clip lies in
+  the file, chat over the file at the second it belongs to, the second most of chat laughed in)
+  go up into a release tagged `moment-<id>` and the `storyboard` workflow is dispatched; the
+  service looks at the release every `POLL_SECONDS` and takes `storyboard.json` and the contact
+  sheet back; a variant and a hook chosen on the review page dispatch the `render` workflow,
+  whose `reel.mp4` is taken back the same way, kept under `data/clips/reels/` and sent with a
+  note. What a step left in the release is taken out before it is asked again, so whatever is
+  found there answers the last request. A failed run is noticed by its name (`run_name`) where
+  the token may read Actions, otherwise after `STORYBOARD_LIMIT`/`RENDER_LIMIT`. Where it
+  stands is the `reels` table; main.py's `_keep_making_reels` loop does the looking, the
+  routes are `POST /moments/{id}/reel`, `POST /moments/{id}/reel/render` and the page's
+  `GET /dashboard/moments/{id}/reel`. The workflows, the skill and the render script live in
+  that repository, not here.
 - `vod_footage.py` — a moment's file made longer, before its clip or after it, with footage
   of the broadcast from the broadcast's own recording, days later too (`lengthen`; the
   dashboard's "Add before" / "Add after"). Its module docstring is the full story. The new

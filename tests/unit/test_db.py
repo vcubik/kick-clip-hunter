@@ -2129,3 +2129,32 @@ class TestRemovingAChannel:
 
         db.add_streamer(conn, 7, "some_channel")
         assert not db.was_removed(conn, 7)
+
+
+class TestReels:
+    def test_a_reel_is_stored_and_changed_a_field_at_a_time(self):
+        conn = db.get_connection()
+        try:
+            db.put_reel(conn, 7, state="sending", asked_at="2026-01-01T00:00:00+00:00")
+            db.put_reel(conn, 7, state="choosing", storyboard="{}")
+            db.put_reel(conn, 8, state="done", asked_at="2026-01-01T00:00:00+00:00")
+
+            reel = db.get_reel(conn, 7)
+            assert (reel["state"], reel["storyboard"], reel["asked_at"]) == (
+                "choosing",
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            )
+            assert [row["moment_id"] for row in db.get_reels_in(conn, ["choosing", "done"])] == [7, 8]
+            db.delete_reel(conn, 7)
+            assert db.get_reel(conn, 7) is None
+        finally:
+            conn.close()
+
+    def test_only_a_reels_own_fields_are_stored(self):
+        conn = db.get_connection()
+        try:
+            with pytest.raises(ValueError, match="clip_path"):
+                db.put_reel(conn, 7, state="sending", clip_path="x")
+        finally:
+            conn.close()

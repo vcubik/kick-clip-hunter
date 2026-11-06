@@ -61,6 +61,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   `--local`, e.g. `http://localhost:8081`), which takes videos of up to 2000 MB instead of
   50 MB - it needs an `api_id`/`api_hash` from my.telegram.org, is built from source, and the
   bot is moved to it with `logOut` on Telegram's (see its README); left empty, Telegram's own is asked
+- Reels (optional, see `reels.py` below): `REELS_REPO` (`owner/name` of the repository whose
+  GitHub Actions make a clip into a reel - its `storyboard` and `render` workflows) and
+  `REELS_GITHUB_TOKEN`, a fine-grained token for that repository alone with Contents: read
+  and write (releases and the dispatch that starts a workflow) and Actions: read (to notice a
+  run that failed; without it a step is given up on only after its time limit). Without both,
+  the review page offers no reel
 - One-time browser login for clip creation: `PYTHONPATH=src python scripts/kick_login.py`
   — opens a real browser window, log in yourself, it detects success and saves the
   session to `data/kick_session_state.json` / `data/kick_browser_profile`. See
