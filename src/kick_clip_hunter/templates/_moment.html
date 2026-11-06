@@ -3,14 +3,17 @@
     (/dashboard/moments/<id>) so the page can open another moment without
     loading the queue around it again. -#}
 {% from "_chat_line.html" import chat_line with context -%}
-{% from "_macros.html" import delete -%}
-<article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-status-scope>
+{% from "_macros.html" import delete, taken_icon -%}
+<article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-downloaded="{{ 'true' if moment.downloaded else 'false' }}" data-status-scope>
 <div class="stage">
 <div class="stage-in">
   <header class="moment-head">
     <div>
       <h1 class="title">{{ moment.channel }}</h1>
-      <p class="moment-when">{{ moment.when }}</p>
+      <p class="moment-when"><span data-when>{{ moment.when }}</span>
+        {#- Something cut out of it has been downloaded from Trim - shown by the script as soon as it is. -#}
+        <span class="moment-taken" title="Something cut out of it was downloaded from Trim"{% if not moment.downloaded %} hidden{% endif %} data-taken>{{ taken_icon() }} Downloaded</span>
+      </p>
     </div>
     <input type="text" class="ch-input moment-name" value="{{ moment.title }}" maxlength="{{ moment.title_max }}" aria-label="Name of this moment" placeholder="Name this moment" autocomplete="off" data-title>
     {#- Where the moment is watched on its platform: its stream's VOD, from

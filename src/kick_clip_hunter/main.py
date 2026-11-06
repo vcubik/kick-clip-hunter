@@ -3248,6 +3248,8 @@ def _open_moment(conn, row, today: date) -> dict:
         "summary": dashboard_view.summary_words(row),
         "rating": row["rating"],
         "rating_words": dashboard_view.rating_words(row["rating"]),
+        # Something cut out of it has been downloaded from Trim.
+        "downloaded": row["downloaded_at"] is not None,
         "stream_type": row["stream_type"],
         "moment_type": row["moment_type"],
         "notes": row["notes"] or "",
@@ -3623,26 +3625,31 @@ async def dashboard(
     show: str = dashboard_view.SHOW_UNRATED,
     channel: str | None = None,
     order: str = dashboard_view.ORDER_NEWEST,
+    downloaded: str = dashboard_view.DOWNLOADED_ANY,
     offset: int = 0,
     moment: int | None = None,
 ):
     """The review page: a queue of moments and the one that is open.
 
     `show` picks the list (unrated, all, best), `channel` narrows it to one
-    channel, `order` says whether the newest or the most laughing come first
-    and `offset` pages through it. `moment` is the one to open; left
+    channel, `order` says whether the newest or the most laughing come first,
+    `downloaded` keeps only the moments downloaded from Trim or only the
+    others, and `offset` pages through it. `moment` is the one to open; left
     out, it is the first of the list, and with an empty list the page says
     what the service is doing instead.
     """
     show = show if show in dashboard_view.SHOWS else dashboard_view.SHOW_UNRATED
     channel = channel or None
     order = order if order in dashboard_view.ORDERS else dashboard_view.ORDER_NEWEST
+    downloaded = downloaded if downloaded in dashboard_view.DOWNLOADEDS else dashboard_view.DOWNLOADED_ANY
+    taken = dashboard_view.DOWNLOADED_FILTERS[downloaded]
     today = _today()
 
     conn = get_connection()
     try:
         counts = {
-            name: count_moments(conn, channel_slug=channel, **filters) for name, filters in SHOW_FILTERS.items()
+            name: count_moments(conn, channel_slug=channel, downloaded=taken, **filters)
+            for name, filters in SHOW_FILTERS.items()
         }
         # A list gets shorter as its moments are rated, so a page that was
         # there a minute ago may be past its end now: show the last one then.
@@ -3652,6 +3659,7 @@ async def dashboard(
             limit=MOMENTS_PAGE_SIZE,
             offset=offset,
             channel_slug=channel,
+            downloaded=taken,
             most_laughing=order == dashboard_view.ORDER_LAUGHING,
             **SHOW_FILTERS[show],
         )
@@ -3661,7 +3669,7 @@ async def dashboard(
         for group in groups:
             for item in group["rows"]:
                 item["href"] = dashboard_view.review_url(
-                    show, channel, order=order, offset=offset, moment=item["id"]
+                    show, channel, order=order, downloaded=downloaded, offset=offset, moment=item["id"]
                 )
                 chat = activity.get(item["id"])
                 item["spark"] = chat_trace.spark_paths(chat["all"], chat["laugh"], spark_top) if chat else None
@@ -3676,7 +3684,11 @@ async def dashboard(
         if not rows:
             newest = get_recent_moments(conn, limit=1, channel_slug=channel)
             empty = dashboard_view.empty_queue_words(
-                show, channel, to_local_datetime(newest[0]["detected_at"]) if newest else None, today
+                show,
+                channel,
+                to_local_datetime(newest[0]["detected_at"]) if newest else None,
+                today,
+                downloaded,
             )
 
         context = _page_context(conn, "review")
@@ -3688,7 +3700,7 @@ async def dashboard(
                         "show": name,
                         "label": dashboard_view.SHOW_LABELS[name],
                         "count": counts[name],
-                        "href": dashboard_view.review_url(name, channel, order=order),
+                        "href": dashboard_view.review_url(name, channel, order=order, downloaded=downloaded),
                         "current": name == show,
                     }
                     for name in dashboard_view.SHOWS
@@ -3699,13 +3711,20 @@ async def dashboard(
                 "orders": [
                     {"order": name, "label": dashboard_view.ORDER_LABELS[name]} for name in dashboard_view.ORDERS
                 ],
+                "downloaded": downloaded,
+                "downloadeds": [
+                    {"downloaded": name, "label": dashboard_view.DOWNLOADED_LABELS[name]}
+                    for name in dashboard_view.DOWNLOADEDS
+                ],
                 "groups": groups,
                 "empty": empty,
                 "paging": dashboard_view.pages(
                     offset,
                     MOMENTS_PAGE_SIZE,
                     counts[show],
-                    lambda other: dashboard_view.review_url(show, channel, order=order, offset=other),
+                    lambda other: dashboard_view.review_url(
+                        show, channel, order=order, downloaded=downloaded, offset=other
+                    ),
                 ),
                 # The list's ends in its paging: newer and older, or more and fewer laughing.
                 "paging_words": (
@@ -3716,7 +3735,7 @@ async def dashboard(
                 "moment": _open_moment(conn, opened, today) if opened is not None else None,
                 # Offered from an empty list when there is something to go through elsewhere.
                 "rated_href": (
-                    dashboard_view.review_url(dashboard_view.SHOW_ALL, channel, order=order)
+                    dashboard_view.review_url(dashboard_view.SHOW_ALL, channel, order=order, downloaded=downloaded)
                     if show != dashboard_view.SHOW_ALL and counts[dashboard_view.SHOW_ALL]
                     else None
                 ),

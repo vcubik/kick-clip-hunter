@@ -1618,6 +1618,25 @@ class TestMoments:
             "four"
         ]
 
+    def test_or_to_what_something_was_downloaded_from_or_not(self, conn):
+        self.rated(conn, {"left": None, "taken": None, "b_taken": 5, "b_left": 4})
+        for row in db.get_recent_moments(conn):
+            if row["reason"].endswith("taken"):
+                db.update_moment_downloaded(conn, row["id"], "2026-01-02T00:00:00Z")
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, downloaded=True)] == ["b_taken", "taken"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, downloaded=False)] == ["b_left", "left"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, downloaded=None)] == [
+            "b_left",
+            "b_taken",
+            "taken",
+            "left",
+        ]
+        assert [row["reason"] for row in db.get_recent_moments(conn, unrated=True, downloaded=True)] == ["taken"]
+        assert db.count_moments(conn, downloaded=True) == 2
+        assert db.count_moments(conn, min_rating=4, downloaded=False) == 1
+        assert db.count_moments(conn, channel_slug="channel_a", downloaded=False) == 1
+
     def test_a_narrowed_list_is_paged_like_the_full_one(self, conn):
         self.rated(conn, {"a": None, "rated": 2, "b": None, "c": None})
 

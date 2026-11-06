@@ -551,6 +551,12 @@ class TestReviewUrl:
             "/dashboard?show=all&order=laughing&offset=50"
         )
 
+    def test_downloaded_or_not_is_spelled_out_when_chosen(self):
+        assert view.review_url(downloaded=view.DOWNLOADED_ANY) == "/dashboard"
+        assert view.review_url(view.SHOW_ALL, order=view.ORDER_LAUGHING, downloaded=view.DOWNLOADED_NO, offset=50) == (
+            "/dashboard?show=all&order=laughing&downloaded=no&offset=50"
+        )
+
     def test_a_channel_name_is_made_safe_for_an_address(self):
         assert view.review_url(channel='a&b="c"') == "/dashboard?channel=a%26b%3D%22c%22"
 
@@ -638,6 +644,18 @@ class TestAnEmptyList:
 
         assert words["heading"] == f"No clips rated {view.BEST_RATING_MIN} or higher yet"
         assert words["lead"] == f"A clip you rate {view.BEST_RATING_MIN} or higher is listed here."
+
+    def test_a_list_narrowed_to_downloaded_or_not_says_that_is_why(self):
+        downloaded = view.empty_queue_words(view.SHOW_ALL, "channel_a", local(2, 14), TODAY, view.DOWNLOADED_YES)
+        left = view.empty_queue_words(view.SHOW_BEST, None, local(2, 14), TODAY, view.DOWNLOADED_NO)
+
+        assert downloaded["heading"] == "No clips from channel_a downloaded here yet"
+        assert "downloaded from Trim" in downloaded["lead"]
+        assert left == {"queue": "Everything here was downloaded", "heading": "Every clip here was downloaded"}
+
+    def test_before_the_first_moment_a_narrowed_list_has_nothing_yet_either(self):
+        for downloaded in view.DOWNLOADEDS:
+            assert view.empty_queue_words(view.SHOW_ALL, None, None, TODAY, downloaded)["queue"] == "No moments yet"
 
     def test_a_chosen_channel_is_named(self):
         assert view.empty_queue_words(view.SHOW_ALL, "channel_a", None, TODAY)["heading"] == (

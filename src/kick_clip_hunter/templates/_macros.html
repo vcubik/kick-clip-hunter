@@ -58,3 +58,9 @@
   </span>
 </nav>
 {%- endmacro %}
+
+{#- The mark of a moment something cut out of was downloaded from Trim: an
+    arrow down onto a line. -#}
+{% macro taken_icon(size=12) -%}
+<svg aria-hidden="true" width="{{ size }}" height="{{ size }}" viewBox="0 0 12 12"><path d="M6 1v6.5M3 5l3 3 3-3M1.5 10.5h9" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
+{%- endmacro %}

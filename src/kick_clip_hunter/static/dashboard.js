@@ -160,10 +160,18 @@
   // ---- Rating, tags, the note ------------------------------------------
 
   // The counts on the queue's tabs are totals for the channel it is narrowed
-  // to, so they follow a rating only when the moment is from that channel.
-  function recount(article, before, rating) {
+  // to, and for the moments downloaded or the others where it is narrowed to
+  // those - so they follow a moment only when it is one of them.
+  function inQueueCounts(article) {
     const queue = one("[data-queue]");
-    if (!queue || (queue.dataset.channel && queue.dataset.channel !== article.dataset.channel)) return;
+    if (!queue || (queue.dataset.channel && queue.dataset.channel !== article.dataset.channel)) return false;
+    const downloaded = article.dataset.downloaded === "true";
+    return !queue.dataset.downloaded || downloaded === (queue.dataset.downloaded === "yes");
+  }
+
+  function recount(article, before, rating) {
+    if (!inQueueCounts(article)) return;
+    const queue = one("[data-queue]");
     const best = Number(queue.dataset.bestFrom);
     const bump = (show, by) => {
       const count = one(`[data-show="${show}"] [data-count]`, queue);
@@ -1331,8 +1339,29 @@
   // service notes it as it hands the file over.
   function markTaken(link) {
     const article = link.closest(".moment");
-    const row = article && one(`a.ch-row[data-moment="${article.dataset.moment}"] [data-taken]`);
+    if (!article) return;
+    const before = article.dataset.downloaded === "true";
+    article.dataset.downloaded = "true";
+    const mark = one(".moment-head [data-taken]", article);
+    if (mark) mark.hidden = false;
+    const row = one(`a.ch-row[data-moment="${article.dataset.moment}"] [data-taken]`);
     if (row) row.hidden = false;
+    if (!before) recountDownloaded(article);
+  }
+
+  // A list narrowed to the moments downloaded or to the others counts only
+  // those, so a moment that is downloaded now moves from one to the other.
+  function recountDownloaded(article) {
+    const queue = one("[data-queue]");
+    if (!queue || !queue.dataset.downloaded) return;
+    if (queue.dataset.channel && queue.dataset.channel !== article.dataset.channel) return;
+    const by = queue.dataset.downloaded === "yes" ? 1 : -1;
+    const rating = Number(article.dataset.rating);
+    const shows = ["all", ...(rating === 0 ? ["unrated"] : []), ...(rating >= Number(queue.dataset.bestFrom) ? ["best"] : [])];
+    for (const show of shows) {
+      const count = one(`[data-show="${show}"] [data-count]`, queue);
+      if (count) count.textContent = String(Math.max(0, Number(count.textContent) + by));
+    }
   }
 
   // ---- What is said in the clip -----------------------------------------
@@ -2160,7 +2189,7 @@
     const next = index < 0 ? null : list[index + 1] || list[index - 1] || null;
 
     const queue = one("[data-queue]");
-    if (queue && !(queue.dataset.channel && queue.dataset.channel !== article.dataset.channel)) {
+    if (inQueueCounts(article)) {
       const rating = Number(article.dataset.rating);
       const bump = (show, by) => {
         const count = one(`[data-show="${show}"] [data-count]`, queue);

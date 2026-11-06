@@ -244,7 +244,7 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 /* Its column is kept when there is nothing in it, so the meters line up. */
 /* How many people laughed around it - nothing where it was not counted. */
 .ch-row .ch-laughing { grid-column: 4; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
-.ch-row .ch-taken { grid-column: 5; display: flex; color: var(--text-2); }
+.ch-row .ch-taken { grid-column: 5; display: flex; color: var(--text); }
 .ch-row .ch-taken[hidden] { display: none; }
 .ch-row .ch-meter { grid-column: 6; }
 .ch-row.is-unrated .ch-time, .ch-row.is-unrated .ch-what { font-weight: 700; }
@@ -399,8 +399,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 .queue { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .queue-head { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-12); }
-.queue-filter { display: flex; gap: var(--space-8); }
-.queue-filter .ch-select { flex: 1 1 0; min-width: 0; }
+/* Two filters to a line; the third takes a line of its own. */
+.queue-filter { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.queue-filter .ch-select { flex: 1 1 140px; min-width: 0; }
 .queue-list { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 .queue-empty { padding: var(--space-12); border-top: 1px solid var(--quiet); font-weight: 700; }
 .queue-pages { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; color: var(--text-2); }
@@ -425,6 +426,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .moment-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-16); margin-bottom: var(--space-12); }
 .moment-name { flex: 1 1 0; min-width: 0; max-width: 360px; margin-right: auto; }
 .moment-when { font-size: 13px; line-height: 16px; color: var(--text-2); }
+/* Downloaded from Trim: a word beside when it was, as quiet as that is. */
+.moment-taken { display: inline-flex; align-items: center; gap: var(--space-4); margin-left: var(--space-8); color: var(--text); font-weight: 500; }
+.moment-taken[hidden] { display: none; }
 .moment-clock { display: flex; align-items: baseline; gap: var(--space-8); font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .moment-clock .counter { color: var(--text); }
 
