@@ -7,8 +7,9 @@ import json
 
 import pytest
 
-from kick_clip_hunter import reels
+from kick_clip_hunter import reels, subtitles
 from kick_clip_hunter.reels import ChatLine
+from kick_clip_hunter.subtitles import Line
 
 STORYBOARD = {
     "variants": [{"id": "A", "render_args": []}, {"id": "B", "render_args": []}],
@@ -230,3 +231,79 @@ def reels_since():
     from datetime import datetime, timezone
 
     return datetime(2026, 6, 1, 11, 59, tzinfo=timezone.utc)
+
+
+class TestTheTranscript:
+    def test_a_time_is_written_to_the_tenth(self):
+        assert [reels.clock(seconds) for seconds in (0, 7.44, 7.46, 59.96, 725.0, -3)] == [
+            "0:00.0",
+            "0:07.4",
+            "0:07.5",
+            "1:00.0",
+            "12:05.0",
+            "0:00.0",
+        ]
+
+    def test_lines_are_kept_tidy_in_the_order_they_are_said(self):
+        kept = reels.checked_transcript(
+            [
+                {"start": 3, "end": 4.25, "text": " second\n line "},
+                {"start": 1.0004, "end": 2.0, "text": "A: first"},
+                {"start": 2.5, "end": 2.6, "text": ""},
+            ],
+            length=10.0,
+        )
+
+        assert kept == [Line(1.0, 2.0, "A: first"), Line(3.0, 4.25, "second line")]
+
+    def test_a_line_is_cut_to_what_a_subtitle_holds(self):
+        (kept,) = reels.checked_transcript([{"start": 0, "end": 1, "text": "x" * 400}], length=None)
+
+        assert len(kept.text) == subtitles.TEXT_MAX_CHARACTERS
+
+    def test_a_line_may_run_a_little_past_the_files_measured_end(self):
+        reels.checked_transcript([{"start": 9, "end": 10.0 + reels.TRANSCRIPT_SLACK_SECONDS, "text": "x"}], 10.0)
+
+    @pytest.mark.parametrize(
+        ("posted", "said"),
+        [
+            ("lines", "Expected the transcript's lines"),
+            ([None], "Line 1: expected its start, end and words"),
+            ([{"start": True, "end": 2, "text": "x"}], "Line 1: write when it starts and ends"),
+            ([{"start": 1, "end": float("nan"), "text": "x"}], "Line 1: write when it starts and ends"),
+            ([{"start": 2, "end": 1, "text": "x"}], "Line 1: it has to end after it starts"),
+            ([{"start": 1, "end": 11, "text": "x"}], "Line 1: the clip ends at 0:10.0"),
+        ],
+    )
+    def test_what_cannot_be_kept_is_refused_saying_which_line(self, posted, said):
+        with pytest.raises(ValueError, match=said):
+            reels.checked_transcript(posted, length=10.0)
+
+    def test_too_many_lines_are_refused(self, monkeypatch):
+        monkeypatch.setattr(reels, "TRANSCRIPT_MOST_LINES", 1)
+
+        with pytest.raises(ValueError, match="at most 1 lines"):
+            reels.checked_transcript([{"start": 0, "end": 1, "text": "x"}] * 2, length=None)
+
+    def test_a_variant_has_subtitles_where_its_render_says_so(self):
+        assert reels.subtitled({"render_args": ["--seg", "1-2", "--subs", "work/clip.subs.srt"]})
+        assert not reels.subtitled({"render_args": ["--seg", "1-2"]})
+        assert not reels.subtitled({})
+
+    def test_a_file_is_known_again_by_its_stamp_until_it_changes(self, tmp_path):
+        file = tmp_path / "moment.mp4"
+        file.write_bytes(b"clip")
+        first = reels.stamp(file)
+
+        assert reels.stamp(file) == first
+        file.write_bytes(b"clip and more")
+        assert reels.stamp(file) != first
+        assert reels.stamp(tmp_path / "gone.mp4") is None
+
+    def test_the_list_says_where_each_reel_stands_in_a_word(self):
+        assert [reels.row_words(state) for state in (reels.STORYBOARDING, reels.CHOOSING, reels.DONE, None)] == [
+            "Storyboard",
+            "Choose",
+            "Ready",
+            "",
+        ]

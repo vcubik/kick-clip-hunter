@@ -181,6 +181,11 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- that stands (`state`), when the step it is in was asked for, the
 -- storyboard that came back (JSON), the variant and hook it was rendered
 -- with, the files kept of it (under the clips folder) and why it failed.
+-- Its transcript (JSON, as subtitles.stored keeps one, in seconds of the
+-- file) is what its subtitles are made of, and `transcript_edited` whether
+-- it was put right by hand; `heard` is the speech model's own, as it heard
+-- it. `clip_stamp` says which file of the moment was sent (its size and
+-- when it was written), `subtitles` how the last render asked for them.
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -190,7 +195,12 @@ CREATE TABLE IF NOT EXISTS reels (
     variant TEXT,
     hook TEXT,
     reel_path TEXT,
-    error TEXT
+    error TEXT,
+    transcript TEXT,
+    heard TEXT,
+    transcript_edited INTEGER NOT NULL DEFAULT 0,
+    clip_stamp TEXT,
+    subtitles TEXT
 );
 """
 
@@ -431,6 +441,19 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("ALTER TABLE streamers ADD COLUMN vod_access TEXT")
     if "vod_access_at" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN vod_access_at TEXT")
+
+    # A reel's transcript, put right on the Reels page, and what goes with
+    # it (see the reels table above, and reels.py).
+    reel_columns = {row[1] for row in conn.execute("PRAGMA table_info(reels)")}
+    for name, kind in (
+        ("transcript", "TEXT"),
+        ("heard", "TEXT"),
+        ("transcript_edited", "INTEGER NOT NULL DEFAULT 0"),
+        ("clip_stamp", "TEXT"),
+        ("subtitles", "TEXT"),
+    ):
+        if name not in reel_columns:
+            conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
 
     return conn
 
@@ -1912,7 +1935,21 @@ def add_channel_rename(conn: sqlite3.Connection, rename: dict) -> None:
 
 # -- reels (see reels.py) ------------------------------------------------------
 
-REEL_FIELDS = ("state", "asked_at", "storyboard", "contact_path", "variant", "hook", "reel_path", "error")
+REEL_FIELDS = (
+    "state",
+    "asked_at",
+    "storyboard",
+    "contact_path",
+    "variant",
+    "hook",
+    "reel_path",
+    "error",
+    "transcript",
+    "heard",
+    "transcript_edited",
+    "clip_stamp",
+    "subtitles",
+)
 
 
 def get_reel(conn: sqlite3.Connection, moment_id: int) -> sqlite3.Row | None:
@@ -1948,6 +1985,20 @@ def put_reel(conn: sqlite3.Connection, moment_id: int, **fields: object) -> None
             (*fields.values(), moment_id),
         )
     conn.commit()
+
+
+def get_reel_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every reel with the moment it is of, the one asked for last first:
+    the Reels page's list."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT reels.moment_id, reels.state, reels.asked_at, reels.error,
+               moments.channel_slug, moments.title, moments.detected_at
+        FROM reels JOIN moments ON moments.id = reels.moment_id
+        ORDER BY reels.asked_at DESC, reels.moment_id DESC
+        """
+    ).fetchall()
 
 
 def delete_reel(conn: sqlite3.Connection, moment_id: int) -> None:

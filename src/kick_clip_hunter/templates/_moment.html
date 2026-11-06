@@ -184,10 +184,14 @@
     {% endfor %}
   </div>
 
+  {#- The moment's clip made into a reel: everything about that is done on
+      the Reels page; here is where it stands and the way there. -#}
   {% if moment.reel %}
-  {% with reel = moment.reel %}
-  {% include "_reel.html" %}
-  {% endwith %}
+  {% set reel = moment.reel %}
+  <p class="reel-link">
+    <a class="ch-btn ch-btn-compact" href="{{ reel.url }}" data-reel-link>{{ "Open the reel" if reel.state else "Make a reel" }}</a>
+    {% if reel.words %}<span>{{ reel.words }}</span>{% endif %}
+  </p>
   {% endif %}
 
   {#- Del on the keyboard asks the same, and Del again deletes. -#}

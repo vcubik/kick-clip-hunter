@@ -10,8 +10,9 @@
 // as the clip plays and saves what is put right in it, has footage from the
 // stream's VOD added to a moment's file and opens it again - or, for a
 // moment that has none, plays the VOD itself and has the clip cut from
-// there - has a moment's clip made into a reel, its storyboard chosen from
-// and followed until the reel is back - saves the Settings page's form - whose sections are tabs, and
+// there - has a moment's clip made into a reel on the Reels page, its
+// storyboard chosen from, its transcript put right and the reel followed
+// until it is back - saves the Settings page's form - whose sections are tabs, and
 // whose lists are added to an item at a time - starts and stops the
 // recording of a whole stream, replays a recording's chat beside it, puts
 // what chat did over all of it
@@ -1606,40 +1607,65 @@
     watchVodClip();
   }
 
-  // ---- A reel -----------------------------------------------------------
+  // ---- Reels ------------------------------------------------------------
   //
-  // A moment's clip is made into a reel by GitHub Actions: the service sends
-  // the clip there and a storyboard comes back minutes later, a variant and
-  // a hook are chosen from it here, and the reel comes back a minute or two
-  // after that. While a step goes on the page asks for the reel's part of
-  // the page every few seconds and puts it in place of the one it has.
+  // On the Reels page a moment's clip is made into a reel by GitHub Actions:
+  // the service sends the clip there and a storyboard comes back minutes
+  // later, a variant and a hook are chosen from it, and the reel comes back
+  // a minute or two after that. While a step goes on the page asks for the
+  // reel every few seconds and puts in place where it stands and the reel
+  // itself - and all of it once another storyboard has come back, unless a
+  // transcript is being put right, which is never thrown away.
 
   const REEL_POLL_MS = 5000;
   let reelWatch = null;
 
-  async function askReel(button) {
-    const section = button.closest("[data-reel]");
-    button.disabled = true;
-    say(section, "Asking for a storyboard.");
-    const response = await post(button.dataset.reelAsk);
-    if (!section.isConnected) return;
-    if (!response || !response.ok) {
-      button.disabled = false;
-      say(section, response ? await problem(response, "Could not ask for a storyboard. Try again.") : "Could not reach the service.");
-      return;
-    }
-    await refreshReel(section);
+  const reelOf = (element) => element.closest("[data-reel]");
+  const reelEditorOf = (element) => element.closest("[data-reel-transcript]");
+  const reelUnsaved = (root) => Boolean(root && one("[data-reel-transcript][data-unsaved]", root));
+
+  // What starts a step is off while one goes on.
+  function dressReel(root) {
+    const busy = root.hasAttribute("data-busy");
+    for (const button of all("[data-reel-ask], [data-reel-render]", root)) button.disabled = busy;
+    for (const field of all("[data-reel-text]", root)) grow(field);
   }
 
-  // A variant or a hook chosen: the one pressed in its group. Choosing one
-  // of the storyboard's hooks drops the words of one's own.
+  async function askReel(button) {
+    const root = reelOf(button);
+    if (reelUnsaved(root)) {
+      say(button, "Save the transcript first: what you changed in it would be lost.");
+      return;
+    }
+    button.disabled = true;
+    say(button, "Asking for a storyboard.");
+    const response = await post(button.dataset.reelAsk);
+    if (!root.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not ask for a storyboard. Try again.") : "Could not reach the service.");
+      return;
+    }
+    await refreshReel(root);
+  }
+
+  // A variant or a hook chosen: the one pressed in its group. A variant sets
+  // the subtitles as it has them; one of the storyboard's hooks drops the
+  // words of one's own.
   function chooseReel(button) {
     const group = button.closest("[data-reel-variants], [data-reel-hooks]");
     for (const other of all("[data-reel-variant], [data-reel-hook]", group)) {
       other.setAttribute("aria-pressed", other === button ? "true" : "false");
     }
+    if (button.matches("[data-reel-variant]")) setReelSubtitles(reelOf(button), button.dataset.subtitled);
     const own = one("[data-reel-own]", group);
     if (own && button.matches("[data-reel-hook]")) own.value = "";
+  }
+
+  function setReelSubtitles(root, value) {
+    for (const button of all("[data-reel-subtitles] button", root)) {
+      button.setAttribute("aria-pressed", button.dataset.value === value ? "true" : "false");
+    }
   }
 
   // Words of one's own typed in: none of the storyboard's hooks is chosen.
@@ -1651,39 +1677,65 @@
   }
 
   async function renderReel(button) {
-    const section = button.closest("[data-reel]");
-    const variant = one('[data-reel-variant][aria-pressed="true"]', section);
-    const own = one("[data-reel-own]", section);
-    const hook = own && own.value.trim() ? own.value.trim() : one('[data-reel-hook][aria-pressed="true"]', section)?.dataset.reelHook;
+    const root = reelOf(button);
+    const variant = one('[data-reel-variant][aria-pressed="true"]', root);
+    const own = one("[data-reel-own]", root);
+    const hook = own && own.value.trim() ? own.value.trim() : one('[data-reel-hook][aria-pressed="true"]', root)?.dataset.reelHook;
+    const subtitles = one('[data-reel-subtitles] [aria-pressed="true"]', root)?.dataset.value || "auto";
     if (!variant || !hook) {
-      say(section, "Choose a variant and a hook first.");
+      say(button, "Choose a variant and a hook first.");
+      return;
+    }
+    // The subtitles are made of the transcript as it is saved.
+    const editor = one("[data-reel-transcript][data-unsaved]", root);
+    if (editor && !(await saveReelTranscript(editor))) {
+      say(button, "The transcript could not be saved, and the subtitles are made of it. It says why.");
       return;
     }
     button.disabled = true;
-    say(section, "Asking for the reel.");
-    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook });
-    if (!section.isConnected) return;
+    say(button, "Asking for the reel.");
+    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook, subtitles });
+    if (!root.isConnected) return;
     if (!response || !response.ok) {
       button.disabled = false;
-      say(section, response ? await problem(response, "Could not ask for the reel. Try again.") : "Could not reach the service.");
+      say(button, response ? await problem(response, "Could not ask for the reel. Try again.") : "Could not reach the service.");
       return;
     }
-    await refreshReel(section);
+    say(button, "");
+    await refreshReel(root);
   }
 
-  // The reel's part of the page as the service has it now, in place of the
-  // one on screen.
-  async function refreshReel(section) {
-    let markup = null;
+  async function fetchedReel(root) {
     try {
-      const response = await fetch(section.dataset.reel);
-      if (response.ok) markup = await response.text();
+      const response = await fetch(root.dataset.reel);
+      if (!response.ok) return null;
+      return one("[data-reel]", new DOMParser().parseFromString(await response.text(), "text/html"));
     } catch {
-      // asked again in a moment, while a step goes on
+      return null; // asked again in a moment, while a step goes on
     }
-    if (!section.isConnected) return;
-    const fresh = markup && one("[data-reel]", new DOMParser().parseFromString(markup, "text/html"));
-    if (fresh) section.replaceWith(fresh);
+  }
+
+  // The reel as the service has it now, in place of the one on screen: all
+  // of it where another storyboard has come back, and nothing is being put
+  // right in the transcript; otherwise where it stands and the reel itself.
+  async function refreshReel(root) {
+    const fresh = await fetchedReel(root);
+    if (!root.isConnected) return;
+    if (fresh) {
+      if (fresh.dataset.board !== root.dataset.board && !reelUnsaved(root)) {
+        root.replaceWith(fresh);
+        root = fresh;
+      } else {
+        for (const region of all("[data-reel-region]", fresh)) {
+          one(`[data-reel-region="${region.dataset.reelRegion}"]`, root)?.replaceWith(region);
+        }
+        root.toggleAttribute("data-busy", fresh.hasAttribute("data-busy"));
+        root.dataset.state = fresh.dataset.state;
+      }
+      const words = one(`[data-reel-row="${fresh.dataset.reelId}"] [data-reel-row-words]`);
+      if (words) words.textContent = fresh.dataset.rowWords;
+      dressReel(root);
+    }
     watchReel();
   }
 
@@ -1691,6 +1743,172 @@
     clearTimeout(reelWatch);
     const busy = one("[data-reel][data-busy]");
     reelWatch = busy ? setTimeout(() => refreshReel(busy), REEL_POLL_MS) : null;
+  }
+
+  // ---- A reel's transcript ----------------------------------------------
+  //
+  // A line at a time, with when it starts and ends in the clip's file -
+  // written to the tenth of a second, and typed as the Trim dialog takes a
+  // time - and what is said. A line plays the clip from its start to its
+  // end, and the line that is being said is marked as the clip plays. Lines
+  // are added after one, or from what the speech model heard, and taken
+  // out; nothing is kept until Save, and leaving the page asks first.
+
+  const tenthsWords = (seconds) => {
+    const tenths = Math.round(Math.max(seconds, 0) * 10);
+    return `${Math.floor(tenths / 600)}:${twoDigits(Math.floor(tenths / 10) % 60)}.${tenths % 10}`;
+  };
+
+  // A time typed into a line: seconds into the clip's file, never before its
+  // first frame. Null for what is not one.
+  function lineTime(field) {
+    const text = field.value.trim();
+    if (/^[+\-−–]/.test(text)) return null;
+    return typedTime(text, { clip: 0 });
+  }
+
+  function reelEdited(field) {
+    const editor = reelEditorOf(field);
+    if (!editor) return;
+    editor.setAttribute("data-unsaved", "");
+    field.removeAttribute("aria-invalid");
+    say(editor, "Not saved yet.");
+  }
+
+  function newReelLine(editor, start, end, text) {
+    const line = one("[data-reel-line-template]", editor).content.firstElementChild.cloneNode(true);
+    one("[data-reel-start]", line).value = tenthsWords(start);
+    one("[data-reel-end]", line).value = tenthsWords(end);
+    one("[data-reel-text]", line).value = text;
+    return line;
+  }
+
+  // A line added after another, from where that one ends - or at the end
+  // of the transcript, from where the clip is - up to two seconds long, and
+  // not into the line after it.
+  function addReelLine(button) {
+    const editor = reelEditorOf(button);
+    const after = button.closest("[data-reel-line]");
+    const list = one("[data-reel-lines]", editor);
+    const source = one("[data-reel-source]", reelOf(editor));
+    const last = after || list.lastElementChild;
+    const start = (last && lineTime(one("[data-reel-end]", last))) ?? (source ? source.currentTime : 0);
+    const next = after ? after.nextElementSibling : null;
+    const nextStart = next ? lineTime(one("[data-reel-start]", next)) : null;
+    const length = Number(editor.dataset.length) || Infinity;
+    let end = Math.min(start + 2, length);
+    if (nextStart !== null && nextStart > start) end = Math.min(end, nextStart);
+    const line = newReelLine(editor, start, Math.max(end, start + 0.1), "");
+    if (after) after.after(line);
+    else list.append(line);
+    reelEdited(one("[data-reel-text]", line));
+    one("[data-reel-text]", line).focus();
+  }
+
+  // A line of what the speech model heard, put into the transcript where
+  // it belongs by its start.
+  function takeHeardLine(button) {
+    const editor = reelEditorOf(button);
+    const start = Number(button.dataset.start);
+    const line = newReelLine(editor, start, Number(button.dataset.end), button.dataset.text);
+    const later = all("[data-reel-line]", editor).find((other) => (lineTime(one("[data-reel-start]", other)) ?? 0) > start);
+    if (later) later.before(line);
+    else one("[data-reel-lines]", editor).append(line);
+    grow(one("[data-reel-text]", line));
+    reelEdited(one("[data-reel-text]", line));
+    say(editor, `Added at ${tenthsWords(start)}. Not saved yet.`);
+  }
+
+  function removeReelLine(button) {
+    const line = button.closest("[data-reel-line]");
+    const editor = reelEditorOf(line);
+    const near = line.nextElementSibling || line.previousElementSibling;
+    line.remove();
+    editor.setAttribute("data-unsaved", "");
+    say(editor, "Not saved yet.");
+    one("[data-reel-text]", near || editor)?.focus();
+  }
+
+  // Plays the clip from where a line starts to where it ends.
+  function playReelLine(button) {
+    const line = button.closest("[data-reel-line]");
+    const source = one("[data-reel-source]", reelOf(line));
+    const start = lineTime(one("[data-reel-start]", line));
+    if (!source || start === null) {
+      say(button, "Write when the line starts, like 0:07.4.");
+      return;
+    }
+    const end = lineTime(one("[data-reel-end]", line));
+    source.dataset.until = end !== null && end > start ? String(end) : "";
+    source.currentTime = start;
+    source.play().catch(() => {});
+  }
+
+  // As the clip plays: stopped at the end of a line that was played alone,
+  // and the line that is being said marked.
+  function reelSourceTick(source) {
+    const until = Number(source.dataset.until);
+    if (source.dataset.until && source.currentTime >= until) {
+      source.dataset.until = "";
+      source.pause();
+    }
+    const now = source.currentTime;
+    for (const line of all("[data-reel-line]", reelOf(source))) {
+      const start = lineTime(one("[data-reel-start]", line));
+      const end = lineTime(one("[data-reel-end]", line));
+      line.classList.toggle("is-now", !source.paused && start !== null && end !== null && start <= now && now < end);
+    }
+  }
+
+  // Enter in a line goes on to the next one, rather than starting a new
+  // row in it: a subtitle is one row.
+  function nextReelLine(field) {
+    const next = field.closest("[data-reel-line]").nextElementSibling;
+    if (next) one("[data-reel-text]", next).focus();
+    else field.blur();
+  }
+
+  // Keeps the transcript as it is on the page, and shows it as the service
+  // has it then - in the order its lines are said. True once it is kept.
+  async function saveReelTranscript(editor) {
+    const lines = [];
+    let number = 0;
+    for (const line of all("[data-reel-line]", editor)) {
+      number += 1;
+      const text = one("[data-reel-text]", line).value;
+      const start = lineTime(one("[data-reel-start]", line));
+      const end = lineTime(one("[data-reel-end]", line));
+      if (text.trim() && (start === null || end === null)) {
+        const field = one(start === null ? "[data-reel-start]" : "[data-reel-end]", line);
+        field.setAttribute("aria-invalid", "true");
+        field.focus();
+        say(editor, `Line ${number}: write when it starts and ends, like 0:07.4.`);
+        return false;
+      }
+      lines.push({ start: start ?? 0, end: end ?? 0, text });
+    }
+    const save = one("[data-reel-transcript-save]", editor);
+    save.disabled = true;
+    say(editor, "Saving.");
+    const response = await post(editor.dataset.reelTranscript, { lines });
+    save.disabled = false;
+    if (!editor.isConnected) return false;
+    if (!response || !response.ok) {
+      say(editor, response ? await problem(response, "Could not save the transcript. Try again.") : "Could not reach the service.");
+      return false;
+    }
+    editor.removeAttribute("data-unsaved");
+    const root = reelOf(editor);
+    const fresh = await fetchedReel(root);
+    const kept = fresh && one("[data-reel-transcript]", fresh);
+    if (kept && editor.isConnected && !editor.hasAttribute("data-unsaved")) {
+      editor.replaceWith(kept);
+      dressReel(root);
+      say(kept, "Saved.");
+    } else {
+      say(editor, "Saved.");
+    }
+    return true;
   }
 
   // The moment as the service has it now, in place of the one on the page,
@@ -1877,6 +2095,7 @@
     recallFootageSeconds();
     watchFootage();
     watchVodClip();
+    for (const root of all("[data-reel]")) dressReel(root);
     watchReel();
     dressChatFile();
     markFound();
@@ -3154,7 +3373,13 @@
     ["[data-vod-clip-go]", cutVodClip],
     ["[data-reel-ask]", askReel],
     ["[data-reel-variant], [data-reel-hook]", chooseReel],
+    ["[data-reel-subtitles] button", (button) => setReelSubtitles(reelOf(button), button.dataset.value)],
     ["[data-reel-render]", renderReel],
+    ["[data-reel-play]", playReelLine],
+    ["[data-reel-line-after], [data-reel-line-add]", addReelLine],
+    ["[data-reel-line-remove]", removeReelLine],
+    ["[data-reel-take]", takeHeardLine],
+    ["[data-reel-transcript-save]", (button) => saveReelTranscript(reelEditorOf(button))],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
@@ -3373,6 +3598,11 @@
       transcriptKey(target, event);
       return;
     }
+    if (target.matches("[data-reel-text]") && event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      nextReelLine(target);
+      return;
+    }
     // Enter beside a list adds what was typed to it, rather than save the
     // form the field is in.
     if (target.matches("[data-chip-input]") && event.key === "Enter") {
@@ -3424,6 +3654,9 @@
       say(target, "");
     } else if (target.matches("[data-reel-own]")) {
       ownHook(target);
+    } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end]")) {
+      if (target.matches("[data-reel-text]")) grow(target);
+      reelEdited(target);
     } else if (target.matches("[data-notify-field]")) {
       delete target.dataset.remove;
       say(notifyPane(target), "Not saved yet.");
@@ -3496,12 +3729,21 @@
     });
   }
   onMedia("[data-recording-clip]", paintRecording);
+  onMedia("[data-reel-source]", reelSourceTick);
   document.addEventListener("close", (event) => event.target.matches?.("[data-trim]") && leaveTrim(event.target), true);
 
   // The page's own transport is not on screen in full screen, so the
   // browser's controls stand in for it for as long as that lasts.
   document.addEventListener("fullscreenchange", () => {
     for (const video of all("[data-clip]")) video.controls = document.fullscreenElement === video;
+  });
+
+  // A transcript of a reel that is being put right is not left behind
+  // unasked.
+  window.addEventListener("beforeunload", (event) => {
+    if (!one("[data-reel-transcript][data-unsaved]")) return;
+    event.preventDefault();
+    event.returnValue = "";
   });
 
   window.addEventListener("pagehide", () => {

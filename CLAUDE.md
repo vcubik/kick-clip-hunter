@@ -85,8 +85,8 @@ Read these on demand, not up front:
   `telegram_chats.py`, `twitch_login.py`, `kick_login.py`. See docs/setup.md.
 - Logs: console and `data/logs/kick_clip_hunter.log` (rotated) - check the file first after
   something went wrong unattended.
-- Dashboard at `GET /dashboard` (review queue), plus Channels, Recordings, Analyze, Settings and
-  Health pages - see docs/dashboard.md.
+- Dashboard at `GET /dashboard` (review queue), plus Reels, Channels, Recordings, Analyze,
+  Settings and Health pages - see docs/dashboard.md.
 
 ## Language convention
 
@@ -157,7 +157,8 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
   channel tracked for moments, its clip cut from the VOD in the first place, by the VOD's clock
   (`cut`; `streams.watch_link` is where a person watches it)
 - `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in another repository
-  (`REELS_REPO`): clip up into a release, storyboard back, the chosen variant rendered there
+  (`REELS_REPO`): clip up into a release, storyboard and transcript back, the transcript put
+  right on the Reels page, the chosen variant rendered there with it as subtitles
 - `clip_creator.py` — manual official Kick clips via the site's internal API
 - `transcriber.py`, `audio_events.py`, `frame_encoder.py`, `sound_events.py`, `ml_loading.py` —
   optional per-clip local ML capture (off by default), lazily loaded under one lock

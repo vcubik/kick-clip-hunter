@@ -749,16 +749,23 @@ Module map (`src/kick_clip_hunter/`):
   story: the moment's file and `context.json` (credit, name and note, where the clip lies in
   the file, chat over the file at the second it belongs to, the second most of chat laughed in)
   go up into a release tagged `moment-<id>` and the `storyboard` workflow is dispatched; the
-  service looks at the release every `POLL_SECONDS` and takes `storyboard.json` and the contact
-  sheet back; a variant and a hook chosen on the review page dispatch the `render` workflow,
-  whose `reel.mp4` is taken back the same way, kept under `data/clips/reels/` and sent with a
-  note. What a step left in the release is taken out before it is asked again, so whatever is
-  found there answers the last request. A failed run is noticed by its name (`run_name`) where
-  the token may read Actions, otherwise after `STORYBOARD_LIMIT`/`RENDER_LIMIT`. Where it
-  stands is the `reels` table; main.py's `_keep_making_reels` loop does the looking, the
-  routes are `POST /moments/{id}/reel`, `POST /moments/{id}/reel/render` and the page's
-  `GET /dashboard/moments/{id}/reel`. The workflows, the skill and the render script live in
-  that repository, not here.
+  service looks at the release every `POLL_SECONDS` and takes `storyboard.json`, the contact
+  sheet and the transcript back - the subtitles Claude proposed (`clip.subs.srt`) where there
+  are some, otherwise what the speech model heard (`clip.srt`, kept as well as `heard`; read by
+  `subtitles.from_srt`). The transcript is put right on the Reels page (`checked_transcript`)
+  and goes up as `clip.subs.srt` before a variant and a hook chosen there dispatch the
+  `render` workflow, with subtitles as the variant has them, on or off; its `reel.mp4` is taken
+  back the same way, kept under `data/clips/reels/` and sent with a note. What a step left in
+  the release is taken out before it is asked again, so whatever is found there answers the
+  last request - except the transcript while the moment's file is the one it was heard from
+  (`stamp`): then the file is not sent again, the workflow does not transcribe it again, and a
+  transcript put right by hand goes up with `context.json` saying so, for Claude to go by. A
+  failed run is noticed by its name (`run_name`) where the token may read Actions, otherwise
+  after `STORYBOARD_LIMIT`/`RENDER_LIMIT`. Where it stands is the `reels` table; main.py's
+  `_keep_making_reels` loop does the looking, the routes are `POST /moments/{id}/reel`,
+  `POST /moments/{id}/reel/transcript`, `POST /moments/{id}/reel/render`, the Reels page
+  `GET /dashboard/reels` and its `GET /dashboard/reels/{id}`. The workflows, the skill and the
+  render script live in that repository, not here.
 - `vod_footage.py` — a moment's file made longer, before its clip or after it, with footage
   of the broadcast from the broadcast's own recording, days later too (`lengthen`; the
   dashboard's "Add before" / "Add after"). Its module docstring is the full story. The new
