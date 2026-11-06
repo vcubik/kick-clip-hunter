@@ -384,6 +384,14 @@ def get_connection() -> sqlite3.Connection:
     if "moments_only" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN moments_only INTEGER NOT NULL DEFAULT 0")
 
+    # Whether a channel tracked for moments has each one's clip cut from its
+    # stream's VOD by itself, as soon as the VOD holds it, rather than only
+    # once it is asked for (see main._moment_kept). Off to begin with. Kept
+    # whatever the channel is tracked for, and heeded only while it is
+    # tracked for moments.
+    if "moments_auto_cut" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN moments_auto_cut INTEGER NOT NULL DEFAULT 0")
+
     # Which platform a channel is on, and its id there (see platforms.py).
     # Every channel from before there were others is on Kick, where that id
     # is the one it is kept by here as well.
@@ -600,8 +608,8 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
     channels of that one."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, moments_only, own_tuning,"
-        " always_record, platform, platform_user_id, vod_access, vod_access_at"
+        "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " own_tuning, always_record, platform, platform_user_id, vod_access, vod_access_at"
         " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
         (platform, platform),
     ).fetchall()
@@ -610,8 +618,8 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
 def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT broadcaster_user_id, tracking_enabled, chat_only, moments_only, own_tuning, always_record,"
-        " platform, platform_user_id"
+        "SELECT broadcaster_user_id, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " own_tuning, always_record, platform, platform_user_id"
         " FROM streamers WHERE slug = ?",
         (slug,),
     ).fetchone()
@@ -622,8 +630,8 @@ def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sq
     under - for what starts from its chat, which may spell it otherwise."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
-        "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, moments_only, own_tuning, always_record,"
-        " platform, platform_user_id"
+        "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " own_tuning, always_record, platform, platform_user_id"
         " FROM streamers WHERE broadcaster_user_id = ?",
         (broadcaster_user_id,),
     ).fetchone()
@@ -722,6 +730,16 @@ def set_vod_access(conn: sqlite3.Connection, broadcaster_user_id: int, access: s
     conn.execute(
         "UPDATE streamers SET vod_access = ?, vod_access_at = ? WHERE broadcaster_user_id = ?",
         (access, at.isoformat(), broadcaster_user_id),
+    )
+    conn.commit()
+
+
+def set_streamer_moments_auto_cut(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+    """Sets whether a channel tracked for moments has their clips cut from
+    its stream's VOD by itself, or only when asked for."""
+    conn.execute(
+        "UPDATE streamers SET moments_auto_cut = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, broadcaster_user_id),
     )
     conn.commit()
 

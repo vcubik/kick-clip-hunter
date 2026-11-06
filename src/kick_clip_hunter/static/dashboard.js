@@ -1809,6 +1809,11 @@
       return;
     }
     for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === option));
+    // How a channel's moments have their clips cut is offered only while
+    // it is tracked for moments.
+    const cell = group.closest("[data-tracking-cell]");
+    const clips = cell && !group.closest("[data-moment-clips]") ? one("[data-moment-clips]", cell) : null;
+    if (clips) clips.hidden = option.dataset.value !== "moments";
     let said = "";
     try {
       said = (await response.json()).said || "";

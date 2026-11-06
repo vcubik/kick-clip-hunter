@@ -938,6 +938,22 @@ VOD_ACCESS_WORDS = {
 }
 
 
+# How the clips of a channel tracked for moments are cut from its stream's
+# VOD: when asked for on the review page, or each by itself as soon as the
+# VOD holds it - and what choosing either answers with.
+MOMENT_CLIPS_ON_REQUEST = "on_request"
+MOMENT_CLIPS_AUTOMATIC = "automatic"
+MOMENT_CLIPS_CHOICES = (
+    (MOMENT_CLIPS_ON_REQUEST, "When asked"),
+    (MOMENT_CLIPS_AUTOMATIC, "Automatically"),
+)
+MOMENT_CLIPS_WORDS = {
+    MOMENT_CLIPS_ON_REQUEST: "A clip of a moment of {channel} is cut from the VOD when you ask for it.",
+    MOMENT_CLIPS_AUTOMATIC: "Each moment of {channel} has its clip cut from the VOD by itself, "
+    "as soon as the VOD holds it.",
+}
+
+
 # What switching a channel to being recorded always, or back, answers with.
 ALWAYS_RECORD_WORDS = {
     True: "Every stream of {channel} is recorded from when it goes live. Stopping a recording ends it for that stream.",

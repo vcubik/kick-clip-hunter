@@ -16,7 +16,8 @@ other channel can be tracked for its chat alone instead of for clips: its chat s
 judged, nothing recorded for it (`streamers.chat_only`, "Chat" on the Channels page). A Kick or
 Twitch channel can be tracked for moments instead: found in its chat alone, no stream of it
 coming in, each told of with a link to it in the stream's VOD, and its clip cut from the VOD
-only once asked for on the dashboard (`streamers.moments_only`, "Moments"; `vod_footage.cut`). A bot
+only once asked for on the dashboard - or by itself, where the channel is set so
+(`streamers.moments_only`, "Moments"; `streamers.moments_auto_cut`; `vod_footage.cut`). A bot
 can write in a channel's chat - when the stream starts, a recording starts or ends, a moment
 is caught, a clip was made, a message of its own every so often, in words the settings may
 choose - and take commands there from its streamer and moderators (start or stop a recording,

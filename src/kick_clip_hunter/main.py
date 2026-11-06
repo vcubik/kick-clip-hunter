@@ -136,6 +136,7 @@ from .db import (
     set_flag,
     set_stream_recording_state,
     set_streamer_always_record,
+    set_streamer_moments_auto_cut,
     set_streamer_own_tuning,
     set_streamer_tracking,
     set_vod_access,
@@ -1813,7 +1814,8 @@ async def _moment_kept(session: _MomentSession) -> None:
     VOD - from where its clip would begin, by the VOD's own clock on Kick -
     is looked up and kept with it, and it is told of where notes of moments
     go. Its clip is cut from the VOD once it is asked for (POST
-    /moments/{id}/clip)."""
+    /moments/{id}/clip) - or, where the channel has them cut by themselves
+    (streamers.moments_auto_cut), right away: as soon as the VOD holds it."""
     first_at = session.tuned.clip_span(session.window_start, session.window_end)[0]
     # On Kick by the VOD's own clock, where its playlist can be read: where
     # the review page's player of it goes, and the clip is cut by. Twitch's
@@ -1847,12 +1849,31 @@ async def _moment_kept(session: _MomentSession) -> None:
         if watch is not None:
             update_moment_watch_url(conn, session.moment_id, watch)
         moment = get_moment(conn, session.moment_id)
+        streamer = get_streamer_by_id(conn, moment["broadcaster_user_id"]) if moment is not None else None
     finally:
         conn.close()
     if moment is None:
         # Removed meanwhile.
         return
-    logger.info("[%s] moment %d kept - its clip is cut from the VOD once asked for", session.channel, session.moment_id)
+    # As the channel is set now: switched since the moment fired, the switch
+    # holds for it too. Not while it is no longer tracked for moments.
+    automatic = (
+        streamer is not None
+        and bool(streamer["moments_auto_cut"])
+        and _tracking_of(streamer) == dashboard_view.TRACKING_MOMENTS
+    )
+    if automatic and not _vod_clip_busy(session.moment_id):
+        logger.info("[%s] moment %d kept - its clip is cut from the VOD by itself", session.channel, session.moment_id)
+        _vod_clips[session.moment_id] = {"state": dashboard_view.FOOTAGE_FINDING}
+        _track_task(
+            _cut_from_vod_background(
+                session.moment_id, session.channel, moment["broadcaster_user_id"], _moment_window(moment)
+            )
+        )
+    else:
+        logger.info(
+            "[%s] moment %d kept - its clip is cut from the VOD once asked for", session.channel, session.moment_id
+        )
     if _notifying("notify_moments"):
         await _notify_of_moment(moment)
 
@@ -3651,6 +3672,13 @@ async def dashboard_channels(request: Request):
                         "added": dashboard_view.date_words(to_local_datetime(row["added_at"]).date(), today),
                         "now": context["now"]["channels"][row["slug"]],
                         "tracking": _tracking_of(row),
+                        # How the clips of its moments are cut, offered
+                        # while it is tracked for moments.
+                        "moment_clips": (
+                            dashboard_view.MOMENT_CLIPS_AUTOMATIC
+                            if row["moments_auto_cut"]
+                            else dashboard_view.MOMENT_CLIPS_ON_REQUEST
+                        ),
                         # Moments only where a clip can be cut afterwards.
                         "tracking_choices": dashboard_view.tracking_choices(row["platform"] in platforms.KEEP_VODS),
                         # What its platform was last seen to list of its
@@ -3678,6 +3706,7 @@ async def dashboard_channels(request: Request):
                     }
                     for row in context["streamers"]
                 ],
+                "moment_clips_choices": dashboard_view.MOMENT_CLIPS_CHOICES,
                 "analysis_settings": [
                     {
                         "name": name,
@@ -6318,6 +6347,28 @@ async def set_channel_always_record(slug: str, enabled: int = 1):
         "always_record": value,
         "said": dashboard_view.ALWAYS_RECORD_WORDS[value].format(channel=slug),
     }
+
+
+@app.post("/channels/{slug}/moments_auto_cut")
+async def set_channel_moments_auto_cut(slug: str, how: str):
+    """Sets how the clips of a channel tracked for moments are cut from its
+    stream's VOD (dashboard_view.MOMENT_CLIPS_*): when asked for on the
+    review page, or by themselves, each as soon as the VOD holds it. Kept
+    whatever the channel is tracked for, and heeded only while it is tracked
+    for moments; moments already kept are left as they are."""
+    if how not in dict(dashboard_view.MOMENT_CLIPS_CHOICES):
+        raise HTTPException(status_code=400, detail=f"unknown way of cutting clips {how!r}")
+    value = how == dashboard_view.MOMENT_CLIPS_AUTOMATIC
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        set_streamer_moments_auto_cut(conn, row["broadcaster_user_id"], value)
+    finally:
+        conn.close()
+    logger.info("clips of %s's moments cut -> %s", slug, how)
+    return {"slug": slug, "how": how, "said": dashboard_view.MOMENT_CLIPS_WORDS[how].format(channel=slug)}
 
 
 async def _unsubscribe_kick_chat(broadcaster_user_id: int, slug: str) -> None:

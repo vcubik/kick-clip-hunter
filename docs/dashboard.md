@@ -79,7 +79,10 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   its stream coming in to cut each one from, which keeps its chat too; Moments looks for them in
   its chat alone - nothing of its stream comes in - keeps each with where it is watched in the
   stream's VOD and tells of it (the "Moments" notification), and has its clip cut from the VOD
-  once it is asked for on the review page. Only Kick and Twitch channels are offered it, their
+  once it is asked for on the review page - or, with "Clips from the VOD" under the choice set
+  to Automatically (`POST /channels/{slug}/moments_auto_cut`, `how` `on_request` or
+  `automatic`, kept as `streamers.moments_auto_cut`; shown only while Moments is lit), by
+  itself as soon as the VOD holds it. Only Kick and Twitch channels are offered it, their
   VODs staying once a stream is over (`platforms.KEEP_VODS`; the route refuses it for any other),
   and choosing it says what the platform lists of the channel's VODs that would keep a clip from
   being cut afterwards - none at all, or kept for subscribers only once a stream is over

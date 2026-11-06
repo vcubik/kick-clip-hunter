@@ -287,11 +287,13 @@ class TestWatchlist:
 
         added = view.date_words(datetime.now(timezone.utc).astimezone().date(), today)
         # The fifth cell is the channel's stream recording (see
-        # test_api_recordings.py).
+        # test_api_recordings.py). Under the tracking choice, hidden while the
+        # channel is not tracked for moments, how their clips are cut.
+        tracking = "Off Chat Moments Clips Clips from the VOD When asked Automatically"
         assert [cells[:4] for cells in self.rows(page)] == [
-            ["first_channel", added, "Live", "Off Chat Moments Clips"],
-            ["second_channel", added, "Not watched", "Off Chat Moments Clips"],
-            ["third_channel", added, "Not live", "Off Chat Moments Clips"],
+            ["first_channel", added, "Live", tracking],
+            ["second_channel", added, "Not watched", tracking],
+            ["third_channel", added, "Not live", tracking],
         ]
         states = switch_states(page)
         assert [states[f"Tracking {slug}"] for slug in ("first_channel", "second_channel", "third_channel")] == [

@@ -11,7 +11,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import dashboard_view, db, detector, kick_stream, recorder, recording_manager, tuning
+from kick_clip_hunter import (
+    dashboard_view,
+    db,
+    detector,
+    kick_stream,
+    recorder,
+    recording_manager,
+    tuning,
+    vod_footage,
+)
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_moment, moment
 from tests.support.hls import Segment, fake_segments
@@ -147,6 +156,67 @@ class TestTrackingAChannelForMoments:
 
         assert offered(CHANNEL) == ["off", "chat", "moments", "clips"]
         assert offered("someone@youtube") == ["off", "chat", "clips"]
+
+
+class TestHowItsClipsAreCut:
+    """A channel tracked for moments has their clips cut from its stream's
+    VOD when asked for, or each by itself as soon as the VOD holds it."""
+
+    async def cut(self, service, how: str, channel: str = CHANNEL):
+        return await service.client.post(f"/channels/{channel}/moments_auto_cut?how={how}")
+
+    async def offered(self, service, slug: str = CHANNEL):
+        page = parse((await service.client.get("/dashboard/channels")).text)
+        return page.one("span", aria_label=f"Clips of {slug}'s moments")
+
+    async def test_when_asked_to_begin_with(self, service, channel):
+        assert stored(CHANNEL)["moments_auto_cut"] == 0
+
+        choice = await self.offered(service)
+
+        lit = [button.attrs["data-value"] for button in choice.find("button", aria_pressed="true")]
+        assert lit == [dashboard_view.MOMENT_CLIPS_ON_REQUEST]
+
+    async def test_automatically_is_kept_and_said(self, service, channel):
+        response = await self.cut(service, dashboard_view.MOMENT_CLIPS_AUTOMATIC)
+
+        assert response.json() == {
+            "slug": CHANNEL,
+            "how": "automatic",
+            "said": f"Each moment of {CHANNEL} has its clip cut from the VOD by itself, as soon as the VOD holds it.",
+        }
+        assert stored(CHANNEL)["moments_auto_cut"] == 1
+        choice = await self.offered(service)
+        assert [button.attrs["data-value"] for button in choice.find("button", aria_pressed="true")] == ["automatic"]
+
+        await self.cut(service, dashboard_view.MOMENT_CLIPS_ON_REQUEST)
+        assert stored(CHANNEL)["moments_auto_cut"] == 0
+
+    async def test_it_is_kept_while_the_channel_is_tracked_for_something_else(self, service, channel):
+        await self.cut(service, dashboard_view.MOMENT_CLIPS_AUTOMATIC)
+
+        await track(service, "clips")
+        page = parse((await service.client.get("/dashboard/channels")).text)
+
+        assert stored(CHANNEL)["moments_auto_cut"] == 1
+        # Offered only while it is tracked for moments - the page shows it
+        # again once that is chosen.
+        assert "hidden" in page.one("span", data_moment_clips=True).attrs
+
+    async def test_a_platform_that_keeps_no_vod_is_not_offered_it(self, service):
+        conn = db.get_connection()
+        try:
+            db.add_platform_streamer(conn, "youtube", "UC123", "someone@youtube")
+        finally:
+            conn.close()
+
+        page = parse((await service.client.get("/dashboard/channels")).text)
+
+        assert page.find("span", data_moment_clips=True) == []
+
+    async def test_an_unknown_way_or_channel_is_refused(self, service, channel):
+        assert (await self.cut(service, "sometimes")).status_code == 400
+        assert (await self.cut(service, "automatic", "nobody")).status_code == 404
 
 
 class TestWhatAChannelKeepsOfItsVods:
@@ -294,6 +364,35 @@ class TestAMomentCaught:
 
         assert telegram.sent == []
         assert found["watch_url"] is not None
+
+    async def test_with_its_clips_cut_automatically_one_is_cut_from_the_vod_right_away(
+        self, service, notified, vod, telegram, monkeypatch
+    ):
+        await service.client.post(f"/channels/{CHANNEL}/moments_auto_cut?how=automatic")
+        # Not waiting for the VOD to reach the end of the moment.
+        monkeypatch.setattr(vod_footage, "VOD_BEHIND_SECONDS", -3600)
+
+        found = await self.react(service)
+
+        # Its footage fetched from the VOD, without anyone asking.
+        assert vod.segment_requests() != []
+        assert service.main._vod_clips[found["id"]]["state"] != dashboard_view.FOOTAGE_NONE
+        # Still told of, with where it is watched.
+        (message,) = telegram.sent
+        assert message["links"][0] == found["watch_url"]
+
+    async def test_switched_to_automatically_with_the_channel_tracked_for_clips_nothing_is_cut(
+        self, service, notified, vod, monkeypatch
+    ):
+        await service.client.post(f"/channels/{CHANNEL}/moments_auto_cut?how=automatic")
+        monkeypatch.setattr(vod_footage, "VOD_BEHIND_SECONDS", -3600)
+        service.warm_up(CHANNEL)
+        await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
+        # Tracked for clips again while the moment is open.
+        await track(service, "clips")
+        await service.settle()
+
+        assert vod.segment_requests() == []
 
     async def test_one_kick_lists_no_vod_of_is_kept_and_told_of_without_the_link(
         self, service, notified, channel, telegram
