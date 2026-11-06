@@ -5,7 +5,8 @@
     which the script fetches after asking for one and every couple of
     seconds while it is being made. Times are clip time: a line's time plays
     the clip from there, and the line that is being said is marked as the
-    clip plays. -#}
+    clip plays. One made of the cut from Trim alone says so, and offers to
+    transcribe the rest of the footage. -#}
 <div class="transcript" data-transcript="{{ transcript.url }}" data-page="{{ transcript.page }}"{% if transcript.busy %} data-busy{% endif %} data-status-scope>
   {% if transcript.lines %}
   <p class="transcript-hint">A time plays the clip from there. What you put right is kept as you leave the line; a line left empty is left out of the subtitles.</p>
@@ -30,13 +31,30 @@
       {% endif %}
     </p>
     {% endif %}
+    {#- Heard from some of the footage only, or more being heard now. -#}
+    {% if transcript.part or transcript.words %}
+    <div class="transcript-part">
+      {% if transcript.words %}
+      <p class="transcript-words">{{ transcript.words }}</p>
+      {% endif %}
+      {% if transcript.part and not transcript.busy %}
+      <p class="transcript-words">{{ transcript.part }}</p>
+      {% endif %}
+      {% if transcript.can_make %}
+      <button type="button" class="ch-btn ch-btn-compact" data-transcribe>{{ transcript.make_words }}</button>
+      {% endif %}
+    </div>
+    {% endif %}
     <p class="status-line" role="status" data-status></p>
   </div>
   {% else %}
   <div class="transcript-empty">
     <p class="transcript-words">{{ transcript.words }}</p>
+    {% if transcript.part and not transcript.busy %}
+    <p class="transcript-words">{{ transcript.part }}</p>
+    {% endif %}
     {% if transcript.can_make %}
-    <button type="button" class="ch-btn ch-btn-primary" data-transcribe>Transcribe</button>
+    <button type="button" class="ch-btn ch-btn-primary" data-transcribe>{{ transcript.make_words }}</button>
     {% endif %}
     <p class="status-line" role="status" data-status></p>
   </div>

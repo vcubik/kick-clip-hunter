@@ -116,7 +116,7 @@ class TestSchema:
             "emote_count", "keyword_hits", "stream_elapsed_seconds", "clip_path", "rating", "notes",
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
-            "context_before", "context_after", "downloaded_at", "subtitles", "laughing",
+            "context_before", "context_after", "downloaded_at", "subtitles", "subtitles_heard", "laughing",
             "clip_on_request", "watch_url",
         }  # fmt: skip
 
@@ -1490,6 +1490,7 @@ class TestMoments:
             "stream_type",
             "moment_type",
             "subtitles",
+            "subtitles_heard",
             "laughing",
         ):
             assert row[column] is None
@@ -1751,6 +1752,7 @@ class TestMoments:
             (db.update_moment_clip_path, "clip_path", "some_channel/moment_1.mp4"),
             (db.update_moment_transcript, "transcript", "to je konec"),
             (db.update_moment_subtitles, "subtitles", '[{"start": 0.5, "end": 2.0, "text": "to je konec"}]'),
+            (db.update_moment_heard_spans, "subtitles_heard", "[[-2.0, 4.0]]"),
             (db.update_moment_audio_events, "audio_events", "cs, HAPPY"),
             (db.update_moment_frame_embedding, "frame_embedding", b"\x00\x01\x02"),
             (db.update_moment_sound_events, "sound_events", "Laughter:0.80"),
@@ -1783,6 +1785,18 @@ class TestMoments:
             )
         )
         assert after == before
+
+    def test_a_transcript_is_kept_with_which_stretches_it_was_heard_from(self, conn):
+        moment_id = store_moment(conn)
+        lines = '[{"start": 0.5, "end": 2.0, "text": "to je konec"}]'
+
+        db.update_moment_heard(conn, moment_id, lines, "[[-2.0, 4.0]]")
+        partly = conn.execute("SELECT subtitles, subtitles_heard FROM moments WHERE id = ?", (moment_id,)).fetchone()
+        db.update_moment_heard(conn, moment_id, lines, None)
+        wholly = conn.execute("SELECT subtitles, subtitles_heard FROM moments WHERE id = ?", (moment_id,)).fetchone()
+
+        assert tuple(partly) == (lines, "[[-2.0, 4.0]]")
+        assert tuple(wholly) == (lines, None)
 
     @pytest.mark.parametrize(
         "update", [db.update_moment_rating, db.update_moment_notes, db.update_moment_stream_type, db.update_moment_type]

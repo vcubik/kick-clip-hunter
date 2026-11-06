@@ -66,7 +66,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   (see `subtitles.py` below): what is said in the footage, written down when "Transcribe" is
   pressed, put right there line by line - the line being said is marked as the clip plays, and a
   line's time plays the clip from there - and downloaded as subtitles (.srt) timed to the
-  moment's file, or beside the cut in the Trim dialog. Delete, under the moment's tags, asks once
+  moment's file, or beside the cut in the Trim dialog. The Trim dialog can also transcribe the cut
+  that is there alone ("Transcribe the cut", `POST /moments/{id}/trim/subtitles`, followed as the
+  dialog follows a cut being made), which takes seconds rather than the whole file's while: its
+  lines are the moment's transcript, the tab says which stretch it was heard from and offers
+  "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Delete, under the moment's tags, asks once
   more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut, it is being transcribed or footage is being added to it; one whose

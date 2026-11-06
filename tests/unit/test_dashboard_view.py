@@ -894,6 +894,19 @@ class TestATranscriptInWords:
     def test_nothing_else_says_how_far_it_has_got(self, state):
         assert view.transcript_words(state, done=0.5) == view.transcript_words(state)
 
+    def test_one_heard_from_some_of_the_footage_only_says_which(self):
+        assert view.transcript_part_words([(-2.0, 4.5)], 30.0) == (
+            f"Transcribed so far: {view.MINUS}0:02.0 to 0:04.5 only."
+        )
+        assert view.transcript_part_words([(0.0, 3.0), (31.0, 40.0)], 30.0) == (
+            "Transcribed so far: 0:00.0 to 0:03.0 and +0:01.0 to +0:10.0 only."
+        )
+
+    def test_where_nothing_was_said_in_it_it_says_nothing_of_the_rest(self):
+        assert view.transcript_words(view.TRANSCRIPT_READY, said=False, part=True) == (
+            "Nothing is said in what has been transcribed of the footage, or nothing the speech model could make out."
+        )
+
 
 class TestClipTimeInWords:
     """A time of a line of the transcript, written as the Trim dialog writes

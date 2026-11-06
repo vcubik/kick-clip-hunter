@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from kick_clip_hunter import clip_trim, dashboard_view, recorder, vod_footage
+from kick_clip_hunter import clip_trim, dashboard_view, db, recorder, subtitles, vod_footage
+from kick_clip_hunter.subtitles import Line
 from tests.support.data import add_moment, moment
 from tests.support.hls import Segment
 from tests.support.html import parse
@@ -156,6 +157,24 @@ class TestAddingFootage:
         begins, duration, end = clip_trim.read_cut_record(record.read_text(encoding="utf-8"))[:3]
         assert added == pytest.approx(4, abs=0.05)
         assert (begins, duration, end) == (pytest.approx(2 + added), 5.0, pytest.approx(7 + added))
+
+    async def test_a_transcript_of_all_the_file_was_heard_from_what_the_file_held_before(
+        self, service, vod, cut_moment
+    ):
+        kept = subtitles.stored([Line(1.0, 2.0, "put right by hand")])
+        conn = db.get_connection()
+        try:
+            db.update_moment_subtitles(conn, cut_moment, kept)
+        finally:
+            conn.close()
+
+        await ask(service, cut_moment, "after", 3)
+        await service.settle()
+
+        # The footage added can be transcribed too, and what is there is kept.
+        row = moment(cut_moment)
+        assert row["subtitles"] == kept
+        assert subtitles.spans_read(row["subtitles_heard"]) == [(-(CLIP - FIRST), LAST - CLIP)]
 
     async def test_the_page_plays_the_new_file_and_not_a_copy_of_the_old_it_kept(self, service, vod, cut_moment):
         file = recorder.CLIPS_DIR / CHANNEL / "moment_1.mp4"

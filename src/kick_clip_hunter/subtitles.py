@@ -4,7 +4,12 @@ transcript, as subtitles.
 A moment's transcript is made when it is asked for on the review page, of
 all of its file - the clip and the footage either side of it, since a
 stretch cut out of it for an editor (clip_trim.py) can begin and end
-anywhere in there. The speech model hears words, each with when it was said
+anywhere in there. Or of no more than that stretch, asked for in the Trim
+dialog: a few seconds are heard in a moment, the whole file takes a while.
+A transcript then knows which stretches of the file it was heard from (its
+spans); another stretch heard later, or the rest of the file, is added to
+it without touching a line already there, which may have been put right
+(see merged). The speech model hears words, each with when it was said
 (transcriber.transcribe_words); this module makes lines of them the size of
 a subtitle, which is what the page shows to be corrected and what an editor
 takes away: SubRip (.srt), which every editor reads, timed to the video it
@@ -45,6 +50,10 @@ TEXT_MAX_CHARACTERS = 300
 # if less than this of it is left in the video: it would flash up and be
 # gone, with words in it that the video does not have.
 CUT_LINE_MIN_SECONDS = 0.5
+# Two stretches heard this close together are one, and a stretch that is
+# heard already to within this is not missing: where a cut begins and ends
+# is kept to the hundredth of a second, a file's length is measured anew.
+SPAN_SLACK_SECONDS = 0.05
 # A subtitles file is written as UTF-8 with a byte order mark, which is how
 # editors on Windows tell it from the local code page (without one, some of
 # them mangle every Czech letter), and with Windows line ends.
@@ -166,6 +175,67 @@ def read(text: str | None) -> list[Line] | None:
         return [Line(float(line["start"]), float(line["end"]), str(line["text"])) for line in kept]
     except (ValueError, TypeError, KeyError):
         return None
+
+
+# A stretch of a moment's file, from and to, in clip time.
+Span = tuple[float, float]
+
+
+def joined(spans: Iterable[Span]) -> list[Span]:
+    """Stretches as few as they make together, in order: those that overlap
+    or touch (to within SPAN_SLACK_SECONDS) as one."""
+    together: list[Span] = []
+    for start, end in sorted(spans):
+        if together and start <= together[-1][1] + SPAN_SLACK_SECONDS:
+            together[-1] = (together[-1][0], max(together[-1][1], end))
+        else:
+            together.append((start, end))
+    return together
+
+
+def spans_stored(spans: Iterable[Span]) -> str:
+    """Which stretches a transcript was heard from, as they are kept on its
+    moment (moments.subtitles_heard)."""
+    return json.dumps([[round(start, 3), round(end, 3)] for start, end in joined(spans)])
+
+
+def spans_read(text: str | None) -> list[Span] | None:
+    """Which stretches of its moment's file a transcript was heard from (see
+    spans_stored) - or None for all of the file: one made of it whole, or
+    before a transcript could be made of less, or where what is kept is not
+    stretches."""
+    if text is None:
+        return None
+    try:
+        kept = json.loads(text)
+        if not isinstance(kept, list):
+            return None
+        return joined((float(start), float(end)) for start, end in kept)
+    except (ValueError, TypeError):
+        return None
+
+
+def heard_in(spans: Sequence[Span] | None, start: float, end: float) -> bool:
+    """Whether all of the stretch from `start` to `end` has been heard by a
+    transcript heard from `spans` (None: all of its file)."""
+    if spans is None:
+        return True
+    slack = SPAN_SLACK_SECONDS
+    return any(begins - slack <= start and end <= ends + slack for begins, ends in joined(spans))
+
+
+def merged(kept: Sequence[Line], spans: Sequence[Span], heard: Sequence[Line]) -> list[Line]:
+    """A transcript heard from `spans` with the lines of another hearing
+    added: those of `heard` that begin where it was not heard yet. Every
+    line already there is kept as it is - put right, perhaps - so the
+    footage it was heard in is not heard twice; one that would run into the
+    line after it ends where that begins."""
+    added = [line for line in heard if not any(start <= line.start < end for start, end in spans)]
+    ordered = sorted([*kept, *added], key=lambda line: line.start)
+    return [
+        line._replace(end=min(line.end, ordered[index + 1].start)) if index + 1 < len(ordered) else line
+        for index, line in enumerate(ordered)
+    ]
 
 
 def corrected(transcript: Sequence[Line], index: int, text: str) -> list[Line]:

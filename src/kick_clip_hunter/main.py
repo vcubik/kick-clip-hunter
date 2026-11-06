@@ -145,6 +145,8 @@ from .db import (
     update_moment_context,
     update_moment_downloaded,
     update_moment_frame_embedding,
+    update_moment_heard,
+    update_moment_heard_spans,
     update_moment_laughing,
     update_moment_notes,
     update_moment_rating,
@@ -2407,11 +2409,20 @@ def _trim_download_url(moment_id: int, what: str, relative: Path) -> str | None:
     return f"/moments/{moment_id}/trim/{what}?v={int(file.stat().st_mtime)}"
 
 
+def _cut_span(row, record: clip_trim.Cut) -> subtitles.Span:
+    """The stretch of a moment's file the video cut out of it holds, in
+    clip time."""
+    begins = record.begins - (row["context_before"] or 0.0)
+    return begins, begins + record.duration
+
+
 def _trim(row) -> dict:
-    """Where the stretch cut out of a moment's footage stands."""
+    """Where the stretch cut out of a moment's footage stands - and whether
+    what is said in it can be transcribed, all of the moment's file not
+    being needed for that."""
     video, chat = _trim_paths(row["clip_path"])
     record = _cut_record(CLIPS_DIR / video)
-    return _trim_standing(
+    standing = _trim_standing(
         _trims.get(row["id"], {}),
         _trim_download_url(row["id"], "video", video),
         _trim_download_url(row["id"], "chat", chat),
@@ -2420,6 +2431,35 @@ def _trim(row) -> dict:
         burned=bool(record and record.burned),
         subtitles_url=_cut_subtitles_url(row, record),
     )
+    return {**standing, **_cut_transcript(row, record, standing)}
+
+
+def _cut_transcript(row, record: clip_trim.Cut | None, standing: dict) -> dict:
+    """Whether the Trim dialog offers to transcribe the cut that is there:
+    one that holds footage the moment's transcript was not heard from, while
+    nothing else is being made of it - and what it says while that is
+    transcribed, or why it could not be."""
+    moment_id = row["id"]
+    known = _transcripts.get(moment_id, {})
+    if _cut_heard_busy(moment_id):
+        return {
+            "transcribing": True,
+            "transcribe": False,
+            "transcript_words": dashboard_view.transcript_words(known["state"], known.get("done")),
+        }
+    ready = standing["state"] in (dashboard_view.TRIM_READY, dashboard_view.TRIM_CHAT_FAILED)
+    # A cut without where it begins can't be placed in the moment's file.
+    heard = record is None or (
+        subtitles.read(row["subtitles"]) is not None
+        and subtitles.heard_in(subtitles.spans_read(row["subtitles_heard"]), *_cut_span(row, record))
+    )
+    failed = known.get("state") == dashboard_view.TRANSCRIPT_FAILED
+    return {
+        "transcribing": False,
+        # Not while all of the file is being heard: that hears the cut too.
+        "transcribe": bool(standing["video_url"] and ready and not heard and not _transcribing(moment_id)),
+        "transcript_words": dashboard_view.transcript_words(known["state"]) if failed and not heard else None,
+    }
 
 
 def _trim_refused(error: clip_trim.TrimError) -> HTTPException:
@@ -2597,16 +2637,34 @@ async def _burn_background(
 # transcript could not be made, by moment id. Any other moment's transcript
 # is told from its row, so a restart forgets nothing that matters.
 _transcripts: dict[int, dict] = {}
+# Of those being transcribed, the moments of which only the cut made with
+# Trim is being heard: that video is not to be cut anew meanwhile.
+_cuts_heard: set[int] = set()
+CUT_HEARD_WORDS = "What is said in the cut is being transcribed. Try again once that is done."
 
 
-async def _transcribe_background(moment_id: int, channel: str, clip: Path, lead: float) -> None:
+def _transcribing(moment_id: int) -> bool:
+    return _transcripts.get(moment_id, {}).get("state") == dashboard_view.TRANSCRIPT_MAKING
+
+
+def _cut_heard_busy(moment_id: int) -> bool:
+    return moment_id in _cuts_heard and _transcribing(moment_id)
+
+
+async def _transcribe_background(
+    moment_id: int, channel: str, file: Path, begins: float, span: subtitles.Span | None = None
+) -> None:
+    """Hears what is said in a moment's `file`, whose first frame is at
+    clip time `begins`: all of the moment's file (`span` None), or the cut
+    made of it with Trim, which holds `span`. What is heard is added to the
+    transcript there is (see subtitles.merged)."""
     # The speech model takes a while over a file of a couple of minutes,
     # and longer the first time, when it is loaded: off the event loop, and
     # as a tracked task, which gives up when the service shuts down rather
     # than hold that up (see _making) - it is made again when asked for.
     progress = _making(_transcripts, moment_id, dashboard_view.TRANSCRIPT_MAKING)
     try:
-        heard = await asyncio.to_thread(transcriber.transcribe_words, clip, progress)
+        heard = await asyncio.to_thread(transcriber.transcribe_words, file, progress)
     except _GivenUp:
         _transcripts.pop(moment_id, None)
         logger.info("[%s] transcribing moment %d given up: shutting down", channel, moment_id)
@@ -2615,15 +2673,34 @@ async def _transcribe_background(moment_id: int, channel: str, clip: Path, lead:
         logger.exception("[%s] transcribing the footage of moment %d failed", channel, moment_id)
         _transcripts[moment_id] = {"state": dashboard_view.TRANSCRIPT_FAILED}
         return
-    # Heard on the file's time, whose first frame is `lead` before the clip's.
-    lines = subtitles.lines(heard, begins=-lead)
+    finally:
+        _cuts_heard.discard(moment_id)
+    lines = subtitles.lines(heard, begins=begins)
     conn = get_connection()
     try:
-        update_moment_subtitles(conn, moment_id, subtitles.stored(lines))
+        # As it is now: a line may have been put right meanwhile.
+        row = get_moment(conn, moment_id)
+        if row is not None:
+            kept = subtitles.read(row["subtitles"])
+            spans = subtitles.spans_read(row["subtitles_heard"])
+            if kept is None:
+                transcript, heard_from = lines, None if span is None else [span]
+            else:
+                # One heard from all of the file has nothing to add to it.
+                everywhere = [(-math.inf, math.inf)] if spans is None else spans
+                transcript = subtitles.merged(kept, everywhere, lines)
+                heard_from = None if span is None or spans is None else [*spans, span]
+            update_moment_heard(
+                conn,
+                moment_id,
+                subtitles.stored(transcript),
+                None if heard_from is None else subtitles.spans_stored(heard_from),
+            )
     finally:
         conn.close()
     _transcripts.pop(moment_id, None)
-    logger.info("[%s] transcript of moment %d saved (%d lines)", channel, moment_id, len(lines))
+    what = "the cut of " if span is not None else ""
+    logger.info("[%s] transcript of %smoment %d saved (%d lines)", channel, what, moment_id, len(lines))
 
 
 def _cut_subtitles_url(row, record: clip_trim.Cut | None) -> str | None:
@@ -2646,19 +2723,29 @@ def _transcript(row) -> dict:
     from, for the whole file and for the cut made with Trim."""
     moment_id = row["id"]
     transcript = subtitles.read(row["subtitles"])
+    # Which stretches it was heard from, where that is not all of the file.
+    spans = subtitles.spans_read(row["subtitles_heard"]) if transcript is not None else None
     known = _transcripts.get(moment_id, {})
-    if transcript is not None:
-        state = dashboard_view.TRANSCRIPT_READY
-    else:
+    # One that is there may be having more added to it, or have failed to.
+    if transcript is None or known.get("state") in (dashboard_view.TRANSCRIPT_MAKING, dashboard_view.TRANSCRIPT_FAILED):
         state = known.get("state", dashboard_view.TRANSCRIPT_NONE)
+    else:
+        state = dashboard_view.TRANSCRIPT_READY
     lines = transcript or []
     video, _chat = _trim_paths(row["clip_path"])
+    part = None
+    if spans is not None:
+        part = dashboard_view.transcript_part_words(spans, row["clip_duration"])
     return {
         "url": f"/moments/{moment_id}/subtitles",
         "page": f"/dashboard/moments/{moment_id}/subtitles",
         "busy": state == dashboard_view.TRANSCRIPT_MAKING,
-        "words": dashboard_view.transcript_words(state, known.get("done"), said=bool(lines)),
-        "can_make": state in (dashboard_view.TRANSCRIPT_NONE, dashboard_view.TRANSCRIPT_FAILED),
+        "words": dashboard_view.transcript_words(state, known.get("done"), said=bool(lines), part=part is not None),
+        # Which stretches it was heard from, where that is not all of it.
+        "part": part,
+        "can_make": state in (dashboard_view.TRANSCRIPT_NONE, dashboard_view.TRANSCRIPT_FAILED)
+        or (part is not None and state == dashboard_view.TRANSCRIPT_READY),
+        "make_words": "Transcribe the rest" if spans is not None else "Transcribe",
         # What the browser checks the spelling of a line in.
         "language": transcriber.LANGUAGE,
         "lines": [
@@ -2831,6 +2918,11 @@ async def _add_footage_background(
     conn = get_connection()
     try:
         update_moment_context(conn, moment_id, row["clip_duration"], context_before, context_after)
+        # A transcript heard from all of the file was heard from less of it
+        # now: the footage added can be transcribed too.
+        if subtitles.read(row["subtitles"]) is not None and subtitles.spans_read(row["subtitles_heard"]) is None:
+            was = (-(row["context_before"] or 0.0), row["clip_duration"] + (row["context_after"] or 0.0))
+            update_moment_heard_spans(conn, moment_id, subtitles.spans_stored([was]))
     finally:
         conn.close()
     _shift_cut_record(row, made.lead)
@@ -3174,6 +3266,8 @@ def _open_moment(conn, row, today: date) -> dict:
                 ),
                 # A moment's strip shows all of its footage at once.
                 "window": None,
+                # What is said in a moment's cut can be written down alone.
+                "transcribes": True,
                 **_trim_dialog(),
             }
             if row["clip_path"] and row["clip_duration"] and strip
@@ -5286,6 +5380,7 @@ def _remove_moment(conn, row) -> None:
     delete_moment(conn, row["id"])
     _trims.pop(row["id"], None)
     _transcripts.pop(row["id"], None)
+    _cuts_heard.discard(row["id"])
     _footage.pop(row["id"], None)
     _vod_clips.pop(row["id"], None)
 
@@ -5353,6 +5448,8 @@ async def trim_moment(moment_id: int, request: Request):
             raise HTTPException(status_code=409, detail="The moment has no clip to trim.")
         if _footage_busy(moment_id):
             raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
+        if _cut_heard_busy(moment_id):
+            raise HTTPException(status_code=409, detail=CUT_HEARD_WORDS)
         try:
             span = clip_trim.file_span(row, asked.get("start"), asked.get("end"))
             look = clip_trim.chat_look(asked)
@@ -5411,6 +5508,9 @@ async def trim_state(moment_id: int):
             "subtitles_url": None,
             "cut": None,
             "chat_later": False,
+            "transcribing": False,
+            "transcribe": False,
+            "transcript_words": None,
         }
     return {"moment_id": moment_id, **_trim(row)}
 
@@ -5496,6 +5596,8 @@ async def trim_moment_chat(moment_id: int, request: Request):
             return {"moment_id": moment_id, **_trim(row)}
         if _footage_busy(moment_id):
             raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
+        if _cut_heard_busy(moment_id):
+            raise HTTPException(status_code=409, detail=CUT_HEARD_WORDS)
         if not video.exists():
             raise HTTPException(status_code=409, detail="Nothing has been cut out of this moment yet.")
         record = _cut_record(video)
@@ -5567,7 +5669,8 @@ async def transcribe_moment(moment_id: int):
     with its times (see subtitles.py): all of its file, the clip and the
     footage either side of it, to be corrected on the review page and taken
     into an editor as subtitles. Asked again while that goes on, nothing
-    more is started; a transcript that is there is kept."""
+    more is started; a transcript that is there is kept - one heard from a
+    stretch of the file only (see transcribe_cut) has the rest added to it."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     conn = get_connection()
@@ -5579,15 +5682,16 @@ async def transcribe_moment(moment_id: int):
         raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
     if not row["clip_path"] or not (CLIPS_DIR / row["clip_path"]).exists():
         raise HTTPException(status_code=409, detail="The moment has no clip to transcribe.")
-    if subtitles.read(row["subtitles"]) is not None:
-        raise HTTPException(status_code=409, detail="The moment has its transcript already.")
-    if _footage_busy(moment_id):
-        raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
-    if _transcripts.get(moment_id, {}).get("state") != dashboard_view.TRANSCRIPT_MAKING:
+    if not _transcribing(moment_id):
+        if subtitles.read(row["subtitles"]) is not None and subtitles.spans_read(row["subtitles_heard"]) is None:
+            raise HTTPException(status_code=409, detail="The moment has its transcript already.")
+        if _footage_busy(moment_id):
+            raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
         _transcripts[moment_id] = {"state": dashboard_view.TRANSCRIPT_MAKING}
+        # Heard on the file's time, whose first frame is before the clip's.
         _track_task(
             _transcribe_background(
-                moment_id, row["channel_slug"], CLIPS_DIR / row["clip_path"], row["context_before"] or 0.0
+                moment_id, row["channel_slug"], CLIPS_DIR / row["clip_path"], -(row["context_before"] or 0.0)
             )
         )
     known = _transcripts[moment_id]
@@ -5596,6 +5700,52 @@ async def transcribe_moment(moment_id: int):
         "state": known["state"],
         "words": dashboard_view.transcript_words(known["state"], known.get("done")),
     }
+
+
+@app.post("/moments/{moment_id}/trim/subtitles")
+async def transcribe_cut(moment_id: int):
+    """Starts writing down what is said in the video cut out of a moment's
+    footage with Trim, and no more: a few seconds are heard in a moment,
+    where all of the file takes a while. What is heard is the moment's
+    transcript, as transcribe_moment's is - shown and put right beside the
+    clip, its subtitles timed to the cut - or is added to the one there is,
+    where that was not heard from this stretch yet. Answers as the Trim
+    dialog asks where the cut stands (trim_state)."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    if not row["clip_path"]:
+        raise HTTPException(status_code=409, detail="The moment has no clip to transcribe.")
+    if not _transcribing(moment_id):
+        video = CLIPS_DIR / _trim_paths(row["clip_path"])[0]
+        if not video.exists():
+            raise HTTPException(status_code=409, detail="Nothing has been cut out of this moment yet.")
+        if _trims.get(moment_id, {}).get("state") in dashboard_view.TRIM_BUSY:
+            raise HTTPException(status_code=409, detail="The cut is being made. Try again once that is done.")
+        if _footage_busy(moment_id):
+            raise HTTPException(status_code=409, detail=FOOTAGE_BUSY_WORDS)
+        record = _cut_record(video)
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Where this video begins was not kept when it was cut, so it can't be transcribed. "
+                "Export it again.",
+            )
+        span = _cut_span(row, record)
+        if subtitles.read(row["subtitles"]) is not None and subtitles.heard_in(
+            subtitles.spans_read(row["subtitles_heard"]), *span
+        ):
+            raise HTTPException(status_code=409, detail="What is said in this cut is transcribed already.")
+        _transcripts[moment_id] = {"state": dashboard_view.TRANSCRIPT_MAKING}
+        _cuts_heard.add(moment_id)
+        _track_task(_transcribe_background(moment_id, row["channel_slug"], video, span[0], span))
+    return {"moment_id": moment_id, **_trim(row)}
 
 
 @app.get("/moments/{moment_id}/subtitles")
@@ -5615,11 +5765,19 @@ async def download_subtitles(moment_id: int):
     return _subtitles_file(transcript, -(row["context_before"] or 0.0), None, Path(row["clip_path"]).name)
 
 
+def _same_time(kept: float, said: float) -> bool:
+    """Whether a time the page was given is the one kept: it was written to
+    the thousandth (see _transcript)."""
+    return abs(kept - said) < 0.0005
+
+
 @app.post("/moments/{moment_id}/subtitles/{line}")
 async def correct_transcript(moment_id: int, line: int, request: Request):
     """Puts a line of a moment's transcript right: `text` is what it says
     instead (see subtitles.corrected). It keeps the times it was heard at;
-    left empty, it is left out of the subtitles."""
+    left empty, it is left out of the subtitles. `start`, where it is
+    given, is when the line begins, as the page had it: lines heard in
+    another stretch of the footage may have been added before it since."""
     try:
         asked = await request.json()
     except ValueError:
@@ -5627,6 +5785,9 @@ async def correct_transcript(moment_id: int, line: int, request: Request):
     text = asked.get("text") if isinstance(asked, dict) else None
     if not isinstance(text, str):
         raise HTTPException(status_code=400, detail="Expected the line's text as JSON.")
+    start = asked.get("start")
+    if start is not None and (isinstance(start, bool) or not isinstance(start, int | float)):
+        raise HTTPException(status_code=400, detail="Expected when the line begins as a number.")
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -5635,6 +5796,13 @@ async def correct_transcript(moment_id: int, line: int, request: Request):
         transcript = subtitles.read(row["subtitles"])
         if transcript is None:
             raise HTTPException(status_code=409, detail="The moment has no transcript yet.")
+        if start is not None and not (0 <= line < len(transcript) and _same_time(transcript[line].start, start)):
+            moved = [index for index, kept in enumerate(transcript) if _same_time(kept.start, start)]
+            if not moved:
+                raise HTTPException(
+                    status_code=409, detail="The transcript has changed. Reload the page and put the line right again."
+                )
+            line = moved[0]
         try:
             transcript = subtitles.corrected(transcript, line, text)
         except IndexError:

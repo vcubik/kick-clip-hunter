@@ -329,6 +329,11 @@ def get_connection() -> sqlite3.Connection:
     # the clip's speech in one line, for a classifier. NULL until made.
     if "subtitles" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN subtitles TEXT")
+    # Which stretches of the moment's file that transcript was heard from,
+    # in clip time (see subtitles.spans_stored) - one cut with Trim may be
+    # all that was transcribed. NULL for all of the file.
+    if "subtitles_heard" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN subtitles_heard TEXT")
 
     # How many distinct people laughed around a moment, from
     # detector.SHORT_WINDOW_SECONDS before it fired to
@@ -789,8 +794,8 @@ _MOMENT_COLUMNS = """
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
     context_before, context_after, downloaded_at,
-    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles, laughing,
-    clip_on_request, watch_url
+    rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles,
+    subtitles_heard, laughing, clip_on_request, watch_url
 """
 
 
@@ -1507,6 +1512,18 @@ def update_moment_transcript(conn: sqlite3.Connection, moment_id: int, transcrip
 
 def update_moment_subtitles(conn: sqlite3.Connection, moment_id: int, subtitles: str) -> None:
     conn.execute("UPDATE moments SET subtitles = ? WHERE id = ?", (subtitles, moment_id))
+    conn.commit()
+
+
+def update_moment_heard(conn: sqlite3.Connection, moment_id: int, subtitles: str, heard: str | None) -> None:
+    """A moment's transcript together with which stretches of its file it
+    was heard from (None: all of it)."""
+    conn.execute("UPDATE moments SET subtitles = ?, subtitles_heard = ? WHERE id = ?", (subtitles, heard, moment_id))
+    conn.commit()
+
+
+def update_moment_heard_spans(conn: sqlite3.Connection, moment_id: int, heard: str | None) -> None:
+    conn.execute("UPDATE moments SET subtitles_heard = ? WHERE id = ?", (heard, moment_id))
     conn.commit()
 
 

@@ -696,6 +696,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    Czech letters come out right. Trim a stretch and Export: "Download subtitles" appears beside
    the video, and `moment_N_trim.srt` lines up with that video from its first frame - closed, the
    dialog leaves "The cut from Trim" in the tab as well. The next moment opened shows the same tab.
+   On a moment with no transcript, Trim a few seconds and Export, then press "Transcribe the cut":
+   the dialog counts up, Export waits meanwhile, and "Download subtitles" appears within seconds;
+   the tab shows those lines and "Transcribed so far: ... only." Put one right, press "Transcribe
+   the rest": the rest of the file's lines appear around it and the corrected one is unchanged.
 16. **Watch a YouTube channel.** Add a live YouTube channel on the Channels page by a link to its
    page, `youtube.com/@<handle>`, and again by a link to its live stream: it is listed once, as
    `<handle>@youtube` with its channel id (`UC...`) in the tooltip. Within half a minute the log

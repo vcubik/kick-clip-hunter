@@ -260,15 +260,27 @@ TRANSCRIPT_WORDS = {
 }
 
 
-def transcript_words(state: str, done: float | None = None, said: bool = True) -> str:
+def transcript_words(state: str, done: float | None = None, said: bool = True, part: bool = False) -> str:
     """What the page says of a moment's transcript. `done` is how much of
     the footage has been heard, as a share, while that goes on; `said`,
-    whether a transcript that is there has anything in it."""
+    whether a transcript that is there has anything in it; `part`, that it
+    was heard from some of the footage only (see transcript_part_words)."""
     if state == TRANSCRIPT_MAKING and done is not None:
         return f"Transcribing: {int(done * 100)} %."
     if state == TRANSCRIPT_READY and not said:
-        return "Nothing is said in the footage, or nothing the speech model could make out."
+        where = "what has been transcribed of the footage" if part else "the footage"
+        return f"Nothing is said in {where}, or nothing the speech model could make out."
     return TRANSCRIPT_WORDS[state]
+
+
+def transcript_part_words(spans: Iterable[tuple[float, float]], clip_seconds: float | None) -> str:
+    """Which stretches of a moment's footage its transcript was heard from,
+    where that is not all of it - a cut made with Trim, say - in clip time
+    as the page writes it."""
+    stretches = [
+        f"{clip_time_words(start, clip_seconds)} to {clip_time_words(end, clip_seconds)}" for start, end in spans
+    ]
+    return f"Transcribed so far: {list_words(stretches)} only."
 
 
 # Where adding footage to a moment's file from its stream's VOD stands (see

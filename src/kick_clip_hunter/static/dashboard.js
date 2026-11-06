@@ -994,8 +994,9 @@
   function leaveTrim(dialog) {
     trimClip(dialog).pause();
     clearTimeout(trimWatch);
-    // The cut it made has subtitles of its own beside the clip.
-    if (dialog.closest(".moment") && one("[data-transcript] [data-transcript-lines]")) refreshTranscript();
+    // The cut it made has subtitles of its own beside the clip - and may
+    // have been transcribed there.
+    if (dialog.closest(".moment") && one("[data-transcript]")) refreshTranscript();
   }
 
   // Whether the chat goes with the video: its lines are then shown beside
@@ -1224,10 +1225,34 @@
     const later = one("[data-trim-chat-later]", dialog);
     if (later) {
       later.hidden = !trim.chat_later;
-      later.disabled = busy;
+      later.disabled = busy || Boolean(trim.transcribing);
     }
+    // What is said in the cut alone can be written down, which is quick;
+    // while it is, the cut is not made anew.
+    const transcribe = one("[data-trim-transcribe]", dialog);
+    if (transcribe) {
+      transcribe.hidden = !trim.transcribe;
+      transcribe.disabled = false;
+    }
+    if (trim.transcribing) one("[data-trim-go]", dialog).disabled = true;
+    if (trim.transcript_words) one("[data-trim-state]", dialog).textContent = trim.transcript_words;
     clearTimeout(trimWatch);
-    if (busy) trimWatch = setTimeout(() => askTrim(dialog), TRIM_POLL_MS);
+    if (busy || trim.transcribing) trimWatch = setTimeout(() => askTrim(dialog), TRIM_POLL_MS);
+  }
+
+  async function trimTranscribe(button) {
+    const dialog = trimOf(button);
+    button.disabled = true;
+    const response = await post(`${dialog.dataset.trim}/subtitles`);
+    if (!dialog.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      one("[data-trim-state]", dialog).textContent = response
+        ? await problem(response, "Could not start the transcript. Try again.")
+        : "Could not reach the service.";
+      return;
+    }
+    showTrim(dialog, await response.json());
   }
 
   async function askTrim(dialog) {
@@ -1426,7 +1451,10 @@
     if (!field?.matches?.("[data-transcript-line]") || field.value === field.defaultValue) return;
     const pane = field.closest("[data-transcript]");
     const text = field.value;
-    const response = await post(`${pane.dataset.transcript}/${field.dataset.transcriptLine}`, { text });
+    // When it begins, too: lines heard in more of the footage may have been
+    // put before it since the tab was shown.
+    const start = Number(field.closest("[data-from]").dataset.from);
+    const response = await post(`${pane.dataset.transcript}/${field.dataset.transcriptLine}`, { text, start });
     if (!field.isConnected) return;
     if (!response || !response.ok) {
       say(field, response ? await problem(response, "Could not save the line. Try again.") : "Could not reach the service. The line was not saved.");
@@ -3023,6 +3051,7 @@
     ["[data-trim-clip]", (video) => toggleTrimPlay(trimOf(video))],
     ["[data-trim-go]", exportTrim],
     ["[data-trim-chat-later]", trimChatLater],
+    ["[data-trim-transcribe]", trimTranscribe],
     ["[data-trim-video], [data-trim-chat-video], [data-trim-subtitles], [data-transcript-cut]", markTaken],
     ["[data-side]", chooseSide],
     ["[data-transcribe]", transcribe],

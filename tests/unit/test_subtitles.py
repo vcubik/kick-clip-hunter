@@ -171,6 +171,71 @@ class TestKeeping:
         assert subtitles.read(kept) is None
 
 
+class TestStretchesHeard:
+    """Which stretches of a moment's file its transcript was heard from,
+    where that is not all of it."""
+
+    SLACK = subtitles.SPAN_SLACK_SECONDS
+
+    def test_stretches_that_overlap_or_touch_are_one(self):
+        assert subtitles.joined([(10.0, 20.0), (-5.0, 2.0), (15.0, 25.0), (2.0 + self.SLACK / 2, 4.0)]) == [
+            (-5.0, 4.0),
+            (10.0, 25.0),
+        ]
+
+    def test_apart_they_stay_apart(self):
+        assert subtitles.joined([(5.0, 6.0), (0.0, 1.0)]) == [(0.0, 1.0), (5.0, 6.0)]
+
+    def test_they_read_back_as_they_were_kept_joined_and_to_the_thousandth(self):
+        kept = subtitles.spans_stored([(1.23456, 2.0), (1.5, 3.0), (-4.0, -3.0)])
+
+        assert json.loads(kept) == [[-4.0, -3.0], [1.235, 3.0]]
+        assert subtitles.spans_read(kept) == [(-4.0, -3.0), (1.235, 3.0)]
+
+    @pytest.mark.parametrize("kept", [None, "", "not json", "{}", "[1, 2]", '[["a", "b"]]'])
+    def test_nothing_kept_or_what_is_not_stretches_is_all_of_the_file(self, kept):
+        assert subtitles.spans_read(kept) is None
+
+    def test_a_stretch_is_heard_when_one_stretch_holds_all_of_it(self):
+        spans = [(-5.0, 4.0), (10.0, 25.0)]
+
+        assert subtitles.heard_in(spans, 10.0, 25.0)
+        assert subtitles.heard_in(spans, -2.0, 3.0)
+        # What a cut runs past one by less than the slack is heard.
+        assert subtitles.heard_in(spans, 10.0 - self.SLACK / 2, 25.0 + self.SLACK / 2)
+        assert not subtitles.heard_in(spans, 3.0, 11.0)
+        assert not subtitles.heard_in(spans, 20.0, 26.0)
+        assert not subtitles.heard_in([], 0.0, 1.0)
+
+    def test_all_of_the_file_holds_every_stretch(self):
+        assert subtitles.heard_in(None, -100.0, 100.0)
+
+
+class TestMerging:
+    """Another stretch of the footage heard, added to a transcript."""
+
+    def test_lines_heard_where_it_was_not_heard_yet_are_added_in_order(self):
+        kept = [Line(1.0, 2.0, "put right by hand")]
+        heard = [Line(-3.0, -2.0, "before"), Line(1.1, 2.1, "heard again"), Line(8.0, 9.0, "after")]
+
+        merged = subtitles.merged(kept, [(0.0, 5.0)], heard)
+
+        # The line already there is kept as it is, and not heard twice.
+        assert merged == [Line(-3.0, -2.0, "before"), Line(1.0, 2.0, "put right by hand"), Line(8.0, 9.0, "after")]
+
+    def test_a_line_never_runs_into_the_one_after_it(self):
+        kept = [Line(4.0, 5.5, "said as the cut ends")]
+
+        merged = subtitles.merged(kept, [(0.0, 5.0)], [Line(5.0, 6.0, "after it")])
+
+        assert merged == [Line(4.0, 5.0, "said as the cut ends"), Line(5.0, 6.0, "after it")]
+
+    def test_nothing_heard_leaves_it_as_it_was(self):
+        kept = [Line(1.0, 2.0, "tak")]
+
+        assert subtitles.merged(kept, [(0.0, 5.0)], []) == kept
+
+
 class TestCorrecting:
     TRANSCRIPT = (Line(0.0, 1.5, "tak co"), Line(2.0, 3.5, "jedeme dal"), Line(4.0, 5.0, "ne"))
 
