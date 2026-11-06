@@ -59,6 +59,7 @@ from . import (
     twitch_chat,
     twitch_client,
     vod_footage,
+    vod_relay,
     win_console,
     youtube_chat,
 )
@@ -2975,9 +2976,11 @@ async def _add_footage_background(
 _vod_clips: dict[int, dict] = {}
 VOD_CLIP_BUSY_WORDS = "Its clip is being cut from the stream's VOD. Try again once that is done."
 # The platforms whose VODs the review page plays itself, before a moment's
-# clip is cut: Kick lets a page elsewhere fetch its VODs' playlists and
-# footage (CORS), Twitch does not.
-VOD_PLAYED_HERE = {platforms.KICK}
+# clip is cut. Kick lets a page elsewhere fetch its VODs' playlists and
+# footage (CORS); Twitch does not, so the service fetches Twitch's for the
+# page (vod_relay).
+VOD_PLAYED_HERE = {platforms.KICK, platforms.TWITCH}
+VOD_RELAYED = {platforms.TWITCH}
 # A clip of which the VOD holds less than this is none.
 VOD_CLIP_LEAST_SECONDS = 1.0
 # How often waiting for the VOD to reach the end of a moment's footage looks
@@ -6433,10 +6436,11 @@ async def moment_vod(moment_id: int):
     the VOD's playlist (`source`), how many seconds into it the moment's clip
     would begin (`lead`) - framed as the channel's clips are framed now, as
     the strip under it is - and how far into the clip to start (`start`):
-    where the link to the VOD on Kick starts. Only of a Kick channel's
-    moment (VOD_PLAYED_HERE). Asks Kick each time: a VOD can be kept for
-    subscribers once its stream is over, and a stream that is on reaches
-    further every few seconds."""
+    where the link to the VOD on its platform starts. Only of a moment of a
+    platform the page plays VODs of (VOD_PLAYED_HERE); Twitch's playlist is
+    one the service fetches for the page (VOD_RELAYED). Asks the platform
+    each time: a VOD can be kept for subscribers once its stream is over,
+    and a stream that is on reaches further every few seconds."""
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -6457,10 +6461,27 @@ async def moment_vod(moment_id: int):
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {
         "moment_id": moment_id,
-        "source": vod.master,
+        "source": vod_relay.address(vod.master) if platform in VOD_RELAYED else vod.master,
         "lead": round(lead, 3),
-        "start": kick_stream.WATCH_LATER_SECONDS,
+        # Kick's link starts a little into the clip; Twitch's where it begins.
+        "start": kick_stream.WATCH_LATER_SECONDS if platform == platforms.KICK else 0.0,
     }
+
+
+@app.get(vod_relay.ROUTE)
+async def vod_relay_get(u: str = "", s: str = ""):
+    """A VOD's playlist or footage fetched for the review page's player,
+    from a host that keeps a page elsewhere from fetching it (see
+    vod_relay.py). Only an address the service handed out is fetched."""
+    if not u or not vod_relay.signed(u, s):
+        raise HTTPException(status_code=403, detail="Not an address the service handed out.")
+    try:
+        fetched = await asyncio.to_thread(vod_relay.fetch, u)
+    except vod_relay.RelayError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    # A playlist of a stream that is on changes; footage does not.
+    headers = {"Cache-Control": "no-store" if fetched.playlist else "private, max-age=3600"}
+    return Response(fetched.body, media_type=fetched.media_type, headers=headers)
 
 
 @app.post("/moments/{moment_id}/stream_type")

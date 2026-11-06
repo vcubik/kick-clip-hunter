@@ -19,7 +19,9 @@ from kick_clip_hunter import (
     recorder,
     recording_manager,
     tuning,
+    twitch_stream,
     vod_footage,
+    vod_relay,
 )
 from kick_clip_hunter.config import load_settings
 from tests.support.data import add_moment, moment
@@ -27,6 +29,7 @@ from tests.support.hls import Segment, fake_segments
 from tests.support.html import parse
 from tests.support.kick_api import kick_video, site_video_id
 from tests.support.media import decodes_cleanly, probe, require_ffmpeg
+from tests.support.twitch_api import past_broadcast
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -687,18 +690,111 @@ class TestItsVodPlayedOnThePage:
 
         assert (response.status_code, response.json()["detail"]) == (409, "The moment has its clip already.")
 
-    async def test_twitch_does_not_let_its_vods_be_played_here(self, service):
-        moment_id = add_moment("someone@twitch", broadcaster_user_id=-7, clip_on_request=1, laughing=9)
+    async def test_youtube_does_not_let_its_vods_be_played_here(self, service):
+        moment_id = add_moment("someone@youtube", broadcaster_user_id=-7, clip_on_request=1, laughing=9)
 
         response = await self.where(service, moment_id)
 
         assert (response.status_code, response.json()["detail"]) == (
             409,
-            "Twitch does not let its VODs be played on this page.",
+            "YouTube does not let its VODs be played on this page.",
         )
 
     async def test_an_unknown_moment_is_not_found(self, service):
         assert (await self.where(service, 999)).status_code == 404
+
+
+class FakeStream:
+    def __init__(self, master: str) -> None:
+        self._master = master
+
+    def to_manifest_url(self) -> str:
+        return self._master
+
+
+class TestATwitchVodPlayedOnThePage:
+    """Twitch's VOD hosts let no page but Twitch's fetch them: the service
+    fetches the past broadcast's playlists and footage for the page."""
+
+    @pytest.fixture
+    def vod(self, hls, twitch_api, monkeypatch):
+        """A past broadcast of five minutes, listed by Helix, its playlist
+        where streamlink says - with no times of its own, as Twitch's are
+        once a stream is over."""
+        server = hls(fake_segments(30, duration=10.0), published=30, window=30, program_date_time=False)
+        server.end_stream()
+        channel = twitch_api.add_channel("someone", "101")
+        channel.past_broadcasts = [past_broadcast("777", "2026-01-01T12:00:00Z", "5m")]
+        answers = {"https://www.twitch.tv/videos/777": {"best": FakeStream(server.master_url)}}
+
+        class Streamlink:
+            def streams(self, url: str):
+                return answers.get(url, {})
+
+        monkeypatch.setattr(twitch_stream, "Streamlink", Streamlink)
+        return server
+
+    @pytest.fixture
+    def kept(self) -> int:
+        return add_moment(
+            "someone@twitch",
+            broadcaster_user_id=-101,
+            detected_at=START + timedelta(seconds=120),
+            reaction_seconds=4,
+            clip_on_request=1,
+            laughing=9,
+        )
+
+    async def where(self, service, moment_id: int) -> dict:
+        response = await service.client.get(f"/moments/{moment_id}/vod")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    async def relay(self, service, address: str):
+        return await service.client.get(address)
+
+    async def test_it_says_where_the_vod_is_through_the_service(self, service, vod, kept):
+        found = await self.where(service, kept)
+
+        assert found["source"] == vod_relay.address(vod.master_url)
+        tuned = tuning.recommended()
+        clip_from = START + timedelta(seconds=116 - tuned.pre_roll_seconds - tuned.playback_delay_seconds)
+        assert found["lead"] == pytest.approx((clip_from - START).total_seconds(), abs=0.001)
+        # The link to the past broadcast on Twitch starts where the clip would.
+        assert found["start"] == 0.0
+
+    async def test_the_page_follows_the_vod_to_its_footage_through_the_service(self, service, vod, kept):
+        master = await self.relay(service, (await self.where(service, kept))["source"])
+
+        assert master.status_code == 200
+        assert master.headers["content-type"] == vod_relay.PLAYLIST_TYPE
+        assert master.headers["cache-control"] == "no-store"
+        variants = [line for line in master.text.splitlines() if line and not line.startswith("#")]
+        assert all(line.startswith(f"{vod_relay.ROUTE}?") for line in variants)
+
+        playlist = await self.relay(service, variants[-1])
+        segments = [line for line in playlist.text.splitlines() if line and not line.startswith("#")]
+        assert len(segments) == 30
+        assert all(line.startswith(f"{vod_relay.ROUTE}?") for line in segments)
+
+        footage = await self.relay(service, segments[12])
+        assert footage.status_code == 200
+        assert footage.content == vod.timeline[12].data
+        assert vod.segment_requests() == [12]
+
+    async def test_an_address_it_did_not_hand_out_is_not_fetched(self, service, vod):
+        signature = vod_relay.signature(vod.master_url)
+        elsewhere = f"{vod.base_url}/segment/3.ts"
+
+        response = await service.client.get(vod_relay.ROUTE, params={"u": elsewhere, "s": signature})
+
+        assert response.status_code == 403
+        assert vod.requests == []
+
+    async def test_what_the_host_will_not_hand_over_is_said(self, service, vod):
+        response = await self.relay(service, vod_relay.address(f"{vod.base_url}/nothing-here"))
+
+        assert (response.status_code, response.json()["detail"]) == (502, "The VOD's host answered 404.")
 
 
 class TestTheReviewPage:
@@ -755,7 +851,7 @@ class TestTheReviewPage:
         assert block.one("p", data_status=True).text == "Putting the clip together."
         assert [line.text for line in page.find("p", data_status=True)] == ["", "Putting the clip together.", ""]
 
-    async def test_a_twitch_moment_without_its_clip_has_only_its_link(self, service):
+    async def test_a_twitch_moment_without_its_clip_offers_to_play_it_from_the_vod_too(self, service):
         moment_id = add_moment(
             "someone@twitch",
             broadcaster_user_id=-7,
@@ -766,10 +862,19 @@ class TestTheReviewPage:
 
         page = await page_of(service, moment_id)
 
-        assert page.find(data_vod_watch=True) == [] and page.find(data_strip=True) == []
-        assert page.find(class_="ch-transport") == []
+        box = page.one("div", data_vod_watch=f"/moments/{moment_id}/vod")
+        assert box.one("button", data_vod_watch_go=True).text == "Play from the VOD"
+        assert page.one("div", data_strip=True).attrs["role"] == "slider"
         assert page.one("a", data_watch=True).text == "Watch on Twitch"
         assert page.one("div", data_vod_clip=True)
+
+    async def test_a_youtube_moment_without_its_clip_is_not_played_from_a_vod(self, service):
+        moment_id = add_moment("someone@youtube", broadcaster_user_id=-7, clip_on_request=1, laughing=9)
+
+        page = await page_of(service, moment_id)
+
+        assert page.find(data_vod_watch=True) == [] and page.find(data_strip=True) == []
+        assert page.find(class_="ch-transport") == []
 
     async def test_a_moment_found_in_no_vod_has_no_link_to_one(self, service, channel):
         moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)

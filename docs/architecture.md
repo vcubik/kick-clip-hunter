@@ -349,7 +349,9 @@ Module map (`src/kick_clip_hunter/`):
   stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
   /moments/{id}/vod` says where the review page plays such a moment from its stream's VOD:
   the VOD's playlist and how far into it the clip would begin (`_vod_place`, by
-  `vod_footage.seconds_in`) - of a Kick channel's only (`VOD_PLAYED_HERE`). What a Kick or
+  `vod_footage.seconds_in`) - of a Kick or Twitch channel's (`VOD_PLAYED_HERE`); Twitch's
+  playlist is handed out as an address of `GET /vod/relay` (`VOD_RELAYED`, `vod_relay.py`),
+  since Twitch's VOD hosts let no other page fetch them. What a Kick or
   Twitch channel's platform lists of its VODs once a stream is over (`streams.vod_access`) is
   asked when the channel is set to be tracked for moments and, of every such channel on the
   watchlist, again once what was seen is a day old (`_look_at_vod_access`, from the hourly
@@ -791,6 +793,12 @@ Module map (`src/kick_clip_hunter/`):
   footage is (`muted`). For the review page's player of the VOD, `seconds_in` says how far
   into it, as a player of its playlist counts it, a time on its clock is (`position`: the
   lengths of the segments before it added up, a gap in the clock not counted)
+- `vod_relay.py` — a VOD's playlists and footage fetched for the review page's player where
+  the host sends no CORS header (Twitch): `GET /vod/relay?u=...&s=...` fetches only an address
+  the service handed out, signed with a key of the run (`address`, `signed`), and writes every
+  address in a playlist it hands on - variants, segments, `URI="..."` of a tag - as another
+  such address (`rewritten`), so the page follows the whole VOD through the service and
+  nothing else can be fetched through it. Footage is fetched whole, kept nowhere
 - `recording_manager.py` — background loop driving one `ChannelRecorder` per watched
   channel, gated on an `is_live` check so offline channels never touch a browser. A
   channel's recorder runs for either of two reasons: the channel is tracked for clips

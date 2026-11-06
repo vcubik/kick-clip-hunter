@@ -199,7 +199,7 @@ the player's address changed with the file, and is nothing else made of the mome
 
 **6b. A channel tracked for moments** - `integration/test_api_moments_on_request.py`, the
 `TestCuttingAStretchFromTheVod` class of `integration/test_vod_footage.py`, and in
-`unit/test_kick_stream.py`, `unit/test_twitch_stream.py`, `unit/test_streams.py`,
+`unit/test_kick_stream.py`, `unit/test_twitch_stream.py`, `unit/test_streams.py`, `unit/test_vod_relay.py`,
 `unit/test_notify.py`, `unit/test_db.py` and `unit/test_dashboard_view.py`
 Is Moments offered and taken only for a platform whose VODs stay once a stream is over, does
 choosing it say what the platform lists of the channel's VODs (subscribers only, none) and run no
@@ -214,8 +214,11 @@ service: is the clip cut once asked for - stored where in the file the clip is, 
 page - and refused while chat still reacts, said when no VOD is to be had, waited for while the
 VOD is behind, given up at shutdown, and the moment kept from removal meanwhile? Before that, is
 where a Kick moment's clip would begin in the VOD said for the page's player - counted by the
-VOD's segments on its own clock, a gap in it not counted - and refused, in words, for a Twitch
-moment, one with its clip, a VOD kept for subscribers and one that does not reach it (yet)?
+VOD's segments on its own clock, a gap in it not counted - and refused, in words, for a YouTube
+moment, one with its clip, a VOD kept for subscribers and one that does not reach it (yet)? Is a
+Twitch moment's VOD given as an address the service fetches itself, which the page follows to
+the footage through the service alone, with an address it did not hand out refused and what
+Twitch would not hand over said?
 
 **7. Per-clip analysis** - `integration/test_api_moments.py`, `unit/test_analysis_wrappers.py`,
 `integration/test_lazy_ml_imports.py`
@@ -800,8 +803,10 @@ Run this on a live channel after changing any of the above, or the code right ne
    "Cut the clip": pressed right
    away it says it waits for the VOD, then counts up while it fetches, then opens the moment with
    its clip - the reaction inside the clip, with footage before and after it; Trim, Add before /
-   after and Transcribe work on it as on any clip. Do the same with a Twitch channel, and with a
-   moment some days old after the stream is over.
+   after and Transcribe work on it as on any clip. Do the same with a Twitch channel - its VOD
+   plays through the service (the browser's network list shows only `/vod/relay` requests, none
+   to Twitch), from where the link starts - and with a moment some days old after the stream is
+   over.
 23. **Use it from a phone.** Open the dashboard on a phone, at the address `DASHBOARD_URL` gives
    (over the tailnet). No page scrolls sideways, and the bar has the pages as tabs in two rows of
    three. On the review page tap a row of the queue: the moment opens and the page scrolls to it.
