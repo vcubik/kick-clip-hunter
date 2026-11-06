@@ -339,7 +339,9 @@ Module map (`src/kick_clip_hunter/`):
   `kick_stream.WATCH_LATER_SECONDS`, and by the VOD's own clock where its playlist can be
   read - `_vod_place`, as the page's player goes) (`streams.watch_link`, kept
   as `moments.watch_url`), and tells of it (`_notify_of_moment`, switch `notify_moments`)
-  instead of cutting a clip. `POST /moments/{id}/clip` cuts it then
+  instead of cutting a clip - unless the channel has them cut automatically
+  (`streamers.moments_auto_cut`, heeded only while it is still tracked for moments), when
+  `_moment_kept` starts the same cut at once. `POST /moments/{id}/clip` cuts it then
   (`_cut_from_vod_background`): framed as the channel's clips are framed now
   (`Tuning.clip_span` and the context), after waiting for the VOD to reach the end of it
   (`vod_footage.VOD_BEHIND_SECONDS` past it, `_wait_for_vod`), with `vod_footage.cut`, and
