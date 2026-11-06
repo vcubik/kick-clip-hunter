@@ -113,6 +113,12 @@
     {#- A moment's transcript as subtitles timed to the video that is ready,
         where it has one with something said while the video runs. -#}
     <a class="ch-btn ch-btn-compact" download hidden title="What is said in the video, as subtitles (.srt) that start with it: the moment's transcript, as it was put right beside the clip" data-trim-subtitles>Download subtitles</a>
+    {#- Where the moment's transcript was not heard from all of the video
+        that is ready: what is said in that video alone written down, which
+        is quick, rather than in all of the moment's footage. -#}
+    {%- if trim.transcribes %}
+    <button type="button" class="ch-btn ch-btn-compact" hidden title="Writes down what is said in the video that is ready, and no more of the footage: the moment's transcript, put right beside the clip, and the subtitles of this video." data-trim-transcribe>Transcribe the cut</button>
+    {%- endif %}
     {%- if trim.chat %}
     {#- For a video that was taken without its chat: the chat of the stretch
         it holds - not of the one set above, if that has been moved since -

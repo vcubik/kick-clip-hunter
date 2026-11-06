@@ -650,7 +650,15 @@ Module map (`src/kick_clip_hunter/`):
   `moment_<id>_trim.srt`, offered beside its video): from where that really begins, which is
   read from its cut record - a cut from before records were kept has none - with a line its ends
   leave less than `CUT_LINE_MIN_SECONDS` of left out. Written as UTF-8 with a byte order mark and
-  Windows line ends, which is how editors on Windows read the Czech letters right
+  Windows line ends, which is how editors on Windows read the Czech letters right. Or only the cut
+  is heard - "Transcribe the cut" in the Trim dialog, `POST /moments/{id}/trim/subtitles`, seconds
+  where the whole file takes a while: the transcript then knows which stretches of the file it was
+  heard from (`moments.subtitles_heard`, JSON in clip time; NULL is all of it), the tab says which
+  and offers "Transcribe the rest", and another cut or the rest is added by `merged` - only lines
+  that begin where nothing was heard yet, so a line already put right stays as it is. While the
+  cut is heard it is not cut anew (Export, its chat made later); a correction carries when its
+  line begins, so one sent as lines are added before it still finds its line. Adding footage from
+  the VOD turns a transcript of all the old file into one of that stretch
 - `templates/` — the dashboard's Jinja2 templates: `base.html` (the bar across the top),
   `review.html`, `recordings.html`, `analyze.html`, `channels.html`, `settings.html`, `health.html`, and `_moment.html` - the open moment, which is also
   served on its own (`GET /dashboard/moments/{id}`) so the page can open another moment

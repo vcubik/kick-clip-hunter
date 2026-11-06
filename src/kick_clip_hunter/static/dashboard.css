@@ -488,6 +488,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .transcript-empty .status-line { margin-top: 0; }
 .transcript-foot { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--quiet); font-size: 12px; line-height: 16px; color: var(--text-2); }
 .transcript-downloads { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-8); }
+/* Heard from some of the footage only: which, and the rest offered. */
+.transcript-part { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-8); }
+.transcript-part:first-child { margin-top: 0; }
 .transcript-foot .status-line { color: var(--text); }
 
 /* ---- Trim: a stretch of the footage, cut out for an editor --------- */

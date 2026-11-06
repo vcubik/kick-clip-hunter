@@ -2135,6 +2135,9 @@ class TestTrimming:
             "subtitles_url": None,
             "cut": None,
             "chat_later": False,
+            "transcribing": False,
+            "transcribe": False,
+            "transcript_words": None,
         }
         await service.settle()
 
@@ -2589,6 +2592,9 @@ class TestTrimming:
             "subtitles_url": None,
             "cut": None,
             "chat_later": False,
+            "transcribing": False,
+            "transcribe": False,
+            "transcript_words": None,
         }
         assert not self.VIDEO.exists()
         assert any("trimming failed for moment 1" in r.getMessage() for r in caplog.records)

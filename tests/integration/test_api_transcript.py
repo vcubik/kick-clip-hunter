@@ -551,6 +551,263 @@ class TestSubtitlesOfACut:
         ]
 
 
+# Said in the cut from 2 s before the clip (28 s into the file) for 6 s, on
+# the cut's own time: a second into it, so a second before the clip.
+HEARD_IN_CUT = [[Word(1.0, 1.4, " Jedeme"), Word(1.5, 2.5, " dál.")]]
+
+
+def heard_from(moment_id: int) -> list[tuple[float, float]] | None:
+    return subtitles.spans_read(moment(moment_id)["subtitles_heard"])
+
+
+class TestTranscribingTheCut:
+    """What is said in the video cut out with Trim, written down alone: a
+    few seconds, where all of the moment's file takes a while."""
+
+    async def trim(self, service, moment_id: int) -> dict:
+        return (await service.client.get(f"/moments/{moment_id}/trim")).json()
+
+    async def transcribe(self, service, moment_id: int):
+        return await service.client.post(f"/moments/{moment_id}/trim/subtitles")
+
+    async def test_the_cut_alone_is_heard_and_its_lines_are_in_clip_time(self, service, speech):
+        moment_id = clip()
+        cut(28.0, 6.0)
+        speech.heard = HEARD_IN_CUT
+
+        response = await self.transcribe(service, moment_id)
+        assert response.status_code == 200, response.text
+        await service.settle()
+
+        assert speech.files == [CUT]
+        assert stored(moment_id) == [Line(-1.0, 0.5, "Jedeme dál.")]
+        # It knows it was heard from the cut's stretch of the file alone.
+        assert heard_from(moment_id) == [(-2.0, 4.0)]
+
+    async def test_the_dialog_offers_it_for_a_cut_that_is_there_then_its_subtitles(self, service, speech):
+        moment_id = clip()
+        assert (await self.trim(service, moment_id))["transcribe"] is False
+        cut(28.0, 6.0)
+        speech.heard = HEARD_IN_CUT
+
+        before = await self.trim(service, moment_id)
+        await self.transcribe(service, moment_id)
+        await service.settle()
+        after = await self.trim(service, moment_id)
+
+        assert (before["transcribe"], before["subtitles_url"]) == (True, None)
+        assert (after["transcribe"], after["subtitles_url"]) == (False, f"/moments/{moment_id}/trim/subtitles")
+        response = await service.client.get(after["subtitles_url"])
+        assert response.text == "﻿1\r\n00:00:01,000 --> 00:00:02,500\r\nJedeme dál.\r\n\r\n"
+
+    async def test_the_dialog_has_a_place_for_it(self, service):
+        moment_id = clip()
+
+        response = await service.client.get("/dashboard", params={"moment": moment_id})
+        button = parse(response.text).one("dialog", class_="trim").one("button", data_trim_transcribe=True)
+
+        # Shown by the script once the service says it can be.
+        assert button.text == "Transcribe the cut" and "hidden" in button.attrs
+
+    async def test_while_it_is_heard_the_dialog_says_how_far_and_the_cut_is_not_made_anew(self, service, speech):
+        moment_id = clip()
+        cut(28.0, 6.0)
+        speech.hold()
+
+        started = await self.transcribe(service, moment_id)
+        await async_wait_until(speech.halfway.is_set, "the speech model to be half-way")
+        state = await self.trim(service, moment_id)
+        again = await self.transcribe(service, moment_id)
+        export = await service.client.post(f"/moments/{moment_id}/trim", json={"start": 0, "end": 3})
+        chat = await service.client.post(f"/moments/{moment_id}/trim/chat", json={"chat_where": "apart"})
+        speech.release()
+        await service.settle()
+
+        assert started.json()["transcribing"] is True
+        assert (state["transcribing"], state["transcribe"], state["transcript_words"]) == (
+            True,
+            False,
+            "Transcribing: 25 %.",
+        )
+        # Asked again, nothing more is started.
+        assert again.status_code == 200 and speech.files == [CUT]
+        for refused in (export, chat):
+            assert refused.status_code == 409
+            assert refused.json()["detail"] == service.main.CUT_HEARD_WORDS
+        assert (await self.trim(service, moment_id))["transcribing"] is False
+
+    async def test_a_cut_heard_already_is_not_heard_again(self, service, speech):
+        whole = transcribed(Line(-1.0, 0.5, "in it"))
+        cut(28.0, 6.0)
+
+        response = await self.transcribe(service, whole)
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "What is said in this cut is transcribed already."
+        assert (await self.trim(service, whole))["transcribe"] is False
+        assert speech.files == []
+
+    async def test_another_stretch_is_added_to_what_was_heard_and_put_right_before(self, service, speech):
+        # The first cut heard, and a line of it put right.
+        moment_id = transcribed(
+            Line(-1.0, 0.5, "Jedeme dál, put right"), subtitles_heard=subtitles.spans_stored([(-2.0, 4.0)])
+        )
+        # A cut that overlaps it, on to 10 s into the clip.
+        cut(30.0, 10.0)
+        speech.heard = [[Word(0.0, 0.4, " Again")], [Word(8.0, 9.0, " Later.")]]
+
+        assert (await self.trim(service, moment_id))["transcribe"] is True
+        await self.transcribe(service, moment_id)
+        await service.settle()
+
+        # What was heard where it was heard already is not taken twice.
+        assert stored(moment_id) == [Line(-1.0, 0.5, "Jedeme dál, put right"), Line(8.0, 9.0, "Later.")]
+        assert heard_from(moment_id) == [(-2.0, 10.0)]
+
+    async def test_one_that_could_not_be_made_says_so_in_the_dialog_and_can_be_asked_for_again(
+        self, service, speech, caplog
+    ):
+        moment_id = clip()
+        cut(28.0, 6.0)
+        speech.failure = RuntimeError("the model file is corrupt")
+
+        with caplog.at_level(logging.ERROR, logger="kick_clip_hunter"):
+            await self.transcribe(service, moment_id)
+            await service.settle()
+
+        state = await self.trim(service, moment_id)
+        assert state["transcribe"] is True
+        assert state["transcript_words"] == view.transcript_words(view.TRANSCRIPT_FAILED)
+        assert stored(moment_id) is None
+
+    async def test_there_is_nothing_to_hear_without_a_cut_or_where_it_begins(self, service, speech):
+        moment_id = clip()
+
+        nothing = await self.transcribe(service, moment_id)
+        cut(28.0, 6.0, kept=False)
+        unplaced = await self.transcribe(service, moment_id)
+
+        assert nothing.status_code == 409
+        assert nothing.json()["detail"] == "Nothing has been cut out of this moment yet."
+        assert unplaced.status_code == 409 and unplaced.json()["detail"].endswith("Export it again.")
+        assert (await self.trim(service, moment_id))["transcribe"] is False
+        assert (await self.transcribe(service, 999)).status_code == 404
+        no_clip = add_moment("channel_b", detected_at=T0)
+        assert (await self.transcribe(service, no_clip)).status_code == 409
+        assert speech.files == []
+
+    async def test_not_while_the_cut_is_being_made(self, service, speech, monkeypatch):
+        moment_id = clip()
+        cut(28.0, 6.0)
+        monkeypatch.setitem(service.main._trims, moment_id, {"state": view.TRIM_CUTTING})
+
+        response = await self.transcribe(service, moment_id)
+
+        assert response.status_code == 409 and speech.files == []
+
+    async def test_none_is_started_while_the_service_shuts_down(self, service, speech, monkeypatch):
+        moment_id = clip()
+        cut(28.0, 6.0)
+        monkeypatch.setattr(service.main, "_shutdown_requested", True)
+
+        assert (await self.transcribe(service, moment_id)).status_code == 409 and speech.files == []
+
+
+class TestTheRestOfTheFootage:
+    """A transcript heard from a cut alone, beside the clip: it says which
+    stretch, and offers to transcribe the rest."""
+
+    def partial(self, *lines: Line) -> int:
+        return transcribed(*lines, subtitles_heard=subtitles.spans_stored([(-2.0, 4.0)]))
+
+    async def test_the_tab_says_which_stretch_and_offers_the_rest(self, service):
+        moment_id = self.partial(Line(-1.0, 0.5, "Jedeme dál."))
+
+        transcript = await served(service, moment_id)
+
+        assert len(lines_of(transcript)) == 1
+        part = transcript.one("div", class_="transcript-part")
+        assert part.one("p", class_="transcript-words").text == view.transcript_part_words([(-2.0, 4.0)], 35.0)
+        assert part.one("button", data_transcribe=True).text == "Transcribe the rest"
+
+    async def test_one_in_which_nothing_was_said_says_so_and_offers_the_rest(self, service):
+        moment_id = self.partial()
+
+        transcript = await served(service, moment_id)
+
+        words = [paragraph.text for paragraph in transcript.find("p", class_="transcript-words")]
+        assert words == [
+            view.transcript_words(view.TRANSCRIPT_READY, said=False, part=True),
+            view.transcript_part_words([(-2.0, 4.0)], 35.0),
+        ]
+        assert transcript.one("button", data_transcribe=True).text == "Transcribe the rest"
+
+    async def test_the_rest_is_added_and_what_was_put_right_kept(self, service, speech):
+        moment_id = self.partial(Line(-1.0, 0.5, "Jedeme dál, put right"))
+        # All of the file heard: before the clip, and in the cut again.
+        speech.heard = [
+            [Word(26.0, 26.4, " Tak"), Word(26.5, 27.0, " co?")],
+            [Word(29.0, 29.4, " Jedeme"), Word(29.5, 30.5, " dál.")],
+        ]
+
+        response = await service.client.post(f"/moments/{moment_id}/subtitles")
+        assert response.status_code == 200, response.text
+        await service.settle()
+
+        assert speech.files == [SOURCE]
+        assert stored(moment_id) == [Line(-4.0, -3.0, "Tak co?"), Line(-1.0, 0.5, "Jedeme dál, put right")]
+        # Heard from all of the file now: nothing more to offer.
+        assert heard_from(moment_id) is None
+        transcript = await served(service, moment_id)
+        assert transcript.find("div", class_="transcript-part") == []
+        assert transcript.find("button", data_transcribe=True) == []
+
+    async def test_while_the_rest_is_heard_the_tab_says_how_far_with_its_lines_shown(self, service, speech):
+        moment_id = self.partial(Line(-1.0, 0.5, "Jedeme dál."))
+        speech.hold()
+
+        await service.client.post(f"/moments/{moment_id}/subtitles")
+        await async_wait_until(speech.halfway.is_set, "the speech model to be half-way")
+        transcript = await served(service, moment_id)
+        speech.release()
+        await service.settle()
+
+        assert "data-busy" in transcript.attrs and len(lines_of(transcript)) == 1
+        assert transcript.one("div", class_="transcript-part").text == "Transcribing: 25 %."
+
+
+class TestPuttingRightAfterMoreWasHeard:
+    """The page knows a line by its place in the transcript; lines heard in
+    more of the footage may have been put before it since it was shown."""
+
+    async def test_a_line_is_found_by_when_it_begins(self, service):
+        moment_id = transcribed(Line(-2.0, -1.0, "added since"), Line(1.0, 2.5, "Jedeme dal."))
+
+        response = await service.client.post(
+            f"/moments/{moment_id}/subtitles/0", json={"text": "Jedeme dál.", "start": 1.0}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"moment_id": moment_id, "line": 1, "text": "Jedeme dál."}
+        assert stored(moment_id) == [Line(-2.0, -1.0, "added since"), Line(1.0, 2.5, "Jedeme dál.")]
+
+    async def test_one_no_longer_there_is_not_put_right(self, service):
+        moment_id = transcribed(Line(1.0, 2.5, "Jedeme dal."))
+
+        response = await service.client.post(f"/moments/{moment_id}/subtitles/0", json={"text": "x", "start": 7.0})
+
+        assert response.status_code == 409
+        assert stored(moment_id) == [Line(1.0, 2.5, "Jedeme dal.")]
+
+    @pytest.mark.parametrize("start", ["1.0", True, [1.0]])
+    async def test_when_it_begins_is_a_number(self, service, start):
+        moment_id = transcribed(Line(1.0, 2.5, "Jedeme dal."))
+
+        response = await service.client.post(f"/moments/{moment_id}/subtitles/0", json={"text": "x", "start": start})
+
+        assert response.status_code == 400
+
+
 def cues(srt: str) -> list[tuple[float, float, str]]:
     """The subtitles in a SubRip file: when each is shown, and what it says."""
 
