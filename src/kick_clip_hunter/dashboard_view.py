@@ -38,6 +38,20 @@ ORDER_NEWEST = "newest"
 ORDER_LAUGHING = "laughing"
 ORDERS = (ORDER_NEWEST, ORDER_LAUGHING)
 ORDER_LABELS = {ORDER_NEWEST: "Newest first", ORDER_LAUGHING: "Most laughing first"}
+# Whether a list keeps only the moments something cut out of them was
+# downloaded from (in Trim; see main.download_trim), only the others, or
+# both - which is what it does unless told otherwise.
+DOWNLOADED_ANY = ""
+DOWNLOADED_YES = "yes"
+DOWNLOADED_NO = "no"
+DOWNLOADEDS = (DOWNLOADED_ANY, DOWNLOADED_YES, DOWNLOADED_NO)
+DOWNLOADED_LABELS = {
+    DOWNLOADED_ANY: "Downloaded or not",
+    DOWNLOADED_YES: "Downloaded",
+    DOWNLOADED_NO: "Not downloaded",
+}
+# What each of them asks of the database (db.get_recent_moments).
+DOWNLOADED_FILTERS = {DOWNLOADED_ANY: None, DOWNLOADED_YES: True, DOWNLOADED_NO: False}
 
 # How many colours chat usernames are spread over (nick-1 to nick-6 in the
 # stylesheet).
@@ -572,12 +586,13 @@ def review_url(
     channel: str | None = None,
     *,
     order: str = ORDER_NEWEST,
+    downloaded: str = DOWNLOADED_ANY,
     offset: int = 0,
     moment: int | None = None,
 ) -> str:
-    """The review page for one list, channel, order, page and open moment.
-    Whatever is at its default is left out, so the plain address is the
-    unrated list, newest first."""
+    """The review page for one list, channel, order, downloaded or not, page
+    and open moment. Whatever is at its default is left out, so the plain
+    address is the unrated list, newest first."""
     query: dict[str, Any] = {}
     if show != SHOW_UNRATED:
         query["show"] = show
@@ -585,6 +600,8 @@ def review_url(
         query["channel"] = channel
     if order != ORDER_NEWEST:
         query["order"] = order
+    if downloaded != DOWNLOADED_ANY:
+        query["downloaded"] = downloaded
     if offset:
         query["offset"] = offset
     if moment is not None:
@@ -713,13 +730,28 @@ def laughing_words(laughing: int | None) -> str | None:
     return f"{laughing} {'person' if laughing == 1 else 'people'} laughed around it"
 
 
-def empty_queue_words(show: str, channel: str | None, newest: datetime | None, today: date) -> dict[str, str]:
+def empty_queue_words(
+    show: str, channel: str | None, newest: datetime | None, today: date, downloaded: str = DOWNLOADED_ANY
+) -> dict[str, str]:
     """What to say when the chosen list has nothing in it: a few words for
     the queue, a heading for the rest of the page and, where the state of the
     service is not what explains it, a sentence to go under that heading.
     `newest` is when the last moment of any rating was detected (on that
-    channel, if one is chosen), or None if there has never been one."""
+    channel, if one is chosen), or None if there has never been one. A list
+    narrowed to downloaded moments or the others says that is what left it
+    empty."""
     of_channel = f" from {channel}" if channel else ""
+    if newest is not None and downloaded == DOWNLOADED_YES:
+        return {
+            "queue": "Nothing downloaded here",
+            "heading": f"No clips{of_channel} downloaded here yet",
+            "lead": "A clip is marked downloaded once something cut out of it is downloaded from Trim.",
+        }
+    if newest is not None and downloaded == DOWNLOADED_NO:
+        return {
+            "queue": "Everything here was downloaded",
+            "heading": f"Every clip{of_channel} here was downloaded",
+        }
     if newest is not None and show == SHOW_BEST:
         words = f"No clips rated {BEST_RATING_MIN} or higher"
         return {

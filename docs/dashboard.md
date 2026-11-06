@@ -24,7 +24,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   corrects it for the open moment's channel (the Trim dialog starts from that). Trim, next to the clip's controls,
   opens a dialog for cutting a stretch of the footage out for an editor (see `clip_trim.py`
   below); a moment something was downloaded from there is marked in the queue, beside its
-  rating (`moments.downloaded_at`). After it, "Add before" and "Add after" put that much more of
+  rating, and beside when it was in the open moment (`moments.downloaded_at`), and the queue
+  can be narrowed to those moments or to the others (`?downloaded=yes|no`; the counts on its
+  tabs follow). After it, "Add before" and "Add after" put that much more of
   the stream into the moment's file - 15 s to 2 min, chosen in the list in front of them, which
   the script remembers - ahead of its first frame or after its last, from the stream's own
   recording: its VOD on Kick and Twitch, days later too, and on YouTube the stream wound back

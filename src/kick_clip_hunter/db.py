@@ -794,9 +794,13 @@ _MOMENT_COLUMNS = """
 """
 
 
-def _moment_filter(channel_slug: str | None, unrated: bool, min_rating: int | None) -> tuple[str, list]:
+def _moment_filter(
+    channel_slug: str | None, unrated: bool, min_rating: int | None, downloaded: bool | None = None
+) -> tuple[str, list]:
     """The WHERE clause (empty when nothing is filtered) and its parameters
-    for the ways the dashboard narrows the list of moments down."""
+    for the ways the dashboard narrows the list of moments down. `downloaded`
+    keeps only the moments something cut out of them was downloaded from
+    (True) or only the others (False); None keeps both."""
     conditions: list[str] = []
     params: list = []
     if channel_slug:
@@ -807,6 +811,8 @@ def _moment_filter(channel_slug: str | None, unrated: bool, min_rating: int | No
     if min_rating is not None:
         conditions.append("rating >= ?")
         params.append(min_rating)
+    if downloaded is not None:
+        conditions.append("downloaded_at IS NOT NULL" if downloaded else "downloaded_at IS NULL")
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
@@ -818,14 +824,16 @@ def get_recent_moments(
     *,
     unrated: bool = False,
     min_rating: int | None = None,
+    downloaded: bool | None = None,
     most_laughing: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
-    not rated yet, or only those rated `min_rating` or higher. With
+    not rated yet, only those rated `min_rating` or higher, or only those
+    downloaded or not (see _moment_filter). With
     `most_laughing`, the ones the most people laughed around come first
     instead, those not counted last, and newest first among equals."""
     conn.row_factory = sqlite3.Row
-    where, params = _moment_filter(channel_slug, unrated, min_rating)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded)
     order = "laughing IS NULL, laughing DESC, " if most_laughing else ""
     return conn.execute(
         f"""
@@ -850,8 +858,9 @@ def count_moments(
     *,
     unrated: bool = False,
     min_rating: int | None = None,
+    downloaded: bool | None = None,
 ) -> int:
-    where, params = _moment_filter(channel_slug, unrated, min_rating)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded)
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 

@@ -611,7 +611,9 @@ class TestOpenMoment:
 
         head = article.one("header", class_="moment-head")
         assert head.one("h1").text == "channel_a"
-        assert head.one("p", class_="moment-when").text == view.when_words(T0.astimezone(), today)
+        assert head.one("p", class_="moment-when").one("span", data_when=True).text == view.when_words(
+            T0.astimezone(), today
+        )
         assert head.one("p", class_="moment-clock").text == "1:02:03 into the stream"
 
     async def test_leaves_the_stream_time_out_when_it_was_not_recorded(self, service):
@@ -1765,6 +1767,57 @@ class TestOrderedByLaughing:
         assert counted.one("span", class_="ch-laughing").text == "8"
         assert counted.one("span", class_="ch-laughing").attrs["title"] == "8 people laughed around it"
         assert uncounted.find("span", class_="ch-laughing") == []
+
+
+class TestDownloadedFilter:
+    @pytest.fixture(autouse=True)
+    def moments_downloaded_and_not(self, service):
+        taken = (T0 + minutes(5)).isoformat()
+        self.old_taken = add_moment(detected_at=T0, rating=5, downloaded_at=taken)
+        self.left = add_moment(detected_at=T0 + minutes(1))
+        self.taken = add_moment(detected_at=T0 + minutes(2), downloaded_at=taken)
+        self.rated_left = add_moment(detected_at=T0 + minutes(3), rating=2)
+
+    async def test_the_list_can_keep_only_the_moments_downloaded_or_only_the_others(self, service):
+        assert queued(await review(service, show="all", downloaded="yes")) == [self.taken, self.old_taken]
+        assert queued(await review(service, show="all", downloaded="no")) == [self.rated_left, self.left]
+        assert queued(await review(service, downloaded="no")) == [self.left]
+
+    async def test_both_are_listed_unless_told_otherwise(self, service):
+        everything = [self.rated_left, self.taken, self.left, self.old_taken]
+        assert queued(await review(service, show="all")) == everything
+        assert queued(await review(service, show="all", downloaded="sideways")) == everything
+
+    async def test_the_counts_on_the_tabs_are_of_the_narrowed_list(self, service):
+        assert tabs(await review(service, downloaded="yes")) == ["Unrated 1", "All 2", "Best 1"]
+        assert tabs(await review(service, downloaded="no")) == ["Unrated 1", "All 2", "Best 0"]
+
+    async def test_the_choice_stays_while_moving_about_the_list(self, service):
+        page = await review(service, downloaded="yes")
+
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?downloaded=yes&moment={self.taken}"
+        tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
+        assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["best"] == (
+            "/dashboard?show=best&downloaded=yes"
+        )
+        (choice,) = page.find("select", id="downloaded-filter")
+        assert [option.attrs["value"] for option in choice.find("option", selected=True)] == ["yes"]
+        assert page.one("aside", class_="queue").attrs["data-downloaded"] == "yes"
+
+    async def test_an_empty_narrowed_list_says_that_is_why(self, service):
+        page = await review(service, show="best", downloaded="no")
+
+        assert queued(page) == []
+        assert page.one("p", class_="queue-empty").text == "Everything here was downloaded"
+
+    async def test_the_open_moment_says_it_was_downloaded(self, service):
+        taken = open_moment(await review(service, show="all", moment=self.taken))
+        left = open_moment(await review(service, show="all", moment=self.left))
+
+        assert taken.attrs["data-downloaded"] == "true"
+        assert "hidden" not in taken.one("span", class_="moment-taken").attrs
+        assert left.attrs["data-downloaded"] == "false"
+        assert "hidden" in left.one("span", class_="moment-taken").attrs
 
 
 class TestChannelFilter:
