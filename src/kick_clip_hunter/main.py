@@ -45,6 +45,7 @@ from . import (
     recorder,
     recording_manager,
     recording_moments,
+    reels,
     replay,
     sound_events,
     stream_recording,
@@ -80,6 +81,7 @@ from .db import (
     count_returning_chatters,
     count_stream_recordings,
     delete_moment,
+    delete_reel,
     delete_stream_recording,
     finish_stream_recording,
     forget_chat_delay,
@@ -109,6 +111,8 @@ from .db import (
     get_moment_times,
     get_notify_setup,
     get_recent_moments,
+    get_reel,
+    get_reels_in,
     get_stream_recording,
     get_stream_recording_offset,
     get_stream_recordings,
@@ -123,6 +127,7 @@ from .db import (
     insert_stream_recording,
     iter_channel_chat,
     iter_channel_chat_between,
+    put_reel,
     recordings_saved_between,
     remove_channel_chat,
     remove_streamer,
@@ -1215,6 +1220,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_keep_telling_of_health()),
         asyncio.create_task(_keep_summing_up_days()),
         asyncio.create_task(_keep_the_bot_talking()),
+        asyncio.create_task(_keep_making_reels()),
     ]
     reader = _start_reading_twitch_chat()
     if reader is not None:
@@ -3291,6 +3297,9 @@ def _open_moment(conn, row, today: date) -> dict:
             if _takes_footage(row) and (CLIPS_DIR / row["clip_path"]).exists()
             else None
         ),
+        # The moment's clip made into a reel by GitHub Actions: where the
+        # service is set up for that and there is a clip to make it of.
+        "reel": _reel_view(conn, row) if settings.reels and row["clip_path"] else None,
     }
 
 
@@ -5354,7 +5363,7 @@ def _moment_files(row) -> list[Path]:
         return []
     video, chat = (CLIPS_DIR / path for path in _trim_paths(row["clip_path"]))
     context = [clip.with_name(name) for name in recorder.context_clip_names(clip.name).values()]
-    return [clip, video, chat, _cut_record_path(video), *context]
+    return [clip, video, chat, _cut_record_path(video), *context, *_reel_files(row["id"])]
 
 
 def _moment_busy(moment_id: int) -> str | None:
@@ -5368,6 +5377,8 @@ def _moment_busy(moment_id: int) -> str | None:
         return FOOTAGE_BUSY_WORDS
     if _vod_clip_busy(moment_id):
         return VOD_CLIP_BUSY_WORDS
+    if moment_id in _reels_sending:
+        return "This moment's clip is being sent to GitHub for a reel. Try again once that is done."
     return None
 
 
@@ -5378,6 +5389,7 @@ def _remove_moment(conn, row) -> None:
     for file in _moment_files(row):
         file.unlink(missing_ok=True)
     delete_moment(conn, row["id"])
+    delete_reel(conn, row["id"])
     _trims.pop(row["id"], None)
     _transcripts.pop(row["id"], None)
     _cuts_heard.discard(row["id"])
@@ -5952,6 +5964,438 @@ async def moment_clip_state(moment_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
     return {"moment_id": moment_id, **_vod_clip_standing(moment_id)}
+
+
+# -- reels (see reels.py) ------------------------------------------------------
+
+# Where what comes back of a moment's reel is kept: under the clips folder,
+# so it is served as the clips are.
+REELS_DIR = CLIPS_DIR / "reels"
+REEL_PARTS = ("contact.jpg", "reel.mp4")
+# The moments whose clip is being sent to GitHub right now. A reel stored as
+# being sent that is not among them was cut short by a restart.
+_reels_sending: set[int] = set()
+REELS_NOT_SET_UP_WORDS = "Reels are not set up: REELS_REPO and REELS_GITHUB_TOKEN go in .env."
+
+
+def _github() -> reels.GitHub | None:
+    """The repository reels are made in, where the service is set up for it."""
+    if not settings.reels:
+        return None
+    return reels.GitHub(settings.reels_repo, settings.reels_github_token)
+
+
+def _reel_file(moment_id: int, part: str) -> Path:
+    return REELS_DIR / f"moment_{moment_id}_{part}"
+
+
+def _reel_files(moment_id: int) -> list[Path]:
+    return [_reel_file(moment_id, part) for part in REEL_PARTS]
+
+
+def _reel_context(conn, row) -> dict:
+    """What goes up with a moment's file (see reels.context): its chat over
+    the whole file, placed against the picture as the review page places it."""
+    before = row["context_before"] or 0.0
+    after = row["context_after"] or 0.0
+    clip_seconds = row["clip_duration"]
+    lines: list[reels.ChatLine] = []
+    if row["reason"] != dashboard_view.IMPORT_REASON:
+        tuned = _tuning(conn, row["broadcaster_user_id"])
+        timeline = chat_trace.clip_timeline(
+            row,
+            pre_roll=tuned.pre_roll_seconds,
+            post_roll=tuned.post_roll_seconds,
+            playback_delay=tuned.playback_delay_seconds,
+            chat_delay=_chat_delay(conn, row["channel_slug"]),
+            context_before=tuned.context_before_seconds,
+            context_after=tuned.context_after_seconds,
+        )
+        if timeline is not None and timeline.chat_start is not None:
+            messages = get_chat_between(
+                conn,
+                row["channel_slug"],
+                timeline.chat_start - timedelta(seconds=before),
+                timeline.chat_start + timedelta(seconds=timeline.clip_seconds + after),
+                reels.CONTEXT_CHAT_LIMIT,
+            )
+            laughing_too = tuned.detector.added_laugh_emote_patterns
+            laugh_names = detector.laugh_emote_names(_channel_keywords(conn, row["broadcaster_user_id"]), laughing_too)
+            lines = [
+                reels.ChatLine(
+                    timeline.at(datetime.fromisoformat(message["received_at"])) + before,
+                    message["sender_username"] or "",
+                    message["content"] or "",
+                    detector.is_laughing(message["content"] or "", laugh_names, laughing_too),
+                )
+                for message in messages
+            ]
+    return reels.context(
+        moment_id=row["id"],
+        channel=row["channel_slug"],
+        title=row["title"],
+        notes=row["notes"],
+        rating=row["rating"],
+        clip_start=before if clip_seconds else None,
+        clip_end=before + clip_seconds if clip_seconds else None,
+        chat=lines,
+    )
+
+
+def _update_reel(moment_id: int, **fields) -> None:
+    """Stores what became of a moment's reel - unless the moment was
+    removed meanwhile."""
+    conn = get_connection()
+    try:
+        if get_reel(conn, moment_id) is not None:
+            put_reel(conn, moment_id, **fields)
+    finally:
+        conn.close()
+
+
+def _reel_failed(moment_id: int, why: str) -> None:
+    logger.warning("the reel of moment %d did not work: %s", moment_id, why)
+    _update_reel(moment_id, state=reels.FAILED, error=why)
+
+
+def _now_text() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _send_for_storyboard(github: reels.GitHub, moment_id: int, clip: Path, context: dict) -> None:
+    """Sends a moment's file and what goes with it to GitHub, and starts the
+    storyboard workflow (see reels.py)."""
+    release_tag = reels.tag(moment_id)
+    try:
+        release = await github.ensure_release(release_tag, f"Moment {moment_id}")
+        await github.remove_assets(release, reels.STORYBOARD_ANSWERS)
+        await github.upload(release, reels.CLIP, path=clip)
+        await github.upload(release, reels.CONTEXT, data=json.dumps(context, ensure_ascii=False, indent=1).encode())
+        asked_at = _now_text()
+        await github.dispatch("storyboard", {"tag": release_tag})
+    except reels.GitHubTrouble as trouble:
+        _reel_failed(moment_id, str(trouble))
+        return
+    except Exception:
+        logger.exception("the clip of moment %d could not be sent for a reel", moment_id)
+        _reel_failed(moment_id, "Something went wrong. The server log says what.")
+        return
+    finally:
+        _reels_sending.discard(moment_id)
+    logger.info("the clip of moment %d was sent for a storyboard", moment_id)
+    _update_reel(moment_id, state=reels.STORYBOARDING, asked_at=asked_at)
+
+
+async def _send_for_render(github: reels.GitHub, moment_id: int, variant: str, hook: str) -> None:
+    """Starts the render workflow for a moment's reel."""
+    release_tag = reels.tag(moment_id)
+    try:
+        release = await github.release(release_tag)
+        if release is None:
+            _reel_failed(moment_id, "The moment's release is gone from GitHub. Make a new storyboard.")
+            return
+        await github.remove_assets(release, reels.RENDER_ANSWERS)
+        await github.dispatch("render", {"tag": release_tag, "variant": variant, "hook": hook})
+    except reels.GitHubTrouble as trouble:
+        _reel_failed(moment_id, str(trouble))
+        return
+    except Exception:
+        logger.exception("the reel of moment %d could not be asked for", moment_id)
+        _reel_failed(moment_id, "Something went wrong. The server log says what.")
+        return
+    logger.info("the reel of moment %d was asked for: variant %s, hook %r", moment_id, variant, hook)
+
+
+async def _keep_making_reels() -> None:
+    """Looks every reels.POLL_SECONDS at what GitHub has made of the reels
+    that were asked for."""
+    while True:
+        await asyncio.sleep(reels.POLL_SECONDS)
+        try:
+            await _look_at_reels()
+        except Exception:
+            logger.exception("could not look at the reels being made")
+
+
+async def _look_at_reels() -> None:
+    github = _github()
+    if github is None:
+        return
+    conn = get_connection()
+    try:
+        waiting = get_reels_in(conn, reels.BUSY)
+    finally:
+        conn.close()
+    for reel in waiting:
+        try:
+            await _look_at_reel(github, reel)
+        except reels.GitHubTrouble as trouble:
+            # Most likely passing; looked at again next time.
+            logger.warning("could not look at the reel of moment %d: %s", reel["moment_id"], trouble)
+
+
+async def _look_at_reel(github: reels.GitHub, reel) -> None:
+    """Takes what came back of one reel, or gives up on it."""
+    moment_id, state = reel["moment_id"], reel["state"]
+    if state == reels.SENDING:
+        if moment_id not in _reels_sending:
+            _reel_failed(moment_id, "Sending the clip was cut short. Make a new storyboard.")
+        return
+    asked_at = datetime.fromisoformat(reel["asked_at"])
+    release_tag = reels.tag(moment_id)
+    release = await github.release(release_tag)
+    if state == reels.STORYBOARDING:
+        asset = release.asset(reels.STORYBOARD) if release else None
+        if asset is not None:
+            await _take_storyboard(github, moment_id, release, asset)
+            return
+        workflow, limit = "storyboard", reels.STORYBOARD_LIMIT
+    else:
+        asset = release.asset(reels.REEL) if release else None
+        if asset is not None:
+            await _take_reel(github, moment_id, asset, reel)
+            return
+        workflow, limit = "render", reels.RENDER_LIMIT
+    ended = await github.failed_run(reels.run_name(workflow, release_tag), asked_at)
+    if ended is not None:
+        _reel_failed(moment_id, f"The {workflow} workflow ended in {ended}. Its run on GitHub says why.")
+    elif datetime.now(timezone.utc) - asked_at > limit:
+        minutes = int(limit.total_seconds() // 60)
+        _reel_failed(moment_id, f"Nothing came back from the {workflow} workflow in {minutes} minutes.")
+
+
+async def _take_storyboard(github: reels.GitHub, moment_id: int, release: reels.Release, asset: reels.Asset) -> None:
+    with tempfile.TemporaryDirectory(prefix="storyboard_") as folder:
+        path = Path(folder) / reels.STORYBOARD
+        await github.download(asset, path)
+        raw = path.read_bytes()
+    try:
+        storyboard = reels.read_storyboard(raw)
+    except reels.BadStoryboard as bad:
+        _reel_failed(moment_id, str(bad))
+        return
+    contact = release.asset(reels.CONTACT)
+    contact_path = None
+    if contact is not None:
+        await github.download(contact, _reel_file(moment_id, "contact.jpg"))
+        contact_path = _reel_file(moment_id, "contact.jpg").relative_to(CLIPS_DIR).as_posix()
+    _update_reel(
+        moment_id,
+        state=reels.CHOOSING,
+        storyboard=json.dumps(storyboard, ensure_ascii=False),
+        contact_path=contact_path,
+        error=None,
+    )
+    logger.info("the storyboard of moment %d came back", moment_id)
+    channel = _channel_of_moment(moment_id)
+    if channel is not None and _notes().destinations:
+        note = notify.storyboard_note(
+            channel, str(storyboard.get("summary") or ""), link=_link(dashboard_view.review_url(moment=moment_id))
+        )
+        _track_task(_notes().notify(note))
+
+
+async def _take_reel(github: reels.GitHub, moment_id: int, asset: reels.Asset, reel) -> None:
+    path = _reel_file(moment_id, "reel.mp4")
+    await github.download(asset, path)
+    _update_reel(moment_id, state=reels.DONE, reel_path=path.relative_to(CLIPS_DIR).as_posix(), error=None)
+    logger.info("the reel of moment %d came back", moment_id)
+    channel = _channel_of_moment(moment_id)
+    if channel is not None and _notes().destinations:
+        note = notify.reel_note(
+            channel,
+            reel["variant"] or "",
+            reels.hook_shown(reel["hook"] or ""),
+            link=_link(dashboard_view.review_url(moment=moment_id)),
+        )
+        _track_task(_notes().notify(note, path))
+
+
+def _channel_of_moment(moment_id: int) -> str | None:
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+    finally:
+        conn.close()
+    return row["channel_slug"] if row is not None else None
+
+
+def _stored_storyboard(reel) -> dict | None:
+    if reel is None or not reel["storyboard"]:
+        return None
+    try:
+        return json.loads(reel["storyboard"])
+    except ValueError:
+        return None
+
+
+def _reel_view(conn, row) -> dict:
+    """What the review page shows of a moment's reel (_reel.html)."""
+    moment_id = row["id"]
+    reel = get_reel(conn, moment_id)
+    state = reel["state"] if reel is not None else None
+    storyboard = _stored_storyboard(reel)
+    view = {
+        "url": f"/dashboard/moments/{moment_id}/reel",
+        "ask_url": f"/moments/{moment_id}/reel",
+        "render_url": f"/moments/{moment_id}/reel/render",
+        "state": state or "",
+        "busy": state in reels.BUSY,
+        "words": reels.state_words(state, reel["error"] if reel is not None else None),
+        "storyboard": None,
+        "contact_url": None,
+        "reel_url": None,
+        "id": moment_id,
+        "variant": reel["variant"] if reel is not None else None,
+        "hook": reels.hook_shown(reel["hook"]) if reel is not None and reel["hook"] else None,
+        # Words of one's own the reel was last rendered with, offered again.
+        "own_hook": "",
+    }
+    if storyboard is not None:
+        variants = [variant for variant in storyboard.get("variants", []) if isinstance(variant, dict)]
+        chosen = view["variant"] or next(
+            (str(variant.get("id")) for variant in variants if variant.get("recommended")), None
+        )
+        hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
+        used = reel["hook"]
+        if used and all(str(hook["text"]) != used for hook in hooks):
+            view["own_hook"] = used
+        chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
+        view["storyboard"] = {
+            "summary": str(storyboard.get("summary") or ""),
+            "thoughts": str(storyboard.get("thoughts") or ""),
+            "question": str(storyboard.get("question") or ""),
+            "variants": [
+                {
+                    "id": str(variant.get("id")),
+                    "title": str(variant.get("title") or variant.get("structure") or ""),
+                    "structure": str(variant.get("structure") or ""),
+                    "why": str(variant.get("why") or ""),
+                    "duration": (
+                        dashboard_view.number_words(float(variant["duration"]), 1)
+                        if isinstance(variant.get("duration"), int | float)
+                        else None
+                    ),
+                    "recommended": bool(variant.get("recommended")),
+                    "chosen": str(variant.get("id")) == chosen,
+                }
+                for variant in variants
+            ],
+            "hooks": [
+                {
+                    "id": str(hook.get("id")),
+                    "type": str(hook.get("type") or ""),
+                    "words": reels.hook_shown(str(hook["text"])),
+                    "chosen": str(hook["text"]) == chosen_hook,
+                }
+                for hook in hooks
+            ],
+        }
+    if reel is not None and reel["contact_path"] and (CLIPS_DIR / reel["contact_path"]).exists():
+        view["contact_url"] = _clip_url(reel["contact_path"], versioned=True)
+    if reel is not None and reel["reel_path"] and (CLIPS_DIR / reel["reel_path"]).exists():
+        view["reel_url"] = _clip_url(reel["reel_path"], versioned=True)
+    return view
+
+
+@app.post("/moments/{moment_id}/reel")
+async def ask_for_reel(moment_id: int):
+    """Sends a moment's file to GitHub and starts its storyboard (see
+    reels.py) - anew, where one was made before. Asked again while a step
+    of the reel goes on, nothing more is started."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    github = _github()
+    if github is None:
+        raise HTTPException(status_code=409, detail=REELS_NOT_SET_UP_WORDS)
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        row = await _with_clip_length(conn, row)
+        if not row["clip_path"] or not (CLIPS_DIR / row["clip_path"]).exists():
+            raise HTTPException(status_code=409, detail="The moment has no clip to make a reel of.")
+        reel = get_reel(conn, moment_id)
+        if reel is None or reel["state"] not in reels.BUSY:
+            if (busy := _moment_busy(moment_id)) is not None:
+                raise HTTPException(status_code=409, detail=busy)
+            context = _reel_context(conn, row)
+            for file in _reel_files(moment_id):
+                file.unlink(missing_ok=True)
+            put_reel(
+                conn,
+                moment_id,
+                state=reels.SENDING,
+                asked_at=_now_text(),
+                storyboard=None,
+                contact_path=None,
+                variant=None,
+                hook=None,
+                reel_path=None,
+                error=None,
+            )
+            _reels_sending.add(moment_id)
+            _track_task(_send_for_storyboard(github, moment_id, CLIPS_DIR / row["clip_path"], context))
+        reel = get_reel(conn, moment_id)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "state": reel["state"], "words": reels.state_words(reel["state"], reel["error"])}
+
+
+@app.post("/moments/{moment_id}/reel/render")
+async def render_reel(moment_id: int, request: Request):
+    """Renders a moment's reel with a variant of its storyboard and a hook -
+    the storyboard's (by its id) or words of one's own: posted as JSON
+    `variant` and `hook`. Again with another choice once one is there."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    github = _github()
+    if github is None:
+        raise HTTPException(status_code=409, detail=REELS_NOT_SET_UP_WORDS)
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict) or not all(isinstance(asked.get(name), str) for name in ("variant", "hook")):
+        raise HTTPException(status_code=400, detail="Expected variant and hook as JSON.")
+    conn = get_connection()
+    try:
+        if get_moment(conn, moment_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        reel = get_reel(conn, moment_id)
+        storyboard = _stored_storyboard(reel)
+        if storyboard is None:
+            raise HTTPException(status_code=409, detail="The moment has no storyboard to render a reel from yet.")
+        if reel["state"] in reels.BUSY:
+            raise HTTPException(status_code=409, detail=reels.state_words(reel["state"]))
+        try:
+            variant = reels.chosen_variant(storyboard, asked["variant"])
+            hook = reels.chosen_hook(storyboard, asked["hook"])
+        except ValueError as wrong:
+            raise HTTPException(status_code=400, detail=str(wrong)) from None
+        put_reel(conn, moment_id, state=reels.RENDERING, asked_at=_now_text(), variant=variant, hook=hook, error=None)
+    finally:
+        conn.close()
+    _track_task(_send_for_render(github, moment_id, variant, hook))
+    return {"moment_id": moment_id, "state": reels.RENDERING, "words": reels.state_words(reels.RENDERING)}
+
+
+@app.get("/dashboard/moments/{moment_id}/reel", response_class=HTMLResponse)
+async def dashboard_reel(request: Request, moment_id: int):
+    """A moment's reel as the review page shows it, on its own - what the
+    page fetches after asking for a step, and while one goes on."""
+    if not settings.reels:
+        raise HTTPException(status_code=404, detail=REELS_NOT_SET_UP_WORDS)
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        view = _reel_view(conn, row)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_reel.html", {"reel": view})
 
 
 @app.get("/moments/{moment_id}/vod")

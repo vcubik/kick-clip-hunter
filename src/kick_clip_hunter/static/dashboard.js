@@ -10,7 +10,8 @@
 // as the clip plays and saves what is put right in it, has footage from the
 // stream's VOD added to a moment's file and opens it again - or, for a
 // moment that has none, plays the VOD itself and has the clip cut from
-// there - saves the Settings page's form - whose sections are tabs, and
+// there - has a moment's clip made into a reel, its storyboard chosen from
+// and followed until the reel is back - saves the Settings page's form - whose sections are tabs, and
 // whose lists are added to an item at a time - starts and stops the
 // recording of a whole stream, replays a recording's chat beside it, puts
 // what chat did over all of it
@@ -1605,6 +1606,93 @@
     watchVodClip();
   }
 
+  // ---- A reel -----------------------------------------------------------
+  //
+  // A moment's clip is made into a reel by GitHub Actions: the service sends
+  // the clip there and a storyboard comes back minutes later, a variant and
+  // a hook are chosen from it here, and the reel comes back a minute or two
+  // after that. While a step goes on the page asks for the reel's part of
+  // the page every few seconds and puts it in place of the one it has.
+
+  const REEL_POLL_MS = 5000;
+  let reelWatch = null;
+
+  async function askReel(button) {
+    const section = button.closest("[data-reel]");
+    button.disabled = true;
+    say(section, "Asking for a storyboard.");
+    const response = await post(button.dataset.reelAsk);
+    if (!section.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(section, response ? await problem(response, "Could not ask for a storyboard. Try again.") : "Could not reach the service.");
+      return;
+    }
+    await refreshReel(section);
+  }
+
+  // A variant or a hook chosen: the one pressed in its group. Choosing one
+  // of the storyboard's hooks drops the words of one's own.
+  function chooseReel(button) {
+    const group = button.closest("[data-reel-variants], [data-reel-hooks]");
+    for (const other of all("[data-reel-variant], [data-reel-hook]", group)) {
+      other.setAttribute("aria-pressed", other === button ? "true" : "false");
+    }
+    const own = one("[data-reel-own]", group);
+    if (own && button.matches("[data-reel-hook]")) own.value = "";
+  }
+
+  // Words of one's own typed in: none of the storyboard's hooks is chosen.
+  function ownHook(field) {
+    const group = field.closest("[data-reel-hooks]");
+    if (field.value.trim()) {
+      for (const hook of all("[data-reel-hook]", group)) hook.setAttribute("aria-pressed", "false");
+    }
+  }
+
+  async function renderReel(button) {
+    const section = button.closest("[data-reel]");
+    const variant = one('[data-reel-variant][aria-pressed="true"]', section);
+    const own = one("[data-reel-own]", section);
+    const hook = own && own.value.trim() ? own.value.trim() : one('[data-reel-hook][aria-pressed="true"]', section)?.dataset.reelHook;
+    if (!variant || !hook) {
+      say(section, "Choose a variant and a hook first.");
+      return;
+    }
+    button.disabled = true;
+    say(section, "Asking for the reel.");
+    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook });
+    if (!section.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(section, response ? await problem(response, "Could not ask for the reel. Try again.") : "Could not reach the service.");
+      return;
+    }
+    await refreshReel(section);
+  }
+
+  // The reel's part of the page as the service has it now, in place of the
+  // one on screen.
+  async function refreshReel(section) {
+    let markup = null;
+    try {
+      const response = await fetch(section.dataset.reel);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // asked again in a moment, while a step goes on
+    }
+    if (!section.isConnected) return;
+    const fresh = markup && one("[data-reel]", new DOMParser().parseFromString(markup, "text/html"));
+    if (fresh) section.replaceWith(fresh);
+    watchReel();
+  }
+
+  function watchReel() {
+    clearTimeout(reelWatch);
+    const busy = one("[data-reel][data-busy]");
+    reelWatch = busy ? setTimeout(() => refreshReel(busy), REEL_POLL_MS) : null;
+  }
+
   // The moment as the service has it now, in place of the one on the page,
   // saying what came of what was asked - where `near` says, in the moment
   // that has arrived, if it has that.
@@ -1789,6 +1877,7 @@
     recallFootageSeconds();
     watchFootage();
     watchVodClip();
+    watchReel();
     dressChatFile();
     markFound();
     const article = one(".moment");
@@ -3058,6 +3147,9 @@
     ["[data-transcript-go]", playLine],
     ["[data-footage-side]", addFootage],
     ["[data-vod-clip-go]", cutVodClip],
+    ["[data-reel-ask]", askReel],
+    ["[data-reel-variant], [data-reel-hook]", chooseReel],
+    ["[data-reel-render]", renderReel],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
@@ -3325,6 +3417,8 @@
       settingsEdited(settingsOf(target));
     } else if (target.matches("[data-chip-input]")) {
       say(target, "");
+    } else if (target.matches("[data-reel-own]")) {
+      ownHook(target);
     } else if (target.matches("[data-notify-field]")) {
       delete target.dataset.remove;
       say(notifyPane(target), "Not saved yet.");

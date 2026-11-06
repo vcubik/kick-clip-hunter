@@ -39,6 +39,7 @@ import pytest
 # one as a deliberate re-export rather than an unused import).
 from tests.support.fixtures import discord as discord
 from tests.support.fixtures import eventsub as eventsub
+from tests.support.fixtures import github as github
 from tests.support.fixtures import hls as hls
 from tests.support.fixtures import kick_api as kick_api
 from tests.support.fixtures import recording as recording
@@ -86,6 +87,9 @@ def pytest_configure(config: pytest.Config) -> None:
     # No notifications go anywhere unless a test says where (the `telegram`
     # and `discord` fixtures), and their links lead nowhere.
     for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_API_URL", "DISCORD_WEBHOOK_URL", "DASHBOARD_URL"):
+        os.environ[name] = ""
+    # Nor is a reel made anywhere (the `github` fixture).
+    for name in ("REELS_REPO", "REELS_GITHUB_TOKEN"):
         os.environ[name] = ""
 
     # No test may talk TLS to anything (see `no_outbound_network`), so the

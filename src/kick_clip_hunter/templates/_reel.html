@@ -1,0 +1,55 @@
+{#- The moment's clip made into a reel by GitHub Actions (see reels.py):
+    asked for here, its storyboard chosen from here, the reel played here.
+    Also served on its own (/dashboard/moments/<id>/reel): the script fetches
+    it after asking for a step, and every few seconds while one goes on, and
+    puts it in place of this one. -#}
+<section class="reel" aria-labelledby="reel-head-{{ reel.id }}" data-reel="{{ reel.url }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
+  <div class="reel-head">
+    <h2 id="reel-head-{{ reel.id }}">Reel</h2>
+    <button type="button" class="ch-btn ch-btn-compact" title="Sends the clip to GitHub, where a storyboard of the reel is made from it" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
+  </div>
+  <p class="status-line" role="status" data-status>{{ reel.words }}</p>
+
+  {% if reel.reel_url %}
+  <div class="reel-done">
+    <video class="reel-video" src="{{ reel.reel_url }}" controls playsinline preload="metadata"></video>
+    <p>Variant {{ reel.variant }}, hook: {{ reel.hook }}</p>
+    <a class="ch-btn ch-btn-compact" href="{{ reel.reel_url }}" download="moment_{{ reel.id }}_reel.mp4">Download</a>
+  </div>
+  {% endif %}
+
+  {% if reel.storyboard %}
+  {% set board = reel.storyboard %}
+  <div class="reel-board">
+    {% if board.summary %}<p>{{ board.summary }}</p>{% endif %}
+    {% if board.thoughts %}<p class="reel-thoughts">{{ board.thoughts }}</p>{% endif %}
+    {% if reel.contact_url %}
+    <a href="{{ reel.contact_url }}" target="_blank" rel="noopener"><img class="reel-contact" src="{{ reel.contact_url }}" alt="Frames of the clip, a few seconds apart"></a>
+    {% endif %}
+
+    <div class="reel-options" role="group" aria-label="Variant" data-reel-variants>
+      {% for variant in board.variants %}
+      <button type="button" class="reel-option" aria-pressed="{{ 'true' if variant.chosen else 'false' }}" data-reel-variant="{{ variant.id }}">
+        <span class="reel-option-head"><b>{{ variant.id }}</b> {{ variant.title }}{% if variant.duration %}, {{ variant.duration }} s{% endif %}{% if variant.recommended %}, recommended{% endif %}</span>
+        {% if variant.why %}<span>{{ variant.why }}</span>{% endif %}
+      </button>
+      {% endfor %}
+    </div>
+
+    <div class="reel-options" role="group" aria-label="Hook" data-reel-hooks>
+      {% for hook in board.hooks %}
+      <button type="button" class="reel-option" aria-pressed="{{ 'true' if hook.chosen else 'false' }}" data-reel-hook="{{ hook.id }}">
+        <span class="reel-option-head"><b>{{ hook.words }}</b>{% if hook.type %} {{ hook.type }}{% endif %}</span>
+      </button>
+      {% endfor %}
+      <label class="reel-own">
+        <span class="ch-cap">Or your own (| breaks the line, *word* is highlighted)</span>
+        <input type="text" class="ch-input" maxlength="80" value="{{ reel.own_hook }}" placeholder="MÁLEM PŘEJEL|*SLEPÉHO?*" autocomplete="off" data-reel-own>
+      </label>
+    </div>
+
+    {% if board.question %}<p class="reel-thoughts">{{ board.question }}</p>{% endif %}
+    <button type="button" class="ch-btn ch-btn-primary" data-reel-render="{{ reel.render_url }}"{% if reel.busy %} disabled{% endif %}>{{ "Render again" if reel.reel_url else "Render" }}</button>
+  </div>
+  {% endif %}
+</section>

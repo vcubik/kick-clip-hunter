@@ -184,6 +184,12 @@
     {% endfor %}
   </div>
 
+  {% if moment.reel %}
+  {% with reel = moment.reel %}
+  {% include "_reel.html" %}
+  {% endwith %}
+  {% endif %}
+
   {#- Del on the keyboard asks the same, and Del again deletes. -#}
   <div class="moment-delete">
     {{ delete("/moments/%d/delete" % moment.id, "Removes the moment, its clip and what was cut out of it, for good.", "moment") }}

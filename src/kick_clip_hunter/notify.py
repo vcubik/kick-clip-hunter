@@ -110,6 +110,7 @@ RECORDING = "recording"
 HEALTH = "health"
 DAILY = "daily"
 TEST = "test"
+REEL = "reel"
 
 # The colour of a Discord embed, by what it tells of: the dashboard's
 # marker for a moment (with its clip or still without one), its lamp for a
@@ -122,6 +123,7 @@ COLOURS = {
     HEALTH: 0xA6CCB7,
     DAILY: 0xF4F1E8,
     TEST: 0xEDEDED,
+    REEL: 0xFFEB57,
 }
 TROUBLE_COLOUR = 0xCF2E2E
 
@@ -210,6 +212,19 @@ def moment_note(
     lines.extend(_reaction_lines(said, reasons, commanded))
     lines.append("No clip has been cut: ask for one on the dashboard." if link else "No clip has been cut yet.")
     return Note(MOMENT, "Moment caught", tuple(lines), channel=channel, link=link, elsewhere=(watch,) if watch else ())
+
+
+def storyboard_note(channel: str, summary: str, *, link: str | None = None) -> Note:
+    """A storyboard for a moment's reel came back (see reels.py): what its
+    maker saw in the clip, and that a variant and a hook are to be chosen."""
+    lines = [summary.strip()] if summary.strip() else []
+    lines.append("Choose a variant and a hook on the dashboard." if link else "Choose a variant and a hook.")
+    return Note(REEL, "Storyboard ready", tuple(lines), channel=channel, link=link)
+
+
+def reel_note(channel: str, variant: str, hook: str, *, link: str | None = None) -> Note:
+    """A moment's reel was rendered: with which variant and hook."""
+    return Note(REEL, "Reel ready", (f"Variant {variant}, hook: {hook}",), channel=channel, link=link)
 
 
 # Who started a recording.

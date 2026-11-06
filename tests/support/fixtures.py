@@ -23,6 +23,7 @@ from kick_clip_hunter import db, detector, recorder
 from kick_clip_hunter.platforms import NoVod, StreamUrls, Vod
 from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.eventsub import FakeEventSub
+from tests.support.github import FakeGitHub
 from tests.support.hls import FakeHlsServer, Segment
 from tests.support.kick_api import FakeKickApi
 from tests.support.media import make_ts_segments, require_ffmpeg
@@ -171,6 +172,18 @@ def telegram(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeTele
     fake = FakeTelegram()
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", fake.token)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", TELEGRAM_CHAT)
+    kick_api.others.append(fake)
+    return fake
+
+
+@pytest.fixture
+def github(kick_api: FakeKickApi, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+    """A fake GitHub for every `httpx.AsyncClient` the service creates, and
+    .env naming the repository reels are made in and a token for it - as
+    `telegram` does."""
+    fake = FakeGitHub()
+    monkeypatch.setenv("REELS_REPO", fake.repo)
+    monkeypatch.setenv("REELS_GITHUB_TOKEN", fake.token)
     kick_api.others.append(fake)
     return fake
 
