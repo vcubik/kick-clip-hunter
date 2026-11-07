@@ -2985,6 +2985,11 @@ VOD_PLAYED_HERE = {platforms.KICK, platforms.TWITCH}
 VOD_RELAYED = {platforms.TWITCH}
 # A clip of which the VOD holds less than this is none.
 VOD_CLIP_LEAST_SECONDS = 1.0
+# The most of the stream a stretch chosen to cut a moment's clip of may
+# hold, and how far before the clip or after it it may reach: a stretch is
+# chosen to fetch less of the VOD than the footage the settings keep around
+# a clip, not to cut a long piece out of the stream.
+VOD_CLIP_MOST_SECONDS = 600.0
 # How often waiting for the VOD to reach the end of a moment's footage looks
 # whether the service is shutting down.
 VOD_WAIT_STEP_SECONDS = 1.0
@@ -3001,6 +3006,22 @@ async def _vod_place(channel: str, when: datetime) -> tuple[Vod, float]:
     footage. Raises NoVod or vod_footage.FootageError, saying why."""
     vod = await asyncio.to_thread(streams.vod_at, channel, when)
     return vod, await asyncio.to_thread(vod_footage.seconds_in, vod, when)
+
+
+def _vod_clip_stretch(row) -> dict:
+    """The stretch of the stream a moment's clip is cut of to begin with, in
+    clip time as the page reads it: the clip as the channel's clips are
+    framed now, with the footage around it that its settings keep - which
+    the page lets be narrowed (or moved) before the clip is cut."""
+    clip_from, clip_to, before, after = _vod_clip_framing(row)
+    clip_seconds = (clip_to - clip_from).total_seconds()
+    return {
+        "clip": dashboard_view.number_words(clip_seconds, 3),
+        "start": dashboard_view.number_words(-before, 3),
+        "end": dashboard_view.number_words(clip_seconds + after, 3),
+        "least": dashboard_view.number_words(VOD_CLIP_LEAST_SECONDS, 3),
+        "most": dashboard_view.number_words(VOD_CLIP_MOST_SECONDS, 3),
+    }
 
 
 def _vod_clip_standing(moment_id: int) -> dict:
@@ -3035,7 +3056,52 @@ async def _wait_for_vod(moment_id: int, until: datetime) -> None:
         await asyncio.sleep(min(left, VOD_WAIT_STEP_SECONDS))
 
 
-async def _cut_from_vod_background(moment_id: int, channel: str, owner: int, window: tuple[datetime, datetime]) -> None:
+def _asked_stretch(asked: object, clip_seconds: float) -> tuple[float, float] | None:
+    """The stretch of the stream a moment's clip is to be cut of, where one
+    was chosen: posted as `start` and `end` in clip time - seconds from where
+    the clip would begin, framed as the channel's clips are framed now (see
+    _vod_clip_framing); before it below zero. None where nothing was posted:
+    the clip is then cut with the footage around it that the settings keep."""
+    if asked is None:
+        return None
+    wrong = "Expected start and end of the stretch to cut, in seconds of the clip, as JSON."
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail=wrong)
+    start, end = asked.get("start"), asked.get("end")
+    if not all(isinstance(value, int | float) and not isinstance(value, bool) for value in (start, end)):
+        raise HTTPException(status_code=400, detail=wrong)
+    if not (math.isfinite(start) and math.isfinite(end)):
+        raise HTTPException(status_code=400, detail=wrong)
+    most = VOD_CLIP_MOST_SECONDS
+    if end - start < VOD_CLIP_LEAST_SECONDS:
+        raise HTTPException(status_code=400, detail="The stretch has to end at least a second after it starts.")
+    if end - start > most:
+        raise HTTPException(status_code=400, detail=f"A stretch holds at most {most / 60:g} minutes of the stream.")
+    if start < -most or end > clip_seconds + most:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A stretch begins and ends at most {most / 60:g} minutes before the clip or after it.",
+        )
+    return float(start), float(end)
+
+
+def _vod_clip_framing(row) -> tuple[datetime, datetime, float, float]:
+    """Where a moment's clip would begin and end on the stream's clock,
+    framed as the channel's clips are framed now - what the trace beside the
+    moment is drawn under, its clip not being there - and the footage its
+    settings keep before it and after it."""
+    tuned = _tuning_now(row["broadcaster_user_id"])
+    clip_from, clip_to = tuned.clip_span(*_moment_window(row))
+    return clip_from, clip_to, tuned.context_before_seconds, tuned.context_after_seconds
+
+
+async def _cut_from_vod_background(
+    moment_id: int,
+    channel: str,
+    owner: int,
+    window: tuple[datetime, datetime],
+    stretch: tuple[float, float] | None = None,
+) -> None:
     # Waiting for the VOD, finding the moment in it, fetching a couple of
     # minutes of it and putting them together takes up to a few minutes: off
     # the event loop where it blocks, and as a tracked task, which gives up
@@ -3046,11 +3112,16 @@ async def _cut_from_vod_background(moment_id: int, channel: str, owner: int, win
         _vod_clips[moment_id] = {"state": step, "done": done}
 
     # Framed as the channel's clips are framed now - what the trace beside
-    # the moment was drawn under, its clip not being there.
+    # the moment was drawn under, its clip not being there - with the
+    # footage around it that its settings keep, or the stretch chosen (in
+    # clip time) in its place.
     tuned = _tuning_now(owner)
     clip_from, clip_to = tuned.clip_span(*window)
-    first = clip_from - timedelta(seconds=tuned.context_before_seconds)
-    last = clip_to + timedelta(seconds=tuned.context_after_seconds)
+    if stretch is None:
+        first = clip_from - timedelta(seconds=tuned.context_before_seconds)
+        last = clip_to + timedelta(seconds=tuned.context_after_seconds)
+    else:
+        first, last = (clip_from + timedelta(seconds=seconds) for seconds in stretch)
     output = CLIPS_DIR / channel / f"moment_{moment_id}.mp4"
     try:
         await _wait_for_vod(moment_id, last + timedelta(seconds=vod_footage.VOD_BEHIND_SECONDS))
@@ -3072,8 +3143,11 @@ async def _cut_from_vod_background(moment_id: int, channel: str, owner: int, win
         return
 
     # The clip is as much of what was asked for as the file holds, the
-    # footage either side of it the rest.
+    # footage either side of it the rest - or, of a stretch chosen to hold
+    # none of the clip, the whole of it.
     clip_start, clip_end = max(clip_from, made.started_at), min(clip_to, made.ended_at)
+    if stretch is not None and (clip_end - clip_start).total_seconds() < VOD_CLIP_LEAST_SECONDS:
+        clip_start, clip_end = made.started_at, made.ended_at
     clip_seconds = (clip_end - clip_start).total_seconds()
     if clip_seconds < VOD_CLIP_LEAST_SECONDS:
         output.unlink(missing_ok=True)
@@ -3221,7 +3295,11 @@ def _open_moment(conn, row, today: date) -> dict:
         # Of a moment of a channel tracked for moments that has no clip yet:
         # where asking for it is, and where that stands.
         "on_request": (
-            {"url": f"/moments/{row['id']}/clip", **_vod_clip_standing(row["id"])}
+            {
+                "url": f"/moments/{row['id']}/clip",
+                **_vod_clip_standing(row["id"]),
+                "stretch": _vod_clip_stretch(row),
+            }
             if row["clip_on_request"] and not row["clip_path"]
             else None
         ),
@@ -5969,15 +6047,22 @@ async def footage_state(moment_id: int):
 
 
 @app.post("/moments/{moment_id}/clip")
-async def cut_moment_clip(moment_id: int):
+async def cut_moment_clip(moment_id: int, request: Request):
     """Starts cutting the clip of a moment of a channel tracked for moments
     from its stream's VOD (see vod_footage.cut): framed as the channel's
     clips are framed now, with the footage around it that its settings
-    keep, once the VOD reaches that far. Not while the moment is still
-    open, or whether it is kept still being counted. Asked again while that
-    goes on, nothing more is started."""
+    keep - or only the stretch posted as JSON `start` and `end`, in clip
+    time (see _asked_stretch), which fetches no more of the VOD than that -
+    once the VOD reaches that far. Not while the moment is still open, or
+    whether it is kept still being counted. Asked again while that goes on,
+    nothing more is started."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
+    body = await request.body()
+    try:
+        asked = json.loads(body) if body.strip() else None
+    except ValueError:
+        asked = {}
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -5999,10 +6084,12 @@ async def cut_moment_clip(moment_id: int):
             )
         if (busy := _moment_busy(moment_id)) is not None:
             raise HTTPException(status_code=409, detail=busy)
+        clip_from, clip_to, _before, _after = _vod_clip_framing(row)
+        stretch = _asked_stretch(asked, (clip_to - clip_from).total_seconds())
         _vod_clips[moment_id] = {"state": dashboard_view.FOOTAGE_FINDING}
         _track_task(
             _cut_from_vod_background(
-                moment_id, row["channel_slug"], row["broadcaster_user_id"], _moment_window(row)
+                moment_id, row["channel_slug"], row["broadcaster_user_id"], _moment_window(row), stretch
             )
         )
     return {"moment_id": moment_id, **_vod_clip_standing(moment_id)}
@@ -6027,7 +6114,8 @@ async def moment_clip_state(moment_id: int):
 # Where what comes back of a moment's reel is kept: under the clips folder,
 # so it is served as the clips are.
 REELS_DIR = CLIPS_DIR / "reels"
-REEL_PARTS = ("contact.jpg", "reel.mp4")
+# "part.mp4": the stretch of the moment's file that was sent in its place.
+REEL_PARTS = ("contact.jpg", "reel.mp4", "part.mp4")
 # The moments whose clip is being sent to GitHub right now. A reel stored as
 # being sent that is not among them was cut short by a restart.
 _reels_sending: set[int] = set()
@@ -6060,9 +6148,26 @@ def _file_length(row) -> float | None:
     return (row["context_before"] or 0.0) + row["clip_duration"] + (row["context_after"] or 0.0)
 
 
-def _reel_context(conn, row, *, corrected: bool = False) -> dict:
+def _reel_part(reel) -> tuple[float, float] | None:
+    """The stretch of the moment's file that was sent for a reel, in seconds
+    of the file - None where the whole file was."""
+    if reel is None or reel["part_start"] is None or reel["part_end"] is None:
+        return None
+    return reel["part_start"], reel["part_end"]
+
+
+def _reel_subtitles(transcript: list[subtitles.Line], part: tuple[float, float] | None) -> str:
+    """A reel's transcript as the subtitles of what was sent: of the stretch
+    alone, timed to it, where only a stretch was (see reels.py)."""
+    if part is None:
+        return subtitles.srt(transcript, 0.0)
+    return subtitles.srt(transcript, part[0], part[1] - part[0])
+
+
+def _reel_context(conn, row, *, corrected: bool = False, part: tuple[float, float] | None = None) -> dict:
     """What goes up with a moment's file (see reels.context): its chat over
-    the whole file, placed against the picture as the review page places it."""
+    the whole file, placed against the picture as the review page places it
+    - or over the stretch of it sent in its place (`part`), and timed to that."""
     before = row["context_before"] or 0.0
     after = row["context_after"] or 0.0
     clip_seconds = row["clip_duration"]
@@ -6097,14 +6202,28 @@ def _reel_context(conn, row, *, corrected: bool = False) -> dict:
                 )
                 for message in messages
             ]
+    clip_start = before if clip_seconds else None
+    clip_end = before + clip_seconds if clip_seconds else None
+    if part is not None:
+        offset, length = part[0], part[1] - part[0]
+        lines = [
+            reels.ChatLine(line.second - offset, line.sender, line.text, line.laughing)
+            for line in lines
+            if offset <= line.second <= part[1]
+        ]
+        if clip_start is not None and clip_end is not None:
+            clip_start, clip_end = max(clip_start - offset, 0.0), min(clip_end - offset, length)
+            if clip_end <= clip_start:
+                # None of the clip the service cut is in the stretch.
+                clip_start = clip_end = None
     return reels.context(
         moment_id=row["id"],
         channel=row["channel_slug"],
         title=row["title"],
         notes=row["notes"],
         rating=row["rating"],
-        clip_start=before if clip_seconds else None,
-        clip_end=before + clip_seconds if clip_seconds else None,
+        clip_start=clip_start,
+        clip_end=clip_end,
         chat=lines,
         transcript_corrected=corrected,
     )
@@ -6267,12 +6386,17 @@ async def _fetched(github: reels.GitHub, asset: reels.Asset) -> bytes:
         return path.read_bytes()
 
 
-async def _fetched_lines(github: reels.GitHub, release: reels.Release, name: str) -> list[subtitles.Line] | None:
-    """The lines of a SubRip file of a release, or None where it has none."""
+async def _fetched_lines(
+    github: reels.GitHub, release: reels.Release, name: str, part: tuple[float, float] | None = None
+) -> list[subtitles.Line] | None:
+    """The lines of a SubRip file of a release, timed to the moment's file -
+    from the stretch of it that was sent (`part`), where only that was - or
+    None where it has none."""
     asset = release.asset(name)
     if asset is None:
         return None
-    return subtitles.from_srt((await _fetched(github, asset)).decode("utf-8", errors="replace"))
+    lines = subtitles.from_srt((await _fetched(github, asset)).decode("utf-8", errors="replace"))
+    return reels.moved(lines, part[0]) if part is not None else lines
 
 
 async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, asset: reels.Asset) -> None:
@@ -6287,7 +6411,9 @@ async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, a
     if contact is not None:
         await github.download(contact, _reel_file(moment_id, "contact.jpg"))
         contact_path = _reel_file(moment_id, "contact.jpg").relative_to(CLIPS_DIR).as_posix()
-    heard = await _fetched_lines(github, release, reels.HEARD)
+    # Timed to what was sent; kept timed to the moment's file.
+    part = _reel_part(reel)
+    heard = await _fetched_lines(github, release, reels.HEARD, part)
     fields = {
         "state": reels.CHOOSING,
         "storyboard": json.dumps(storyboard, ensure_ascii=False),
@@ -6299,7 +6425,7 @@ async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, a
     # A transcript put right by hand is kept; otherwise the subtitles Claude
     # proposed are the transcript, or what was heard where it proposed none.
     if not reel["transcript_edited"]:
-        proposed = await _fetched_lines(github, release, reels.SUBTITLES)
+        proposed = await _fetched_lines(github, release, reels.SUBTITLES, part)
         transcript = proposed if proposed is not None else heard
         fields["transcript"] = subtitles.stored(transcript) if transcript is not None else None
     _update_reel(moment_id, **fields)
@@ -6445,7 +6571,14 @@ def _reel_workspace(conn, row, today: date) -> dict:
         "clip_url": _clip_url(row["clip_path"], versioned=True) if has_clip else None,
         # Footage was added to the moment's file since its clip was sent: the
         # transcript's times are of the file as it was.
-        "stale": bool(reel is not None and reel["clip_stamp"] and has_clip and reels.stamp(clip) != reel["clip_stamp"]),
+        "stale": bool(
+            reel is not None
+            and reel["clip_stamp"]
+            and has_clip
+            and reels.stamp(clip, _reel_part(reel)) != reel["clip_stamp"]
+        ),
+        # The stretch of the file to send: the one sent last, or all of it.
+        "part": _reel_part_view(row, reel) if has_clip else None,
         "board": board,
         "storyboard": _reel_storyboard(storyboard, reel) if storyboard is not None else None,
         "contact_url": None,
@@ -6483,6 +6616,23 @@ def _reel_workspace(conn, row, today: date) -> dict:
         if heard is not None:
             view["heard"] = _transcript_lines(heard)
     return view
+
+
+def _reel_part_view(row, reel) -> dict | None:
+    """The stretch of a moment's file the Reels page offers to send, in
+    seconds of the file: the one sent last, or all of it - which is what it
+    goes back to. None where the file's length is not known."""
+    length = _file_length(row)
+    if length is None:
+        return None
+    start, end = _reel_part(reel) or (0.0, length)
+    return {
+        "start": dashboard_view.number_words(start, 3),
+        "end": dashboard_view.number_words(min(end, length), 3),
+        "length": dashboard_view.number_words(length, 3),
+        "least": dashboard_view.number_words(reels.PART_LEAST_SECONDS, 3),
+        "sent": _reel_part(reel) is not None,
+    }
 
 
 def _stored_storyboard_version(reel) -> str:
@@ -6549,16 +6699,27 @@ async def dashboard_reel(request: Request, moment_id: int):
 
 
 @app.post("/moments/{moment_id}/reel")
-async def ask_for_reel(moment_id: int):
+async def ask_for_reel(moment_id: int, request: Request):
     """Sends a moment's file to GitHub and starts its storyboard (see
     reels.py) - anew, where one was made before: from the same transcript
-    while the moment's file is the one it was heard from. Asked again while
-    a step of the reel goes on, nothing more is started."""
+    while the moment's file, and the stretch of it sent, is the one it was
+    heard from. Only a stretch of the file is sent where one is posted as
+    JSON `start` and `end`, in seconds of the file: cut out of it, nothing
+    re-encoded, so it begins on the last frame a cut can begin on at or
+    before `start`. Asked again while a step of the reel goes on, nothing
+    more is started."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
     if github is None:
         raise HTTPException(status_code=409, detail=REELS_NOT_SET_UP_WORDS)
+    body = await request.body()
+    try:
+        asked = json.loads(body) if body.strip() else {}
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="Expected the start and end of the stretch to send as JSON.")
     conn = get_connection()
     try:
         row = get_moment(conn, moment_id)
@@ -6571,15 +6732,37 @@ async def ask_for_reel(moment_id: int):
         if reel is None or reel["state"] not in reels.BUSY:
             if (busy := _moment_busy(moment_id)) is not None:
                 raise HTTPException(status_code=409, detail=busy)
+            try:
+                part = reels.part_asked(asked.get("start"), asked.get("end"), _file_length(row))
+            except ValueError as wrong:
+                raise HTTPException(status_code=400, detail=str(wrong)) from None
             clip = CLIPS_DIR / row["clip_path"]
-            sent = reels.stamp(clip)
+            source = clip
+            if part is not None:
+                # Where the stretch really begins: on the last frame a cut
+                # can begin on, at or before where it was asked to.
+                source = _reel_file(moment_id, "part.mp4")
+                try:
+                    begins, seconds = await asyncio.to_thread(recorder.trim_clip, clip, part[0], part[1], source)
+                except Exception:
+                    logger.exception("the stretch of moment %d's file to make a reel of could not be cut", moment_id)
+                    raise HTTPException(
+                        status_code=500, detail="The stretch could not be cut. The server log says why."
+                    ) from None
+                part = (round(begins, 3), round(begins + seconds, 3))
+            for file in _reel_files(moment_id):
+                if file != source:
+                    file.unlink(missing_ok=True)
+            sent = reels.stamp(clip, part)
             keep = reel is not None and reel["heard"] is not None and reel["clip_stamp"] == sent
             transcript = subtitles.read(reel["transcript"]) if keep else None
             edited = keep and bool(reel["transcript_edited"])
-            corrected = subtitles.srt(transcript, 0.0) if edited and transcript and subtitles.said(transcript) else None
-            context = _reel_context(conn, row, corrected=corrected is not None)
-            for file in _reel_files(moment_id):
-                file.unlink(missing_ok=True)
+            # Of the stretch alone, where only that is sent: none where
+            # nothing of it is said in the stretch.
+            corrected = None
+            if edited and transcript and subtitles.said(transcript):
+                corrected = _reel_subtitles(transcript, part) or None
+            context = _reel_context(conn, row, corrected=corrected is not None, part=part)
             fields = {
                 "state": reels.SENDING,
                 "asked_at": _now_text(),
@@ -6591,13 +6774,15 @@ async def ask_for_reel(moment_id: int):
                 "error": None,
                 "subtitles": None,
                 "clip_stamp": sent,
+                "part_start": part[0] if part else None,
+                "part_end": part[1] if part else None,
             }
             if not keep:
                 fields.update(transcript=None, heard=None, transcript_edited=0)
             put_reel(conn, moment_id, **fields)
             _reels_sending.add(moment_id)
             _track_task(
-                _send_for_storyboard(github, moment_id, clip, context, keep_transcript=keep, corrected=corrected)
+                _send_for_storyboard(github, moment_id, source, context, keep_transcript=keep, corrected=corrected)
             )
         reel = get_reel(conn, moment_id)
     finally:
@@ -6681,8 +6866,9 @@ async def render_reel(moment_id: int, request: Request):
         transcript = subtitles.read(reel["transcript"])
         said = None
         if transcript is not None:
-            if subtitles.said(transcript):
-                said = subtitles.srt(transcript, 0.0)
+            # Of the stretch that was sent alone, where only that was.
+            if subtitles.said(transcript) and (cues := _reel_subtitles(transcript, _reel_part(reel))):
+                said = cues
             elif choice == reels.WITH_SUBTITLES:
                 raise HTTPException(status_code=400, detail="The transcript is empty: there is nothing to subtitle.")
             else:

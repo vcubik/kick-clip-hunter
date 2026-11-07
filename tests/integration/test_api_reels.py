@@ -19,6 +19,7 @@ from kick_clip_hunter.config import load_settings
 from tests.support.data import T0, add_chat, add_moment
 from tests.support.github import FakeGitHub, FakeRelease
 from tests.support.html import parse
+from tests.support.media import make_video, probe, require_ffmpeg
 from tests.support.waiting import async_wait_until
 
 pytestmark = pytest.mark.anyio
@@ -746,6 +747,173 @@ class TestAskingAnew:
         assert [github.asset(tag, name) for name in ("storyboard.json", "contact.jpg", "reel.mp4")] == [None] * 3
         assert not any(path.exists() for path in kept)
         assert reel_of(moment_id)["storyboard"] is None
+
+
+# A stretch of a moment's file: 8 to 20 seconds of it.
+STRETCH = {"start": 8, "end": 20}
+
+
+@pytest.mark.ffmpeg
+class TestAStretchOfTheFile:
+    """Only a stretch of the moment's file sent: here 8 to 20 seconds of it,
+    which begins three seconds into the clip (BEFORE is 5) - a frame a cut
+    can begin on every second."""
+
+    @pytest.fixture
+    def moment_id(self, reeling) -> int:
+        require_ffmpeg()
+        moment_id = clipped_moment()
+        make_video(clip_file(), BEFORE + CLIP + AFTER, keyframe_every=1.0)
+        return moment_id
+
+    async def asked(self, service, moment_id: int, stretch: dict | None = None):
+        return await service.client.post(f"/moments/{moment_id}/reel", json=stretch or STRETCH)
+
+    async def sent(self, service, moment_id: int, stretch: dict | None = None) -> None:
+        response = await self.asked(service, moment_id, stretch)
+        assert response.status_code == 200, response.text
+        await async_wait_until(lambda: reel_of(moment_id)["state"] != reels.SENDING, "the clip to be sent")
+        assert reel_of(moment_id)["state"] == reels.STORYBOARDING, reel_of(moment_id)["error"]
+
+    async def test_only_the_stretch_goes_up_with_its_chat_and_clip_timed_to_it(
+        self, reeling, github, moment_id, tmp_path
+    ):
+        add_chat(CHANNEL, "early", "what", T0 - timedelta(seconds=2))
+        add_chat(CHANNEL, "fan", "xdddd", T0 + timedelta(seconds=3))
+        add_chat(CHANNEL, "other", "xdddd", T0 + timedelta(seconds=3.5))
+        add_chat(CHANNEL, "late", "ok", T0 + timedelta(seconds=16))
+
+        await self.sent(reeling, moment_id)
+
+        reel = reel_of(moment_id)
+        assert (reel["part_start"], reel["part_end"]) == (pytest.approx(8, abs=0.05), pytest.approx(20, abs=0.15))
+        tag = reels.tag(moment_id)
+        sent = tmp_path / "sent.mp4"
+        sent.write_bytes(github.asset(tag, "clip.mp4"))
+        assert probe(sent)["duration"] == pytest.approx(12, abs=0.15)
+        context = json.loads(github.asset(tag, "context.json"))
+        # The clip ran on past the stretch's end; its start was before it.
+        assert context["clip"] == {"start": 0.0, "end": pytest.approx(12, abs=0.15)}
+        # Chat at the second of the stretch it belongs to; what was said
+        # before it or after it does not go.
+        assert [(line["t"], line["user"]) for line in context["chat"]] == [
+            (pytest.approx(0, abs=0.05), "fan"),
+            (pytest.approx(0.5, abs=0.05), "other"),
+        ]
+
+    async def test_what_comes_back_is_timed_to_the_file_and_goes_up_timed_to_the_stretch(
+        self, reeling, github, moment_id
+    ):
+        await self.sent(reeling, moment_id)
+        answer(github, moment_id, proposed=PROPOSED)
+        await reeling.main._look_at_reels()
+        begins = reel_of(moment_id)["part_start"]
+
+        # The page has it in seconds of the moment's file, as it plays it.
+        assert transcript_of(moment_id) == reels.moved(PROPOSED, begins)
+        assert subtitles.read(reel_of(moment_id)["heard"]) == reels.moved(HEARD, begins)
+        # A line of the file outside the stretch is kept, but not rendered.
+        put_right = [
+            {"start": 1.0, "end": 2.0, "text": "before the stretch"},
+            {"start": begins + 1.2, "end": begins + 2.5, "text": "A: Watch OUT!"},
+        ]
+        assert (await save(reeling, moment_id, put_right)).status_code == 200
+        await rendered(reeling, github, moment_id, "B", "1", subtitles="on")
+
+        assert lines_of(github.asset(reels.tag(moment_id), reels.SUBTITLES)) == [
+            subtitles.Line(1.2, 2.5, "A: Watch OUT!")
+        ]
+
+    async def test_a_transcript_with_nothing_said_in_the_stretch_renders_without_subtitles(
+        self, reeling, github, moment_id
+    ):
+        await self.sent(reeling, moment_id)
+        answer(github, moment_id)
+        await reeling.main._look_at_reels()
+        await save(reeling, moment_id, [{"start": 1.0, "end": 2.0, "text": "before the stretch"}])
+
+        refused = await render(reeling, moment_id, "B", "1", subtitles="on")
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert (refused.status_code, refused.json()["detail"]) == (
+            400,
+            "The transcript is empty: there is nothing to subtitle.",
+        )
+        assert payload["subtitles"] == "off"
+
+    async def test_the_same_stretch_keeps_its_transcript_and_another_is_heard_anew(self, reeling, github, moment_id):
+        await self.sent(reeling, moment_id)
+        answer(github, moment_id, proposed=PROPOSED)
+        await reeling.main._look_at_reels()
+        kept = transcript_of(moment_id)
+
+        await self.sent(reeling, moment_id)
+        assert transcript_of(moment_id) == kept
+        answer(github, moment_id)
+        await reeling.main._look_at_reels()
+        await self.sent(reeling, moment_id, {"start": 6, "end": 20})
+
+        assert (reel_of(moment_id)["transcript"], reel_of(moment_id)["heard"]) == (None, None)
+        assert [github.asset(reels.tag(moment_id), name) for name in reels.TRANSCRIPT_FILES] == [None, None, None]
+
+    async def test_the_whole_file_asked_for_is_the_file_itself(self, reeling, github, moment_id):
+        await self.sent(reeling, moment_id)
+        answer(github, moment_id)
+        await reeling.main._look_at_reels()
+
+        await self.sent(reeling, moment_id, {"start": 0, "end": BEFORE + CLIP + AFTER})
+
+        reel = reel_of(moment_id)
+        assert (reel["part_start"], reel["part_end"]) == (None, None)
+        assert github.asset(reels.tag(moment_id), "clip.mp4") == clip_file().read_bytes()
+        assert not reeling.main._reel_file(moment_id, "part.mp4").exists()
+
+    @pytest.mark.parametrize(
+        ("stretch", "said"),
+        [
+            ({"start": 8}, "Expected the start and end of the stretch, in seconds of the clip's file."),
+            ({"start": "8", "end": 20}, "Expected the start and end of the stretch, in seconds of the clip's file."),
+            ({"start": -1, "end": 20}, "The stretch has to lie within the clip's file, 0:00.0 to 0:35.0."),
+            ({"start": 8, "end": 40}, "The stretch has to lie within the clip's file, 0:00.0 to 0:35.0."),
+            ({"start": 8, "end": 8.5}, "The stretch has to end at least a second after it starts."),
+        ],
+    )
+    async def test_a_stretch_that_cannot_be_cut_is_refused(self, reeling, github, moment_id, stretch, said):
+        response = await self.asked(reeling, moment_id, stretch)
+
+        assert (response.status_code, response.json()["detail"]) == (400, said)
+        assert reel_of(moment_id) is None
+        assert github.dispatches == []
+
+    async def test_the_page_offers_the_whole_file_and_then_the_stretch_sent(self, reeling, github, moment_id):
+        offered = (await workspace(reeling, moment_id)).one("span", data_stretch="reel")
+        await self.sent(reeling, moment_id)
+        again = (await workspace(reeling, moment_id)).one("span", data_stretch="reel")
+
+        # Seconds of the file; shown, and filled in, by the script.
+        assert "hidden" in offered.attrs
+        assert [offered.attrs[name] for name in ("data-start", "data-end", "data-clip", "data-highest")] == [
+            "0",
+            "35",
+            "35",
+            "35",
+        ]
+        assert (offered.attrs["data-reset-start"], offered.attrs["data-reset-end"]) == ("0", "35")
+        assert [button.text for button in offered.find("button")] == ["Start here", "End here", "Whole file"]
+        assert float(again.attrs["data-start"]) == pytest.approx(8, abs=0.05)
+        assert float(again.attrs["data-end"]) == pytest.approx(20, abs=0.15)
+        # Nothing is changed while the storyboard is made.
+        assert all("disabled" in control.attrs for control in again.find("input") + again.find("button"))
+
+    async def test_the_stretch_goes_when_the_moment_does(self, reeling, github, moment_id):
+        await self.sent(reeling, moment_id)
+        part = reeling.main._reel_file(moment_id, "part.mp4")
+        assert part.exists()
+
+        response = await reeling.client.post(f"/moments/{moment_id}/delete")
+
+        assert response.status_code == 200
+        assert not part.exists()
 
 
 class TestRemovingTheMoment:

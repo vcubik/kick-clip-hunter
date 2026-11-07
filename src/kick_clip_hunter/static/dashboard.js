@@ -649,6 +649,10 @@
     };
   }
 
+  // How long a stretch runs, the way the page writes it: 12.5 s, 1 min 5.0 s.
+  const lengthWords = (length) =>
+    length < 60 ? `${length.toFixed(1)} s` : `${Math.floor(length / 60)} min ${(length % 60).toFixed(1)} s`;
+
   // The stretch that is set, and where the dialog's player is.
   const trimAt = (dialog) => ({ from: Number(dialog.dataset.from), to: Number(dialog.dataset.to) });
   const trimTime = (dialog) => trimClip(dialog).currentTime - (Number(dialog.dataset.lead) || 0);
@@ -843,9 +847,7 @@
       const field = one(`[data-trim-type="${which}"]`, dialog);
       if (document.activeElement !== field) field.value = trimWords(at, span);
     }
-    const length = to - from;
-    one("[data-trim-length]", dialog).textContent =
-      length < 60 ? `${length.toFixed(1)} s` : `${Math.floor(length / 60)} min ${(length % 60).toFixed(1)} s`;
+    one("[data-trim-length]", dialog).textContent = lengthWords(to - from);
     one("[data-trim-now]", dialog).textContent = trimWords(time, span);
 
     const playing = !video.paused && !video.ended;
@@ -1592,14 +1594,128 @@
 
   function setVodClipBusy(group, busy) {
     group.toggleAttribute("data-busy", busy);
-    for (const button of all("[data-vod-clip-go]", group)) button.disabled = busy;
+    for (const control of all("[data-vod-clip-go], [data-stretch] input, [data-stretch] button", group)) {
+      control.disabled = busy;
+    }
+  }
+
+  // ---- A stretch to cut -----------------------------------------------
+  //
+  // A stretch chosen before something is cut: of the stream, before a
+  // moment's clip is cut from its VOD (and all of the VOD that is fetched),
+  // in clip time as the strip has it, which marks it; of a moment's file,
+  // before it goes off to be made into a reel, in seconds of the file. It
+  // starts out as the box says (data-start, data-end), and either end is
+  // typed, or set where the player beside it is (I and O on the review
+  // page); "reset" puts back what the box gives for it. It is kept on the
+  // box, and the box is marked once one was chosen (data-chosen).
+  const stretchSpan = (box) => ({ clip: Number(box.dataset.clip), windowed: false });
+  const stretchAt = (box) => ({ start: Number(box.dataset.start), end: Number(box.dataset.end) });
+  const stretchOf = (element) => element.closest("[data-stretch]");
+
+  // The player whose place an end is set to, and where it is: the VOD's on
+  // the review page, in clip time; the moment's file on the Reels page.
+  function stretchPlayer(box) {
+    if (box.dataset.stretch === "reel") {
+      const video = one("[data-reel-source]", reelOf(box));
+      return video ? { time: video.currentTime } : null;
+    }
+    const video = one("video[data-vod]", box.closest(".moment"));
+    return video && !video.hasAttribute("data-vod-starting") ? { time: clipTime(video) } : null;
+  }
+
+  function showStretch(box) {
+    const span = stretchSpan(box);
+    const { start, end } = stretchAt(box);
+    for (const field of all("[data-stretch-type]", box)) {
+      // A field that is being typed into is left alone.
+      if (document.activeElement !== field) field.value = trimWords(stretchAt(box)[field.dataset.stretchType], span);
+    }
+    one("[data-stretch-length]", box).textContent = lengthWords(end - start);
+    const mark = box.dataset.stretch === "vod" ? one("[data-vod-stretch-mark]", box.closest(".moment")) : null;
+    const trace = mark?.closest("[data-trace]");
+    if (!trace) return;
+    const first = Number(trace.dataset.start);
+    const whole = Number(trace.dataset.end) - first;
+    const left = clamp((start - first) / whole, 0, 1);
+    const right = clamp((end - first) / whole, 0, 1);
+    mark.style.left = `${left * 100}%`;
+    mark.style.width = `${(right - left) * 100}%`;
+    mark.hidden = right <= left;
+  }
+
+  // Moves one end of the stretch, kept to the box's bounds where it has
+  // them (data-lowest, data-highest); the other end goes with it where the
+  // stretch would otherwise be shorter than it can be, or longer.
+  function setStretch(box, which, time) {
+    const least = Number(box.dataset.least);
+    const most = Number(box.dataset.most || Infinity);
+    const lowest = box.dataset.lowest ? Number(box.dataset.lowest) : -Infinity;
+    const highest = box.dataset.highest ? Number(box.dataset.highest) : Infinity;
+    let { start, end } = stretchAt(box);
+    if (which === "start") {
+      start = clamp(time, lowest, highest - least);
+      end = clamp(end, start + least, Math.min(start + most, highest));
+    } else {
+      end = clamp(time, lowest + least, highest);
+      start = clamp(start, Math.max(end - most, lowest), end - least);
+    }
+    box.dataset.start = start.toFixed(3);
+    box.dataset.end = end.toFixed(3);
+    box.dataset.chosen = "";
+    say(box, "");
+    showStretch(box);
+  }
+
+  function resetStretch(box) {
+    box.dataset.start = box.dataset.resetStart;
+    box.dataset.end = box.dataset.resetEnd;
+    delete box.dataset.chosen;
+    say(box, "");
+    showStretch(box);
+  }
+
+  // An end of the stretch set where the player beside it is.
+  function stretchHere(box, which) {
+    const player = stretchPlayer(box);
+    if (!player) {
+      say(box, box.dataset.stretch === "vod" ? "Play the VOD first: the stretch is set where it plays." : "The clip's file is not here to play.");
+      return;
+    }
+    setStretch(box, which, player.time);
+  }
+
+  // An end of the stretch as it was typed. What is not a time is said so,
+  // and the field goes back to what the end is.
+  function typeStretch(field) {
+    const box = stretchOf(field);
+    const which = field.dataset.stretchType;
+    const said = trimWords(stretchAt(box)[which], stretchSpan(box));
+    if (field.value.trim() === said) return;
+    const time = typedTime(field.value, stretchSpan(box));
+    if (time === null) {
+      say(box, `"${field.value.trim()}" is not a time. Write it like 0:12.5.`);
+      field.value = said;
+      return;
+    }
+    setStretch(box, which, time);
+    field.value = trimWords(stretchAt(box)[which], stretchSpan(box));
+  }
+
+  // A reel's is dressed with the reel (dressReel).
+  function dressStretch() {
+    for (const box of all('[data-stretch="vod"]')) {
+      box.hidden = false;
+      showStretch(box);
+    }
   }
 
   async function cutVodClip(button) {
     const group = button.closest("[data-vod-clip]");
+    const stretch = one("[data-stretch]", group);
     setVodClipBusy(group, true);
     say(group, "Asking for the clip.");
-    const response = await post(group.dataset.vodClip);
+    const response = await post(group.dataset.vodClip, stretch?.hasAttribute("data-chosen") ? stretchAt(stretch) : undefined);
     if (!group.isConnected) return; // another moment was opened meanwhile
     if (!response || !response.ok) {
       setVodClipBusy(group, false);
@@ -1656,7 +1772,13 @@
   // What starts a step is off while one goes on.
   function dressReel(root) {
     const busy = root.hasAttribute("data-busy");
-    for (const button of all("[data-reel-ask], [data-reel-render]", root)) button.disabled = busy;
+    for (const button of all("[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button", root)) {
+      button.disabled = busy;
+    }
+    for (const box of all("[data-stretch]", root)) {
+      box.hidden = false;
+      showStretch(box);
+    }
     for (const field of all("[data-reel-text]", root)) grow(field);
   }
 
@@ -1668,7 +1790,10 @@
     }
     button.disabled = true;
     say(button, "Asking for a storyboard.");
-    const response = await post(button.dataset.reelAsk);
+    // The stretch of the file shown above the button - all of it, unless
+    // another was chosen.
+    const stretch = one("[data-stretch]", root);
+    const response = await post(button.dataset.reelAsk, stretch ? stretchAt(stretch) : {});
     if (!root.isConnected) return;
     if (!response || !response.ok) {
       button.disabled = false;
@@ -2124,6 +2249,7 @@
     recallFootageSeconds();
     watchFootage();
     watchVodClip();
+    dressStretch();
     for (const root of all("[data-reel]")) dressReel(root);
     watchReel();
     dressChatFile();
@@ -3400,6 +3526,8 @@
     ["[data-transcript-go]", playLine],
     ["[data-footage-side]", addFootage],
     ["[data-vod-clip-go]", cutVodClip],
+    ["[data-stretch-here]", (button) => stretchHere(stretchOf(button), button.dataset.stretchHere)],
+    ["[data-stretch-reset]", (button) => resetStretch(stretchOf(button))],
     ["[data-reel-ask]", askReel],
     ["[data-reel-variant], [data-reel-hook]", chooseReel],
     ["[data-reel-subtitles] button", (button) => setReelSubtitles(reelOf(button), button.dataset.value)],
@@ -3627,6 +3755,12 @@
       transcriptKey(target, event);
       return;
     }
+    // Enter sets an end of a stretch to cut.
+    if (target.matches("[data-stretch-type]") && event.key === "Enter") {
+      event.preventDefault();
+      typeStretch(target);
+      return;
+    }
     if (target.matches("[data-reel-text]") && event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       nextReelLine(target);
@@ -3656,6 +3790,9 @@
     else if (key === "j") move(1);
     else if (key === "k") move(-1);
     else if (key.length === 1 && key >= "1" && key <= "5") rateFromKeyboard(Number(key));
+    else if ((key === "i" || key === "o") && one("[data-vod-clip]:not([data-busy]) [data-stretch]")) {
+      stretchHere(one("[data-vod-clip] [data-stretch]"), key === "i" ? "start" : "end");
+    }
     else if (key === " " && !target.matches("button, a.ch-btn, a.ch-tab")) {
       event.preventDefault();
       const video = one("[data-clip]");
@@ -3704,6 +3841,7 @@
     else if (target.matches("[data-title]")) saveTitle(target);
     else if (target.matches("[data-transcript-line]")) correctLine(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
+    else if (target.matches("[data-stretch-type]")) typeStretch(target);
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
     else if (target.matches("[data-trim-where]")) {
       keepTrimChoice(TRIM_WHERE_KEY, target.value);

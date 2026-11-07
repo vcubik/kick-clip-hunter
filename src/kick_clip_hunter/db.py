@@ -186,6 +186,9 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- it was put right by hand; `heard` is the speech model's own, as it heard
 -- it. `clip_stamp` says which file of the moment was sent (its size and
 -- when it was written), `subtitles` how the last render asked for them.
+-- `part_start` and `part_end` are the stretch of the moment's file that was
+-- sent, in seconds of it, where only a stretch of it was (none: all of it);
+-- the transcript is in seconds of the moment's file all the same.
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -200,7 +203,9 @@ CREATE TABLE IF NOT EXISTS reels (
     heard TEXT,
     transcript_edited INTEGER NOT NULL DEFAULT 0,
     clip_stamp TEXT,
-    subtitles TEXT
+    subtitles TEXT,
+    part_start REAL,
+    part_end REAL
 );
 """
 
@@ -451,6 +456,8 @@ def get_connection() -> sqlite3.Connection:
         ("transcript_edited", "INTEGER NOT NULL DEFAULT 0"),
         ("clip_stamp", "TEXT"),
         ("subtitles", "TEXT"),
+        ("part_start", "REAL"),
+        ("part_end", "REAL"),
     ):
         if name not in reel_columns:
             conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
@@ -1958,6 +1965,8 @@ REEL_FIELDS = (
     "transcript_edited",
     "clip_stamp",
     "subtitles",
+    "part_start",
+    "part_end",
 )
 
 

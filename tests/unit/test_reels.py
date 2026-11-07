@@ -300,6 +300,20 @@ class TestTheTranscript:
         assert reels.stamp(file) != first
         assert reels.stamp(tmp_path / "gone.mp4") is None
 
+    def test_a_stretch_of_a_file_is_another_file_by_its_stamp(self, tmp_path):
+        file = tmp_path / "moment.mp4"
+        file.write_bytes(b"clip")
+
+        whole = reels.stamp(file)
+        stretch = reels.stamp(file, (2.0, 9.5))
+
+        assert len({whole, stretch, reels.stamp(file, (2.0, 9.0))}) == 3
+        assert reels.stamp(file, (2.0, 9.5)) == stretch
+        assert reels.stamp(tmp_path / "gone.mp4", (2.0, 9.5)) is None
+
+    def test_lines_of_a_stretch_are_moved_to_the_file(self):
+        assert reels.moved([Line(0.5, 1.25, "a")], 8.0001) == [Line(8.5, 9.25, "a")]
+
     def test_the_list_says_where_each_reel_stands_in_a_word(self):
         assert [reels.row_words(state) for state in (reels.STORYBOARDING, reels.CHOOSING, reels.DONE, None)] == [
             "Storyboard",
@@ -307,3 +321,36 @@ class TestTheTranscript:
             "Ready",
             "",
         ]
+
+
+class TestAStretchOfTheFile:
+    def test_none_asked_for_is_the_whole_file(self):
+        assert reels.part_asked(None, None, 35.0) is None
+
+    def test_a_stretch_is_kept_to_the_thousandth(self):
+        assert reels.part_asked(8.00049, 20, 35.0) == (8.0, 20.0)
+
+    def test_one_that_leaves_out_next_to_nothing_is_the_whole_file(self):
+        slack = reels.PART_SLACK_SECONDS
+        assert reels.part_asked(slack, 35.0 - slack, 35.0) is None
+        assert reels.part_asked(slack * 2, 35.0, 35.0) == (slack * 2, 35.0)
+
+    def test_without_the_files_length_only_its_start_is_checked(self):
+        assert reels.part_asked(0, 500, None) == (0.0, 500.0)
+        with pytest.raises(ValueError, match=r"within the clip's file\."):
+            reels.part_asked(-1, 5, None)
+
+    @pytest.mark.parametrize(
+        ("start", "end", "said"),
+        [
+            (None, 5, "Expected the start and end"),
+            (1, float("inf"), "Expected the start and end"),
+            (False, 5, "Expected the start and end"),
+            (-0.5, 5, "within the clip's file, 0:00.0 to 0:35.0"),
+            (1, 35.0 + reels.TRANSCRIPT_SLACK_SECONDS + 0.1, "within the clip's file"),
+            (4, 4 + reels.PART_LEAST_SECONDS / 2, "at least a second after it starts"),
+        ],
+    )
+    def test_one_that_cannot_be_cut_is_refused(self, start, end, said):
+        with pytest.raises(ValueError, match=said):
+            reels.part_asked(start, end, 35.0)
