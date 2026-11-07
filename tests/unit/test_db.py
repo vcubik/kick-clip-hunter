@@ -2215,6 +2215,23 @@ class TestReelsFromBeforeTranscripts:
         finally:
             connection.close()
 
+    def test_the_comment_and_feedback_columns_are_added_to_a_reels_table_without_them(self):
+        legacy_database(
+            "CREATE TABLE reels (moment_id INTEGER PRIMARY KEY, state TEXT NOT NULL, asked_at TEXT NOT NULL,"
+            " storyboard TEXT, contact_path TEXT, variant TEXT, hook TEXT, reel_path TEXT, error TEXT)",
+            "INSERT INTO reels (moment_id, state, asked_at) VALUES (3, 'done', '2026-01-01T00:00:00+00:00')",
+        )
+
+        connection = db.get_connection()
+        try:
+            reel = db.get_reel(connection, 3)
+            names = ("storyboard_comment", "render_comment", "render_note", "feedback", "feedback_sent")
+            assert [reel[name] for name in names] == [None, None, None, None, 0]
+            db.put_reel(connection, 3, feedback="Too long.", feedback_sent=1)
+            assert db.get_reel(connection, 3)["feedback"] == "Too long."
+        finally:
+            connection.close()
+
     def test_the_reels_page_lists_each_reel_with_its_moment_the_last_asked_first(self):
         connection = db.get_connection()
         try:

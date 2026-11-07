@@ -62,7 +62,7 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   50 MB - it needs an `api_id`/`api_hash` from my.telegram.org, is built from source, and the
   bot is moved to it with `logOut` on Telegram's (see its README); left empty, Telegram's own is asked
 - Reels (optional, see `reels.py` below): `REELS_REPO` (`owner/name` of the repository whose
-  GitHub Actions make a clip into a reel - its `storyboard` and `render` workflows) and
+  GitHub Actions make a clip into a reel - its `storyboard`, `render` and `feedback` workflows) and
   `REELS_GITHUB_TOKEN`, a fine-grained token for that repository alone with Contents: read
   and write (releases and the dispatch that starts a workflow) and Actions: read (to notice a
   run that failed; without it a step is given up on only after its time limit). Without both,

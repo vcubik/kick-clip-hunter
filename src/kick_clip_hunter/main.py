@@ -6203,10 +6203,13 @@ def _reel_subtitles(transcript: list[subtitles.Line], part: tuple[float, float] 
     return subtitles.srt(transcript, part[0], part[1] - part[0])
 
 
-def _reel_context(conn, row, *, corrected: bool = False, part: tuple[float, float] | None = None) -> dict:
+def _reel_context(
+    conn, row, *, corrected: bool = False, part: tuple[float, float] | None = None, comment: str = ""
+) -> dict:
     """What goes up with a moment's file (see reels.context): its chat over
     the whole file, placed against the picture as the review page places it
-    - or over the stretch of it sent in its place (`part`), and timed to that."""
+    - or over the stretch of it sent in its place (`part`), and timed to that
+    - and the comment written for the storyboard."""
     before = row["context_before"] or 0.0
     after = row["context_after"] or 0.0
     clip_seconds = row["clip_duration"]
@@ -6265,6 +6268,7 @@ def _reel_context(conn, row, *, corrected: bool = False, part: tuple[float, floa
         clip_end=clip_end,
         chat=lines,
         transcript_corrected=corrected,
+        comment=comment,
     )
 
 
@@ -6332,11 +6336,19 @@ async def _send_for_storyboard(
 
 
 async def _send_for_render(
-    github: reels.GitHub, moment_id: int, variant: str, hook: str, choice: str, said: str | None, unsaid: bool
+    github: reels.GitHub,
+    moment_id: int,
+    variant: str,
+    hook: str,
+    choice: str,
+    said: str | None,
+    unsaid: bool,
+    comment: str = "",
 ) -> None:
     """Starts the render workflow for a moment's reel: with the transcript as
     its subtitles (`said`, as SubRip), or with the subtitles taken out of the
-    release where there is nothing left to say (`unsaid`)."""
+    release where there is nothing left to say (`unsaid`) - and with the
+    comment on what to change in the variant, where one was written."""
     release_tag = reels.tag(moment_id)
     try:
         release = await github.release(release_tag)
@@ -6346,7 +6358,10 @@ async def _send_for_render(
         await github.remove_assets(release, [*reels.RENDER_ANSWERS, *([reels.SUBTITLES] if unsaid else [])])
         if said is not None:
             await github.upload(release, reels.SUBTITLES, data=said.encode(subtitles.ENCODING))
-        await github.dispatch("render", {"tag": release_tag, "variant": variant, "hook": hook, "subtitles": choice})
+        await github.dispatch(
+            "render",
+            {"tag": release_tag, "variant": variant, "hook": hook, "subtitles": choice, "comment": comment},
+        )
     except reels.GitHubTrouble as trouble:
         _reel_failed(moment_id, str(trouble))
         return
@@ -6355,7 +6370,12 @@ async def _send_for_render(
         _reel_failed(moment_id, "Something went wrong. The server log says what.")
         return
     logger.info(
-        "the reel of moment %d was asked for: variant %s, hook %r, subtitles %s", moment_id, variant, hook, choice
+        "the reel of moment %d was asked for: variant %s, hook %r, subtitles %s%s",
+        moment_id,
+        variant,
+        hook,
+        choice,
+        ", with a comment" if comment else "",
     )
 
 
@@ -6406,7 +6426,7 @@ async def _look_at_reel(github: reels.GitHub, reel) -> None:
     else:
         asset = release.asset(reels.REEL) if release else None
         if asset is not None:
-            await _take_reel(github, moment_id, asset, reel)
+            await _take_reel(github, release, asset, reel)
             return
         workflow, limit = "render", reels.RENDER_LIMIT
     ended = await github.failed_run(reels.run_name(workflow, release_tag), asked_at)
@@ -6477,10 +6497,21 @@ async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, a
         _track_task(_notes().notify(note))
 
 
-async def _take_reel(github: reels.GitHub, moment_id: int, asset: reels.Asset, reel) -> None:
+async def _take_reel(github: reels.GitHub, release: reels.Release, asset: reels.Asset, reel) -> None:
+    moment_id = reel["moment_id"]
+    # What Claude made of the comment the reel was rendered with: put into
+    # the release before the reel itself.
+    rendered = release.asset(reels.RENDERED)
+    note = reels.rendered_note(await _fetched(github, rendered)) if rendered is not None else ""
     path = _reel_file(moment_id, "reel.mp4")
     await github.download(asset, path)
-    _update_reel(moment_id, state=reels.DONE, reel_path=path.relative_to(CLIPS_DIR).as_posix(), error=None)
+    _update_reel(
+        moment_id,
+        state=reels.DONE,
+        reel_path=path.relative_to(CLIPS_DIR).as_posix(),
+        render_note=note or None,
+        error=None,
+    )
     logger.info("the reel of moment %d came back", moment_id)
     channel = _channel_of_moment(moment_id)
     if channel is not None and _notes().destinations:
@@ -6601,6 +6632,7 @@ def _reel_workspace(conn, row, today: date) -> dict:
         "ask_url": f"/moments/{moment_id}/reel",
         "render_url": f"/moments/{moment_id}/reel/render",
         "transcript_url": f"/moments/{moment_id}/reel/transcript",
+        "feedback_url": f"/moments/{moment_id}/reel/feedback",
         "state": state or "",
         "busy": state in reels.BUSY,
         "editable": state not in REEL_TRANSCRIPT_COMING,
@@ -6626,6 +6658,15 @@ def _reel_workspace(conn, row, today: date) -> dict:
         "subtitles_on": False,
         "transcript": None,
         "heard": None,
+        # What was written to go with the last storyboard and render, offered
+        # again; what Claude made of the render's; feedback on the reel.
+        "comment_most": reels.COMMENT_MOST_CHARACTERS,
+        "storyboard_comment": (reel["storyboard_comment"] or "") if reel is not None else "",
+        "render_comment": (reel["render_comment"] or "") if reel is not None else "",
+        "render_note": None,
+        "feedback_open": False,
+        "feedback": (reel["feedback"] or "") if reel is not None else "",
+        "feedback_sent": bool(reel is not None and reel["feedback_sent"]),
     }
     if storyboard is not None:
         chosen = next((variant for variant in view["storyboard"]["variants"] if variant["chosen"]), None)
@@ -6645,6 +6686,9 @@ def _reel_workspace(conn, row, today: date) -> dict:
             f"Variant {reel['variant']}, hook: {reels.hook_shown(reel['hook'] or '')}"
             f"{with_subtitles.get(reel['subtitles'] or '', '')}"
         )
+        if state == reels.DONE:
+            view["render_note"] = reel["render_note"]
+            view["feedback_open"] = True
     if transcript is not None:
         length = _file_length(row)
         view["transcript"] = {
@@ -6745,8 +6789,9 @@ async def ask_for_reel(moment_id: int, request: Request):
     heard from. Only a stretch of the file is sent where one is posted as
     JSON `start` and `end`, in seconds of the file: cut out of it, nothing
     re-encoded, so it begins on the last frame a cut can begin on at or
-    before `start`. Asked again while a step of the reel goes on, nothing
-    more is started."""
+    before `start`. A `comment` posted with it goes up for the storyboard to
+    go by. Asked again while a step of the reel goes on, nothing more is
+    started."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
@@ -6773,6 +6818,7 @@ async def ask_for_reel(moment_id: int, request: Request):
                 raise HTTPException(status_code=409, detail=busy)
             try:
                 part = reels.part_asked(asked.get("start"), asked.get("end"), _file_length(row))
+                comment = reels.comment_asked(asked.get("comment"))
             except ValueError as wrong:
                 raise HTTPException(status_code=400, detail=str(wrong)) from None
             clip = CLIPS_DIR / row["clip_path"]
@@ -6801,7 +6847,7 @@ async def ask_for_reel(moment_id: int, request: Request):
             corrected = None
             if edited and transcript and subtitles.said(transcript):
                 corrected = _reel_subtitles(transcript, part) or None
-            context = _reel_context(conn, row, corrected=corrected is not None, part=part)
+            context = _reel_context(conn, row, corrected=corrected is not None, part=part, comment=comment)
             fields = {
                 "state": reels.SENDING,
                 "asked_at": _now_text(),
@@ -6815,6 +6861,12 @@ async def ask_for_reel(moment_id: int, request: Request):
                 "clip_stamp": sent,
                 "part_start": part[0] if part else None,
                 "part_end": part[1] if part else None,
+                "storyboard_comment": comment or None,
+                # Of the storyboard before, and of its reel.
+                "render_comment": None,
+                "render_note": None,
+                "feedback": None,
+                "feedback_sent": 0,
             }
             if not keep:
                 fields.update(transcript=None, heard=None, transcript_edited=0)
@@ -6870,8 +6922,10 @@ async def render_reel(moment_id: int, request: Request):
     the storyboard's (by its id) or words of one's own - and its subtitles
     as the variant has them, or with them or without them: posted as JSON
     `variant`, `hook` and `subtitles` ("auto", "on" or "off"; "auto" left
-    out). The subtitles are made of the reel's transcript. Again with
-    another choice once one is there."""
+    out), and a `comment` on what to change in the variant, which Claude
+    reworks it by before it is rendered. The subtitles are made of the
+    reel's transcript. Again with another choice once one is there - a new
+    reel, so the feedback on the one before is done with."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
@@ -6886,6 +6940,10 @@ async def render_reel(moment_id: int, request: Request):
     choice = asked.get("subtitles", reels.SUBTITLES_AS_THE_VARIANT)
     if choice not in reels.SUBTITLE_CHOICES:
         raise HTTPException(status_code=400, detail="Subtitles are auto, on or off.")
+    try:
+        comment = reels.comment_asked(asked.get("comment"))
+    except ValueError as wrong:
+        raise HTTPException(status_code=400, detail=str(wrong)) from None
     conn = get_connection()
     try:
         if get_moment(conn, moment_id) is None:
@@ -6921,12 +6979,95 @@ async def render_reel(moment_id: int, request: Request):
             variant=variant,
             hook=hook,
             subtitles=choice,
+            render_comment=comment or None,
+            render_note=None,
+            feedback=None,
+            feedback_sent=0,
             error=None,
         )
     finally:
         conn.close()
-    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid))
+    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid, comment))
     return {"moment_id": moment_id, "state": reels.RENDERING, "words": reels.state_words(reels.RENDERING)}
+
+
+async def _send_feedback(github: reels.GitHub, moment_id: int, record: dict) -> None:
+    """Puts feedback on a moment's reel into its release and starts the
+    feedback workflow, which records it in the repository (see reels.py).
+    Raises reels.GitHubTrouble."""
+    release_tag = reels.tag(moment_id)
+    release = await github.release(release_tag)
+    if release is None:
+        raise reels.GitHubTrouble("The moment's release is gone from GitHub.")
+    await github.upload(release, reels.FEEDBACK, data=json.dumps(record, ensure_ascii=False, indent=1).encode())
+    await github.dispatch("feedback", {"tag": release_tag})
+
+
+@app.post("/moments/{moment_id}/reel/feedback")
+async def give_reel_feedback(moment_id: int, request: Request):
+    """Keeps feedback on a moment's reel once it is back - posted as JSON
+    `feedback` - and sends it to GitHub with what the reel was made of and
+    with, where the feedback workflow records it for later storyboards to
+    go by (see reels.py). Sent again, it takes the place of what was sent of
+    the same reel. Kept here even where GitHub does not take it (502), to be
+    sent again."""
+    if _shutdown_requested:
+        raise HTTPException(status_code=409, detail="The service is shutting down.")
+    github = _github()
+    if github is None:
+        raise HTTPException(status_code=409, detail=REELS_NOT_SET_UP_WORDS)
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="Expected the feedback as JSON.")
+    try:
+        words = reels.comment_asked(asked.get("feedback"))
+    except ValueError as wrong:
+        raise HTTPException(status_code=400, detail=str(wrong)) from None
+    if not words:
+        raise HTTPException(status_code=400, detail="Write what you think of the reel first.")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        reel = get_reel(conn, moment_id)
+        if reel is None or reel["state"] != reels.DONE or not reel["reel_path"]:
+            raise HTTPException(status_code=409, detail="There is no reel to give feedback on yet.")
+        put_reel(conn, moment_id, feedback=words, feedback_sent=0)
+        record = reels.feedback(
+            moment_id=moment_id,
+            channel=row["channel_slug"],
+            title=row["title"],
+            storyboard=_stored_storyboard(reel),
+            storyboard_comment=reel["storyboard_comment"],
+            variant=reel["variant"],
+            hook=reel["hook"],
+            subtitles_asked=reel["subtitles"],
+            render_comment=reel["render_comment"],
+            render_note=reel["render_note"],
+            rendered_at=reel["asked_at"],
+            words=words,
+        )
+    finally:
+        conn.close()
+    try:
+        await _send_feedback(github, moment_id, record)
+    except reels.GitHubTrouble as trouble:
+        logger.warning("the feedback on moment %d's reel did not reach GitHub: %s", moment_id, trouble)
+        raise HTTPException(status_code=502, detail=f"Kept here, but not sent: {trouble}") from None
+    conn = get_connection()
+    try:
+        # Unless another reel was asked for meanwhile, or other words kept.
+        reel = get_reel(conn, moment_id)
+        if reel is not None and reel["asked_at"] == record["rendered_at"] and reel["feedback"] == words:
+            put_reel(conn, moment_id, feedback_sent=1)
+    finally:
+        conn.close()
+    logger.info("feedback on moment %d's reel was sent", moment_id)
+    return {"moment_id": moment_id, "sent": True}
 
 
 @app.get("/moments/{moment_id}/vod")

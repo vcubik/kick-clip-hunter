@@ -246,9 +246,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   seconds of the file or set where the player under the transcript is ("Start here", "End
   here"; "Whole file" puts it back): less to transcribe and for Claude to look through where
   the rest would be thrown away. It is cut out of the file as the Trim dialog cuts one, nothing
-  re-encoded, so it begins on the last keyframe at or before its start. "Make a reel" sends it
-  and its chat to GitHub (`POST /moments/{id}/reel`, `start` and `end`; a stretch that leaves
-  out next to nothing is the whole file), and a storyboard comes back in a few minutes:
+  re-encoded, so it begins on the last keyframe at or before its start. Above the button a
+  comment for the storyboard can be written - what the clip is about, where to cut, what the
+  hook should play on - which Claude goes by; the one sent last is offered again. "Make a reel"
+  sends the stretch, its chat and the comment to GitHub (`POST /moments/{id}/reel`, `start`,
+  `end` and `comment`; a stretch that leaves out next to nothing is the whole file), and a
+  storyboard comes back in a few minutes:
   what is in the clip, two or three variants (one recommended, those with subtitles saying
   so), three hooks and a sheet of frames - beside them the reel's transcript, under the
   moment's file playing in a player of its own: a line a block, when it starts and ends
@@ -263,10 +266,18 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   saved asks first. "A: " and "B: " in front of a line colour it in the reel for who says it,
   `*a word*` makes it stand out. A variant and a hook (or words of one's own, `|` breaking the
   line and `*word*` highlighted) are pressed, subtitles switched on or off (as the pressed
-  variant has them to begin with), and "Render" (`POST /moments/{id}/reel/render`, `variant`,
-  `hook` and `subtitles`, after saving what is not saved in the transcript) has the reel made
-  with the transcript as its subtitles; it plays at the top once it is back, with a download
-  and what it was made with. While a step goes on the page fetches the reel
+  variant has them to begin with), a comment for the render written if there is something to
+  change in the variant (Claude reworks it by that first), and "Render"
+  (`POST /moments/{id}/reel/render`, `variant`, `hook`, `subtitles` and `comment`, after saving
+  what is not saved in the transcript) has the reel made with the transcript as its subtitles;
+  it plays at the top once it is back, with a download, what it was made with and what Claude
+  made of the comment. Under it, feedback on the reel - what works, what does not - goes with
+  "Send feedback" (`POST /moments/{id}/reel/feedback`, `feedback`) to the reel repository,
+  where later storyboards go by it; it is kept here even where GitHub does not take it (502),
+  and then the page says so until it is sent again. A comment of up to 2000 characters goes
+  along; what is typed in one and not sent stays when the page puts the reel in place anew,
+  and leaving the page with one asks first. A new render or storyboard is another reel, so
+  the comment for the render (after a storyboard) and the feedback start empty again. While a step goes on the page fetches the reel
   (`GET /dashboard/reels/{id}`) every five seconds and puts in place where it stands and the
   reel - and the rest only once another storyboard is back, never over a transcript being put
   right; the transcript's times are the moment's file's whatever was sent, and only its lines

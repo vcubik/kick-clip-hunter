@@ -354,3 +354,89 @@ class TestAStretchOfTheFile:
     def test_one_that_cannot_be_cut_is_refused(self, start, end, said):
         with pytest.raises(ValueError, match=said):
             reels.part_asked(start, end, 35.0)
+
+
+class TestComments:
+    def test_none_is_no_comment(self):
+        assert reels.comment_asked(None) == ""
+        assert reels.comment_asked(" \n ") == ""
+
+    def test_its_rows_are_kept_without_the_space_at_their_ends(self):
+        assert reels.comment_asked("  Start late.  \r\n\r\nEnd early.\rKeep the laugh. \n") == (
+            "Start late.\n\nEnd early.\nKeep the laugh."
+        )
+
+    def test_one_as_long_as_allowed_goes_along(self):
+        assert reels.comment_asked("x" * reels.COMMENT_MOST_CHARACTERS) == "x" * reels.COMMENT_MOST_CHARACTERS
+
+    @pytest.mark.parametrize(
+        ("value", "said"),
+        [("x" * (reels.COMMENT_MOST_CHARACTERS + 1), "at most"), (["x"], "as words"), (3, "as words")],
+    )
+    def test_what_cannot_go_along_is_refused(self, value, said):
+        with pytest.raises(ValueError, match=said):
+            reels.comment_asked(value)
+
+    def test_the_storyboards_comment_goes_up_in_its_context(self):
+        context = reels.context(
+            moment_id=1,
+            channel="some_channel",
+            title=None,
+            notes=None,
+            rating=None,
+            clip_start=None,
+            clip_end=None,
+            chat=[],
+            comment="Start late.",
+        )
+
+        assert context["comment"] == "Start late."
+
+
+class TestFeedback:
+    def feedback(self, **changed):
+        return reels.feedback(
+            **{
+                "moment_id": 7,
+                "channel": "somebody@twitch",
+                "title": None,
+                "storyboard": {"summary": "He falls.", "variants": [{"id": "B", "structure": "S2"}]},
+                "storyboard_comment": None,
+                "variant": "B",
+                "hook": "FIRST|*HOOK*",
+                "subtitles_asked": None,
+                "render_comment": "Shorter.",
+                "render_note": None,
+                "rendered_at": "2026-11-07T10:00:00+00:00",
+                "words": "Too long.",
+                **changed,
+            }
+        )
+
+    def test_it_says_what_the_reel_was_made_of_and_with(self):
+        sent = self.feedback()
+
+        assert sent["tag"] == "moment-7"
+        assert (sent["streamer"], sent["platform"], sent["credit"]) == ("somebody", "twitch", "twitch.tv/somebody")
+        assert (sent["summary"], sent["variant"], sent["variant_title"]) == ("He falls.", "B", "S2")
+        assert (sent["storyboard_comment"], sent["render_comment"], sent["render_note"]) == ("", "Shorter.", "")
+        assert (sent["subtitles"], sent["feedback"]) == (reels.SUBTITLES_AS_THE_VARIANT, "Too long.")
+        json.dumps(sent)
+
+    def test_a_variant_the_storyboard_lacks_has_no_title(self):
+        assert self.feedback(variant="Z")["variant_title"] == ""
+        assert self.feedback(storyboard=None)["summary"] == ""
+
+
+class TestWhatTheRenderSays:
+    def test_its_note_is_what_claude_made_of_the_comment(self):
+        assert reels.rendered_note(json.dumps({"note": " Ended it sooner. "}).encode()) == "Ended it sooner."
+
+    @pytest.mark.parametrize("raw", [b"not json", b"\xff", b"[1]", b'{"note": 3}', b"{}"])
+    def test_anything_else_says_nothing(self, raw):
+        assert reels.rendered_note(raw) == ""
+
+    def test_a_long_note_is_cut_to_what_a_comment_may_be(self):
+        note = reels.rendered_note(json.dumps({"note": "x" * (reels.COMMENT_MOST_CHARACTERS + 5)}).encode())
+
+        assert len(note) == reels.COMMENT_MOST_CHARACTERS
