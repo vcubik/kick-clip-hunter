@@ -86,6 +86,16 @@ stream (its picture encoded otherwise, its times jumping) starts a group, as
 a discontinuity does. Such an address works for weeks; one that runs out
 ends the run, and the next starts at a new one.
 
+A Kick channel can have its stream followed from that VOD in the first
+place (`ChannelRecorder.from_vod`, streams.stream_urls): no browser is
+needed to find it, and there are no ads in it, but footage comes in up to
+about a minute behind the live stream, in 12.5 s segments written a few at
+a time. Its playlist says it has ended while the stream is still on, so
+such a run takes no notice of that - it ends when the channel is no longer
+live (the loop stops it) or stalls. A clip of such a channel waits for the
+footage it needs to come in (`wait_for_footage`), and the buffer reaches
+back that much further.
+
 The buffer is only ever a few minutes deep. A stream that is to be kept
 whole (see stream_recording.py) is not kept here: while one is, every
 segment of the broadcast is also handed on, as it is saved, to whatever the
@@ -211,6 +221,12 @@ KEYFRAME_SLACK_SECONDS = 0.05
 # be from the sum of theirs before the join is taken to have gone wrong.
 JOIN_TOLERANCE_SECONDS = 1.0
 VOD_POLL_SECONDS = 3
+# A run that follows the stream's VOD (see `ChannelRecorder.from_vod`) reads
+# its playlist this often - a long one, written a few segments at a time -
+# and a clip waits up to this long for the footage it needs to come in
+# (seen November 2026: up to about 50 s behind the live stream).
+VOD_FOLLOW_POLL_SECONDS = 5
+VOD_FOLLOW_WAIT_SECONDS = 90
 # Raw playlists saved at each discontinuity, for working out how ad breaks
 # are marked. Capped per channel.
 DEBUG_PLAYLIST_DIR = Path("data/hls_debug")
@@ -350,6 +366,9 @@ class _Run:
     renew_at: datetime | None = None
     # Whether `variant_url` is the stream itself as FLV, not a playlist.
     flv: bool = False
+    # Whether `variant_url` is the VOD's playlist, which says it has ended
+    # while the stream is still on.
+    from_vod: bool = False
 
 
 def _attributes(tag_line: str) -> dict[str, str]:
@@ -357,26 +376,40 @@ def _attributes(tag_line: str) -> dict[str, str]:
 
 
 def _choose_variant(master_text: str, master_url: str) -> tuple[str, str]:
-    """The highest-bandwidth variant playlist URL in a master playlist - of
-    the picture the stream is usually watched in, where it also comes
-    upright (a portrait variant) - and what the master playlist says of it."""
-    variants: list[tuple[bool, int, str, str]] = []
-    bandwidth, upright, said = 0, False, ""
+    """The variant playlist URL of the biggest picture in a master playlist,
+    of the highest bandwidth among those as big - of the picture the stream
+    is usually watched in, where it also comes upright (a portrait variant) -
+    and what the master playlist says of it. The picture goes first because
+    a bandwidth can be wrong: Kick's VOD lists its 1080p variant at a tenth
+    of its 720p one's (seen November 2026)."""
+    variants: list[tuple[bool, int, int, str, str]] = []
+    bandwidth, pixels, upright, said = 0, 0, False, ""
     for line in master_text.splitlines():
         line = line.strip()
         if line.startswith("#EXT-X-STREAM-INF:"):
             attributes = _attributes(line)
             bandwidth = int(attributes.get("BANDWIDTH", "0") or 0)
+            pixels = _pixels(attributes.get("RESOLUTION", ""))
             upright = attributes.get("IVS-GROUPS", "").lower() == PORTRAIT_GROUP
             said = line.split(":", 1)[1]
         elif line and not line.startswith("#"):
-            variants.append((upright, bandwidth, urljoin(master_url, line), said))
-            bandwidth, upright, said = 0, False, ""
+            variants.append((upright, pixels, bandwidth, urljoin(master_url, line), said))
+            bandwidth, pixels, upright, said = 0, 0, False, ""
     if not variants:
         raise RecorderError("master playlist lists no variants")
     # The first of the best, where several are as good.
-    _, _, url, said = min(variants, key=lambda variant: (variant[0], -variant[1]))
+    _, _, _, url, said = min(variants, key=lambda variant: (variant[0], -variant[1], -variant[2]))
     return url, said
+
+
+def _pixels(resolution: str) -> int:
+    """How many pixels a variant's RESOLUTION (`1920x1080`) is - 0 where it
+    says none, as an audio-only one does."""
+    width, _, height = resolution.partition("x")
+    try:
+        return int(width) * int(height)
+    except ValueError:
+        return 0
 
 
 def _pick_variant(master_text: str, master_url: str) -> str:
@@ -523,9 +556,13 @@ class ChannelRecorder:
         # The VOD is looked for from the loop's ticks and from a clip being
         # cut, one look at a time.
         self._vod_lock = threading.Lock()
+        # Whether the stream is followed from its VOD rather than from the
+        # live stream (see streams.stream_urls) - set from outside, by the
+        # channel's choice; a run that follows the other is started anew.
+        self.from_vod = False
 
     def _start_run(self) -> None:
-        urls = stream_urls(self.channel_slug)
+        urls = stream_urls(self.channel_slug, from_vod=self.from_vod)
         if urls.flv:
             # The stream itself: nothing to choose from.
             variant_url, variant = urls.live, ""
@@ -541,6 +578,7 @@ class ChannelRecorder:
             variant=variant,
             renew_at=_renew_at(urls),
             flv=urls.flv,
+            from_vod=urls.from_vod,
         )
         run.thread = threading.Thread(target=self._record, args=(run,), daemon=True)
         self._run = run
@@ -548,8 +586,9 @@ class ChannelRecorder:
             self._since, self._footage_at, self._footage_until = run.started_at, None, None
         run.thread.start()
         logger.info(
-            "[%s] recording started -> %s (VOD %s)",
-            self.channel_slug, self._base_dir, "found" if urls.vod else "not available",
+            "[%s] recording started -> %s (%s, VOD %s)",
+            self.channel_slug, self._base_dir, "from the VOD" if urls.from_vod else "live",
+            "found" if urls.vod else "not available",
         )
 
     def _renew(self, run: _Run) -> bool:
@@ -558,7 +597,7 @@ class ChannelRecorder:
         look at the playlist. Returns whether the variant followed is another
         one now - whose segments are then not joined onto the ones before."""
         try:
-            urls = stream_urls(self.channel_slug)
+            urls = stream_urls(self.channel_slug, from_vod=run.from_vod)
             response = httpx.get(urls.live, timeout=PLAYLIST_TIMEOUT_SECONDS)
             response.raise_for_status()
             variant_url, variant = _choose_variant(response.text, urls.live)
@@ -654,10 +693,12 @@ class ChannelRecorder:
                     continue
                 self._kept(run, started_at, segment.duration, group_name, content)
 
-            if playlist.ended:
+            # The VOD's playlist says it has ended while it is still being
+            # written: the run goes on until it is stopped or stalls.
+            if playlist.ended and not run.from_vod:
                 logger.info("[%s] stream playlist ended", self.channel_slug)
                 return
-            run.stop_event.wait(PLAYLIST_POLL_SECONDS)
+            run.stop_event.wait(VOD_FOLLOW_POLL_SECONDS if run.from_vod else PLAYLIST_POLL_SECONDS)
 
     def _follow_flv(self, run: _Run, client: httpx.Client) -> None:
         """Reads a stream that comes as one FLV download, as it arrives, and
@@ -810,7 +851,9 @@ class ChannelRecorder:
         now = now or datetime.now(timezone.utc)
         self._longer = [(seconds, until) for seconds, until in self._longer if until > now]
         reach = BUFFER_RETENTION_SECONDS if self._reach is None else self._reach
-        return max([reach, *(seconds for seconds, _until in self._longer)])
+        # A clip of a stream followed from its VOD is cut that much later.
+        behind = VOD_FOLLOW_WAIT_SECONDS if self.from_vod else 0
+        return max([reach, *(seconds for seconds, _until in self._longer)]) + behind
 
     def _prune(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.reach())
@@ -852,8 +895,14 @@ class ChannelRecorder:
         # one. Restart if it's never been started, its thread has exited
         # (stream ended, unexpected error), or it's stalled.
         died = self._run is not None and not self._run.thread.is_alive()
-        if self._run is None or died or self._is_stalled():
-            if self._run is not None and not died:
+        other_source = self._run is not None and not self._run.flv and self._run.from_vod != self.from_vod
+        if other_source:
+            logger.info(
+                "[%s] the stream is to be followed %s now - starting over",
+                self.channel_slug, "from its VOD" if self.from_vod else "live",
+            )
+        if self._run is None or died or other_source or self._is_stalled():
+            if self._run is not None and not died and not other_source:
                 logger.warning(
                     "[%s] recording stalled (no new segment in %ds), restarting",
                     self.channel_slug, STALL_TIMEOUT_SECONDS,
@@ -881,6 +930,20 @@ class ChannelRecorder:
         if footage_at is not None and footage_at < since:
             footage_at = None
         return RunState(since=since, has_vod=run.vod_url is not None, footage_at=footage_at)
+
+    def wait_for_footage(self, until: datetime, timeout: float = VOD_FOLLOW_WAIT_SECONDS) -> bool:
+        """Blocks until footage of the stream up to `until` (its own clock)
+        has come in, for up to `timeout` seconds - for a stream followed from
+        its VOD, which comes in well behind the live one. Returns whether it
+        has; never waits while nothing is recorded."""
+        deadline = time.monotonic() + timeout
+        while True:
+            reached = self._footage_until
+            if reached is not None and reached >= until:
+                return True
+            run = self._run
+            if run is None or time.monotonic() >= deadline or run.stop_event.wait(VOD_POLL_SECONDS / 3):
+                return False
 
     def segments_overlapping(self, start: datetime, end: datetime) -> list[_StoredSegment]:
         """All buffered segments whose time range overlaps [start, end], in order."""

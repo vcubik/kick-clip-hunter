@@ -428,6 +428,13 @@ def get_connection() -> sqlite3.Connection:
     if "moments_auto_cut" not in columns:
         conn.execute("ALTER TABLE streamers ADD COLUMN moments_auto_cut INTEGER NOT NULL DEFAULT 0")
 
+    # Whether a Kick channel's stream is followed from its VOD, as Kick
+    # writes it, rather than live - no browser needed to find it, footage
+    # coming in up to a minute later (see recorder.ChannelRecorder.from_vod).
+    # Off to begin with; heeded only for a Kick channel.
+    if "stream_from_vod" not in columns:
+        conn.execute("ALTER TABLE streamers ADD COLUMN stream_from_vod INTEGER NOT NULL DEFAULT 0")
+
     # Which platform a channel is on, and its id there (see platforms.py).
     # Every channel from before there were others is on Kick, where that id
     # is the one it is kept by here as well.
@@ -660,6 +667,7 @@ def get_streamers(conn: sqlite3.Connection, platform: str | None = None) -> list
     conn.row_factory = sqlite3.Row
     return conn.execute(
         "SELECT slug, broadcaster_user_id, added_at, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " stream_from_vod,"
         " own_tuning, always_record, platform, platform_user_id, vod_access, vod_access_at"
         " FROM streamers WHERE ? IS NULL OR platform = ? ORDER BY added_at",
         (platform, platform),
@@ -670,6 +678,7 @@ def get_streamer_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | N
     conn.row_factory = sqlite3.Row
     return conn.execute(
         "SELECT broadcaster_user_id, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " stream_from_vod,"
         " own_tuning, always_record, platform, platform_user_id"
         " FROM streamers WHERE slug = ?",
         (slug,),
@@ -682,6 +691,7 @@ def get_streamer_by_id(conn: sqlite3.Connection, broadcaster_user_id: int) -> sq
     conn.row_factory = sqlite3.Row
     return conn.execute(
         "SELECT slug, broadcaster_user_id, tracking_enabled, chat_only, moments_only, moments_auto_cut,"
+        " stream_from_vod,"
         " own_tuning, always_record, platform, platform_user_id"
         " FROM streamers WHERE broadcaster_user_id = ?",
         (broadcaster_user_id,),
@@ -790,6 +800,16 @@ def set_streamer_moments_auto_cut(conn: sqlite3.Connection, broadcaster_user_id:
     its stream's VOD by itself, or only when asked for."""
     conn.execute(
         "UPDATE streamers SET moments_auto_cut = ? WHERE broadcaster_user_id = ?",
+        (1 if enabled else 0, broadcaster_user_id),
+    )
+    conn.commit()
+
+
+def set_streamer_stream_from_vod(conn: sqlite3.Connection, broadcaster_user_id: int, enabled: bool) -> None:
+    """Sets whether a Kick channel's stream is followed from its VOD rather
+    than live."""
+    conn.execute(
+        "UPDATE streamers SET stream_from_vod = ? WHERE broadcaster_user_id = ?",
         (1 if enabled else 0, broadcaster_user_id),
     )
     conn.commit()

@@ -146,6 +146,7 @@ from .db import (
     set_streamer_always_record,
     set_streamer_moments_auto_cut,
     set_streamer_own_tuning,
+    set_streamer_stream_from_vod,
     set_streamer_tracking,
     set_vod_access,
     update_moment_audio_events,
@@ -279,6 +280,17 @@ def _is_tracked_by_chat(slug: str) -> bool:
     try:
         row = get_streamer_by_slug(conn, slug)
         return row is not None and _tracking_of(row) in dashboard_view.TRACKED_BY_CHAT
+    finally:
+        conn.close()
+
+
+def _streams_from_vod(slug: str) -> bool:
+    """Whether a channel's stream is followed from its VOD rather than live:
+    a Kick channel's, where that was chosen on the Channels page."""
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        return row is not None and row["platform"] == platforms.KICK and bool(row["stream_from_vod"])
     finally:
         conn.close()
 
@@ -1216,6 +1228,7 @@ async def lifespan(app: FastAPI):
                 _look_failed,
                 _buffer_seconds,
                 _is_tracked_by_chat,
+                _streams_from_vod,
             )
         ),
         asyncio.create_task(_keep_chat_subscriptions()),
@@ -3887,6 +3900,14 @@ async def dashboard_channels(request: Request):
                             if row["moments_auto_cut"]
                             else dashboard_view.MOMENT_CLIPS_ON_REQUEST
                         ),
+                        # Where its stream is followed from - offered for a
+                        # Kick channel alone, whose VOD is written as it goes.
+                        "stream_source": (
+                            dashboard_view.STREAM_SOURCE_VOD
+                            if row["stream_from_vod"]
+                            else dashboard_view.STREAM_SOURCE_LIVE
+                        ),
+                        "stream_source_offered": row["platform"] == platforms.KICK,
                         # Moments only where a clip can be cut afterwards.
                         "tracking_choices": dashboard_view.tracking_choices(row["platform"] in platforms.KEEP_VODS),
                         # What its platform was last seen to list of its
@@ -3915,6 +3936,7 @@ async def dashboard_channels(request: Request):
                     for row in context["streamers"]
                 ],
                 "moment_clips_choices": dashboard_view.MOMENT_CLIPS_CHOICES,
+                "stream_source_choices": dashboard_view.STREAM_SOURCE_CHOICES,
                 "analysis_settings": [
                     {
                         "name": name,
@@ -7462,6 +7484,29 @@ async def set_channel_moments_auto_cut(slug: str, how: str):
         conn.close()
     logger.info("clips of %s's moments cut -> %s", slug, how)
     return {"slug": slug, "how": how, "said": dashboard_view.MOMENT_CLIPS_WORDS[how].format(channel=slug)}
+
+
+@app.post("/channels/{slug}/stream_source")
+async def set_channel_stream_source(slug: str, source: str):
+    """Sets where a Kick channel's stream is followed from, for its clips
+    and its recordings (dashboard_view.STREAM_SOURCE_*): live, its address
+    found in a browser window, or from the VOD Kick writes as it goes along.
+    A recorder that is running starts over on the other at its next tick.
+    Refused for a channel of any other platform, which needs no browser."""
+    if source not in dict(dashboard_view.STREAM_SOURCE_CHOICES):
+        raise HTTPException(status_code=400, detail=f"unknown stream source {source!r}")
+    conn = get_connection()
+    try:
+        row = get_streamer_by_slug(conn, slug)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown channel {slug!r}")
+        if row["platform"] != platforms.KICK:
+            raise HTTPException(status_code=400, detail="Only a Kick channel's stream can be followed from its VOD.")
+        set_streamer_stream_from_vod(conn, row["broadcaster_user_id"], source == dashboard_view.STREAM_SOURCE_VOD)
+    finally:
+        conn.close()
+    logger.info("stream of %s followed -> %s", slug, source)
+    return {"slug": slug, "source": source, "said": dashboard_view.STREAM_SOURCE_WORDS[source].format(channel=slug)}
 
 
 async def _unsubscribe_kick_chat(broadcaster_user_id: int, slug: str) -> None:

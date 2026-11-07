@@ -257,6 +257,28 @@ class TestHowMuchOfAStreamIsKept:
         assert not any("recording tick failed" in record.getMessage() for record in caplog.records)
 
 
+class TestWhereTheStreamIsFollowedFrom:
+    async def test_a_recorder_is_told_its_channels_choice_before_it_is_ticked(self, kick_api, recorders):
+        kick_api.add_channel("from_vod", 1, is_live=True)
+        kick_api.add_channel("live", 2, is_live=True)
+        recorders["from_vod"] = StandInRecorder()
+        recorders["live"] = StandInRecorder()
+        task = asyncio.create_task(
+            recording_manager.run_forever(
+                lambda: ["from_vod", "live"], lambda: True, lambda slug: True, from_vod=lambda slug: slug == "from_vod"
+            )
+        )
+        try:
+            await async_wait_until(lambda: recorders["live"].ticks >= 1, "a tick of each")
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        assert recorders["from_vod"].from_vod is True
+        assert recorders["live"].from_vod is False
+
+
 class TestPausing:
     async def test_with_watching_off_nothing_is_checked_or_ticked(self, kick_api, recorders):
         kick_api.add_channel("live_one", 1, is_live=True)
@@ -442,6 +464,34 @@ class TestClipRequests:
         assert calls == [
             (20, 3, {"playback_delay_seconds": 4, "context_before_seconds": 0, "context_after_seconds": 90})
         ]
+
+    async def test_a_stream_followed_from_its_vod_waits_for_the_footage_the_file_needs(self, monkeypatch):
+        recorder = recording_manager._get_recorder("channel_a")
+        monkeypatch.setattr(recorder, "from_vod", True)
+        waited, cut = [], []
+        monkeypatch.setattr(recorder, "wait_for_footage", lambda until: waited.append(until) or True)
+        monkeypatch.setattr(recording_manager, "extract_clip", lambda *args, **framing: cut.append(waited[:]))
+
+        await recording_manager.create_clip_for_moment(
+            "channel_a",
+            self.START,
+            self.END,
+            "moment_1.mp4",
+            post_roll_seconds=3,
+            playback_delay_seconds=4,
+            context_after_seconds=90,
+        )
+
+        # The end of the context after the clip, on the stream's clock.
+        assert waited == [self.END + timedelta(seconds=3 + 90 - 4)]
+        assert cut == [waited]
+
+    async def test_a_live_stream_is_not_waited_for(self, monkeypatch):
+        recorder = recording_manager._get_recorder("channel_b")
+        monkeypatch.setattr(recorder, "wait_for_footage", lambda until: pytest.fail("waited"))
+        monkeypatch.setattr(recording_manager, "extract_clip", lambda *args, **framing: None)
+
+        await recording_manager.create_clip_for_moment("channel_b", self.START, self.END, "moment_1.mp4")
 
 
 @asynccontextmanager

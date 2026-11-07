@@ -11,7 +11,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kick_clip_hunter import kick_stream
-from kick_clip_hunter.platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, Vod
+from kick_clip_hunter.platforms import (
+    VODS_FOR_SUBSCRIBERS,
+    VODS_HIDDEN,
+    VODS_NONE,
+    VODS_PUBLIC,
+    NoVod,
+    StreamUrlError,
+    StreamUrls,
+    Vod,
+)
 from tests.support.kick_api import kick_video, site_video_id
 
 T0 = datetime(2026, 10, 21, 19, 2, 25, tzinfo=timezone.utc)
@@ -223,3 +232,31 @@ class TestWhatKickListsOfAChannelsVods:
         kick_api.failures["web.kick.com"] = 503
 
         assert await kick_stream.vod_access("some_channel") is None
+
+
+class TestFollowingAStreamFromItsVod:
+    """A stream that is on followed from the VOD Kick writes of it, found
+    over plain HTTP - no browser."""
+
+    def test_the_vod_of_the_stream_that_is_on_is_followed(self, kick_api):
+        kick_api.add_channel("some_channel", 1).videos = [
+            kick_video(T0, 0, SOURCE, live=True),
+            kick_video(T0 - minutes(1440), 3600, "older"),
+        ]
+
+        assert kick_stream.get_stream_urls_from_vod("Some_Channel") == StreamUrls(
+            live=SOURCE, vod=SOURCE, from_vod=True
+        )
+
+    def test_a_channel_with_no_stream_on_has_none(self, kick_api):
+        kick_api.add_channel("some_channel", 1).videos = [kick_video(T0, 3600, SOURCE)]
+
+        with pytest.raises(StreamUrlError, match="is it live"):
+            kick_stream.get_stream_urls_from_vod("some_channel")
+
+    def test_kick_not_answering_is_said(self, kick_api):
+        kick_api.add_channel("some_channel", 1).videos = [kick_video(T0, 0, SOURCE, live=True)]
+        kick_api.failures["/videos"] = 503
+
+        with pytest.raises(StreamUrlError, match="HTTPStatusError"):
+            kick_stream.get_stream_urls_from_vod("some_channel")

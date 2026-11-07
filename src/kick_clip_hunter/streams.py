@@ -81,13 +81,18 @@ async def _tiktok_live_status(login: str) -> LiveStatus:
     return LiveStatus(live=room.live, started_at=room.started_at)
 
 
-def stream_urls(channel: str) -> StreamUrls:
+def stream_urls(channel: str, from_vod: bool = False) -> StreamUrls:
     """Where a live channel's stream is: its live playlist (TikTok's: the
     stream itself, as FLV) and, where the platform keeps one as the stream
-    goes along, its VOD's. Blocks while it is found out; raises
+    goes along, its VOD's. A Kick channel's stream is followed `from_vod`
+    where that is asked for: the VOD being written, found with no browser
+    (see kick_stream.get_stream_urls_from_vod); other platforms need no
+    browser either way and ignore it. Blocks while it is found out; raises
     StreamUrlError if there is no stream to be found."""
     platform, login = platforms.split(channel)
     if platform == platforms.KICK:
+        if from_vod:
+            return kick_stream.get_stream_urls_from_vod(login)
         return kick_stream.get_stream_urls(login)
     if platform == platforms.TWITCH:
         return twitch_stream.get_stream_urls(login)

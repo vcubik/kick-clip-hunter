@@ -173,6 +173,11 @@ class StreamUrls:
     # Whether `live` is the stream as one FLV download that does not end
     # (TikTok's, see flv.py) rather than an HLS playlist.
     flv: bool = False
+    # Whether `live` is the master playlist of the broadcast's own recording
+    # (its VOD) rather than of the live stream - Kick's, which a recorder can
+    # follow as it is written, a little behind the live stream, without a
+    # browser. Its playlist says it has ended while the stream is still on.
+    from_vod: bool = False
 
 
 class NoVod(RuntimeError):

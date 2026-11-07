@@ -57,6 +57,16 @@ class TestKickStream:
         assert streams.stream_urls("some_channel") == StreamUrls("x")
         assert asked == ["some_channel"]
 
+    def test_one_followed_from_its_vod_is_found_with_no_browser(self, monkeypatch):
+        asked = []
+        monkeypatch.setattr(kick_stream, "get_stream_urls", lambda slug: pytest.fail("a browser was opened"))
+        monkeypatch.setattr(
+            kick_stream, "get_stream_urls_from_vod", lambda slug: asked.append(slug) or StreamUrls("v", from_vod=True)
+        )
+
+        assert streams.stream_urls("some_channel", from_vod=True) == StreamUrls("v", from_vod=True)
+        assert asked == ["some_channel"]
+
 
 class TestWhereAStreamsRecordingIs:
     """The recording of a stream a moment was in is looked for on the

@@ -59,6 +59,7 @@ class FakeHlsServer:
         best_variant: str = BEST_VARIANT,
         program_date_time_once: bool = False,
         numbered: bool = False,
+        ended_while_on: bool = False,
     ) -> None:
         self.timeline = timeline
         self.best_variant = best_variant
@@ -78,6 +79,9 @@ class FakeHlsServer:
         self.program_date_time = program_date_time
         self.stream_start = stream_start or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         self.ended = False
+        # Every segment listed from the first, and #EXT-X-ENDLIST while the
+        # stream is still on - as Kick's VOD of a stream that is on lists it.
+        self.ended_while_on = ended_while_on
         # Request path -> HTTP statuses to answer with first, one per request,
         # before serving it normally. "playlist" stands for the variant playlist.
         self.fail_next: dict[str, list[int]] = {}
@@ -184,7 +188,7 @@ class FakeHlsServer:
     def _variant_playlist(self) -> str:
         with self._lock:
             published, ended = self.published, self.ended
-        first = max(0, published - self.window)
+        first = 0 if self.ended_while_on else max(0, published - self.window)
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:3",
@@ -209,7 +213,7 @@ class FakeHlsServer:
                 lines.append(f"../sq/{self.first_sequence + index}/file{suffix}")
             else:
                 lines.append(f"../segment/{index}{'-muted' if segment.muted else ''}{suffix}")
-        if ended:
+        if ended or self.ended_while_on:
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 

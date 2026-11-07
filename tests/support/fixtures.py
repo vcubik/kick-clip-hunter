@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from kick_clip_hunter import db, detector, recorder
-from kick_clip_hunter.platforms import NoVod, StreamUrls, Vod
+from kick_clip_hunter.platforms import NoVod, StreamUrlError, StreamUrls, Vod
 from kick_clip_hunter.recorder import ChannelRecorder
 from tests.support.eventsub import FakeEventSub
 from tests.support.github import FakeGitHub
@@ -63,6 +63,8 @@ class Recording:
         # Channel slugs the recorder looked for its stream's VOD for again,
         # after its run began without one (see recorder._look_for_vod).
         self.vod_lookups: list[str] = []
+        # Channel slugs whose stream was asked for from its VOD.
+        self.vod_follows: list[str] = []
 
     def of(
         self,
@@ -75,8 +77,15 @@ class Recording:
         recording; without one the channel has no VOD. `vod_later` is one
         that is not found as a run starts, only when it is looked for again."""
 
-        def stream_urls(slug: str) -> StreamUrls:
+        def stream_urls(slug: str, from_vod: bool = False) -> StreamUrls:
             self.url_requests.append(slug)
+            if from_vod:
+                # The broadcast followed from its VOD: `vod` stands in for
+                # it, as Kick lists it with the stream that is on.
+                if vod is None:
+                    raise StreamUrlError(f"Kick lists no VOD of a stream of {slug!r} that is on")
+                self.vod_follows.append(slug)
+                return StreamUrls(live=vod.master_url, vod=vod.master_url, from_vod=True)
             return StreamUrls(live=server.master_url, vod=vod.master_url if vod else None)
 
         def vod_at(slug: str, when: datetime) -> Vod:
@@ -100,6 +109,7 @@ class Recording:
 def recording(hls, monkeypatch: pytest.MonkeyPatch) -> Iterator[Recording]:
     # Depends on `hls` so recorders are stopped before their servers go away.
     monkeypatch.setattr(recorder, "PLAYLIST_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(recorder, "VOD_FOLLOW_POLL_SECONDS", 0.01)
     rig = Recording(monkeypatch)
     yield rig
     rig.stop_all()

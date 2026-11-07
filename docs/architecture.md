@@ -704,7 +704,9 @@ Module map (`src/kick_clip_hunter/`):
   none for a VOD kept for subscribers only. Where a person watches that VOD is the site's
   page of it, by an id only the site's newer API lists (`watch_link_at`, by `site_covering`:
   `kick.com/<slug>/videos/<id>?t=<seconds>`, which its player starts at), and that list is
-  also what says whether a channel's VODs stay public once a stream is over (`vod_access`)
+  also what says whether a channel's VODs stay public once a stream is over (`vod_access`).
+  A channel set to "From the VOD" has its stream found with no browser at all
+  (`get_stream_urls_from_vod`): the VOD of the stream that is on, as kick.com lists it
 - `recorder.py` — per-channel recording into a rolling segment buffer, plus
   `extract_clip()` to cut a clip from it. A thread per channel polls the live playlist
   (`httpx`) and saves each source MPEG-TS segment untouched, named by its
@@ -735,6 +737,12 @@ Module map (`src/kick_clip_hunter/`):
   segment - so the buffer, clips and stream recordings need nothing of their own for it. A
   break the cutter sees, or a piece that could not be copied, starts a new group; an FLV
   address about to run out ends the run, and the next tick starts one at a new address.
+  A run that follows the stream's VOD (`ChannelRecorder.from_vod`, set by
+  `recording_manager` from `streamers.stream_from_vod` before every tick; a run on the other
+  source is started over) ignores the `#EXT-X-ENDLIST` that playlist carries while the
+  stream is on, and a clip of it waits for its footage (`wait_for_footage`, from
+  `recording_manager.create_clip_for_moment`); its buffer reaches `VOD_FOLLOW_WAIT_SECONDS`
+  further back.
   How far back the buffer reaches is the channel's: `tuning.buffer_seconds` adds up what
   its clip settings need kept from a file's first frame until it is cut (context, rolls,
   playback delay, how long a moment stays open or its laughs are counted, the wait for the

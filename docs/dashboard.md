@@ -116,6 +116,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   never seen by the detector, nothing recorded for it. Of a channel tracked for moments or for
   its chat its platform is still asked whether it is live, so that "Right now" can say "Live,
   chat only" (no lamp: no stream is coming in) and the Health page can tell its chat gone quiet;
+  A Kick channel's row also says where its stream is followed from, for its clips and its
+  recordings - "Live" (its address found in a browser window) or "From the VOD" (the VOD Kick
+  writes as it goes along: no browser, no ads, footage up to a minute behind; `POST
+  /channels/{slug}/stream_source`, `source` `live` or `vod`, kept as
+  `streamers.stream_from_vod`; refused for any other platform, hidden while Moments is lit). A
+  recorder that is running starts over on the other at its next tick.
   Off keeps nothing (a TikTok channel has none of
   them: "Recorded only", and the route refuses anything but `off` for one) - and the button that
   starts or stops a recording of its whole stream (see `stream_recording.py` below), with
