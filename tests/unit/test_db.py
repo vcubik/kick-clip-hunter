@@ -1637,6 +1637,20 @@ class TestMoments:
         assert db.count_moments(conn, min_rating=4, downloaded=False) == 1
         assert db.count_moments(conn, channel_slug="channel_a", downloaded=False) == 1
 
+    def test_or_to_what_has_its_clip_on_disk_or_not(self, conn):
+        self.rated(conn, {"vod": None, "kept": None, "b_kept": 5, "b_vod": 4})
+        for row in db.get_recent_moments(conn):
+            if row["reason"].endswith("kept"):
+                conn.execute("UPDATE moments SET clip_path = ? WHERE id = ?", (f"clips/{row['id']}.mp4", row["id"]))
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, on_disk=True)] == ["b_kept", "kept"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, on_disk=False)] == ["b_vod", "vod"]
+        assert len(db.get_recent_moments(conn, on_disk=None)) == 4
+        assert [row["reason"] for row in db.get_recent_moments(conn, unrated=True, on_disk=True)] == ["kept"]
+        assert db.count_moments(conn, on_disk=True) == 2
+        assert db.count_moments(conn, min_rating=4, on_disk=False) == 1
+        assert db.count_moments(conn, channel_slug="channel_a", on_disk=False, downloaded=False) == 1
+
     def test_a_narrowed_list_is_paged_like_the_full_one(self, conn):
         self.rated(conn, {"a": None, "rated": 2, "b": None, "c": None})
 

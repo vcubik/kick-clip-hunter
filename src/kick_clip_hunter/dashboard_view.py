@@ -52,6 +52,20 @@ DOWNLOADED_LABELS = {
 }
 # What each of them asks of the database (db.get_recent_moments).
 DOWNLOADED_FILTERS = {DOWNLOADED_ANY: None, DOWNLOADED_YES: True, DOWNLOADED_NO: False}
+# Whether a list keeps only the moments whose clip is on disk here, only the
+# others - those that are only a link into the stream's VOD until their clip
+# is cut from it, or whose recording failed - or both, which is the default.
+ON_DISK_ANY = ""
+ON_DISK_YES = "yes"
+ON_DISK_NO = "no"
+ON_DISKS = (ON_DISK_ANY, ON_DISK_YES, ON_DISK_NO)
+ON_DISK_LABELS = {
+    ON_DISK_ANY: "On disk or not",
+    ON_DISK_YES: "On disk",
+    ON_DISK_NO: "Not on disk",
+}
+# What each of them asks of the database (db.get_recent_moments).
+ON_DISK_FILTERS = {ON_DISK_ANY: None, ON_DISK_YES: True, ON_DISK_NO: False}
 
 # How many colours chat usernames are spread over (nick-1 to nick-6 in the
 # stylesheet).
@@ -599,11 +613,12 @@ def review_url(
     *,
     order: str = ORDER_NEWEST,
     downloaded: str = DOWNLOADED_ANY,
+    on_disk: str = ON_DISK_ANY,
     offset: int = 0,
     moment: int | None = None,
 ) -> str:
-    """The review page for one list, channel, order, downloaded or not, page
-    and open moment. Whatever is at its default is left out, so the plain
+    """The review page for one list, channel, order, downloaded or not, on
+    disk or not, page and open moment. Whatever is at its default is left out, so the plain
     address is the unrated list, newest first."""
     query: dict[str, Any] = {}
     if show != SHOW_UNRATED:
@@ -614,6 +629,8 @@ def review_url(
         query["order"] = order
     if downloaded != DOWNLOADED_ANY:
         query["downloaded"] = downloaded
+    if on_disk != ON_DISK_ANY:
+        query["on_disk"] = on_disk
     if offset:
         query["offset"] = offset
     if moment is not None:
@@ -748,15 +765,20 @@ def laughing_words(laughing: int | None) -> str | None:
 
 
 def empty_queue_words(
-    show: str, channel: str | None, newest: datetime | None, today: date, downloaded: str = DOWNLOADED_ANY
+    show: str,
+    channel: str | None,
+    newest: datetime | None,
+    today: date,
+    downloaded: str = DOWNLOADED_ANY,
+    on_disk: str = ON_DISK_ANY,
 ) -> dict[str, str]:
     """What to say when the chosen list has nothing in it: a few words for
     the queue, a heading for the rest of the page and, where the state of the
     service is not what explains it, a sentence to go under that heading.
     `newest` is when the last moment of any rating was detected (on that
     channel, if one is chosen), or None if there has never been one. A list
-    narrowed to downloaded moments or the others says that is what left it
-    empty."""
+    narrowed to downloaded moments or the others, or to those on disk or the
+    others, says that is what left it empty."""
     of_channel = f" from {channel}" if channel else ""
     if newest is not None and downloaded == DOWNLOADED_YES:
         return {
@@ -768,6 +790,17 @@ def empty_queue_words(
         return {
             "queue": "Everything here was downloaded",
             "heading": f"Every clip{of_channel} here was downloaded",
+        }
+    if newest is not None and on_disk == ON_DISK_YES:
+        return {
+            "queue": "Nothing on disk here",
+            "heading": f"No clips{of_channel} on disk here",
+            "lead": "A moment caught in chat alone has only a link into the VOD until its clip is cut from it.",
+        }
+    if newest is not None and on_disk == ON_DISK_NO:
+        return {
+            "queue": "Everything here is on disk",
+            "heading": f"Every clip{of_channel} here is on disk",
         }
     if newest is not None and show == SHOW_BEST:
         words = f"No clips rated {BEST_RATING_MIN} or higher"

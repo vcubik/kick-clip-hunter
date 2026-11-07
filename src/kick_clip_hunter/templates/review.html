@@ -7,7 +7,7 @@
 {% block title %}Review{% endblock %}
 {% block main %}
 <main class="review">
-<aside class="queue" aria-label="Moments" data-queue data-channel="{{ selected_channel or '' }}" data-downloaded="{{ downloaded }}" data-best-from="{{ best_rating_min }}">
+<aside class="queue" aria-label="Moments" data-queue data-channel="{{ selected_channel or '' }}" data-downloaded="{{ downloaded }}" data-on-disk="{{ on_disk }}" data-best-from="{{ best_rating_min }}">
   <div class="queue-head">
     <nav class="ch-tabs" aria-label="Which moments to list">
       {% for tab in tabs %}
@@ -31,6 +31,12 @@
       <select class="ch-select" id="downloaded-filter" name="downloaded" aria-label="Downloaded" data-submit-on-change>
         {% for option in downloadeds %}
         <option value="{{ option.downloaded }}"{% if option.downloaded == downloaded %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {#- Only the moments whose clip is on disk, or only those that are a link into the VOD and nothing more. -#}
+      <select class="ch-select" id="on-disk-filter" name="on_disk" aria-label="On disk" data-submit-on-change>
+        {% for option in on_disks %}
+        <option value="{{ option.on_disk }}"{% if option.on_disk == on_disk %} selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
       </select>
       <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
