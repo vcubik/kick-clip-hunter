@@ -2,8 +2,10 @@
 
 `FakeTwitchApi` answers what the service asks of Twitch over HTTP - its
 OAuth server and Helix, the chat a message is written in among it
-(`chat_written`) - and of the emote services that know Twitch channels
-(7TV's lookup by a Twitch id), with the same response shapes. Like
+(`chat_written`), and the playback token twitch.tv's own GraphQL API hands
+a visitor about to watch a past broadcast (`subscriber_only_videos`) - and
+of the emote services that know Twitch channels (7TV's lookup by a Twitch
+id), with the same response shapes. Like
 `FakeKickApi` it plugs in as an `httpx` transport, so the real client code
 runs unmodified; the `twitch_api` fixture routes every request for one of
 its hosts here and everything else on to the fake Kick.
@@ -18,7 +20,11 @@ import httpx
 
 from tests.support.kick_api import seventv_emote_id
 
-HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv", "api.betterttv.net", "api.frankerfacez.com"})
+HOSTS = frozenset({"id.twitch.tv", "api.twitch.tv", "gql.twitch.tv", "api.betterttv.net", "api.frankerfacez.com"})
+# The qualities of a past broadcast kept for subscribers only that its
+# playback token names as theirs alone - as Twitch named them, Source
+# ("chunked") among them.
+SUBSCRIBER_QUALITIES = ["160p30", "360p30", "480p30", "720p60", "audio_only", "chunked"]
 # What an account signed in for the service lets it do: read chat, and write
 # in it - what twitch_login.py asks for.
 SCOPES = ("user:read:chat", "user:write:chat")
@@ -154,6 +160,9 @@ class FakeTwitchApi:
     chat_written: list[dict] = field(default_factory=list)
     chat_refusals: dict[str, int] = field(default_factory=dict)
     chat_drops: dict[str, str] = field(default_factory=dict)
+    # Past broadcasts (by id) Twitch plays to the channel's subscribers
+    # only - which Helix lists as "public" all the same.
+    subscriber_only_videos: set[str] = field(default_factory=set)
 
     def sign_in_will_happen(
         self, account: FakeAccount | None = None, *, after_polls: int = 0, denied: bool = False
@@ -248,6 +257,8 @@ class FakeTwitchApi:
                 },
             )
 
+        if request.url.host == "gql.twitch.tv" and path == "/gql":
+            return self._gql(request, body)
         if request.url.host == "api.twitch.tv":
             if not request.headers.get("client-id"):
                 return httpx.Response(401, json={"message": "Client ID is missing"})
@@ -382,6 +393,19 @@ class FakeTwitchApi:
         self.chat_written.append({"broadcaster_id": broadcaster, "message": message, "sender": account.login})
         sent = {"message_id": f"written-{len(self.chat_written)}", "is_sent": True, "drop_reason": None}
         return httpx.Response(200, json={"data": [sent]})
+
+    def _gql(self, request: httpx.Request, body: object) -> httpx.Response:
+        """A past broadcast's playback access token, as Twitch hands it to
+        a visitor: who may watch which of its qualities, as JSON in a
+        string."""
+        if not request.headers.get("client-id"):
+            return httpx.Response(400, json={"error": "Bad Request", "message": 'The "Client-ID" header is missing'})
+        if not isinstance(body, dict) or body.get("operationName") != "PlaybackAccessToken":
+            return httpx.Response(200, json={"errors": [{"message": "PersistedQueryNotFound"}]})
+        video_id = str(body.get("variables", {}).get("vodID", ""))
+        restricted = SUBSCRIBER_QUALITIES if video_id in self.subscriber_only_videos else []
+        value = json.dumps({"authorization": {"forbidden": False}, "chansub": {"restricted_bitrates": restricted}})
+        return httpx.Response(200, json={"data": {"videoPlaybackAccessToken": {"value": value, "signature": "sig"}}})
 
     def _by_id(self, user_id: str) -> FakeTwitchChannel | None:
         return next((channel for channel in self.channels.values() if channel.user_id == user_id), None)

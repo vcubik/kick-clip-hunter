@@ -7,11 +7,21 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
 
+import httpx
 import pytest
 from streamlink.exceptions import NoPluginError, PluginError
 
-from kick_clip_hunter import streams, twitch_stream
-from kick_clip_hunter.platforms import VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
+from kick_clip_hunter import streams, twitch_client, twitch_stream
+from kick_clip_hunter.platforms import (
+    VODS_FOR_SUBSCRIBERS,
+    VODS_HIDDEN,
+    VODS_NONE,
+    VODS_PUBLIC,
+    NoVod,
+    StreamUrlError,
+    StreamUrls,
+    Vod,
+)
 from tests.support.twitch_api import past_broadcast
 
 MASTER = "https://usher.example/api/v2/channel/hls/some_channel.m3u8?sig=abc&token=def"
@@ -193,6 +203,30 @@ class TestFindingAPastBroadcast:
         with pytest.raises(NoVod, match="would not say where"):
             twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
 
+    @pytest.mark.parametrize("refused", [{}, PluginError("Manifest is restricted")])
+    def test_one_kept_for_subscribers_says_so_once_its_playlist_is_refused(
+        self, channel, streamlink, twitch_api, refused
+    ):
+        # Helix lists it as "public"; only its playback token tells.
+        twitch_api.subscriber_only_videos.add("777")
+        streamlink.answers["https://www.twitch.tv/videos/777"] = refused
+
+        with pytest.raises(NoVod, match="for the channel's subscribers only"):
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
+    def test_one_kept_for_subscribers_that_still_plays_is_had(self, channel, twitch_api):
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6)).master == PAST_MASTER
+        assert twitch_api.calls("POST", "gql.twitch.tv/gql") == []
+
+    def test_a_refused_playlist_twitch_says_nothing_more_of_stays_unexplained(self, channel, streamlink, twitch_api):
+        twitch_api.failures["gql.twitch.tv"] = 500
+        streamlink.answers["https://www.twitch.tv/videos/777"] = {}
+
+        with pytest.raises(NoVod, match="would not say where"):
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+
     def test_a_channel_twitch_does_not_have_has_none(self, channel):
         with pytest.raises(NoVod, match=r"could not be asked .*ValueError"):
             twitch_stream.vod_at("gone_channel", BEGAN)
@@ -259,6 +293,45 @@ class TestWhatTwitchListsOfAChannelsPastBroadcasts:
         assert await twitch_stream.vod_access("some_channel") == VODS_HIDDEN
         assert "from the public" in twitch_stream.VOD_TROUBLE[VODS_HIDDEN]
 
+    async def test_one_keeping_them_for_its_subscribers_has_them_for_subscribers(self, twitch_api):
+        # Helix lists them as "public" all the same.
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h")
+        ]
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert await twitch_stream.vod_access("some_channel") == VODS_FOR_SUBSCRIBERS
+        assert "subscribers only" in twitch_stream.VOD_TROUBLE[VODS_FOR_SUBSCRIBERS]
+        assert (
+            streams.vod_trouble("some_channel@twitch", VODS_FOR_SUBSCRIBERS)
+            == (twitch_stream.VOD_TROUBLE[VODS_FOR_SUBSCRIBERS])
+        )
+
+    async def test_the_newest_of_a_stream_that_is_over_is_the_one_that_tells(self, twitch_api):
+        channel = twitch_api.add_channel("some_channel", "101", is_live=True, stream_id="9")
+        channel.past_broadcasts = [
+            past_broadcast("888", "2026-10-22T09:00:00Z", "5m", stream_id="9"),
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h"),
+        ]
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert await twitch_stream.vod_access("some_channel") == VODS_FOR_SUBSCRIBERS
+
+    async def test_with_only_the_stream_that_is_on_listed_it_is_the_one_that_tells(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101", is_live=True, stream_id="9").past_broadcasts = [
+            past_broadcast("888", "2026-10-22T09:00:00Z", "5m", stream_id="9")
+        ]
+
+        assert await twitch_stream.vod_access("some_channel") == VODS_PUBLIC
+
+    async def test_what_helix_lists_stands_where_the_playback_token_is_not_had(self, twitch_api):
+        twitch_api.add_channel("some_channel", "101").past_broadcasts = [
+            past_broadcast("777", "2026-10-16T14:38:15Z", "1h")
+        ]
+        twitch_api.failures["gql.twitch.tv"] = 500
+
+        assert await twitch_stream.vod_access("some_channel") == VODS_PUBLIC
+
     async def test_twitch_not_set_up_says_nothing_either_way(self, kick_api):
         assert await twitch_stream.vod_access("some_channel") is None
 
@@ -268,3 +341,40 @@ class TestWhatTwitchListsOfAChannelsPastBroadcasts:
 )
 def test_how_long_helix_says_a_past_broadcast_is_is_read_in_seconds(helix, seconds):
     assert twitch_stream.length_seconds(helix) == seconds
+
+
+@pytest.mark.anyio
+class TestWhoMayWatchAPastBroadcast:
+    """What the playback token Twitch hands a visitor says of a past
+    broadcast: the qualities only the channel's subscribers may watch."""
+
+    async def test_it_is_asked_as_twitchs_own_site_asks_it(self, twitch_api):
+        assert await twitch_client.video_restricted_qualities("777") == []
+
+        [query] = twitch_api.calls("POST", "gql.twitch.tv/gql")
+        assert query["operationName"] == "PlaybackAccessToken"
+        assert query["variables"]["vodID"] == "777"
+        assert query["variables"]["isVod"] is True
+
+    async def test_one_kept_for_subscribers_has_its_source_among_them(self, twitch_api):
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert twitch_client.SOURCE_QUALITY in await twitch_client.video_restricted_qualities("777")
+        assert await twitch_stream.kept_for_subscribers("777") is True
+        assert await twitch_stream.kept_for_subscribers("666") is False
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            {"errors": [{"message": "PersistedQueryNotFound"}]},
+            {"data": {"videoPlaybackAccessToken": None}},
+            {"data": {"videoPlaybackAccessToken": {"value": "not json", "signature": "s"}}},
+            {"data": {"videoPlaybackAccessToken": {"value": '{"chansub": {"restricted_bitrates": "x"}}'}}},
+        ],
+    )
+    async def test_an_answer_that_does_not_say_is_not_taken_for_one(self, twitch_api, monkeypatch, answer):
+        monkeypatch.setattr(twitch_api, "_gql", lambda request, body: httpx.Response(200, json=answer))
+
+        with pytest.raises(ValueError, match="did not say"):
+            await twitch_client.video_restricted_qualities("777")
+        assert await twitch_stream.kept_for_subscribers("777") is None
