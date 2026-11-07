@@ -5,7 +5,9 @@ machine the service runs on.
 
 How it goes, a moment at a time, each step started from the Reels page:
 
-1. "Make a reel": the moment's file goes up into a release of that
+1. "Make a reel": the moment's file - or the stretch of it that was chosen,
+   cut out of it as the Trim dialog cuts one, nothing re-encoded - goes up
+   into a release of that
    repository, tagged `moment-<id>` (`tag`), as `clip.mp4`, and with it
    `context.json` (`context`): the channel, how it is credited, the
    moment's name and note, where in the file the clip the service cut
@@ -31,12 +33,20 @@ How it goes, a moment at a time, each step started from the Reels page:
    `reel.mp4` into the same release; the service fetches it the same way
    and keeps it next to the moment's clip.
 
+Times on the page - the transcript's, the stretch's - are seconds of the
+moment's file, whatever was sent: what comes back is moved by where the
+stretch begins in it (`moved`), and the subtitles that go up are cut to the
+stretch and timed to it (subtitles.srt). So a transcript put right stays
+right where another stretch of the same file is sent, and only the lines in
+that stretch go up with it.
+
 What was there of an earlier storyboard or reel is taken out of the release
 before a step is asked again, so what the service finds there is always the
 answer to what it last asked - but not the transcript, while the moment's
 file is the one it was heard from (`stamp`): a new storyboard is made from
 the same transcript, and one put right by hand goes up with it (and
-`context.json` says so), for Claude to go by. A workflow that fails is
+`context.json` says so), for Claude to go by. A stretch other than the one
+sent before is heard anew, as another file would be. A workflow that fails is
 noticed by its run (each run is named `run_name`), where the token may read
 the repository's Actions; otherwise a step that has not come back within
 its limit (`STORYBOARD_LIMIT`, `RENDER_LIMIT`) is given up on.
@@ -115,6 +125,10 @@ TRANSCRIPT_MOST_LINES = 1000
 TRANSCRIPT_SLACK_SECONDS = 0.5
 # The chat that goes along with the clip: enough for minutes of a busy one.
 CONTEXT_CHAT_LIMIT = 1500
+# A stretch of the moment's file sent in its place is at least this long; one
+# that leaves out less than this of the file at either end is the whole file.
+PART_LEAST_SECONDS = 1.0
+PART_SLACK_SECONDS = 0.05
 
 _CREDIT = {
     platforms.KICK: "kick.com/{login}",
@@ -255,15 +269,42 @@ def chosen_variant(storyboard: Mapping[str, Any], variant: str) -> str:
 # -- the transcript --------------------------------------------------------------
 
 
-def stamp(path: Path) -> str | None:
+def stamp(path: Path, part: tuple[float, float] | None = None) -> str | None:
     """Which file a moment's is: its size and when it was last written -
-    what changes when footage is added to it. None for one that is not
-    there."""
+    what changes when footage is added to it - and the stretch of it that
+    was sent, where only a stretch was. None for one that is not there."""
     try:
         found = path.stat()
     except OSError:
         return None
-    return f"{found.st_size}:{found.st_mtime_ns}"
+    whole = f"{found.st_size}:{found.st_mtime_ns}"
+    return whole if part is None else f"{whole}@{part[0]:.3f}-{part[1]:.3f}"
+
+
+def part_asked(start: object, end: object, length: float | None) -> tuple[float, float] | None:
+    """The stretch of a moment's file to send in its place, from `start` to
+    `end` in seconds of the file (`length` long, where that is known) - or
+    None for the whole file: where neither was given, or the stretch leaves
+    out next to nothing of it. Raises ValueError, in words that say why, for
+    one that cannot be cut."""
+    if start is None and end is None:
+        return None
+    first, last = _number(start), _number(end)
+    if first is None or last is None:
+        raise ValueError("Expected the start and end of the stretch, in seconds of the clip's file.")
+    if first < 0 or (length is not None and last > length + TRANSCRIPT_SLACK_SECONDS):
+        within = f", 0:00.0 to {clock(length)}" if length is not None else ""
+        raise ValueError(f"The stretch has to lie within the clip's file{within}.")
+    if last - first < PART_LEAST_SECONDS:
+        raise ValueError("The stretch has to end at least a second after it starts.")
+    if length is not None and first <= PART_SLACK_SECONDS and last >= length - PART_SLACK_SECONDS:
+        return None
+    return round(first, 3), round(last, 3)
+
+
+def moved(lines: Iterable[subtitles.Line], seconds: float) -> list[subtitles.Line]:
+    """Lines timed to a stretch of a file, timed to the file: `seconds` on."""
+    return [subtitles.Line(round(line.start + seconds, 3), round(line.end + seconds, 3), line.text) for line in lines]
 
 
 def clock(seconds: float) -> str:

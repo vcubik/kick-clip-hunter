@@ -471,6 +471,79 @@ class TestItsClipCutWhenAskedFor:
         # The VOD's segments 15-20, 20-25 and 25-30, and no more.
         assert sorted(vod.segment_requests()) == [3, 4, 5]
 
+    async def test_only_the_stretch_chosen_is_cut_and_only_that_much_of_the_vod_fetched(self, service, vod, asked_for):
+        # A second before the clip (18-26 s) to four seconds into it.
+        response = await service.client.post(f"/moments/{asked_for}/clip", json={"start": -1, "end": 4})
+        assert response.status_code == 200, response.text
+        await service.settle()
+
+        row = moment(asked_for)
+        assert row["clip_start"] == (START + timedelta(seconds=18)).isoformat()
+        assert row["clip_duration"] == pytest.approx(4, abs=0.15)
+        assert (row["context_before"], row["context_after"]) == (pytest.approx(1, abs=0.01), pytest.approx(0, abs=0.15))
+        file = recorder.CLIPS_DIR / CHANNEL / f"moment_{asked_for}.mp4"
+        assert probe(file)["duration"] == pytest.approx(5, abs=0.15)
+        assert decodes_cleanly(file)
+        # The VOD's segments 15-20 and 20-25 - not the one after them that the
+        # footage the settings keep would have needed.
+        assert sorted(vod.segment_requests()) == [3, 4]
+
+    async def test_a_stretch_chosen_with_none_of_the_clip_is_the_clip_itself(self, service, vod, asked_for):
+        # 28-31 s: two seconds after the clip ends.
+        response = await service.client.post(f"/moments/{asked_for}/clip", json={"start": 10, "end": 13})
+        assert response.status_code == 200, response.text
+        await service.settle()
+
+        row = moment(asked_for)
+        assert row["clip_start"] == (START + timedelta(seconds=28)).isoformat()
+        assert row["clip_duration"] == pytest.approx(3, abs=0.15)
+        assert (row["context_before"], row["context_after"]) == (0, 0)
+        assert await self.standing(service, asked_for) == {
+            "moment_id": asked_for,
+            "state": dashboard_view.FOOTAGE_DONE,
+            "busy": False,
+            "words": "The clip was cut from the stream's VOD.",
+        }
+
+    @pytest.mark.parametrize(
+        ("asked", "said"),
+        [
+            ({"start": 2}, "Expected start and end of the stretch to cut, in seconds of the clip, as JSON."),
+            (
+                {"start": "0", "end": 5},
+                "Expected start and end of the stretch to cut, in seconds of the clip, as JSON.",
+            ),
+            (
+                {"start": True, "end": 5},
+                "Expected start and end of the stretch to cut, in seconds of the clip, as JSON.",
+            ),
+            ([0, 5], "Expected start and end of the stretch to cut, in seconds of the clip, as JSON."),
+            ({"start": 3, "end": 3.5}, "The stretch has to end at least a second after it starts."),
+            ({"start": 5, "end": 2}, "The stretch has to end at least a second after it starts."),
+            ({"start": 0, "end": 601}, "A stretch holds at most 10 minutes of the stream."),
+            ({"start": -700, "end": -650}, "A stretch begins and ends at most 10 minutes before the clip or after it."),
+            ({"start": 650, "end": 700}, "A stretch begins and ends at most 10 minutes before the clip or after it."),
+        ],
+    )
+    async def test_a_stretch_that_cannot_be_cut_is_refused_and_nothing_is_started(
+        self, service, vod, asked_for, asked, said
+    ):
+        response = await service.client.post(f"/moments/{asked_for}/clip", json=asked)
+
+        assert (response.status_code, response.json()["detail"]) == (400, said)
+        await service.settle()
+        assert (await self.standing(service, asked_for))["state"] == dashboard_view.FOOTAGE_NONE
+        assert moment(asked_for)["clip_path"] is None
+        assert vod.segment_requests() == []
+
+    async def test_what_is_not_json_is_refused(self, service, vod, asked_for):
+        response = await service.client.post(
+            f"/moments/{asked_for}/clip", content=b"{not json", headers={"Content-Type": "application/json"}
+        )
+
+        assert response.status_code == 400
+        assert moment(asked_for)["clip_path"] is None
+
     async def test_it_says_it_is_done_and_the_page_plays_it(self, service, vod, asked_for):
         await self.ask(service, asked_for)
         await service.settle()
@@ -818,6 +891,36 @@ class TestTheReviewPage:
         assert (watch.attrs["href"], watch.text) == ("https://kick.com/some_channel/videos/v1?t=3565", "Watch on Kick")
         assert watch.attrs["target"] == "_blank"
         assert page.find("video", data_clip=True) == []
+
+    async def test_the_stretch_to_cut_starts_out_as_the_settings_frame_the_clip(self, service, channel):
+        moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)
+        row = moment(moment_id)
+        tuned = tuning.recommended()
+        clip_from, clip_to = tuned.clip_span(
+            datetime.fromisoformat(row["window_start"]), datetime.fromisoformat(row["window_end"])
+        )
+
+        page = await page_of(service, moment_id)
+
+        # In clip time, as the strip has it; shown, and filled in, by the script.
+        stretch = page.one("div", data_vod_clip=True).one("span", data_stretch="vod")
+        assert "hidden" in stretch.attrs
+        assert float(stretch.attrs["data-clip"]) == pytest.approx((clip_to - clip_from).total_seconds(), abs=0.001)
+        assert float(stretch.attrs["data-start"]) == -tuned.context_before_seconds
+        assert float(stretch.attrs["data-end"]) == pytest.approx(
+            (clip_to - clip_from).total_seconds() + tuned.context_after_seconds, abs=0.001
+        )
+        assert float(stretch.attrs["data-least"]) == service.main.VOD_CLIP_LEAST_SECONDS
+        assert float(stretch.attrs["data-most"]) == service.main.VOD_CLIP_MOST_SECONDS
+        # Reset goes back to it.
+        assert (stretch.attrs["data-reset-start"], stretch.attrs["data-reset-end"]) == (
+            stretch.attrs["data-start"],
+            stretch.attrs["data-end"],
+        )
+        assert [field.attrs["data-stretch-type"] for field in stretch.find("input")] == ["start", "end"]
+        assert [button.text for button in stretch.find("button")] == ["Start here", "End here", "Reset"]
+        # Marked on the strip by the script.
+        assert "hidden" in page.one("div", data_vod_stretch_mark=True).attrs
 
     async def test_a_kick_moment_without_its_clip_offers_to_play_it_from_the_vod(self, service, channel):
         moment_id = add_moment(CHANNEL, broadcaster_user_id=USER_ID, clip_on_request=1, laughing=9)

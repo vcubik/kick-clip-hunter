@@ -98,9 +98,24 @@
   <div class="no-clip on-request" data-vod-clip="{{ asked.url }}"{% if asked.busy %} data-busy{% endif %} data-status-scope>
     <div>
       <p>No clip has been cut of this moment yet: its channel is tracked for moments, so a clip is cut from the stream's VOD once you ask for it.</p>
+      {#- The stretch of the stream that is cut and fetched: to begin with
+          the clip with the footage the settings keep around it, in clip
+          time as the strip has it - narrowed by typing, or set where the
+          VOD plays (I, O). The script fills in the times and shows it. -#}
+      {% set stretch = asked.stretch %}
+      <span class="trim-range stretch" role="group" aria-label="The stretch of the stream to cut" title="A time in the clip, written like 0:12.5. With a minus in front it counts back from the clip's start, with a plus on from its end." hidden data-stretch="vod" data-clip="{{ stretch.clip }}" data-start="{{ stretch.start }}" data-end="{{ stretch.end }}" data-reset-start="{{ stretch.start }}" data-reset-end="{{ stretch.end }}" data-least="{{ stretch.least }}" data-most="{{ stretch.most }}">
+        <span class="stretch-end"><label>From <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="Start of the clip, as a time" data-stretch-type="start"></label>
+          <button type="button" class="ch-btn ch-btn-compact" title="Starts the clip where the VOD is playing (I)" data-stretch-here="start">Start here</button>
+        </span>
+        <span class="stretch-end"><label>to <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="End of the clip, as a time" data-stretch-type="end"></label>
+          <button type="button" class="ch-btn ch-btn-compact" title="Ends the clip where the VOD is playing (O)" data-stretch-here="end">End here</button>
+        </span>
+        <b data-stretch-length></b>
+        <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Back to the clip with the footage the settings keep around it" data-stretch-reset>Reset</button>
+      </span>
       <p class="status-line" role="status" data-status>{{ asked.words }}</p>
     </div>
-    <button type="button" class="ch-btn ch-btn-primary" title="Cuts the clip, with the footage around it, from the stream's VOD" hidden data-vod-clip-go{% if asked.busy %} disabled{% endif %}>Cut the clip</button>
+    <button type="button" class="ch-btn ch-btn-primary" title="Cuts the stretch above from the stream's VOD" hidden data-vod-clip-go{% if asked.busy %} disabled{% endif %}>Cut the clip</button>
   </div>
   {% elif not moment.clip_url %}
   <p class="no-clip">{% if moment.clip_state == "pending" %}The clip is still being cut. That takes about two minutes.{% else %}No clip was saved for this moment.{% endif %}</p>
@@ -145,6 +160,10 @@
       {% endif %}
       {% if strip.moment %}
       <span class="ch-note" style="{% if strip.moment.note_right %}right: {{ strip.moment.note_right }}%{% else %}left: {{ strip.moment.note_left }}%{% endif %}">{{ strip.moment.note }}</span>
+      {% endif %}
+      {% if moment.on_request %}
+      {#- The stretch that is to be cut, placed by the script. -#}
+      <div class="ch-chosen" hidden data-vod-stretch-mark></div>
       {% endif %}
       {% if playable %}
       <div class="ch-hover" data-hover hidden></div>

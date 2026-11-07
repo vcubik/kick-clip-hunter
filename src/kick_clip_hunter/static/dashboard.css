@@ -285,6 +285,9 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-strip .ch-wash { fill: var(--pen); fill-opacity: 0.14; stroke: none; }
 .ch-strip .ch-context { position: absolute; top: 0; bottom: 0; background: var(--ink); opacity: 0.05; }
 .ch-strip .ch-moment { position: absolute; top: 0; bottom: 0; background: var(--marker); mix-blend-mode: multiply; }
+/* The stretch a moment's clip is to be cut of, from the VOD: marked as the
+   Trim dialog marks what it keeps. */
+.ch-strip .ch-chosen { position: absolute; top: -3px; bottom: -3px; border-top: 3px solid var(--lit); border-bottom: 3px solid var(--lit); pointer-events: none; }
 .ch-strip .ch-usual { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--ink-2); }
 .ch-strip .ch-note { position: absolute; top: 5px; margin: 0 var(--space-4); padding: 0 var(--space-4); background: var(--paper); font-size: 12px; line-height: 16px; white-space: nowrap; }
 .ch-strip .ch-hover { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink-2); pointer-events: none; }
@@ -540,6 +543,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .trim-corner.is-se { bottom: 0; right: 0; cursor: nwse-resize; }
 .trim-range { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
 .trim-range label { display: inline-flex; align-items: center; gap: var(--space-8); }
+/* A stretch chosen before something is cut: the Trim dialog's fields, on a
+   line of their own that wraps. */
+.trim-range.stretch { display: flex; flex-wrap: wrap; margin-top: var(--space-12); white-space: normal; }
+.stretch-end { display: inline-flex; align-items: center; gap: var(--space-8); }
 .trim-range b { min-width: 52px; font-weight: 600; color: var(--text); }
 /* Either end of the stretch as a time, to type where dragging is not exact
    enough. */
@@ -873,6 +880,7 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-in { width: 100%; }
 .reel-standing { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-12); }
 .reel-standing .status-line { flex: 1 1 0; min-width: 0; margin-top: 0; }
+.reel-standing .stretch { flex: 1 1 100%; margin-top: 0; }
 .reel-note { flex: 1 1 100%; font-size: 13px; color: var(--text-2); }
 .reel-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--space-24); margin-top: var(--space-16); }
 .reel-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); }

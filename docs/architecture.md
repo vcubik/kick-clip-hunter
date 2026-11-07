@@ -343,7 +343,10 @@ Module map (`src/kick_clip_hunter/`):
   (`streamers.moments_auto_cut`, heeded only while it is still tracked for moments), when
   `_moment_kept` starts the same cut at once. `POST /moments/{id}/clip` cuts it then
   (`_cut_from_vod_background`): framed as the channel's clips are framed now
-  (`Tuning.clip_span` and the context), after waiting for the VOD to reach the end of it
+  (`Tuning.clip_span` and the context) - or only the stretch the page posts (`start`, `end` in
+  clip time, `_asked_stretch`, up to `VOD_CLIP_MOST_SECONDS`), which fetches no more of the VOD
+  than that, the clip then being what of it the stretch holds, or the whole stretch where it
+  holds none of it - after waiting for the VOD to reach the end of it
   (`vod_footage.VOD_BEHIND_SECONDS` past it, `_wait_for_vod`), with `vod_footage.cut`, and
   stored as a clip the recorder cut would be - then the analysis steps run on it; where it
   stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
@@ -748,19 +751,23 @@ Module map (`src/kick_clip_hunter/`):
 - `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in a repository of the
   reel tooling's own (`REELS_REPO`, reached with `REELS_GITHUB_TOKEN`), since transcribing and
   rendering need more than the machine the service runs on. Its module docstring is the full
-  story: the moment's file and `context.json` (credit, name and note, where the clip lies in
-  the file, chat over the file at the second it belongs to, the second most of chat laughed in)
+  story: the moment's file - or only the stretch of it chosen on the Reels page (`part_asked`,
+  cut by `recorder.trim_clip` to `moment_<id>_part.mp4`, kept as `reels.part_start`/`part_end`)
+  - and `context.json` (credit, name and note, where the clip lies in what is sent, chat over it
+  at the second it belongs to, the second most of chat laughed in)
   go up into a release tagged `moment-<id>` and the `storyboard` workflow is dispatched; the
   service looks at the release every `POLL_SECONDS` and takes `storyboard.json`, the contact
   sheet and the transcript back - the subtitles Claude proposed (`clip.subs.srt`) where there
   are some, otherwise what the speech model heard (`clip.srt`, kept as well as `heard`; read by
-  `subtitles.from_srt`). The transcript is put right on the Reels page (`checked_transcript`)
+  `subtitles.from_srt`), moved to the moment's file's own seconds where only a stretch was sent
+  (`moved`), and cut back to the stretch and timed to it whenever it goes up
+  (`main._reel_subtitles`). The transcript is put right on the Reels page (`checked_transcript`)
   and goes up as `clip.subs.srt` before a variant and a hook chosen there dispatch the
   `render` workflow, with subtitles as the variant has them, on or off; its `reel.mp4` is taken
   back the same way, kept under `data/clips/reels/` and sent with a note. What a step left in
   the release is taken out before it is asked again, so whatever is found there answers the
-  last request - except the transcript while the moment's file is the one it was heard from
-  (`stamp`): then the file is not sent again, the workflow does not transcribe it again, and a
+  last request - except the transcript while the moment's file, and the stretch of it sent, is
+  the one it was heard from (`stamp`): then the file is not sent again, the workflow does not transcribe it again, and a
   transcript put right by hand goes up with `context.json` saying so, for Claude to go by. A
   failed run is noticed by its name (`run_name`) where the token may read Actions, otherwise
   after `STORYBOARD_LIMIT`/`RENDER_LIMIT`. Where it stands is the `reels` table; main.py's

@@ -36,12 +36,30 @@
 
   {#- Where the reel stands, kept current while a step of it goes on. -#}
   <div class="reel-standing" data-reel-region="standing">
+    {% if reel.part %}
+    {#- The stretch of the clip's file that goes to GitHub in its place -
+        less to transcribe and to look through - in seconds of the file, as
+        the transcript has them: the one sent last, or all of it to begin
+        with. Typed, or set where the player under the transcript is. The
+        script fills in the times and shows it. -#}
+    {% set part = reel.part %}
+    <span class="trim-range stretch" role="group" aria-label="The stretch of the clip's file to make a reel of" title="A time in the clip's file, written like 0:12.5." hidden data-stretch="reel" data-clip="{{ part.length }}" data-start="{{ part.start }}" data-end="{{ part.end }}" data-reset-start="0" data-reset-end="{{ part.length }}" data-lowest="0" data-highest="{{ part.length }}" data-least="{{ part.least }}">
+      <span class="stretch-end"><label>From <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="Start of the stretch, as a time" data-stretch-type="start"{% if reel.busy %} disabled{% endif %}></label>
+        <button type="button" class="ch-btn ch-btn-compact" title="Starts the stretch where the clip's player is" data-stretch-here="start"{% if reel.busy %} disabled{% endif %}>Start here</button>
+      </span>
+      <span class="stretch-end"><label>to <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="End of the stretch, as a time" data-stretch-type="end"{% if reel.busy %} disabled{% endif %}></label>
+        <button type="button" class="ch-btn ch-btn-compact" title="Ends the stretch where the clip's player is" data-stretch-here="end"{% if reel.busy %} disabled{% endif %}>End here</button>
+      </span>
+      <b data-stretch-length></b>
+      <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Sends the whole of the clip's file" data-stretch-reset{% if reel.busy %} disabled{% endif %}>Whole file</button>
+    </span>
+    {% endif %}
     {% if reel.has_clip %}
     <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the clip to GitHub, where a storyboard of the reel is made from it in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
     {% endif %}
     <p class="status-line" role="status" data-status>
       {%- if reel.words %}{{ reel.words }}
-      {%- elif reel.has_clip %}The clip goes to GitHub, where it is transcribed and a storyboard is made of it: a few minutes.
+      {%- elif reel.has_clip %}The clip's file - or the stretch of it above - goes to GitHub, where it is transcribed and a storyboard is made of it: a few minutes.
       {%- else %}The moment has no clip to make a reel of.{% endif -%}
     </p>
     {% if reel.stale %}

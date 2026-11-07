@@ -42,7 +42,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   place the page says so, with "Cut the clip" (`POST /moments/{id}/clip`, a tracked background
   task the page follows as it follows footage being added - `GET /moments/{id}/clip`, its words
   beside the button, under what the page says in the clip's place - until it opens the moment
-  again with its clip). The clip is cut from the
+  again with its clip). Above the button is the stretch of the stream that is cut - and all of
+  the VOD that is fetched: to begin with the clip with the footage the settings keep around it,
+  in clip time as the strip has it (`−0:30.0` to `+1:00.0`), marked on the strip. Either end is
+  typed as the Trim dialog takes a time, or set where the VOD plays on the page ("Start here" /
+  "End here", or I and O), and "Reset" puts it back; only a stretch that was changed is posted
+  (`start`, `end`, at most `main.VOD_CLIP_MOST_SECONDS` long and that far from the clip at
+  most). The moment's clip is then what of the clip the stretch holds, the rest of it the
+  footage around - or the whole stretch, where it holds none of the clip. The clip is cut from the
   stream's VOD (`vod_footage.cut`), framed as the channel's clips are framed now, once the VOD
   reaches the end of the moment's footage - which can take a minute while the stream is on, said
   as "Waiting for the stream's VOD" - and the moment is then like any other; refused until chat
@@ -227,8 +234,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   `reels.py` below) has every reel that was asked for, the one asked for last first, with where
   it stands in a word ("Storyboard", "Choose", "Rendering", "Ready", "Failed"), and the one that
   is open beside it - `?moment=` opens a moment's, one that has none yet too, which is how the
-  review page leads here. "Make a reel" (later "New storyboard") sends the moment's file and
-  its chat to GitHub (`POST /moments/{id}/reel`), and a storyboard comes back in a few minutes:
+  review page leads here. Above "Make a reel" (later "New storyboard") is the stretch of the
+  moment's file that is sent - all of it to begin with, then the one sent last - typed in
+  seconds of the file or set where the player under the transcript is ("Start here", "End
+  here"; "Whole file" puts it back): less to transcribe and for Claude to look through where
+  the rest would be thrown away. It is cut out of the file as the Trim dialog cuts one, nothing
+  re-encoded, so it begins on the last keyframe at or before its start. "Make a reel" sends it
+  and its chat to GitHub (`POST /moments/{id}/reel`, `start` and `end`; a stretch that leaves
+  out next to nothing is the whole file), and a storyboard comes back in a few minutes:
   what is in the clip, two or three variants (one recommended, those with subtitles saying
   so), three hooks and a sheet of frames - beside them the reel's transcript, under the
   moment's file playing in a player of its own: a line a block, when it starts and ends
@@ -249,7 +262,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   and what it was made with. While a step goes on the page fetches the reel
   (`GET /dashboard/reels/{id}`) every five seconds and puts in place where it stands and the
   reel - and the rest only once another storyboard is back, never over a transcript being put
-  right; a new storyboard of the same file keeps the transcript, the one put right by hand
+  right; the transcript's times are the moment's file's whatever was sent, and only its lines
+  in the stretch go up as subtitles; a new storyboard of the same file and stretch keeps the
+  transcript (another stretch is heard anew), the one put right by hand
   going to Claude with it, and one of a file that footage was added to since is said to be of
   the file as it was. A storyboard and a reel are also told of as notes, which lead here.
 - On a narrow screen: up to 1100 px wide the panes stack and the page scrolls - the queue (or
