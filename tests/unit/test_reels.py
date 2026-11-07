@@ -112,10 +112,38 @@ class TestChoosing:
         with pytest.raises(ValueError, match="at most"):
             reels.chosen_hook(STORYBOARD, "X" * (reels.HOOK_MOST_CHARACTERS + 1))
 
+    def test_an_emoji_shortcut_counts_as_its_emoji(self):
+        hook = "X" * (reels.HOOK_MOST_CHARACTERS - 2) + "{rofl}{SKULL}"
+
+        assert reels.chosen_hook(STORYBOARD, hook) == hook
+
+    def test_shortcuts_beyond_what_may_be_typed_are_refused(self):
+        with pytest.raises(ValueError, match="at most"):
+            reels.chosen_hook(STORYBOARD, "{x}" * (reels.HOOK_MOST_TYPED // 3 + 1))
+
 
 class TestWords:
     def test_a_hook_is_shown_without_its_marks(self):
         assert reels.hook_shown("NEARLY RAN|*HIM OVER?*") == "NEARLY RAN / HIM OVER?"
+
+    def test_a_hooks_emoji_shortcuts_are_shown_as_emoji_whatever_their_case(self):
+        assert reels.hook_shown("NEARLY RAN|*HIM OVER?* {rofl}{Lebka}") == "NEARLY RAN / HIM OVER? 🤣💀"
+
+    def test_an_unknown_shortcut_is_shown_as_typed_and_marked(self):
+        assert reels.hook_pieces("WHAT {rofl} {nope}!") == [
+            {"text": "WHAT 🤣 ", "unknown": False},
+            {"text": "{nope}", "unknown": True},
+            {"text": "!", "unknown": False},
+        ]
+
+    def test_a_hook_without_shortcuts_is_one_piece(self):
+        assert reels.hook_pieces("PLAIN") == [{"text": "PLAIN", "unknown": False}]
+
+    def test_every_emoji_is_offered_once_with_all_its_shortcuts(self):
+        picks = {pick["emoji"]: pick["codes"] for pick in reels.EMOJI_PICKS}
+
+        assert picks["😭"] == ["sob", "cry", "brek"]
+        assert sorted(code for codes in picks.values() for code in codes) == sorted(reels.EMOJI_CODES)
 
     def test_every_state_says_something_but_none(self):
         assert reels.state_words(None) == ""

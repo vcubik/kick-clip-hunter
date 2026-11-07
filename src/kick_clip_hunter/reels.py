@@ -70,6 +70,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -129,8 +130,37 @@ WITH_SUBTITLES = "on"
 WITHOUT_SUBTITLES = "off"
 SUBTITLE_CHOICES = (SUBTITLES_AS_THE_VARIANT, WITH_SUBTITLES, WITHOUT_SUBTITLES)
 
-# Hook words of one's own are kept to what fits on two lines of the reel.
+# Hook words of one's own are kept to what fits on two lines of the reel -
+# counted as the reel shows them, an emoji shortcut ("{rofl}") as its emoji.
 HOOK_MOST_CHARACTERS = 80
+# What may be typed for them, shortcuts spelled out: far more than any
+# hook of HOOK_MOST_CHARACTERS needs, only so that no essay goes up.
+HOOK_MOST_TYPED = 240
+
+# The emoji shortcuts a hook may have, in English and in Czech, the case of
+# their letters not mattering: "{rofl}" is drawn as 🤣. Keep this in step
+# with EMOJI_CODES in the reel repository's assets/render_reel.py - the
+# render script turns them into emoji, and leaves out (with a warning) any
+# shortcut it does not know; the page only shows them as it will.
+EMOJI_CODES = {
+    "skull": "💀", "lebka": "💀",
+    "sob": "😭", "cry": "😭", "brek": "😭",
+    "rofl": "🤣", "smich": "🤣",
+    "joy": "😂", "lol": "😂",
+    "sweat": "😅", "fire": "🔥", "ohen": "🔥", "eyes": "👀", "oci": "👀",
+    "clown": "🤡", "klaun": "🤡", "moai": "🗿", "scream": "😱", "sok": "😱",
+    "flushed": "😳", "facepalm": "🤦", "think": "🤔", "sus": "🤨",
+    "cold": "🥶", "hot": "🥵", "nerd": "🤓", "pleading": "🥺", "rage": "😡",
+    "money": "🤑", "crown": "👑", "100": "💯", "heart": "❤️", "srdce": "❤️",
+    "pray": "🙏", "clap": "👏", "ok": "👌", "poop": "💩", "hovno": "💩",
+}
+# Each emoji once, with every shortcut for it: the page's emoji buttons.
+EMOJI_PICKS = [
+    {"emoji": emoji, "codes": [code for code, its in EMOJI_CODES.items() if its == emoji]}
+    for emoji in dict.fromkeys(EMOJI_CODES.values())
+]
+# A shortcut as the render script finds one.
+EMOJI_SHORTCUT = re.compile(r"\{([A-Za-z0-9_]+)\}")
 # A comment written on the page to go with a step - for the storyboard, for
 # the render - or feedback on the reel: a few paragraphs at most.
 COMMENT_MOST_CHARACTERS = 2000
@@ -342,7 +372,7 @@ def chosen_hook(storyboard: Mapping[str, Any], hook: str) -> str:
             return str(offered["text"])
     if not hook:
         raise ValueError("Choose a hook, or write one.")
-    if len(hook) > HOOK_MOST_CHARACTERS:
+    if len(hook) > HOOK_MOST_TYPED or len(with_emoji(hook)) > HOOK_MOST_CHARACTERS:
         raise ValueError(f"A hook of your own is at most {HOOK_MOST_CHARACTERS} characters.")
     return hook
 
@@ -649,10 +679,34 @@ class GitHub:
 # -- what the page says ---------------------------------------------------------
 
 
+def with_emoji(text: str) -> str:
+    """Text with its emoji shortcuts ("{rofl}") as the emoji they stand for
+    (EMOJI_CODES); one that is not known is left as it is."""
+    return EMOJI_SHORTCUT.sub(lambda found: EMOJI_CODES.get(found.group(1).lower(), found.group(0)), text)
+
+
 def hook_shown(hook: str) -> str:
     """A hook as words to read: the render script's line break ("|") as a
-    slash, its marks around the highlighted words ("*") left out."""
-    return " / ".join(part.strip() for part in hook.replace("*", "").split("|") if part.strip())
+    slash, its marks around the highlighted words ("*") left out, its emoji
+    shortcuts as emoji (an unknown one as it is typed)."""
+    return " / ".join(part.strip() for part in with_emoji(hook).replace("*", "").split("|") if part.strip())
+
+
+def hook_pieces(hook: str) -> list[dict[str, Any]]:
+    """A hook as the page shows it (hook_shown), in pieces: each with its
+    `text`, and `unknown` for an emoji shortcut the render script does not
+    know and leaves out of the reel - so that the page can mark it."""
+    shown = hook_shown(hook)
+    pieces: list[dict[str, Any]] = []
+    at = 0
+    for found in EMOJI_SHORTCUT.finditer(shown):
+        if found.start() > at:
+            pieces.append({"text": shown[at : found.start()], "unknown": False})
+        pieces.append({"text": found.group(0), "unknown": True})
+        at = found.end()
+    if at < len(shown) or not pieces:
+        pieces.append({"text": shown[at:], "unknown": False})
+    return pieces
 
 
 def row_words(state: str | None) -> str:

@@ -265,7 +265,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   out, the rest kept in the order they are said), and leaving the page with something not
   saved asks first. "A: " and "B: " in front of a line colour it in the reel for who says it,
   `*a word*` makes it stand out. A variant and a hook (or words of one's own, `|` breaking the
-  line and `*word*` highlighted) are pressed, subtitles switched on or off (as the pressed
+  line and `*word*` highlighted) are pressed - an emoji shortcut in a hook (`{rofl}`, `{lebka}`,
+  any case; `reels.EMOJI_CODES`, kept in step with the render script's) shown as its emoji, and
+  one the render script does not know struck through, as the reel leaves it out. The words of
+  one's own are shown so under the field as they are typed, and the emoji buttons under them put
+  a shortcut where the cursor is; the shortcuts go up as typed, and count as their emoji against
+  the hook's 80 characters. Subtitles are switched on or off (as the pressed
   variant has them to begin with), a comment for the render written if there is something to
   change in the variant (Claude reworks it by that first), and "Render"
   (`POST /moments/{id}/reel/render`, `variant`, `hook`, `subtitles` and `comment`, after saving

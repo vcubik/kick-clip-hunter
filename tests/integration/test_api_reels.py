@@ -615,6 +615,34 @@ class TestRendering:
         assert opened.one(data_reel_own=True).attrs["value"] == "MY OWN|*HOOK*"
         assert all(hook.attrs["aria-pressed"] == "false" for hook in opened.find(data_reel_hook=True))
 
+    async def test_emoji_shortcuts_go_up_as_typed_and_the_page_shows_them_as_emoji(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        payload = await rendered(reeling, github, moment_id, "B", "MY *OWN* {rofl}{nope}")
+
+        assert payload["hook"] == "MY *OWN* {rofl}{nope}"
+        opened = await workspace(reeling, moment_id)
+        shown = opened.one(data_reel_own_shown=True)
+        assert shown.children[0] == "MY OWN 🤣"
+        assert shown.one("s", class_="reel-unknown").text == "{nope}"
+
+    async def test_the_storyboards_hooks_show_their_emoji_and_the_page_offers_them_all(self, reeling, github):
+        moment_id = clipped_moment()
+        hooks = [{"id": 1, "type": "T1", "text": "NEARLY RAN|*HIM OVER?* {ROFL}{huh}"}]
+
+        await storyboard_back(reeling, github, moment_id, storyboard={**STORYBOARD, "hooks": hooks})
+
+        opened = await workspace(reeling, moment_id)
+        hook = opened.one(data_reel_hook=True).one("b")
+        assert hook.children[0] == "NEARLY RAN / HIM OVER? 🤣"
+        assert hook.one("s", class_="reel-unknown").text == "{huh}"
+        table = opened.one(data_reel_emoji_codes=True)
+        assert json.loads(table.attrs["data-reel-emoji-codes"]) == reels.EMOJI_CODES
+        assert [pick.attrs["data-reel-emoji"] for pick in table.find(data_reel_emoji=True)] == [
+            pick["codes"][0] for pick in reels.EMOJI_PICKS
+        ]
+
     async def test_rendering_again_takes_the_last_reel_out_of_the_release_first(self, reeling, github):
         moment_id = clipped_moment()
         await storyboard_back(reeling, github, moment_id)

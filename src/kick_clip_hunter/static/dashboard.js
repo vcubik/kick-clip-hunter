@@ -1846,7 +1846,10 @@
     }
     if (button.matches("[data-reel-variant]")) setReelSubtitles(reelOf(button), button.dataset.subtitled);
     const own = one("[data-reel-own]", group);
-    if (own && button.matches("[data-reel-hook]")) own.value = "";
+    if (own && button.matches("[data-reel-hook]")) {
+      own.value = "";
+      showOwnHook(own);
+    }
   }
 
   function setReelSubtitles(root, value) {
@@ -1855,12 +1858,74 @@
     }
   }
 
-  // Words of one's own typed in: none of the storyboard's hooks is chosen.
+  // Words of one's own typed in: none of the storyboard's hooks is chosen,
+  // and the words are shown as the reel will show them.
   function ownHook(field) {
     const group = field.closest("[data-reel-hooks]");
     if (field.value.trim()) {
       for (const hook of all("[data-reel-hook]", group)) hook.setAttribute("aria-pressed", "false");
     }
+    showOwnHook(field);
+  }
+
+  // A hook as the reel shows it, in pieces - as reels.hook_pieces has it for
+  // the storyboard's hooks: "|" a slash, the stars gone, an emoji shortcut
+  // ("{rofl}") its emoji by the table the page was given (reels.EMOJI_CODES),
+  // and one the render script does not know - and leaves out - marked.
+  const EMOJI_SHORTCUT = /\{([A-Za-z0-9_]+)\}/g;
+
+  function hookPieces(hook, codes) {
+    const shown = hook
+      .replace(EMOJI_SHORTCUT, (found, code) => (Object.hasOwn(codes, code.toLowerCase()) ? codes[code.toLowerCase()] : found))
+      .replaceAll("*", "")
+      .split("|")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(" / ");
+    const pieces = [];
+    let at = 0;
+    for (const found of shown.matchAll(EMOJI_SHORTCUT)) {
+      if (found.index > at) pieces.push({ text: shown.slice(at, found.index), unknown: false });
+      pieces.push({ text: found[0], unknown: true });
+      at = found.index + found[0].length;
+    }
+    if (at < shown.length) pieces.push({ text: shown.slice(at), unknown: false });
+    return pieces;
+  }
+
+  function showOwnHook(field) {
+    const group = field.closest("[data-reel-hooks]");
+    const shown = one("[data-reel-own-shown]", group);
+    const table = one("[data-reel-emoji-codes]", group);
+    if (!shown || !table) return;
+    const codes = JSON.parse(table.dataset.reelEmojiCodes);
+    shown.replaceChildren(
+      ...hookPieces(field.value, codes).map((piece) => {
+        if (!piece.unknown) return document.createTextNode(piece.text);
+        const mark = document.createElement("s");
+        mark.className = "reel-unknown";
+        mark.title = "Not an emoji shortcut the render knows: left out of the reel";
+        mark.textContent = piece.text;
+        return mark;
+      }),
+    );
+  }
+
+  // An emoji button: its shortcut put where the cursor is in the words of
+  // one's own (at their end where the field was not typed in), a space
+  // before it where the words run up to it.
+  function addReelEmoji(button) {
+    const field = one("[data-reel-own]", button.closest("[data-reel-hooks]"));
+    if (!field) return;
+    const shortcut = `{${button.dataset.reelEmoji}}`;
+    const start = field.selectionStart ?? field.value.length;
+    const end = field.selectionEnd ?? start;
+    const before = field.value.slice(0, start);
+    const words = (before && !/\s$|\}$/.test(before) ? " " : "") + shortcut;
+    if (field.value.length - (end - start) + words.length > field.maxLength) return;
+    field.setRangeText(words, start, end, "end");
+    field.focus();
+    ownHook(field);
   }
 
   async function renderReel(button) {
@@ -3596,6 +3661,7 @@
     ["[data-stretch-reset]", (button) => resetStretch(stretchOf(button))],
     ["[data-reel-ask]", askReel],
     ["[data-reel-variant], [data-reel-hook]", chooseReel],
+    ["[data-reel-emoji]", addReelEmoji],
     ["[data-reel-subtitles] button", (button) => setReelSubtitles(reelOf(button), button.dataset.value)],
     ["[data-reel-render]", renderReel],
     ["[data-reel-play]", playReelLine],
