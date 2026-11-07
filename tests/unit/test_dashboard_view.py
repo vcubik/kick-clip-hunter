@@ -557,6 +557,12 @@ class TestReviewUrl:
             "/dashboard?show=all&order=laughing&downloaded=no&offset=50"
         )
 
+    def test_on_disk_or_not_is_spelled_out_when_chosen(self):
+        assert view.review_url(on_disk=view.ON_DISK_ANY) == "/dashboard"
+        assert view.review_url(view.SHOW_ALL, downloaded=view.DOWNLOADED_NO, on_disk=view.ON_DISK_YES, offset=50) == (
+            "/dashboard?show=all&downloaded=no&on_disk=yes&offset=50"
+        )
+
     def test_a_channel_name_is_made_safe_for_an_address(self):
         assert view.review_url(channel='a&b="c"') == "/dashboard?channel=a%26b%3D%22c%22"
 
@@ -652,6 +658,17 @@ class TestAnEmptyList:
         assert downloaded["heading"] == "No clips from channel_a downloaded here yet"
         assert "downloaded from Trim" in downloaded["lead"]
         assert left == {"queue": "Everything here was downloaded", "heading": "Every clip here was downloaded"}
+
+    def test_a_list_narrowed_to_on_disk_or_not_says_that_is_why(self):
+        kept = view.empty_queue_words(view.SHOW_ALL, "channel_a", local(2, 14), TODAY, on_disk=view.ON_DISK_YES)
+        vod = view.empty_queue_words(view.SHOW_BEST, None, local(2, 14), TODAY, on_disk=view.ON_DISK_NO)
+
+        assert kept["heading"] == "No clips from channel_a on disk here"
+        assert "VOD" in kept["lead"]
+        assert vod == {"queue": "Everything here is on disk", "heading": "Every clip here is on disk"}
+        assert view.empty_queue_words(view.SHOW_ALL, None, None, TODAY, on_disk=view.ON_DISK_YES)["queue"] == (
+            "No moments yet"
+        )
 
     def test_before_the_first_moment_a_narrowed_list_has_nothing_yet_either(self):
         for downloaded in view.DOWNLOADEDS:

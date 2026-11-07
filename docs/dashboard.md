@@ -26,7 +26,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   below); a moment something was downloaded from there is marked in the queue, beside its
   rating, and beside when it was in the open moment (`moments.downloaded_at`), and the queue
   can be narrowed to those moments or to the others (`?downloaded=yes|no`; the counts on its
-  tabs follow). After it, "Add before" and "Add after" put that much more of
+  tabs follow) - and, beside that, to the moments whose clip is on disk or to those that are
+  only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). After it, "Add before" and "Add after" put that much more of
   the stream into the moment's file - 15 s to 2 min, chosen in the list in front of them, which
   the script remembers - ahead of its first frame or after its last, from the stream's own
   recording: its VOD on Kick and Twitch, days later too, and on YouTube the stream wound back

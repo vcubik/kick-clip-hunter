@@ -1823,6 +1823,60 @@ class TestDownloadedFilter:
         assert "hidden" in left.one("span", class_="moment-taken").attrs
 
 
+class TestOnDiskFilter:
+    @pytest.fixture(autouse=True)
+    def moments_on_disk_and_not(self, service):
+        self.old_kept = add_moment(detected_at=T0, rating=5, clip_path="clips/old.mp4")
+        self.vod = add_moment(detected_at=T0 + minutes(1), clip_on_request=1)
+        self.kept = add_moment(detected_at=T0 + minutes(2), clip_path="clips/new.mp4")
+        self.rated_vod = add_moment(detected_at=T0 + minutes(3), rating=2, clip_on_request=1)
+
+    async def test_the_list_can_keep_only_the_moments_on_disk_or_only_the_others(self, service):
+        assert queued(await review(service, show="all", on_disk="yes")) == [self.kept, self.old_kept]
+        assert queued(await review(service, show="all", on_disk="no")) == [self.rated_vod, self.vod]
+        assert queued(await review(service, on_disk="no")) == [self.vod]
+
+    async def test_both_are_listed_unless_told_otherwise(self, service):
+        everything = [self.rated_vod, self.kept, self.vod, self.old_kept]
+        assert queued(await review(service, show="all")) == everything
+        assert queued(await review(service, show="all", on_disk="sideways")) == everything
+
+    async def test_the_counts_on_the_tabs_are_of_the_narrowed_list(self, service):
+        assert tabs(await review(service, on_disk="yes")) == ["Unrated 1", "All 2", "Best 1"]
+        assert tabs(await review(service, on_disk="no")) == ["Unrated 1", "All 2", "Best 0"]
+
+    async def test_it_goes_together_with_downloaded_or_not(self, service):
+        taken = add_moment(detected_at=T0 + minutes(4), clip_path="clips/taken.mp4", downloaded_at=T0.isoformat())
+
+        assert queued(await review(service, show="all", on_disk="yes", downloaded="yes")) == [taken]
+        assert queued(await review(service, show="all", on_disk="yes", downloaded="no")) == [self.kept, self.old_kept]
+
+    async def test_the_choice_stays_while_moving_about_the_list(self, service):
+        page = await review(service, on_disk="yes", downloaded="no")
+
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?downloaded=no&on_disk=yes&moment={self.kept}"
+        tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
+        assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["best"] == (
+            "/dashboard?show=best&downloaded=no&on_disk=yes"
+        )
+        (choice,) = page.find("select", id="on-disk-filter")
+        assert [option.attrs["value"] for option in choice.find("option", selected=True)] == ["yes"]
+        assert page.one("aside", class_="queue").attrs["data-on-disk"] == "yes"
+
+    async def test_an_empty_narrowed_list_says_that_is_why(self, service):
+        page = await review(service, show="best", on_disk="no")
+
+        assert queued(page) == []
+        assert page.one("p", class_="queue-empty").text == "Everything here is on disk"
+
+    async def test_the_open_moment_says_whether_it_is_on_disk(self, service):
+        kept = open_moment(await review(service, show="all", moment=self.kept))
+        vod = open_moment(await review(service, show="all", moment=self.vod))
+
+        assert kept.attrs["data-on-disk"] == "true"
+        assert vod.attrs["data-on-disk"] == "false"
+
+
 class TestChannelFilter:
     @pytest.fixture(autouse=True)
     def moments_of_two_channels(self, service):

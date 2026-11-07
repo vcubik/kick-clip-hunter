@@ -4,7 +4,7 @@
     loading the queue around it again. -#}
 {% from "_chat_line.html" import chat_line with context -%}
 {% from "_macros.html" import delete, taken_icon -%}
-<article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-downloaded="{{ 'true' if moment.downloaded else 'false' }}" data-status-scope>
+<article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-downloaded="{{ 'true' if moment.downloaded else 'false' }}" data-on-disk="{{ 'true' if moment.on_disk else 'false' }}" data-status-scope>
 <div class="stage">
 <div class="stage-in">
   <header class="moment-head">
