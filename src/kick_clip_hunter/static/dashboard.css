@@ -655,7 +655,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .watchlist td { height: var(--h-row); border-top: 1px solid var(--quiet); }
 .watchlist td:first-child { font-weight: 700; }
 .watchlist .channel-vods { display: block; font-weight: 400; }
-.watchlist .moment-clips { margin-top: var(--space-8); gap: var(--space-8); }
+.watchlist .tracking-line { flex-wrap: nowrap; gap: var(--space-8); white-space: nowrap; }
+.watchlist .moment-clips { gap: var(--space-8); padding-left: var(--space-8); border-left: 1px solid var(--quiet); }
 .watchlist .moment-clips[hidden] { display: none; }
 .watchlist th:nth-last-child(-n+3), .watchlist td:nth-last-child(-n+3) { width: 1%; white-space: nowrap; }
 .watchlist th:last-child, .watchlist td:last-child { padding-right: 0; text-align: right; }
@@ -1031,6 +1032,9 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .watchlist td:first-child { display: block; grid-column: 1; overflow-wrap: anywhere; }
   .watchlist td:last-child { grid-column: 2; grid-row: 1; }
   .watchlist td:first-child::before, .watchlist td:last-child::before { content: none; }
+  /* Too narrow for the moments' clips beside the tracking: under it. */
+  .watchlist .tracking-line { flex: 1 1 0; flex-wrap: wrap; min-width: 0; }
+  .watchlist .moment-clips { padding-left: 0; border-left: 0; }
   .rec-control { flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
   .rec-control > .ch-meta:empty { display: none; }
   .add-channel .ch-input { width: 100%; }
