@@ -14,8 +14,10 @@ import logging
 try:
     from streamlink import Streamlink
     from streamlink.exceptions import StreamlinkError
+    from streamlink.options import Options
 except ImportError:  # pragma: no cover - installed wherever the suite runs
     Streamlink = None  # type: ignore[assignment, misc]
+    Options = None  # type: ignore[assignment, misc]
 
     class StreamlinkError(Exception):  # type: ignore[no-redef]
         """Stands in for streamlink's own, which nothing can raise now."""
@@ -26,4 +28,4 @@ NOT_INSTALLED = "streamlink is not installed: pip install -r requirements-core.t
 for _level in (logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG):
     logging.addLevelName(_level, logging.getLevelName(_level).upper())
 
-__all__ = ["NOT_INSTALLED", "Streamlink", "StreamlinkError"]
+__all__ = ["NOT_INSTALLED", "Options", "Streamlink", "StreamlinkError"]

@@ -37,13 +37,21 @@ class FakeStream:
 
 class FakeStreamlink:
     """Stands in for a streamlink session: what `streams` answers for each
-    address, or raises."""
+    address, or raises - and the headers its Twitch plugin was told to send
+    with each ask (`viewers`). One asked with a header Twitch refuses
+    (`refused_headers`) raises as streamlink does."""
 
     answers: ClassVar[dict[str, object]] = {}
     asked: ClassVar[list[str]] = []
+    viewers: ClassVar[list[dict[str, str]]] = []
+    refused_headers: ClassVar[list[dict[str, str]]] = []
 
-    def streams(self, url: str):
+    def streams(self, url: str, options=None):
+        headers = dict(options.get("api-header") or []) if options is not None else {}
         FakeStreamlink.asked.append(url)
+        FakeStreamlink.viewers.append(headers)
+        if headers and headers in FakeStreamlink.refused_headers:
+            raise PluginError("Unable to validate response text: 401 Unauthorized")
         answer = FakeStreamlink.answers.get(url, {})
         if isinstance(answer, Exception):
             raise answer
@@ -54,8 +62,22 @@ class FakeStreamlink:
 def streamlink(monkeypatch) -> type[FakeStreamlink]:
     FakeStreamlink.answers = {}
     FakeStreamlink.asked = []
+    FakeStreamlink.viewers = []
+    FakeStreamlink.refused_headers = []
     monkeypatch.setattr(twitch_stream, "Streamlink", FakeStreamlink)
     return FakeStreamlink
+
+
+AUTH_TOKEN = "subscriber-auth-token"
+AS_THE_ACCOUNT = {"Authorization": f"OAuth {AUTH_TOKEN}"}
+
+
+@pytest.fixture
+def auth_token(monkeypatch) -> str:
+    """The auth-token of an account signed in on twitch.tv set, as .env sets
+    it."""
+    monkeypatch.setenv("TWITCH_AUTH_TOKEN", AUTH_TOKEN)
+    return AUTH_TOKEN
 
 
 class TestFindingTheStream:
@@ -83,6 +105,46 @@ class TestFindingTheStream:
 
         assert streams.stream_urls("some_channel@twitch").live == MASTER
         assert streamlink.asked == ["https://www.twitch.tv/some_channel"]
+
+
+class TestAskingAsASignedInAccount:
+    """With the auth-token of an account signed in on twitch.tv set, Twitch
+    is asked for a stream as that account - a subscriber's gets what only
+    subscribers do - and as a visitor where it will not answer that."""
+
+    def test_without_one_twitch_is_asked_as_a_visitor(self, streamlink):
+        streamlink.answers["https://www.twitch.tv/some_channel"] = {"best": FakeStream(MASTER)}
+
+        twitch_stream.get_stream_urls("some_channel")
+
+        assert streamlink.viewers == [{}]
+
+    def test_with_one_streamlink_sends_it_to_twitch(self, streamlink, auth_token):
+        streamlink.answers["https://www.twitch.tv/some_channel"] = {"best": FakeStream(MASTER)}
+
+        assert twitch_stream.get_stream_urls("some_channel").live == MASTER
+        assert streamlink.viewers == [AS_THE_ACCOUNT]
+
+    def test_one_twitch_refuses_is_let_go_of_and_a_visitor_asks(self, streamlink, auth_token, caplog):
+        streamlink.answers["https://www.twitch.tv/some_channel"] = {"best": FakeStream(MASTER)}
+        streamlink.refused_headers = [AS_THE_ACCOUNT]
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            assert twitch_stream.get_stream_urls("some_channel").live == MASTER
+
+        assert streamlink.viewers == [AS_THE_ACCOUNT, {}]
+        assert "TWITCH_AUTH_TOKEN" in caplog.text
+        assert AUTH_TOKEN not in caplog.text
+
+    def test_a_vod_kept_for_subscribers_is_had_as_one(self, streamlink, auth_token, twitch_api):
+        channel = twitch_api.add_channel("some_channel", "101")
+        channel.past_broadcasts = [past_broadcast("777", "2026-10-16T14:38:15Z", "9h58m16s")]
+        twitch_api.subscriber_only_videos.add("777")
+        # Twitch plays it to the account only.
+        streamlink.answers["https://www.twitch.tv/videos/777"] = {"best": FakeStream(VOD_MASTER)}
+
+        assert twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6)).master == VOD_MASTER
+        assert streamlink.viewers == [AS_THE_ACCOUNT]
 
 
 def test_streamlink_leaves_the_names_of_the_log_levels_as_the_service_writes_them():
@@ -211,8 +273,20 @@ class TestFindingAPastBroadcast:
         twitch_api.subscriber_only_videos.add("777")
         streamlink.answers["https://www.twitch.tv/videos/777"] = refused
 
-        with pytest.raises(NoVod, match="for the channel's subscribers only"):
+        with pytest.raises(NoVod, match="for the channel's subscribers only") as refusal:
             twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+        assert "TWITCH_AUTH_TOKEN" in str(refusal.value)
+
+    def test_one_refused_to_an_account_that_is_no_subscriber_says_no_more(
+        self, channel, streamlink, twitch_api, auth_token
+    ):
+        twitch_api.web_tokens.add(auth_token)
+        twitch_api.subscriber_only_videos.add("777")
+        streamlink.answers["https://www.twitch.tv/videos/777"] = {}
+
+        with pytest.raises(NoVod, match="for the channel's subscribers only") as refusal:
+            twitch_stream.vod_at("some_channel", BEGAN + timedelta(hours=6))
+        assert "TWITCH_AUTH_TOKEN" not in str(refusal.value)
 
     def test_one_kept_for_subscribers_that_still_plays_is_had(self, channel, twitch_api):
         twitch_api.subscriber_only_videos.add("777")
@@ -355,6 +429,36 @@ class TestWhoMayWatchAPastBroadcast:
         assert query["operationName"] == "PlaybackAccessToken"
         assert query["variables"]["vodID"] == "777"
         assert query["variables"]["isVod"] is True
+
+    async def test_without_an_auth_token_a_visitor_asks(self, twitch_api):
+        await twitch_client.video_restricted_qualities("777")
+
+        assert twitch_api.gql_viewers == [None]
+
+    async def test_a_subscriber_may_watch_one_kept_for_subscribers_in_full(self, twitch_api, auth_token):
+        twitch_api.web_tokens.add(auth_token)
+        twitch_api.subscribing_tokens.add(auth_token)
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert await twitch_client.video_restricted_qualities("777") == []
+        assert await twitch_stream.kept_for_subscribers("777") is False
+        assert twitch_api.gql_viewers == [auth_token, auth_token]
+
+    async def test_an_account_that_is_no_subscriber_may_not(self, twitch_api, auth_token):
+        twitch_api.web_tokens.add(auth_token)
+        twitch_api.subscriber_only_videos.add("777")
+
+        assert await twitch_stream.kept_for_subscribers("777") is True
+
+    async def test_a_token_twitch_refuses_is_let_go_of_and_a_visitor_asks(self, twitch_api, auth_token, caplog):
+        twitch_api.subscriber_only_videos.add("777")
+
+        with caplog.at_level(logging.WARNING, logger="kick_clip_hunter"):
+            assert twitch_client.SOURCE_QUALITY in await twitch_client.video_restricted_qualities("777")
+
+        assert twitch_api.gql_viewers == [auth_token, None]
+        assert "TWITCH_AUTH_TOKEN" in caplog.text
+        assert auth_token not in caplog.text
 
     async def test_one_kept_for_subscribers_has_its_source_among_them(self, twitch_api):
         twitch_api.subscriber_only_videos.add("777")

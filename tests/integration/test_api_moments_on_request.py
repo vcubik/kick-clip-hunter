@@ -801,7 +801,7 @@ class TestATwitchVodPlayedOnThePage:
         answers = {"https://www.twitch.tv/videos/777": {"best": FakeStream(server.master_url)}}
 
         class Streamlink:
-            def streams(self, url: str):
+            def streams(self, url: str, options=None):
                 return answers.get(url, {})
 
         monkeypatch.setattr(twitch_stream, "Streamlink", Streamlink)

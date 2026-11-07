@@ -36,7 +36,13 @@ Helix lists a past broadcast a channel keeps for its subscribers only as
 visitor about to watch it, which names the qualities only subscribers may
 watch - the Source quality among them (twitch_client.
 video_restricted_qualities). Its playlist is then refused ("Manifest is
-restricted"), and streamlink finds nothing at it.
+restricted"), and streamlink finds nothing at it - unless the account
+whose auth-token is set (TWITCH_AUTH_TOKEN, a browser's cookie on twitch.tv)
+subscribes to the channel: everything here asks Twitch as that account where
+there is one (twitch_client.viewer_headers), which also has a subscriber's
+live stream come without ads. Where Twitch will not answer with the token -
+it ran out, the account signed out - it is asked as a visitor once more,
+and the log says so.
 
 A person watches a past broadcast at twitch.tv/videos/<id>, from a time
 the address says (`?t=1h2m3s`) - `watch_link_at` gives that of the one a
@@ -55,7 +61,7 @@ import httpx
 from . import twitch_client
 from .config import load_settings
 from .platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
-from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
+from .streamlink_support import NOT_INSTALLED, Options, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
 
@@ -83,13 +89,30 @@ FOR_SUBSCRIBERS = (
     "Twitch keeps the past broadcast of that stream for the channel's subscribers only: "
     "no clip can be cut from it now that the stream is over."
 )
+# Said with it where the stream and VOD are asked for as no account.
+AS_A_SUBSCRIBER = " Set TWITCH_AUTH_TOKEN to a subscriber's to have it all the same (see docs/setup.md)."
 
 
 def _master(url: str) -> str | None:
-    """The master playlist streamlink finds at a Twitch address, if any."""
+    """The master playlist streamlink finds at a Twitch address, if any -
+    asked as the account whose auth-token is set, and as a visitor where
+    Twitch would not answer that."""
     if Streamlink is None:  # pragma: no cover - see the import above
         raise StreamUrlError(NOT_INSTALLED)
-    stream = Streamlink().streams(url).get("best")
+    viewer = twitch_client.viewer_headers()
+    if viewer:
+        try:
+            return _best(url, viewer)
+        except StreamlinkError as error:
+            logger.warning("Twitch would not answer with TWITCH_AUTH_TOKEN - asking as a visitor (%s)", error)
+    return _best(url, {})
+
+
+def _best(url: str, headers: dict[str, str]) -> str | None:
+    options = Options()
+    if headers:
+        options.set("api-header", list(headers.items()))
+    stream = Streamlink().streams(url, options=options).get("best")
     return stream.to_manifest_url() if stream is not None else None
 
 
@@ -278,4 +301,4 @@ def _refuse_if_for_subscribers(video_id: str) -> None:
     channel's subscribers only - why its playlist was refused. Asked only
     once it was: while the stream is on, Twitch may play it to anyone."""
     if asyncio.run(kept_for_subscribers(video_id)):
-        raise NoVod(FOR_SUBSCRIBERS)
+        raise NoVod(FOR_SUBSCRIBERS + ("" if twitch_client.viewer_headers() else AS_A_SUBSCRIBER))
