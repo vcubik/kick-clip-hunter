@@ -27,6 +27,17 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   `twitch_auth.py` below for why an account is needed at all. The bot writes in Twitch's
   chat as the same account, which the sign-in asks for (`user:write:chat`) - one signed in
   before the bot could write reads as it did, and has to sign in again for the bot to write
+- Optionally, `TWITCH_AUTH_TOKEN` in `.env`: the `auth-token` cookie of a browser signed in
+  on twitch.tv (the browser's developer tools, Application/Storage, Cookies,
+  `https://www.twitch.tv`). Every Twitch stream and VOD is then asked for as that account
+  (`twitch_stream.py`): a VOD a channel keeps for its subscribers only can be had where the
+  account subscribes to it - for clips cut from the VOD, footage added from it, the review
+  page's player - and a subscriber's live stream comes without ads. Without it Twitch is
+  asked as a visitor. It is the whole account's sign-in: it stays in `.env` and is never
+  logged. It lasts until the account signs out of that browser or changes its password;
+  Twitch refusing it is a warning in the log (`Twitch refused TWITCH_AUTH_TOKEN`), and the
+  service asks as a visitor meanwhile. The service picks a changed one up on its next ask,
+  without a restart
 - For the bot to write in Kick's chat (see `chat_bot.py` below), an account signs in for it
   from the dashboard - "Sign one in" beside a Kick channel's bot settings, or the Health
   page's Chat bot part - through Kick's OAuth 2.1 flow with PKCE (`kick_auth.py`); the

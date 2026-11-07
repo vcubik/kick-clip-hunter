@@ -88,7 +88,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   VODs for subscribers only once a stream is over, "Cut the clip" works while the stream is
   on and fails after, as "Play from the VOD" does - and on a Twitch channel that keeps its
   past broadcasts so, once the stream is over, they fail saying so (Helix lists such a past
-  broadcast as public; its playback token is what tells). Choosing Moments for the channel
+  broadcast as public; its playback token is what tells) - unless `TWITCH_AUTH_TOKEN` is
+  of an account that subscribes to the channel (docs/setup.md). A sub that runs out, or a
+  Prime sub not renewed, takes that away again without a word but the same refusal. Choosing Moments for the channel
   says so, and the Channels page shows it under the channel's name: every
   Kick and Twitch channel's VODs are asked about once a day. A
   clip of one is cut by the VOD's clock, not found by its pictures: seconds off where the

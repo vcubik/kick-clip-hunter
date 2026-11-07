@@ -19,6 +19,11 @@ class Settings:
     # Twitch channel can be (see `twitch`).
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
+    # The `auth-token` cookie of a browser signed in on twitch.tv: with it
+    # the stream and VOD of a channel are asked for as that account - which
+    # may watch a VOD kept for the channel's subscribers where it is one,
+    # and gets no ads where it subscribes. As a visitor without it.
+    twitch_auth_token: str = ""
     kick_redirect_uri: str = DEFAULT_KICK_REDIRECT_URI
     # A key of Euler Stream's, the service that signs the requests TikTok's
     # chat is read with (see tiktok_chat.py), for more of them a day than it
@@ -61,6 +66,7 @@ def load_settings() -> Settings:
         kick_client_secret=client_secret,
         twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", "").strip(),
         twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", "").strip(),
+        twitch_auth_token=os.environ.get("TWITCH_AUTH_TOKEN", "").strip(),
         kick_redirect_uri=os.environ.get("KICK_REDIRECT_URI", "").strip() or DEFAULT_KICK_REDIRECT_URI,
         euler_stream_api_key=os.environ.get("EULER_STREAM_API_KEY", "").strip(),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),

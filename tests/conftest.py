@@ -82,6 +82,9 @@ def pytest_configure(config: pytest.Config) -> None:
     # empty, they are there for python-dotenv not to fill them in either.
     os.environ["TWITCH_CLIENT_ID"] = ""
     os.environ["TWITCH_CLIENT_SECRET"] = ""
+    # Twitch's streams are asked for as a visitor unless a test says
+    # otherwise.
+    os.environ["TWITCH_AUTH_TOKEN"] = ""
     # Kick sends the bot's sign-in back where it does by default.
     os.environ["KICK_REDIRECT_URI"] = ""
     # No notifications go anywhere unless a test says where (the `telegram`

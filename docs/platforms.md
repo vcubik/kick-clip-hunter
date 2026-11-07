@@ -116,7 +116,11 @@ October 2026:
   restricted" in the log - streamlink then finds no streams). What tells is the playback
   token twitch.tv's own GraphQL API hands a visitor (`PlaybackAccessToken`, the site's
   public client id): its `chansub.restricted_bitrates` names every quality, Source
-  (`chunked`) among them, where a public one names none (seen November 2026).
+  (`chunked`) among them, where a public one names none (seen November 2026). Asked as an
+  account signed in on twitch.tv (`TWITCH_AUTH_TOKEN`, sent as `Authorization: OAuth
+  <token>` - to that API and, through streamlink's `api-header`, to everything streamlink
+  asks Twitch) a subscriber is handed the playlist; the token has to be the site's own
+  (its `auth-token` cookie), as one an application of ours gets is not taken there.
 - YouTube: nothing of a stream that is over in a form that could be taken (streamlink plays
   such a video in 360p only). A stream that is on can be wound back, as its viewers can, up
   to twelve hours: the live playlist lists only its newest segments, but a segment's address

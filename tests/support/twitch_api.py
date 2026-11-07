@@ -163,6 +163,14 @@ class FakeTwitchApi:
     # Past broadcasts (by id) Twitch plays to the channel's subscribers
     # only - which Helix lists as "public" all the same.
     subscriber_only_videos: set[str] = field(default_factory=set)
+    # The auth-tokens of accounts signed in on twitch.tv that its GraphQL
+    # API knows (any other is refused, 401), and of those the ones that
+    # subscribe to every channel here - which watch any past broadcast in
+    # full. `gql_viewers` is the token each GraphQL request came with, in
+    # order (None where it came as a visitor).
+    web_tokens: set[str] = field(default_factory=set)
+    subscribing_tokens: set[str] = field(default_factory=set)
+    gql_viewers: list[str | None] = field(default_factory=list)
 
     def sign_in_will_happen(
         self, account: FakeAccount | None = None, *, after_polls: int = 0, denied: bool = False
@@ -396,14 +404,20 @@ class FakeTwitchApi:
 
     def _gql(self, request: httpx.Request, body: object) -> httpx.Response:
         """A past broadcast's playback access token, as Twitch hands it to
-        a visitor: who may watch which of its qualities, as JSON in a
-        string."""
+        a visitor or a signed-in account: which of its qualities it may not
+        watch, as JSON in a string."""
         if not request.headers.get("client-id"):
             return httpx.Response(400, json={"error": "Bad Request", "message": 'The "Client-ID" header is missing'})
+        authorization = request.headers.get("authorization")
+        viewer = authorization.removeprefix("OAuth ") if authorization else None
+        self.gql_viewers.append(viewer)
+        if viewer is not None and viewer not in self.web_tokens:
+            return httpx.Response(401, json={"error": "Unauthorized", "message": "invalid token"})
         if not isinstance(body, dict) or body.get("operationName") != "PlaybackAccessToken":
             return httpx.Response(200, json={"errors": [{"message": "PersistedQueryNotFound"}]})
         video_id = str(body.get("variables", {}).get("vodID", ""))
-        restricted = SUBSCRIBER_QUALITIES if video_id in self.subscriber_only_videos else []
+        kept = video_id in self.subscriber_only_videos and viewer not in self.subscribing_tokens
+        restricted = SUBSCRIBER_QUALITIES if kept else []
         value = json.dumps({"authorization": {"forbidden": False}, "chansub": {"restricted_bitrates": restricted}})
         return httpx.Response(200, json={"data": {"videoPlaybackAccessToken": {"value": value, "signature": "sig"}}})
 

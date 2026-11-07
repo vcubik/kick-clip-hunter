@@ -12,18 +12,22 @@ account's token (see twitch_auth.py) - and so does writing in it
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 
 import httpx
 
-from .config import Settings
+from .config import Settings, load_settings
+
+logger = logging.getLogger("kick_clip_hunter")
 
 ID_BASE = "https://id.twitch.tv/oauth2"
 API_BASE = "https://api.twitch.tv/helix"
 # twitch.tv's own GraphQL API, asked as its site asks it (with the site's
-# public client id, as a visitor) - only for what Helix does not say: who
-# may watch a past broadcast. The query is the site's stored one, as
+# public client id, as a visitor - or as the account whose auth-token is
+# set, see `viewer_headers`) - only for what Helix does not say: who may
+# watch a past broadcast. The query is the site's stored one, as
 # streamlink asks it too.
 GQL_URL = "https://gql.twitch.tv/gql"
 WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
@@ -114,15 +118,24 @@ async def get_archives(user_id: str, client_id: str, token: str, count: int = 5)
     return await _get("videos", {"user_id": user_id, "type": "archive", "first": count}, client_id, token)
 
 
+def viewer_headers() -> dict[str, str]:
+    """What has twitch.tv's own APIs answer as the account whose auth-token
+    is set (TWITCH_AUTH_TOKEN) - with what it subscribes to - rather than
+    as a visitor: nothing where none is. The token is never logged."""
+    token = load_settings().twitch_auth_token
+    return {"Authorization": f"OAuth {token}"} if token else {}
+
+
 async def video_restricted_qualities(video_id: str) -> list[str]:
-    """The qualities of a past broadcast Twitch plays only to the channel's
-    subscribers, as it says to a visitor about to watch it (its playback
-    access token, asked of twitch.tv's own GraphQL API as its site does).
-    Helix cannot tell: it lists a past broadcast kept for subscribers as
-    "public" too. Empty where everyone may watch it in full; one kept for
-    subscribers has its Source quality (SOURCE_QUALITY) among them, and
-    every other besides. Raises httpx.HTTPError or ValueError where Twitch
-    did not say."""
+    """The qualities of a past broadcast Twitch would not play to the one
+    about to watch it - a visitor, or the account whose auth-token is set
+    (`viewer_headers`) - as its playback access token says (asked of
+    twitch.tv's own GraphQL API as its site does). Helix cannot tell: it
+    lists a past broadcast kept for subscribers as "public" too. Empty where
+    it may be watched in full; one kept for subscribers, to a viewer who is
+    not one, has its Source quality (SOURCE_QUALITY) among them, and every
+    other besides. A token Twitch refuses is let go of, and a visitor asks.
+    Raises httpx.HTTPError or ValueError where Twitch did not say."""
     query = {
         "operationName": "PlaybackAccessToken",
         "extensions": {"persistedQuery": {"version": 1, "sha256Hash": PLAYBACK_ACCESS_TOKEN_QUERY}},
@@ -135,8 +148,12 @@ async def video_restricted_qualities(video_id: str) -> list[str]:
             "platform": "site",
         },
     }
+    viewer = viewer_headers()
     async with httpx.AsyncClient() as client:
-        response = await client.post(GQL_URL, json=query, headers={"Client-ID": WEB_CLIENT_ID})
+        response = await client.post(GQL_URL, json=query, headers={"Client-ID": WEB_CLIENT_ID, **viewer})
+        if viewer and response.status_code == 401:
+            logger.warning("Twitch refused TWITCH_AUTH_TOKEN - asking as a visitor; is the token still good?")
+            response = await client.post(GQL_URL, json=query, headers={"Client-ID": WEB_CLIENT_ID})
         response.raise_for_status()
         payload = response.json()
     try:

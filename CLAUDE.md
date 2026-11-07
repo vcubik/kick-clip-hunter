@@ -66,6 +66,7 @@ Read these on demand, not up front:
   Playwright/patchright lacks HTTPS.
 - `.env` (gitignored): `KICK_CLIENT_ID`/`KICK_CLIENT_SECRET` (a Kick app); optionally
   `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` (without them no Twitch channel can be watched),
+  `TWITCH_AUTH_TOKEN` (a twitch.tv browser cookie: subscriber-only VODs, no ads where subscribed),
   `KICK_REDIRECT_URI`, `EULER_STREAM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
   `TELEGRAM_API_URL`, `DISCORD_WEBHOOK_URL`, `DASHBOARD_URL`, `REELS_REPO`/`REELS_GITHUB_TOKEN`. YouTube and TikTok need nothing.
   Notifications can also be set up on the Settings page (that wins over `.env`).
