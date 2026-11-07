@@ -99,6 +99,12 @@ October 2026:
   past broadcast's playlist is 10s MPEG-TS without a program date-time - footage is placed
   by when it began, which was three seconds off where it was measured - and Twitch marks
   the segments it silenced for music it may not play with `-muted` in their address.
+  A past broadcast a channel keeps for its subscribers only is listed by Helix as
+  `viewable: public` all the same, and its playlist is refused (`403`, "Manifest is
+  restricted" in the log - streamlink then finds no streams). What tells is the playback
+  token twitch.tv's own GraphQL API hands a visitor (`PlaybackAccessToken`, the site's
+  public client id): its `chansub.restricted_bitrates` names every quality, Source
+  (`chunked`) among them, where a public one names none (seen November 2026).
 - YouTube: nothing of a stream that is over in a form that could be taken (streamlink plays
   such a video in 360p only). A stream that is on can be wound back, as its viewers can, up
   to twelve hours: the live playlist lists only its newest segments, but a segment's address

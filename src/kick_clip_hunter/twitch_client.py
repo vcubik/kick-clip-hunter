@@ -11,6 +11,7 @@ account's token (see twitch_auth.py) - and so does writing in it
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -20,6 +21,16 @@ from .config import Settings
 
 ID_BASE = "https://id.twitch.tv/oauth2"
 API_BASE = "https://api.twitch.tv/helix"
+# twitch.tv's own GraphQL API, asked as its site asks it (with the site's
+# public client id, as a visitor) - only for what Helix does not say: who
+# may watch a past broadcast. The query is the site's stored one, as
+# streamlink asks it too.
+GQL_URL = "https://gql.twitch.tv/gql"
+WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+PLAYBACK_ACCESS_TOKEN_QUERY = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9"
+# What Twitch calls a stream's Source quality where it says which qualities
+# only the channel's subscribers may watch.
+SOURCE_QUALITY = "chunked"
 
 # What a Twitch channel can be called: what its login can be made of.
 LOGIN = re.compile(r"[a-z0-9_]{1,25}")
@@ -101,6 +112,41 @@ async def get_archives(user_id: str, client_id: str, token: str, count: int = 5)
     them, with that stream's id (`stream_id`), where the channel keeps them
     at all."""
     return await _get("videos", {"user_id": user_id, "type": "archive", "first": count}, client_id, token)
+
+
+async def video_restricted_qualities(video_id: str) -> list[str]:
+    """The qualities of a past broadcast Twitch plays only to the channel's
+    subscribers, as it says to a visitor about to watch it (its playback
+    access token, asked of twitch.tv's own GraphQL API as its site does).
+    Helix cannot tell: it lists a past broadcast kept for subscribers as
+    "public" too. Empty where everyone may watch it in full; one kept for
+    subscribers has its Source quality (SOURCE_QUALITY) among them, and
+    every other besides. Raises httpx.HTTPError or ValueError where Twitch
+    did not say."""
+    query = {
+        "operationName": "PlaybackAccessToken",
+        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": PLAYBACK_ACCESS_TOKEN_QUERY}},
+        "variables": {
+            "isLive": False,
+            "login": "",
+            "isVod": True,
+            "vodID": str(video_id),
+            "playerType": "embed",
+            "platform": "site",
+        },
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(GQL_URL, json=query, headers={"Client-ID": WEB_CLIENT_ID})
+        response.raise_for_status()
+        payload = response.json()
+    try:
+        value = payload["data"]["videoPlaybackAccessToken"]["value"]
+        restricted = json.loads(value)["chansub"]["restricted_bitrates"]
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError(f"Twitch did not say who may watch past broadcast {video_id}") from error
+    if not isinstance(restricted, list):
+        raise ValueError(f"Twitch did not say who may watch past broadcast {video_id}")
+    return [str(quality) for quality in restricted]
 
 
 async def get_chat_badges(user_id: str, client_id: str, token: str) -> list[dict]:

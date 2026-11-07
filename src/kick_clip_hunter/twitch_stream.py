@@ -31,6 +31,13 @@ when the broadcast began, to a few seconds (see vod_footage.py). Where
 Twitch found music in it that it may not play, a segment's address says
 "-muted": its sound is silence.
 
+Helix lists a past broadcast a channel keeps for its subscribers only as
+"public" all the same; what tells is the playback token Twitch hands a
+visitor about to watch it, which names the qualities only subscribers may
+watch - the Source quality among them (twitch_client.
+video_restricted_qualities). Its playlist is then refused ("Manifest is
+restricted"), and streamlink finds nothing at it.
+
 A person watches a past broadcast at twitch.tv/videos/<id>, from a time
 the address says (`?t=1h2m3s`) - `watch_link_at` gives that of the one a
 moment was in, from when the moment's clip would begin.
@@ -47,7 +54,7 @@ import httpx
 
 from . import twitch_client
 from .config import load_settings
-from .platforms import VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
+from .platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
 from .streamlink_support import NOT_INSTALLED, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -67,7 +74,15 @@ _UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
 VOD_TROUBLE = {
     VODS_NONE: "Twitch lists no past broadcasts of this channel: if it keeps none, no moment's clip can be cut.",
     VODS_HIDDEN: "Twitch keeps this channel's past broadcasts from the public: no moment's clip can be cut.",
+    VODS_FOR_SUBSCRIBERS: (
+        "Twitch keeps this channel's past broadcasts for its subscribers only: "
+        "no moment's clip can be cut once its stream is over."
+    ),
 }
+FOR_SUBSCRIBERS = (
+    "Twitch keeps the past broadcast of that stream for the channel's subscribers only: "
+    "no clip can be cut from it now that the stream is over."
+)
 
 
 def _master(url: str) -> str | None:
@@ -116,6 +131,16 @@ async def _archive_of_the_stream(login: str) -> str | None:
         if str(video.get("stream_id")) == str(stream["id"]):
             return str(video["id"])
     return None
+
+
+async def kept_for_subscribers(video_id: str) -> bool | None:
+    """Whether Twitch plays a past broadcast to the channel's subscribers
+    only - None where it did not say."""
+    try:
+        restricted = await twitch_client.video_restricted_qualities(video_id)
+    except (httpx.HTTPError, ValueError):
+        return None
+    return twitch_client.SOURCE_QUALITY in restricted
 
 
 def length_seconds(text: object) -> int:
@@ -202,21 +227,29 @@ async def watch_link_at(login: str, when: datetime) -> str:
 
 
 async def vod_access(login: str) -> str | None:
-    """What Helix lists of the channel's past broadcasts (platforms.VODS_*),
-    by its newest one - None where Twitch could not be asked. Helix tells
-    one kept for subscribers from one kept from everyone by nothing: both
-    are kept from the public."""
+    """Who may watch the channel's past broadcasts (platforms.VODS_*), by
+    its newest one of a stream that is over (the one of a stream that is on
+    where there is no other) - None where Twitch could not be asked. Helix
+    says whether one is kept from the public; whether it is kept for the
+    channel's subscribers, only the playback token does - and where that is
+    not said, what Helix lists stands."""
     try:
         settings = load_settings()
         token = await twitch_client.app_token(settings)
         user = await twitch_client.get_user(login, settings.twitch_client_id, token)
-        archives = await twitch_client.get_archives(user["id"], settings.twitch_client_id, token, 1)
+        stream = await twitch_client.get_stream(login, settings.twitch_client_id, token)
+        archives = await twitch_client.get_archives(user["id"], settings.twitch_client_id, token, 2)
     except (twitch_client.NotSetUp, httpx.HTTPError, KeyError, ValueError):
         return None
     if not archives:
         return VODS_NONE
-    if archives[0].get("viewable", "public") != "public":
+    on = str(stream["id"]) if stream else None
+    over = [video for video in archives if on is None or str(video.get("stream_id")) != on]
+    newest = (over or archives)[0]
+    if newest.get("viewable", "public") != "public":
         return VODS_HIDDEN
+    if await kept_for_subscribers(str(newest["id"])):
+        return VODS_FOR_SUBSCRIBERS
     return VODS_PUBLIC
 
 
@@ -232,7 +265,17 @@ def vod_at(login: str, when: datetime) -> Vod:
     try:
         master = _master(VIDEO_URL.format(video_id=video["id"]))
     except StreamlinkError as error:
+        _refuse_if_for_subscribers(str(video["id"]))
         raise NoVod(f"Twitch would not say where the past broadcast is: {error}") from error
     if master is None:
+        _refuse_if_for_subscribers(str(video["id"]))
         raise NoVod("Twitch would not say where the past broadcast is.")
     return Vod(master=master, started_at=_began(video))
+
+
+def _refuse_if_for_subscribers(video_id: str) -> None:
+    """Raises NoVod saying so where Twitch keeps the past broadcast for the
+    channel's subscribers only - why its playlist was refused. Asked only
+    once it was: while the stream is on, Twitch may play it to anyone."""
+    if asyncio.run(kept_for_subscribers(video_id)):
+        raise NoVod(FOR_SUBSCRIBERS)
