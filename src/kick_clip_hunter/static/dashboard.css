@@ -902,6 +902,14 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-option:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .reel-option-head { font-stretch: var(--width-compact); }
 .reel-own { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; margin-top: var(--space-4); }
+/* The words of one's own as the reel will show them; an emoji shortcut the
+   render does not know is struck through, as the reel leaves it out. */
+.reel-own-shown { min-height: 20px; font-size: 13px; font-weight: 700; font-stretch: var(--width-compact); }
+.reel-own-shown:empty { display: none; }
+.reel-unknown { color: var(--text-2); }
+.reel-emoji { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.reel-emoji .ch-cap { flex: 1 1 100%; }
+.reel-emoji-pick { padding: 0 var(--space-4); min-width: var(--h-compact); font-size: 16px; }
 .reel-render { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .reel-render .status-line { flex: 1 1 0; min-width: 0; margin-top: 0; }
 .reel-comment { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }

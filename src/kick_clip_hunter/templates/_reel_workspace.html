@@ -24,6 +24,16 @@
   <textarea class="ch-input reel-text" rows="1" aria-label="What is said" data-reel-text{% if not editable %} disabled{% endif %}>{{ line.text if line else '' }}</textarea>
 </li>
 {%- endmacro %}
+{#- A hook's words as the reel shows them (reels.hook_pieces): emoji
+    shortcuts as their emoji, and one the render script does not know - and
+    leaves out of the reel - struck through. dashboard.js builds the same for
+    the words of one's own as they are typed (hookPieces). -#}
+{% macro hook_words(pieces) -%}
+{%- for piece in pieces -%}
+{%- if piece.unknown %}<s class="reel-unknown" title="Not an emoji shortcut the render knows: left out of the reel">{{ piece.text }}</s>
+{%- else %}{{ piece.text }}{% endif -%}
+{%- endfor -%}
+{%- endmacro %}
 {#- A comment written to go with a step, or feedback on the reel: what was
     sent last is offered again. The script keeps what is typed in one when
     the part of the page it is in is put in place anew. -#}
@@ -132,13 +142,24 @@
         <div class="reel-options" role="group" aria-label="Hook" data-reel-hooks>
           {% for hook in board.hooks %}
           <button type="button" class="reel-option" aria-pressed="{{ 'true' if hook.chosen else 'false' }}" data-reel-hook="{{ hook.id }}">
-            <span class="reel-option-head"><b>{{ hook.words }}</b>{% if hook.type %} {{ hook.type }}{% endif %}</span>
+            <span class="reel-option-head"><b>{{ hook_words(hook.pieces) }}</b>{% if hook.type %} {{ hook.type }}{% endif %}</span>
           </button>
           {% endfor %}
           <label class="reel-own">
-            <span class="ch-cap">Or your own: | breaks the line, *a word* between stars stands out</span>
-            <input type="text" class="ch-input" maxlength="80" value="{{ board.own_hook }}" placeholder="NEARLY RAN|*HIM OVER?*" autocomplete="off" data-reel-own>
+            <span class="ch-cap">Or your own: | breaks the line, *a word* between stars stands out, {rofl} and the like are emoji</span>
+            <input type="text" class="ch-input" maxlength="{{ board.own_most }}" value="{{ board.own_hook }}" placeholder="NEARLY RAN|*HIM OVER?* {rofl}" autocomplete="off" spellcheck="false" data-reel-own>
           </label>
+          {#- As the reel will show them, put in place as they are typed. -#}
+          <p class="reel-own-shown" aria-live="polite" data-reel-own-shown>{{ hook_words(board.own_pieces) }}</p>
+          {#- A press puts the emoji's shortcut where the cursor is in the
+              words of one's own. The table is reels.EMOJI_CODES, for the
+              script to show the words with. -#}
+          <div class="reel-emoji" role="group" aria-label="Emoji" data-reel-emoji-codes='{{ board.emoji_codes | tojson }}'>
+            <span class="ch-cap">Emoji, now and then, one to three at the end:</span>
+            {% for pick in board.emoji %}
+            <button type="button" class="ch-tag reel-emoji-pick" title="{% for code in pick.codes %}{{ '{' ~ code ~ '}' }}{% if not loop.last %} {% endif %}{% endfor %}" aria-label="Add {{ '{' ~ pick.codes[0] ~ '}' }}" data-reel-emoji="{{ pick.codes[0] }}">{{ pick.emoji }}</button>
+            {% endfor %}
+          </div>
         </div>
 
         {% if board.question %}<p class="reel-quiet">{{ board.question }}</p>{% endif %}

@@ -6577,11 +6577,16 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
     hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
     used = reel["hook"]
     chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
+    own = used if used and all(str(hook["text"]) != used for hook in hooks) else ""
     return {
         "summary": str(storyboard.get("summary") or ""),
         "thoughts": str(storyboard.get("thoughts") or ""),
         "question": str(storyboard.get("question") or ""),
-        "own_hook": used if used and all(str(hook["text"]) != used for hook in hooks) else "",
+        "own_hook": own,
+        "own_pieces": reels.hook_pieces(own) if own else [],
+        "own_most": reels.HOOK_MOST_TYPED,
+        "emoji": reels.EMOJI_PICKS,
+        "emoji_codes": reels.EMOJI_CODES,
         "variants": [
             {
                 "id": str(variant.get("id")),
@@ -6603,6 +6608,7 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
                 "id": str(hook.get("id")),
                 "type": str(hook.get("type") or ""),
                 "words": reels.hook_shown(str(hook["text"])),
+                "pieces": reels.hook_pieces(str(hook["text"])),
                 "chosen": str(hook["text"]) == chosen_hook,
             }
             for hook in hooks
