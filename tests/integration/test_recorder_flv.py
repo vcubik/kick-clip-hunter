@@ -56,7 +56,9 @@ def follow(monkeypatch):
         server = FakeFlvServer(content)
         servers.append(server)
         monkeypatch.setattr(
-            recorder, "stream_urls", lambda slug: StreamUrls(live=server.url, expires_at=expires_at, flv=True)
+            recorder,
+            "stream_urls",
+            lambda slug, from_vod=False: StreamUrls(live=server.url, expires_at=expires_at, flv=True),
         )
         rec = recorder.ChannelRecorder("some_channel@tiktok")
         recorders.append(rec)

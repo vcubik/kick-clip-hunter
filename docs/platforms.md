@@ -39,6 +39,18 @@ for viewers — and by the fact that none of the app's OAuth scopes relate to me
   instead, so its clip comes out up to ~25s longer than usual (whole VOD segments); a
   channel with VODs turned off gets the clip from the live segments, and context only as
   far as the ad.
+- A channel can instead have its stream followed from that VOD in the first place ("From
+  the VOD" beside its tracking on the Channels page, `streamers.stream_from_vod`,
+  `kick_stream.get_stream_urls_from_vod`): the VOD of the stream that is on is listed by
+  `/api/v2/channels/{slug}/videos` over plain HTTP, so no browser window opens, and it has
+  no ads. Seen in November 2026: its playlist is an `EVENT` one listing every segment from
+  the stream's start, with `#EXT-X-ENDLIST` while the stream is still on (the recorder takes
+  no notice of it there), written a few segments at a time - every 30-40 s, footage up to
+  about 50 s behind the live stream. A clip of such a channel waits for its footage
+  (`ChannelRecorder.wait_for_footage`, up to `VOD_FOLLOW_WAIT_SECONDS`) and the buffer
+  reaches back that much further. Its master playlist lists the 1080p variant at a tenth of
+  the 720p one's bandwidth, which is why a variant is chosen by its picture first. A channel
+  that keeps no VOD can't be followed so: no recording starts.
 
 **Twitch (`twitch_stream.py`)** - the same recorder and buffer, no browser. Twitch's API
 has no playback either, so where a live stream is comes from streamlink, asked for the

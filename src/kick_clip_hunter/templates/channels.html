@@ -14,7 +14,7 @@
   <section aria-labelledby="watchlist-title" data-status-scope>
     <h2 class="title" id="watchlist-title">Watchlist</h2>
     {% if watchlist %}
-    <p class="section-lead">Tracking a channel for clips looks for them while it is live, its stream coming in to cut each one from. Tracking it for moments finds them in its chat alone - no video comes in - and tells you of each with a link to it in the stream's VOD; its clip is cut from the VOD when you ask for it on the review page, or by itself as soon as the VOD holds it, if you choose "Automatically" under it (Kick and Twitch only). Tracking it for chat keeps its messages and nothing more - no clips, no video - for the Analyze page. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. A TikTok channel is only ever recorded. What was kept is on the Recordings page.</p>
+    <p class="section-lead">Tracking a channel for clips looks for them while it is live, its stream coming in to cut each one from. Tracking it for moments finds them in its chat alone - no video comes in - and tells you of each with a link to it in the stream's VOD; its clip is cut from the VOD when you ask for it on the review page, or by itself as soon as the VOD holds it, if you choose "Automatically" under it (Kick and Twitch only). Tracking it for chat keeps its messages and nothing more - no clips, no video - for the Analyze page. A recording keeps the channel's whole stream and its chat, tracked or not, from when you start it until you stop it or the stream is over. With "Always record" on, one is started by itself whenever the channel goes live. A Kick channel's video comes in live, its address found in a browser window, or - with "From the VOD" beside its tracking - from the VOD Kick writes as it goes along: no browser and no ads, but up to a minute behind, so its clips come later. A TikTok channel is only ever recorded. What was kept is on the Recordings page.</p>
     <table class="watchlist">
       <thead>
         <tr><th scope="col">Channel</th><th scope="col">Added</th><th scope="col">Right now</th><th scope="col">Tracking</th><th scope="col">Always record</th><th scope="col">Stream recording</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr>
@@ -40,6 +40,12 @@
           <td data-label="Tracking" data-tracking-cell>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}<span class="ch-line tracking-line">{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}
             {%- if "moments" in channel.tracking_choices | map("first") %}
             <span class="ch-line moment-clips" title="Clips from the VOD" data-moment-clips{% if channel.tracking != "moments" %} hidden{% endif %}><span class="visually-hidden">Clips from the VOD</span>{{ choice("Clips of " ~ channel.slug ~ "'s moments", "/channels/" ~ (channel.slug | urlencode) ~ "/moments_auto_cut", "how", moment_clips_choices, channel.moment_clips) }}</span>
+            {%- endif %}
+            {#- Where a Kick channel's stream is followed from, for its clips
+                and its recordings - hidden while it is tracked for moments,
+                of which no stream comes in for clips. -#}
+            {%- if channel.stream_source_offered %}
+            <span class="ch-line moment-clips" title="Video" data-stream-source{% if channel.tracking == "moments" %} hidden{% endif %}><span class="visually-hidden">Video</span>{{ choice("Video of " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/stream_source", "source", stream_source_choices, channel.stream_source) }}</span>
             {%- endif %}</span>{% endif %}</td>
           <td data-always-record data-label="Always record">{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
           {#- One button or the other, and what the recording is doing; the

@@ -46,12 +46,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import stream_recording, streams
 from .platforms import StreamUrlError
 from .recorder import (
+    CONTEXT_AFTER_SECONDS,
+    PLAYBACK_DELAY_SECONDS,
     POST_ROLL_SECONDS,
     PRE_ROLL_SECONDS,
     ChannelRecorder,
@@ -363,6 +365,7 @@ async def _see_to(
     stream_is_on: StreamIsOn | None,
     buffer_seconds: BufferSeconds | None = None,
     chat: bool = False,
+    from_vod: bool = False,
 ) -> None:
     """One channel's turn in a round: its recorder is ticked if the channel
     is live and its stream is wanted - for clips (`tracked`) or whole - and
@@ -371,7 +374,8 @@ async def _see_to(
     recorded `always` and turns out to be live with nothing keeping its
     stream is reported first, so that what is started for it gets this
     round's tick. Before a tick the recorder is told how far back to keep its
-    buffer (`buffer_seconds`), which the tick prunes it to."""
+    buffer (`buffer_seconds`), which the tick prunes it to, and whether to
+    follow the stream from its VOD (`from_vod`)."""
     recorder = _get_recorder(slug)
     if not (tracked or chat or always or slug in _stream_recordings):
         # Tracking paused for this one channel - same teardown as the
@@ -391,6 +395,7 @@ async def _see_to(
         except Exception:
             logger.exception("[%s] is live and always recorded, but its recording could not be started", slug)
     if live and (tracked or slug in _stream_recordings):
+        recorder.from_vod = from_vod
         if buffer_seconds is not None:
             _keep(recorder, slug, buffer_seconds)
         await asyncio.to_thread(_tick_one, slug)
@@ -408,6 +413,7 @@ async def run_forever(
     look_failed: LookFailed | None = None,
     buffer_seconds: BufferSeconds | None = None,
     chat_only: Callable[[str], bool] = lambda slug: False,
+    from_vod: Callable[[str], bool] = lambda slug: False,
 ) -> None:
     """Drives the recorders until cancelled. `stream_recording_over` is
     told, with the channel and why, when a stream recording should be ended;
@@ -423,7 +429,9 @@ async def run_forever(
     could need (recorder.BUFFER_RETENTION_SECONDS). `chat_only` says which
     channels that are not tracked for clips are tracked through their chat
     alone - for the chat, or for moments: looked at, while watching is on,
-    and never recorded for that."""
+    and never recorded for that. `from_vod` says which channels have their
+    stream followed from its VOD rather than live (see
+    recorder.ChannelRecorder.from_vod)."""
     global _wake, _round_finished_at
     _wake = wake_up = asyncio.Event()
     try:
@@ -460,6 +468,7 @@ async def run_forever(
                         stream_is_on=stream_is_on,
                         buffer_seconds=buffer_seconds,
                         chat=watching and not tracked and chat_only(slug),
+                        from_vod=from_vod(slug),
                     )
                 except Exception as error:
                     logger.exception("[%s] recording tick failed", slug)
@@ -513,8 +522,15 @@ async def create_clip_for_moment(
 ) -> CutClip:
     """Cuts a moment's file from the channel's buffer. `framing` is whatever
     else of how the clip is framed was set for the channel, as
-    recorder.extract_clip takes it."""
+    recorder.extract_clip takes it. A stream followed from its VOD comes in
+    well behind the live one: the clip waits for its footage to (see
+    recorder.ChannelRecorder.wait_for_footage)."""
     recorder = _get_recorder(channel_slug)
+    if recorder.from_vod:
+        delay = framing.get("playback_delay_seconds", PLAYBACK_DELAY_SECONDS)
+        after = framing.get("context_after_seconds", CONTEXT_AFTER_SECONDS)
+        until = window_end + timedelta(seconds=post_roll_seconds + after - delay)
+        await asyncio.to_thread(recorder.wait_for_footage, until)
     return await asyncio.to_thread(
         extract_clip, recorder, window_start, window_end, output_name,
         pre_roll_seconds, post_roll_seconds, **framing,

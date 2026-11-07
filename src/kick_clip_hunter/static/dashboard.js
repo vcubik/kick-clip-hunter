@@ -2303,8 +2303,12 @@
     // How a channel's moments have their clips cut is offered only while
     // it is tracked for moments.
     const cell = group.closest("[data-tracking-cell]");
-    const clips = cell && !group.closest("[data-moment-clips]") ? one("[data-moment-clips]", cell) : null;
+    // Where its stream is followed from is offered while it is not.
+    const tracking = cell && !group.closest("[data-moment-clips], [data-stream-source]");
+    const clips = tracking ? one("[data-moment-clips]", cell) : null;
     if (clips) clips.hidden = option.dataset.value !== "moments";
+    const source = tracking ? one("[data-stream-source]", cell) : null;
+    if (source) source.hidden = option.dataset.value === "moments";
     let said = "";
     try {
       said = (await response.json()).said || "";

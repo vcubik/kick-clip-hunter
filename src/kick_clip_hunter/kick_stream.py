@@ -19,6 +19,11 @@ also where footage of a stream that is over is found (see vod_footage.py).
 A VOD's address carries no token and does not run out: one from weeks ago
 still plays, as long as the channel keeps it.
 
+A channel can also have its stream followed from that VOD in the first
+place (`get_stream_urls_from_vod`, streamers.stream_from_vod): no browser at
+all, at the cost of footage coming in up to about a minute behind the live
+stream, in longer segments.
+
 Where a person watches a VOD is another matter: kick.com's pages address a
 VOD by an id the list vod_at asks does not give, only the site's newer API
 (web.kick.com), by the channel's id on the site. `watch_link_at` asks that
@@ -135,6 +140,26 @@ def get_stream_urls(channel_slug: str) -> StreamUrls:
     if m3u8_url is None:
         raise StreamUrlError(f"No live stream URL captured for {channel_slug!r} - is it live?")
     return StreamUrls(live=m3u8_url, vod=vod_url)
+
+
+def get_stream_urls_from_vod(channel_slug: str) -> StreamUrls:
+    """Where a live channel's stream is to be followed without a browser:
+    the VOD Kick writes of it as it goes along, which kick.com lists over
+    plain HTTP. Its playlist is an EVENT one from the stream's start, in
+    12.5 s segments with their program date-time, and is written in batches -
+    seen in November 2026, up to about 50 s behind the live stream - with
+    `#EXT-X-ENDLIST` even while the stream is on. No ads: it is the broadcast
+    itself. Raises StreamUrlError where no VOD of a stream that is on is
+    listed with an address - the channel is not live, or keeps no VOD."""
+    try:
+        # A thread of its own, with no event loop running in it.
+        videos = asyncio.run(kick_client.get_videos(channel_slug))
+    except (httpx.HTTPError, ValueError) as error:
+        raise StreamUrlError(f"Kick could not be asked for {channel_slug!r}'s VODs ({type(error).__name__})") from error
+    for video in videos:
+        if isinstance(video, dict) and video.get("is_live") and video.get("source"):
+            return StreamUrls(live=video["source"], vod=video["source"], from_vod=True)
+    raise StreamUrlError(f"Kick lists no VOD of a stream of {channel_slug!r} that is on - is it live, with VODs?")
 
 
 def get_live_stream_url(channel_slug: str) -> str:

@@ -1003,6 +1003,23 @@ MOMENT_CLIPS_WORDS = {
 }
 
 
+# Where a Kick channel's stream is followed from, for its clips and its
+# recordings: live, its address found in a browser window, or the VOD Kick
+# writes as it goes along - no browser, footage up to a minute later - and
+# what choosing either answers with.
+STREAM_SOURCE_LIVE = "live"
+STREAM_SOURCE_VOD = "vod"
+STREAM_SOURCE_CHOICES = (
+    (STREAM_SOURCE_LIVE, "Live"),
+    (STREAM_SOURCE_VOD, "From the VOD"),
+)
+STREAM_SOURCE_WORDS = {
+    STREAM_SOURCE_LIVE: "The stream of {channel} is followed live, its address found in a browser window.",
+    STREAM_SOURCE_VOD: "The stream of {channel} is followed from its VOD as Kick writes it: no browser, "
+    "no ads, footage up to a minute behind - a clip waits for it. Needs the channel to keep VODs.",
+}
+
+
 # What switching a channel to being recorded always, or back, answers with.
 ALWAYS_RECORD_WORDS = {
     True: "Every stream of {channel} is recorded from when it goes live. Stopping a recording ends it for that stream.",

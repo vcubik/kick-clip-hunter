@@ -500,3 +500,24 @@ class TestFragmentedMp4:
 
         assert recorder._vod_group(segment) == group
         assert recorder._is_vod_group(group)
+
+
+class TestTheBiggestPicture:
+    def test_it_wins_over_a_bigger_bandwidth(self):
+        # Kick's VOD lists its 1080p variant at a tenth of its 720p one's.
+        master = (
+            "#EXTM3U\n"
+            '#EXT-X-STREAM-INF:BANDWIDTH=423316,RESOLUTION=1920x1080,VIDEO="1080p60"\n1080p60/playlist.m3u8\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=3331553,RESOLUTION=1280x720,VIDEO="720p60"\n720p60/playlist.m3u8\n'
+        )
+
+        assert recorder._pick_variant(master, MASTER_URL).endswith("/1080p60/playlist.m3u8")
+
+    def test_of_pictures_as_big_the_bigger_bandwidth_wins(self):
+        master = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720\n720p30.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1280x720\n720p60.m3u8\n"
+        )
+
+        assert recorder._pick_variant(master, MASTER_URL).endswith("/720p60.m3u8")

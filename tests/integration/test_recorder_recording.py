@@ -365,7 +365,7 @@ class TestFailures:
         assert rec.is_active is False
 
     def test_a_channel_that_is_not_live_fails_the_start(self, recording, monkeypatch):
-        def not_live(slug):
+        def not_live(slug, from_vod=False):
             raise StreamUrlError(f"No live stream URL captured for {slug!r} - is it live?")
 
         rec = recorder.ChannelRecorder("offline_channel")
@@ -389,7 +389,7 @@ class TestAddressesThatRunOut:
         queue: list[object] = []
         asked: list[str] = []
 
-        def stream_urls(slug: str) -> StreamUrls:
+        def stream_urls(slug: str, from_vod: bool = False) -> StreamUrls:
             asked.append(slug)
             answer = queue.pop(0) if len(queue) > 1 else queue[0]
             if isinstance(answer, Exception):
@@ -962,3 +962,82 @@ class TestLookingForTheVodAgain:
 
         wait_for_segments(rec, 8)
         assert any("looking for the stream's VOD failed: RuntimeError" in r.getMessage() for r in caplog.records)
+
+
+class TestFollowingTheVod:
+    """A Kick channel can have its stream followed from the VOD Kick writes
+    as it goes along (ChannelRecorder.from_vod) - found with no browser. Its
+    playlist lists every segment from the stream's start and says it has
+    ended while the stream is still on."""
+
+    def test_it_is_followed_from_near_its_end_and_on_past_the_endlist(self, hls, recording):
+        live = hls(fake_segments(10), published=3)
+        timeline = fake_segments(10)
+        vod = hls(timeline, published=5, ended_while_on=True)
+        rec = recording.of(live, vod=vod)
+        rec.from_vod = True
+
+        start(rec)
+        vod.publish(3)
+        wait_for_segments(rec, recorder.INITIAL_SEGMENTS + 3)
+
+        assert recording.vod_follows == ["some_channel"]
+        assert stored_data(rec) == [segment.data for segment in timeline[2:8]]
+        assert live.segment_requests() == []
+        assert rec._run.thread.is_alive()
+        assert rec.state().has_vod
+
+    def test_choosing_the_other_source_starts_the_run_over_on_it(self, hls, recording):
+        live = hls(fake_segments(10), published=3)
+        vod = hls(fake_segments(10), published=3, ended_while_on=True)
+        rec = recording.of(live, vod=vod)
+        start(rec)
+        first_run = rec._run
+
+        rec.from_vod = True
+        rec.tick()
+
+        assert rec._run is not first_run and rec._run.from_vod
+        assert not first_run.thread.is_alive()
+        wait_until(lambda: vod.segment_requests() != [], "a segment of the VOD")
+
+        rec.from_vod = False
+        rec.tick()
+
+        assert not rec._run.from_vod
+        assert recording.vod_follows == ["some_channel"]
+
+    def test_a_channel_without_a_vod_of_its_stream_is_not_started(self, hls, recording):
+        rec = recording.of(hls(fake_segments(4), published=3))
+        rec.from_vod = True
+
+        with pytest.raises(StreamUrlError):
+            rec.tick()
+
+        assert rec.is_active is False
+
+    def test_a_clip_waits_for_its_footage_to_come_in(self, hls, recording):
+        vod = hls(fake_segments(10), published=3, ended_while_on=True)
+        rec = recording.of(hls(fake_segments(10), published=3), vod=vod)
+        rec.from_vod = True
+        start(rec)
+        until = vod.segment_start(5) + timedelta(seconds=SEGMENT_SECONDS)
+
+        assert rec.wait_for_footage(until, timeout=0.05) is False
+
+        vod.publish(3)
+
+        assert rec.wait_for_footage(until, timeout=5) is True
+
+    def test_nothing_recorded_is_never_waited_for(self, recording, hls):
+        rec = recording.of(hls(fake_segments(4)))
+
+        assert rec.wait_for_footage(datetime.now(timezone.utc), timeout=5) is False
+
+    def test_the_buffer_reaches_back_as_much_further_as_a_clip_may_wait(self, hls, recording):
+        rec = recording.of(hls(fake_segments(4)))
+        live = rec.reach()
+
+        rec.from_vod = True
+
+        assert rec.reach() == live + recorder.VOD_FOLLOW_WAIT_SECONDS

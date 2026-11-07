@@ -753,6 +753,8 @@ class TestAChannelRecordedAlways:
             # ...and which channels are tracked through their chat alone - for
             # the chat, or for moments: looked at, never recorded for that.
             service.main._is_tracked_by_chat,
+            # ...and which have their stream followed from its VOD.
+            service.main._streams_from_vod,
         ]
 
 
