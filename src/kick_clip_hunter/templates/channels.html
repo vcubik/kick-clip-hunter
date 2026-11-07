@@ -33,13 +33,14 @@
               table is a block per channel, the columns' names not shown. -#}
           <td class="ch-meta" data-label="Added">{{ channel.added }}</td>
           <td data-now="{{ channel.slug }}" data-label="Right now">{% if channel.now.live %}<span class="ch-lamp ch-lamp-rec">{{ channel.now.words }}</span>{% else %}<span class="ch-meta">{{ channel.now.words }}</span>{% endif %}</td>
-          {#- Under the choice, while it is tracked for moments, how their
-              clips are cut from the VOD: when asked for, or by themselves.
-              The script shows and hides it as the choice above changes. -#}
-          <td data-label="Tracking" data-tracking-cell>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}
+          {#- Beside the choice, while it is tracked for moments, how their
+              clips are cut from the VOD: when asked for, or by themselves -
+              its name said on hover and to a screen reader, a rule between
+              the two. The script shows and hides it as the choice changes. -#}
+          <td data-label="Tracking" data-tracking-cell>{% if channel.recorded_only %}<span class="ch-meta">Recorded only</span>{% else %}<span class="ch-line tracking-line">{{ choice("Tracking " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/tracking", "what", channel.tracking_choices, channel.tracking) }}
             {%- if "moments" in channel.tracking_choices | map("first") %}
-            <span class="ch-line moment-clips" data-moment-clips{% if channel.tracking != "moments" %} hidden{% endif %}><span class="ch-meta">Clips from the VOD</span>{{ choice("Clips of " ~ channel.slug ~ "'s moments", "/channels/" ~ (channel.slug | urlencode) ~ "/moments_auto_cut", "how", moment_clips_choices, channel.moment_clips) }}</span>
-            {%- endif %}{% endif %}</td>
+            <span class="ch-line moment-clips" title="Clips from the VOD" data-moment-clips{% if channel.tracking != "moments" %} hidden{% endif %}><span class="visually-hidden">Clips from the VOD</span>{{ choice("Clips of " ~ channel.slug ~ "'s moments", "/channels/" ~ (channel.slug | urlencode) ~ "/moments_auto_cut", "how", moment_clips_choices, channel.moment_clips) }}</span>
+            {%- endif %}</span>{% endif %}</td>
           <td data-always-record data-label="Always record">{{ switch("Always record " ~ channel.slug, "/channels/" ~ (channel.slug | urlencode) ~ "/always_record", channel.always_record) }}</td>
           {#- One button or the other, and what the recording is doing; the
               script keeps both current while there is one. -#}
