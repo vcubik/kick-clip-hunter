@@ -761,8 +761,9 @@ Module map (`src/kick_clip_hunter/`):
   rendering need more than the machine the service runs on. Its module docstring is the full
   story: the moment's file - or only the stretch of it chosen on the Reels page (`part_asked`,
   cut by `recorder.trim_clip` to `moment_<id>_part.mp4`, kept as `reels.part_start`/`part_end`)
-  - and `context.json` (credit, name and note, where the clip lies in what is sent, chat over it
-  at the second it belongs to, the second most of chat laughed in)
+  - and `context.json` (credit, name and note, the comment written for the storyboard on the
+  Reels page, where the clip lies in what is sent, chat over it at the second it belongs to, the
+  second most of chat laughed in)
   go up into a release tagged `moment-<id>` and the `storyboard` workflow is dispatched; the
   service looks at the release every `POLL_SECONDS` and takes `storyboard.json`, the contact
   sheet and the transcript back - the subtitles Claude proposed (`clip.subs.srt`) where there
@@ -771,8 +772,15 @@ Module map (`src/kick_clip_hunter/`):
   (`moved`), and cut back to the stretch and timed to it whenever it goes up
   (`main._reel_subtitles`). The transcript is put right on the Reels page (`checked_transcript`)
   and goes up as `clip.subs.srt` before a variant and a hook chosen there dispatch the
-  `render` workflow, with subtitles as the variant has them, on or off; its `reel.mp4` is taken
-  back the same way, kept under `data/clips/reels/` and sent with a note. What a step left in
+  `render` workflow, with subtitles as the variant has them, on or off, and the comment written
+  for the render, by which Claude reworks the variant first; its `reel.mp4` is taken back the
+  same way - with `render.json`'s word on what Claude made of the comment (`rendered_note`) -
+  kept under `data/clips/reels/` and sent with a note. Feedback on the reel goes up as
+  `feedback.json` (`reels.feedback`: the words and what the reel was made of and with) and
+  dispatches the `feedback` workflow, which records it in the repository for later storyboards;
+  it is sent from the request itself, and kept here (the `reels` table's `feedback` and
+  `feedback_sent`) even where GitHub does not take it. A new render or storyboard is another reel, so the comments
+  of the steps after it and the feedback start afresh. What a step left in
   the release is taken out before it is asked again, so whatever is found there answers the
   last request - except the transcript while the moment's file, and the stretch of it sent, is
   the one it was heard from (`stamp`): then the file is not sent again, the workflow does not transcribe it again, and a
@@ -780,7 +788,8 @@ Module map (`src/kick_clip_hunter/`):
   failed run is noticed by its name (`run_name`) where the token may read Actions, otherwise
   after `STORYBOARD_LIMIT`/`RENDER_LIMIT`. Where it stands is the `reels` table; main.py's
   `_keep_making_reels` loop does the looking, the routes are `POST /moments/{id}/reel`,
-  `POST /moments/{id}/reel/transcript`, `POST /moments/{id}/reel/render`, the Reels page
+  `POST /moments/{id}/reel/transcript`, `POST /moments/{id}/reel/render`,
+  `POST /moments/{id}/reel/feedback`, the Reels page
   `GET /dashboard/reels` and its `GET /dashboard/reels/{id}`. The workflows, the skill and the
   render script live in that repository, not here.
 - `vod_footage.py` — a moment's file made longer, before its clip or after it, with footage

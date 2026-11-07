@@ -97,6 +97,7 @@
   --h-reel: 480px;        /* a rendered reel, 9:16, on the Reels page */
   --h-reel-lines: 520px;  /* a reel's transcript, scrolled inside itself beside the clip */
   --w-reel-time: 72px;    /* when a line of a reel's transcript starts or ends, typed */
+  --h-reel-comment: 160px; /* a comment written to go with a reel, before it scrolls inside itself */
   --w-gutter: 44px;
   --w-when: 152px;
   --w-label: 104px;       /* on a phone, the name in front of a value of a channel on the watchlist */
@@ -902,6 +903,11 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-option-head { font-stretch: var(--width-compact); }
 .reel-own { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; margin-top: var(--space-4); }
 .reel-render { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.reel-render .status-line { flex: 1 1 0; min-width: 0; margin-top: 0; }
+.reel-comment { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
+.reel-standing .reel-comment { flex: 1 1 100%; }
+.reel-comment-text { width: 100%; height: auto; min-height: var(--h-control); max-height: var(--h-reel-comment); padding: 7px 10px; line-height: 20px; resize: none; }
+.reel-feedback { width: 100%; }
 .reel-subtitles { display: flex; align-items: center; gap: var(--space-4); }
 .reel-subtitles .ch-cap { margin-right: var(--space-4); }
 

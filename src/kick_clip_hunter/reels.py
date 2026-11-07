@@ -10,10 +10,11 @@ How it goes, a moment at a time, each step started from the Reels page:
    into a release of that
    repository, tagged `moment-<id>` (`tag`), as `clip.mp4`, and with it
    `context.json` (`context`): the channel, how it is credited, the
-   moment's name and note, where in the file the clip the service cut
-   begins and ends, and the chat over the whole file - each message at the
-   second of the file it belongs to, and the second most of chat laughed
-   at. Then the `storyboard` workflow is dispatched. It transcribes the
+   moment's name and note, a comment written for the storyboard on the
+   page (what to make of the clip), where in the file the clip the service
+   cut begins and ends, and the chat over the whole file - each message at
+   the second of the file it belongs to, and the second most of chat
+   laughed at. Then the `storyboard` workflow is dispatched. It transcribes the
    clip (`clip.srt`, and `clip.words.json` with the time of every word)
    and has Claude Code write `storyboard.json`: two or three variants of
    the reel, each with what the render script is to be run with, and three
@@ -28,10 +29,19 @@ How it goes, a moment at a time, each step started from the Reels page:
    times, lines added and taken out (`checked_transcript`) - and the reel's
    subtitles are made of it from then on.
 4. "Render" with a variant and a hook - one of the storyboard's, or words
-   of one's own - and with or without subtitles: the transcript goes up as
-   `clip.subs.srt` and the `render` workflow is dispatched, which puts
-   `reel.mp4` into the same release; the service fetches it the same way
-   and keeps it next to the moment's clip.
+   of one's own - and with or without subtitles, and a comment on what to
+   change in the variant where one was written: the transcript goes up as
+   `clip.subs.srt` and the `render` workflow is dispatched, which has
+   Claude rework the variant by the comment, where there is one, and puts
+   `reel.mp4` into the same release, with `render.json`: what it was
+   rendered with, and what Claude made of the comment (`rendered_note`).
+   The service fetches them the same way and keeps the reel next to the
+   moment's clip.
+5. Feedback on the reel, once it is back, is kept with it and goes up as
+   `feedback.json` (`feedback`) - with what the reel was made of and with -
+   and the `feedback` workflow is dispatched, which records it in the
+   repository, for later storyboards to go by. A new render or storyboard
+   is of another reel, so its feedback starts afresh.
 
 Times on the page - the transcript's, the stretch's - are seconds of the
 moment's file, whatever was sent: what comes back is moved by where the
@@ -99,15 +109,18 @@ CONTEXT = "context.json"
 STORYBOARD = "storyboard.json"
 CONTACT = "contact.jpg"
 REEL = "reel.mp4"
+RENDERED = "render.json"
+FEEDBACK = "feedback.json"
 HEARD = "clip.srt"
 WORDS = "clip.words.json"
 SUBTITLES = "clip.subs.srt"
 # What a step leaves in the release, taken out before it is asked again -
 # the transcript only where the moment's file is not the one it was heard
-# from any more (see the module's docstring).
-STORYBOARD_ANSWERS = (STORYBOARD, CONTACT, REEL)
+# from any more (see the module's docstring). Feedback is on the reel that
+# was there, so it goes with it.
+STORYBOARD_ANSWERS = (STORYBOARD, CONTACT, REEL, RENDERED, FEEDBACK)
 TRANSCRIPT_FILES = (HEARD, WORDS, SUBTITLES)
-RENDER_ANSWERS = (REEL,)
+RENDER_ANSWERS = (REEL, RENDERED, FEEDBACK)
 
 # How a render is asked to treat subtitles: as the variant has them, or
 # with them or without them whatever it has.
@@ -118,6 +131,9 @@ SUBTITLE_CHOICES = (SUBTITLES_AS_THE_VARIANT, WITH_SUBTITLES, WITHOUT_SUBTITLES)
 
 # Hook words of one's own are kept to what fits on two lines of the reel.
 HOOK_MOST_CHARACTERS = 80
+# A comment written on the page to go with a step - for the storyboard, for
+# the render - or feedback on the reel: a few paragraphs at most.
+COMMENT_MOST_CHARACTERS = 2000
 # A transcript put right on the page: as many lines as hours of talk would
 # make, each no longer than a subtitle can hold, and its times may run this
 # far past the end of the file (its length is known to the tenth).
@@ -192,11 +208,13 @@ def context(
     clip_end: float | None,
     chat: Iterable[ChatLine],
     transcript_corrected: bool = False,
+    comment: str = "",
 ) -> dict[str, Any]:
     """What goes up with a moment's file, for whoever makes its storyboard:
     see the module's docstring. Times are seconds into the file.
     `transcript_corrected` says that the subtitles that go up with it are
-    the transcript put right by hand."""
+    the transcript put right by hand; `comment` is what was written on the
+    page for the storyboard to go by."""
     lines = [line for line in chat if line.second >= 0][:CONTEXT_CHAT_LIMIT]
     platform, login = platforms.split(channel)
     return {
@@ -211,6 +229,65 @@ def context(
         "peak": peak_second(lines),
         "chat": [{"t": round(line.second, 1), "user": line.sender, "text": line.text} for line in lines],
         "transcript_corrected": transcript_corrected,
+        "comment": comment,
+    }
+
+
+def comment_asked(value: object) -> str:
+    """A comment as it was written on the page, made fit to go along: its
+    rows kept, the space at their ends and around it dropped - "" for none.
+    Raises ValueError, in words for the page, for one that is not words, or
+    is too long."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("Expected the comment as words.")
+    rows = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    text = "\n".join(row.rstrip() for row in rows).strip()
+    if len(text) > COMMENT_MOST_CHARACTERS:
+        raise ValueError(f"A comment is at most {COMMENT_MOST_CHARACTERS} characters.")
+    return text
+
+
+def feedback(
+    *,
+    moment_id: int,
+    channel: str,
+    title: str | None,
+    storyboard: Mapping[str, Any] | None,
+    storyboard_comment: str | None,
+    variant: str | None,
+    hook: str | None,
+    subtitles_asked: str | None,
+    render_comment: str | None,
+    render_note: str | None,
+    rendered_at: str,
+    words: str,
+) -> dict[str, Any]:
+    """What goes up as feedback on a moment's reel (see the module's
+    docstring): the words, and what the reel was made of and with - so it
+    can be recorded on its own. `rendered_at` is when the reel was asked
+    for, which tells one reel of the moment from another."""
+    platform, login = platforms.split(channel)
+    offered = (storyboard or {}).get("variants", [])
+    chosen = next((one for one in offered if isinstance(one, dict) and str(one.get("id")) == variant), {})
+    return {
+        "tag": tag(moment_id),
+        "moment_id": moment_id,
+        "streamer": login,
+        "platform": platform,
+        "credit": credit(channel),
+        "title": title or "",
+        "summary": str((storyboard or {}).get("summary") or ""),
+        "storyboard_comment": storyboard_comment or "",
+        "variant": variant or "",
+        "variant_title": str(chosen.get("title") or chosen.get("structure") or ""),
+        "hook": hook or "",
+        "subtitles": subtitles_asked or SUBTITLES_AS_THE_VARIANT,
+        "render_comment": render_comment or "",
+        "render_note": render_note or "",
+        "rendered_at": rendered_at,
+        "feedback": words,
     }
 
 
@@ -240,6 +317,19 @@ def read_storyboard(raw: bytes) -> dict[str, Any]:
     if not isinstance(hooks, list) or not all(isinstance(hook, dict) and hook.get("text") for hook in hooks):
         raise BadStoryboard("The storyboard's hooks have no words.")
     return storyboard
+
+
+def rendered_note(raw: bytes) -> str:
+    """What the render workflow says Claude made of the comment the reel was
+    rendered with (the `note` of its `render.json`): "" where it says
+    nothing, or the file is not what the workflow promises - the reel is
+    there all the same."""
+    try:
+        rendered = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return ""
+    note = rendered.get("note") if isinstance(rendered, dict) else None
+    return note.strip()[:COMMENT_MOST_CHARACTERS] if isinstance(note, str) else ""
 
 
 def chosen_hook(storyboard: Mapping[str, Any], hook: str) -> str:

@@ -1,6 +1,7 @@
 {#- One moment's reel on the Reels page (see reels.py): where it stands and the
-    way to ask for a storyboard; the storyboard, a variant and a hook chosen
-    from it, and the render; the reel once it is back; and the transcript
+    way to ask for a storyboard, with a comment for it; the storyboard, a
+    variant and a hook chosen from it, and the render, with a comment of what
+    to change; the reel once it is back, and feedback on it; and the transcript
     its subtitles are made of, put right line by line beside the clip it was
     heard from. Also served on its own (/dashboard/reels/<id>), which the
     script fetches while a step goes on: then it puts in place only where
@@ -22,6 +23,15 @@
   </div>
   <textarea class="ch-input reel-text" rows="1" aria-label="What is said" data-reel-text{% if not editable %} disabled{% endif %}>{{ line.text if line else '' }}</textarea>
 </li>
+{%- endmacro %}
+{#- A comment written to go with a step, or feedback on the reel: what was
+    sent last is offered again. The script keeps what is typed in one when
+    the part of the page it is in is put in place anew. -#}
+{% macro comment_field(kind, label, value, placeholder, disabled=false) -%}
+<label class="reel-comment">
+  <span class="ch-cap">{{ label }}</span>
+  <textarea class="ch-input reel-comment-text" rows="2" maxlength="{{ reel.comment_most }}" placeholder="{{ placeholder }}" data-reel-comment="{{ kind }}"{% if disabled %} disabled{% endif %}>{{ value }}</textarea>
+</label>
 {%- endmacro %}
 <article class="reel" data-reel="{{ reel.url }}" data-reel-id="{{ reel.id }}" data-board="{{ reel.board }}" data-state="{{ reel.state }}" data-row-words="{{ reel.row_words }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
 <div class="stage">
@@ -55,6 +65,7 @@
     </span>
     {% endif %}
     {% if reel.has_clip %}
+    {{ comment_field("storyboard", "Comment for the storyboard, if you like: what the clip is about, where to cut, what the hook should play on. Claude goes by it.", reel.storyboard_comment, "e.g. the joke is the second fall - start just before it", reel.busy) }}
     <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the clip to GitHub, where a storyboard of the reel is made from it in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
     {% endif %}
     <p class="status-line" role="status" data-status>
@@ -75,9 +86,24 @@
           <video class="reel-video" src="{{ reel.reel_url }}" controls playsinline preload="metadata"></video>
           <div class="reel-result-words">
             <p>{{ reel.result_words }}</p>
+            {% if reel.render_note %}<p class="reel-quiet" data-reel-render-note>Claude, of your comment: {{ reel.render_note }}</p>{% endif %}
             <a class="ch-btn ch-btn-compact" href="{{ reel.reel_url }}" download="moment_{{ reel.id }}_reel.mp4">Download</a>
           </div>
         </section>
+        {% if reel.feedback_open %}
+        {#- Feedback on the reel: kept here, and recorded in the reel
+            repository for later storyboards to go by. -#}
+        <section class="reel-section reel-feedback" aria-label="Feedback on the reel" data-reel-feedback-box data-status-scope>
+          {{ comment_field("feedback", "Feedback on the reel: what works, what does not. It is recorded in the reel repository, and later storyboards go by it.", reel.feedback, "e.g. the hook gives the joke away, the ending drags") }}
+          <div class="reel-render">
+            <button type="button" class="ch-btn" data-reel-feedback="{{ reel.feedback_url }}">{{ "Send again" if reel.feedback else "Send feedback" }}</button>
+            <p class="status-line" role="status" data-status>
+              {%- if reel.feedback and reel.feedback_sent %}Sent.
+              {%- elif reel.feedback %}Kept here, but not sent to GitHub yet: send it again.{% endif -%}
+            </p>
+          </div>
+        </section>
+        {% endif %}
         {% endif %}
       </div>
 
@@ -116,6 +142,7 @@
         </div>
 
         {% if board.question %}<p class="reel-quiet">{{ board.question }}</p>{% endif %}
+        {{ comment_field("render", "Comment for the render, if you like: what to change in the chosen variant. Claude reworks it by that before it is rendered.", reel.render_comment, "e.g. end it a second sooner, right after the laugh", reel.busy) }}
         <div class="reel-render">
           {#- Made of the transcript, under it. As the chosen variant has them
               to begin with. -#}

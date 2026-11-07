@@ -189,6 +189,10 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- `part_start` and `part_end` are the stretch of the moment's file that was
 -- sent, in seconds of it, where only a stretch of it was (none: all of it);
 -- the transcript is in seconds of the moment's file all the same.
+-- `storyboard_comment` and `render_comment` are what was written on the
+-- page to go with the last storyboard and render, `render_note` what Claude
+-- made of the render's comment, `feedback` what was written of the reel
+-- once it was back and `feedback_sent` whether GitHub took it.
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -205,7 +209,12 @@ CREATE TABLE IF NOT EXISTS reels (
     clip_stamp TEXT,
     subtitles TEXT,
     part_start REAL,
-    part_end REAL
+    part_end REAL,
+    storyboard_comment TEXT,
+    render_comment TEXT,
+    render_note TEXT,
+    feedback TEXT,
+    feedback_sent INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -455,7 +464,8 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("ALTER TABLE streamers ADD COLUMN vod_access_at TEXT")
 
     # A reel's transcript, put right on the Reels page, and what goes with
-    # it (see the reels table above, and reels.py).
+    # it; the comments written there and the feedback on the reel (see the
+    # reels table above, and reels.py).
     reel_columns = {row[1] for row in conn.execute("PRAGMA table_info(reels)")}
     for name, kind in (
         ("transcript", "TEXT"),
@@ -465,6 +475,11 @@ def get_connection() -> sqlite3.Connection:
         ("subtitles", "TEXT"),
         ("part_start", "REAL"),
         ("part_end", "REAL"),
+        ("storyboard_comment", "TEXT"),
+        ("render_comment", "TEXT"),
+        ("render_note", "TEXT"),
+        ("feedback", "TEXT"),
+        ("feedback_sent", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if name not in reel_columns:
             conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
@@ -1998,6 +2013,11 @@ REEL_FIELDS = (
     "subtitles",
     "part_start",
     "part_end",
+    "storyboard_comment",
+    "render_comment",
+    "render_note",
+    "feedback",
+    "feedback_sent",
 )
 
 

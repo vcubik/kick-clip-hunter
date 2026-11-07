@@ -2,10 +2,11 @@
 clip and what goes with it sent to a fake GitHub, the storyboard workflow
 started, the storyboard and the transcript taken back and shown on the Reels
 page, the transcript put right there, a variant and a hook chosen, the render
-workflow started with the transcript as subtitles and the reel taken back -
-and what happens when GitHub refuses, a workflow fails or nothing comes
-back. What the workflows would put into the release the tests put there
-themselves; the service's look at GitHub is called as its loop would."""
+workflow started with the transcript as subtitles and the reel taken back,
+the comments that go with each step and the feedback on the reel - and what
+happens when GitHub refuses, a workflow fails or nothing comes back. What the
+workflows would put into the release the tests put there themselves; the
+service's look at GitHub is called as its loop would."""
 
 from __future__ import annotations
 
@@ -124,12 +125,14 @@ def transcript_of(moment_id: int) -> list[subtitles.Line] | None:
     return subtitles.read(reel_of(moment_id)["transcript"])
 
 
-async def ask(service, moment_id: int):
+async def ask(service, moment_id: int, **asked):
+    if asked:
+        return await service.client.post(f"/moments/{moment_id}/reel", json=asked)
     return await service.client.post(f"/moments/{moment_id}/reel")
 
 
-async def asked_for_storyboard(service, github: FakeGitHub, moment_id: int) -> None:
-    response = await ask(service, moment_id)
+async def asked_for_storyboard(service, github: FakeGitHub, moment_id: int, **asked) -> None:
+    response = await ask(service, moment_id, **asked)
     assert response.status_code == 200, response.text
     await async_wait_until(lambda: reel_of(moment_id)["state"] != reels.SENDING, "the clip to be sent")
     assert reel_of(moment_id)["state"] == reels.STORYBOARDING, reel_of(moment_id)["error"]
@@ -146,8 +149,8 @@ def answer(github: FakeGitHub, moment_id: int, storyboard=STORYBOARD, heard=HEAR
         github.put(tag, reels.SUBTITLES, srt_bytes(proposed))
 
 
-async def storyboard_back(service, github: FakeGitHub, moment_id: int, **answered) -> None:
-    await asked_for_storyboard(service, github, moment_id)
+async def storyboard_back(service, github: FakeGitHub, moment_id: int, comment: str = "", **answered) -> None:
+    await asked_for_storyboard(service, github, moment_id, **({"comment": comment} if comment else {}))
     answer(github, moment_id, **answered)
     await service.main._look_at_reels()
 
@@ -271,6 +274,7 @@ class TestAskingForAStoryboard:
         ]
         assert context["peak"] == BEFORE + 3
         assert context["transcript_corrected"] is False
+        assert context["comment"] == ""
 
     async def test_the_page_says_the_storyboard_is_being_made_and_offers_nothing_more_meanwhile(self, reeling, github):
         moment_id = clipped_moment()
@@ -522,7 +526,7 @@ class TestRendering:
         payload = await rendered(reeling, github, moment_id, "a", "2")
 
         tag = reels.tag(moment_id)
-        assert payload == {"tag": tag, "variant": "A", "hook": "WAS IT *GREEN?*", "subtitles": "auto"}
+        assert payload == {"tag": tag, "variant": "A", "hook": "WAS IT *GREEN?*", "subtitles": "auto", "comment": ""}
         assert reel_of(moment_id)["state"] == reels.RENDERING
 
         github.answer_reel(tag, b"the reel")
@@ -914,6 +918,213 @@ class TestAStretchOfTheFile:
 
         assert response.status_code == 200
         assert not part.exists()
+
+
+async def reel_back(service, github: FakeGitHub, moment_id: int, note: str | None = None, **asked) -> None:
+    """Renders the reel with variant B and hook 1 and has it come back - with
+    what Claude made of the render's comment, where `note` is given."""
+    await rendered(service, github, moment_id, "B", "1", **asked)
+    tag = reels.tag(moment_id)
+    if note is not None:
+        github.put(tag, reels.RENDERED, json.dumps({"variant": "B", "note": note}).encode())
+    github.answer_reel(tag, b"the reel")
+    await service.main._look_at_reels()
+    assert reel_of(moment_id)["state"] == reels.DONE, reel_of(moment_id)["error"]
+
+
+async def give_feedback(service, moment_id: int, words: object):
+    return await service.client.post(f"/moments/{moment_id}/reel/feedback", json={"feedback": words})
+
+
+class TestComments:
+    async def test_a_comment_for_the_storyboard_goes_up_in_its_context_and_is_offered_again(self, reeling, github):
+        moment_id = clipped_moment()
+
+        await asked_for_storyboard(
+            reeling, github, moment_id, comment="  The joke is the second fall.  \r\n\r\nKeep it short.\n "
+        )
+
+        said = "The joke is the second fall.\n\nKeep it short."
+        assert json.loads(github.asset(reels.tag(moment_id), "context.json"))["comment"] == said
+        assert reel_of(moment_id)["storyboard_comment"] == said
+        field = (await workspace(reeling, moment_id)).one(data_reel_comment="storyboard")
+        assert field.text == "The joke is the second fall. Keep it short."
+        # Not to be changed while the storyboard is made.
+        assert "disabled" in field.attrs
+
+    @pytest.mark.parametrize(
+        ("comment", "said"),
+        [("x" * (reels.COMMENT_MOST_CHARACTERS + 1), "at most"), (5, "Expected the comment as words")],
+    )
+    async def test_a_comment_that_cannot_go_along_is_refused_and_nothing_is_sent(self, reeling, github, comment, said):
+        moment_id = clipped_moment()
+
+        response = await ask(reeling, moment_id, comment=comment)
+
+        assert response.status_code == 400
+        assert said in response.json()["detail"]
+        assert github.dispatches == []
+        assert reel_of(moment_id) is None
+
+    async def test_a_comment_for_the_render_goes_with_it_and_what_claude_made_of_it_comes_back(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        await reel_back(
+            reeling, github, moment_id, note="Ended it at 16.2 s, after the laugh.", comment=" End sooner. "
+        )
+
+        assert github.dispatches[-1][1]["comment"] == "End sooner."
+        reel = reel_of(moment_id)
+        assert (reel["render_comment"], reel["render_note"]) == ("End sooner.", "Ended it at 16.2 s, after the laugh.")
+        opened = await workspace(reeling, moment_id)
+        assert opened.one(data_reel_comment="render").text == "End sooner."
+        assert "Ended it at 16.2 s, after the laugh." in opened.one(data_reel_render_note=True).text
+
+    async def test_a_reel_whose_render_says_nothing_readable_of_it_is_taken_all_the_same(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await rendered(reeling, github, moment_id, "B", "1", comment="End sooner.")
+        tag = reels.tag(moment_id)
+        github.put(tag, reels.RENDERED, b"not json")
+        github.answer_reel(tag, b"the reel")
+
+        await reeling.main._look_at_reels()
+
+        assert reel_of(moment_id)["state"] == reels.DONE
+        assert reel_of(moment_id)["render_note"] is None
+        assert (await workspace(reeling, moment_id)).find(data_reel_render_note=True) == []
+
+    async def test_a_comment_for_the_render_that_is_too_long_is_refused(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await render(reeling, moment_id, "B", "1", comment="x" * (reels.COMMENT_MOST_CHARACTERS + 1))
+
+        assert response.status_code == 400
+        assert reel_of(moment_id)["state"] == reels.CHOOSING
+
+    async def test_a_new_storyboard_starts_the_reels_comments_and_feedback_afresh(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id, comment="The first fall.")
+        await reel_back(reeling, github, moment_id, note="Done.", comment="End sooner.")
+        await give_feedback(reeling, moment_id, "Too long.")
+
+        await asked_for_storyboard(reeling, github, moment_id, comment="The second fall.")
+
+        reel = reel_of(moment_id)
+        assert reel["storyboard_comment"] == "The second fall."
+        assert [reel[name] for name in ("render_comment", "render_note", "feedback")] == [None, None, None]
+        tag = reels.tag(moment_id)
+        assert [github.asset(tag, name) for name in (reels.RENDERED, reels.FEEDBACK)] == [None, None]
+
+
+class TestFeedback:
+    async def test_it_goes_up_with_what_the_reel_was_made_of_and_the_feedback_workflow_starts(self, reeling, github):
+        moment_id = clipped_moment(title="Nearly ran him over")
+        await storyboard_back(reeling, github, moment_id, comment="The second fall.")
+        await reel_back(reeling, github, moment_id, note="Ended it sooner.", comment="End sooner.", subtitles="on")
+        rendered_at = reel_of(moment_id)["asked_at"]
+
+        response = await give_feedback(reeling, moment_id, " The hook gives it away.\nGreat ending. ")
+
+        assert response.status_code == 200, response.text
+        tag = reels.tag(moment_id)
+        assert github.dispatches[-1] == ("feedback", {"tag": tag})
+        assert json.loads(github.asset(tag, reels.FEEDBACK)) == {
+            "tag": tag,
+            "moment_id": moment_id,
+            "streamer": CHANNEL,
+            "platform": "kick",
+            "credit": f"kick.com/{CHANNEL}",
+            "title": "Nearly ran him over",
+            "summary": STORYBOARD["summary"],
+            "storyboard_comment": "The second fall.",
+            "variant": "B",
+            "variant_title": "Teaser first",
+            "hook": "NEARLY RAN|*HIM OVER?*",
+            "subtitles": "on",
+            "render_comment": "End sooner.",
+            "render_note": "Ended it sooner.",
+            "rendered_at": rendered_at,
+            "feedback": "The hook gives it away.\nGreat ending.",
+        }
+        reel = reel_of(moment_id)
+        assert (reel["feedback"], reel["feedback_sent"]) == ("The hook gives it away.\nGreat ending.", 1)
+        box = (await workspace(reeling, moment_id)).one(data_reel_feedback_box=True)
+        assert box.one(data_reel_comment="feedback").text == "The hook gives it away. Great ending."
+        assert box.one(data_status=True).text == "Sent."
+        assert box.one(data_reel_feedback=True).text == "Send again"
+
+    async def test_it_is_offered_only_once_the_reel_is_back(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        choosing = await workspace(reeling, moment_id)
+        refused = await give_feedback(reeling, moment_id, "Too long.")
+        await rendered(reeling, github, moment_id, "B", "1")
+        rendering = await give_feedback(reeling, moment_id, "Too long.")
+
+        assert choosing.find(data_reel_feedback_box=True) == []
+        assert (refused.status_code, rendering.status_code) == (409, 409)
+        assert "no reel" in refused.json()["detail"]
+        assert all(event != "feedback" for event, _ in github.dispatches)
+
+    @pytest.mark.parametrize(("words", "said"), [("   ", "Write what you think"), (None, "Write what you think")])
+    async def test_none_is_refused(self, reeling, github, words, said):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await reel_back(reeling, github, moment_id)
+
+        response = await give_feedback(reeling, moment_id, words)
+
+        assert response.status_code == 400
+        assert said in response.json()["detail"]
+
+    async def test_what_github_does_not_take_is_kept_said_so_and_sent_again(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await reel_back(reeling, github, moment_id)
+        github.failures["POST /dispatches"] = 500
+
+        refused = await give_feedback(reeling, moment_id, "Too long.")
+
+        assert refused.status_code == 502
+        assert "Kept here, but not sent: GitHub refused" in refused.json()["detail"]
+        assert (reel_of(moment_id)["feedback"], reel_of(moment_id)["feedback_sent"]) == ("Too long.", 0)
+        box = (await workspace(reeling, moment_id)).one(data_reel_feedback_box=True)
+        assert "not sent to GitHub yet" in box.one(data_status=True).text
+
+        again = await give_feedback(reeling, moment_id, "Too long.")
+
+        assert again.status_code == 200
+        assert reel_of(moment_id)["feedback_sent"] == 1
+
+    async def test_sent_again_it_takes_the_place_of_what_was_sent(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await reel_back(reeling, github, moment_id)
+
+        await give_feedback(reeling, moment_id, "Too long.")
+        await give_feedback(reeling, moment_id, "Too long, but the hook is great.")
+
+        tag = reels.tag(moment_id)
+        assert json.loads(github.asset(tag, reels.FEEDBACK))["feedback"] == "Too long, but the hook is great."
+        assert [event for event, _ in github.dispatches].count("feedback") == 2
+
+    async def test_a_new_render_is_another_reel_whose_feedback_starts_afresh(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await reel_back(reeling, github, moment_id, note="Nothing to change.")
+        await give_feedback(reeling, moment_id, "Too long.")
+
+        await rendered(reeling, github, moment_id, "A", "2", comment="Shorter.")
+
+        reel = reel_of(moment_id)
+        assert (reel["feedback"], reel["feedback_sent"], reel["render_note"]) == (None, 0, None)
+        tag = reels.tag(moment_id)
+        assert [github.asset(tag, name) for name in (reels.REEL, reels.RENDERED, reels.FEEDBACK)] == [None] * 3
+        assert (await workspace(reeling, moment_id)).find(data_reel_feedback_box=True) == []
 
 
 class TestRemovingTheMoment:

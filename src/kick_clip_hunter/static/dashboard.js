@@ -1766,7 +1766,10 @@
   // a minute or two after that. While a step goes on the page asks for the
   // reel every few seconds and puts in place where it stands and the reel
   // itself - and all of it once another storyboard has come back, unless a
-  // transcript is being put right, which is never thrown away.
+  // transcript is being put right, which is never thrown away. A comment can
+  // go with each step, and feedback on the reel once it is back; what is
+  // typed in one and not sent yet is kept when its part of the page is put
+  // in place anew.
 
   const REEL_POLL_MS = 5000;
   let reelWatch = null;
@@ -1775,17 +1778,39 @@
   const reelEditorOf = (element) => element.closest("[data-reel-transcript]");
   const reelUnsaved = (root) => Boolean(root && one("[data-reel-transcript][data-unsaved]", root));
 
-  // What starts a step is off while one goes on.
+  // What starts a step, and its comment, is off while one goes on.
   function dressReel(root) {
     const busy = root.hasAttribute("data-busy");
-    for (const button of all("[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button", root)) {
-      button.disabled = busy;
-    }
+    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"]';
+    for (const control of all(starting, root)) control.disabled = busy;
     for (const box of all("[data-stretch]", root)) {
       box.hidden = false;
       showStretch(box);
     }
-    for (const field of all("[data-reel-text]", root)) grow(field);
+    for (const field of all("[data-reel-text], [data-reel-comment]", root)) grow(field);
+  }
+
+  // The words of the comment of a kind ("storyboard", "render") that go
+  // with a step.
+  function reelComment(root, kind) {
+    return one(`[data-reel-comment="${kind}"]`, root)?.value ?? "";
+  }
+
+  // A comment that has gone off with its step, or been kept by the service.
+  function reelCommentSent(root, kind) {
+    const field = one(`[data-reel-comment="${kind}"]`, root);
+    if (field) delete field.dataset.edited;
+  }
+
+  // What is typed in a comment and not sent yet, carried over to the reel as
+  // the service has it now.
+  function keepReelDrafts(from, to) {
+    for (const field of all("[data-reel-comment][data-edited]", from)) {
+      const twin = one(`[data-reel-comment="${field.dataset.reelComment}"]`, to);
+      if (!twin || twin === field) continue;
+      twin.value = field.value;
+      twin.dataset.edited = "";
+    }
   }
 
   async function askReel(button) {
@@ -1799,13 +1824,15 @@
     // The stretch of the file shown above the button - all of it, unless
     // another was chosen.
     const stretch = one("[data-stretch]", root);
-    const response = await post(button.dataset.reelAsk, stretch ? stretchAt(stretch) : {});
+    const asked = { ...(stretch ? stretchAt(stretch) : {}), comment: reelComment(root, "storyboard") };
+    const response = await post(button.dataset.reelAsk, asked);
     if (!root.isConnected) return;
     if (!response || !response.ok) {
       button.disabled = false;
       say(button, response ? await problem(response, "Could not ask for a storyboard. Try again.") : "Could not reach the service.");
       return;
     }
+    reelCommentSent(root, "storyboard");
     await refreshReel(root);
   }
 
@@ -1854,15 +1881,43 @@
     }
     button.disabled = true;
     say(button, "Asking for the reel.");
-    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook, subtitles });
+    const comment = reelComment(root, "render");
+    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook, subtitles, comment });
     if (!root.isConnected) return;
     if (!response || !response.ok) {
       button.disabled = false;
       say(button, response ? await problem(response, "Could not ask for the reel. Try again.") : "Could not reach the service.");
       return;
     }
+    reelCommentSent(root, "render");
     say(button, "");
     await refreshReel(root);
+  }
+
+  // Feedback on the reel: kept by the service, which sends it on to the reel
+  // repository - kept even where GitHub does not take it, to be sent again.
+  async function sendReelFeedback(button) {
+    const box = button.closest("[data-reel-feedback-box]");
+    const field = one('[data-reel-comment="feedback"]', box);
+    if (!field.value.trim()) {
+      say(button, "Write what you think of the reel first.");
+      field.focus();
+      return;
+    }
+    button.disabled = true;
+    say(button, "Sending.");
+    const response = await post(button.dataset.reelFeedback, { feedback: field.value });
+    button.disabled = false;
+    if (!box.isConnected) return;
+    if (response && (response.ok || response.status === 502)) {
+      delete field.dataset.edited;
+      button.textContent = "Send again";
+    }
+    if (!response || !response.ok) {
+      say(button, response ? await problem(response, "Could not send the feedback. Try again.") : "Could not reach the service.");
+      return;
+    }
+    say(button, "Sent.");
   }
 
   async function fetchedReel(root) {
@@ -1882,6 +1937,7 @@
     const fresh = await fetchedReel(root);
     if (!root.isConnected) return;
     if (fresh) {
+      keepReelDrafts(root, fresh);
       if (fresh.dataset.board !== root.dataset.board && !reelUnsaved(root)) {
         root.replaceWith(fresh);
         root = fresh;
@@ -3547,6 +3603,7 @@
     ["[data-reel-line-remove]", removeReelLine],
     ["[data-reel-take]", takeHeardLine],
     ["[data-reel-transcript-save]", (button) => saveReelTranscript(reelEditorOf(button))],
+    ["[data-reel-feedback]", sendReelFeedback],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
@@ -3830,6 +3887,10 @@
       say(target, "");
     } else if (target.matches("[data-reel-own]")) {
       ownHook(target);
+    } else if (target.matches("[data-reel-comment]")) {
+      grow(target);
+      target.dataset.edited = "";
+      if (target.dataset.reelComment === "feedback") say(target, "Not sent yet.");
     } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end]")) {
       if (target.matches("[data-reel-text]")) grow(target);
       reelEdited(target);
@@ -3915,10 +3976,10 @@
     for (const video of all("[data-clip]")) video.controls = document.fullscreenElement === video;
   });
 
-  // A transcript of a reel that is being put right is not left behind
-  // unasked.
+  // A transcript of a reel that is being put right, or a comment on one that
+  // has not been sent, is not left behind unasked.
   window.addEventListener("beforeunload", (event) => {
-    if (!one("[data-reel-transcript][data-unsaved]")) return;
+    if (!one("[data-reel-transcript][data-unsaved], [data-reel-comment][data-edited]")) return;
     event.preventDefault();
     event.returnValue = "";
   });
