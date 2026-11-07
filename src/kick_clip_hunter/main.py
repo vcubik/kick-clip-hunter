@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -113,6 +114,7 @@ from .db import (
     get_notify_setup,
     get_recent_moments,
     get_reel,
+    get_reel_list,
     get_reels_in,
     get_stream_recording,
     get_stream_recording_offset,
@@ -3323,9 +3325,10 @@ def _open_moment(conn, row, today: date) -> dict:
             if _takes_footage(row) and (CLIPS_DIR / row["clip_path"]).exists()
             else None
         ),
-        # The moment's clip made into a reel by GitHub Actions: where the
-        # service is set up for that and there is a clip to make it of.
-        "reel": _reel_view(conn, row) if settings.reels and row["clip_path"] else None,
+        # The moment's clip made into a reel by GitHub Actions, on the Reels
+        # page: where the service is set up for that and there is a clip to
+        # make it of.
+        "reel": _reel_link(conn, row) if settings.reels and row["clip_path"] else None,
     }
 
 
@@ -3619,6 +3622,8 @@ def _page_context(conn, nav: str) -> dict:
         ),
         "shutdown_requested": _shutdown_requested,
         "shutdown_words": dashboard_view.shutdown_words(len(_moment_sessions) + len(_background_tasks)),
+        # The Reels page is in the bar where the service is set up for reels.
+        "reels_on": settings.reels,
     }
 
 
@@ -6027,6 +6032,9 @@ REEL_PARTS = ("contact.jpg", "reel.mp4")
 # being sent that is not among them was cut short by a restart.
 _reels_sending: set[int] = set()
 REELS_NOT_SET_UP_WORDS = "Reels are not set up: REELS_REPO and REELS_GITHUB_TOKEN go in .env."
+# While a new storyboard is being made, the transcript is not put right:
+# the one that comes with it takes its place.
+REEL_TRANSCRIPT_COMING = frozenset({reels.SENDING, reels.STORYBOARDING})
 
 
 def _github() -> reels.GitHub | None:
@@ -6044,7 +6052,15 @@ def _reel_files(moment_id: int) -> list[Path]:
     return [_reel_file(moment_id, part) for part in REEL_PARTS]
 
 
-def _reel_context(conn, row) -> dict:
+def _file_length(row) -> float | None:
+    """How long a moment's file runs - the footage before its clip, the clip
+    and the footage after it - where the clip's length is known."""
+    if not row["clip_duration"]:
+        return None
+    return (row["context_before"] or 0.0) + row["clip_duration"] + (row["context_after"] or 0.0)
+
+
+def _reel_context(conn, row, *, corrected: bool = False) -> dict:
     """What goes up with a moment's file (see reels.context): its chat over
     the whole file, placed against the picture as the review page places it."""
     before = row["context_before"] or 0.0
@@ -6090,6 +6106,7 @@ def _reel_context(conn, row) -> dict:
         clip_start=before if clip_seconds else None,
         clip_end=before + clip_seconds if clip_seconds else None,
         chat=lines,
+        transcript_corrected=corrected,
     )
 
 
@@ -6113,15 +6130,34 @@ def _now_text() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _send_for_storyboard(github: reels.GitHub, moment_id: int, clip: Path, context: dict) -> None:
+async def _send_for_storyboard(
+    github: reels.GitHub,
+    moment_id: int,
+    clip: Path,
+    context: dict,
+    *,
+    keep_transcript: bool = False,
+    corrected: str | None = None,
+) -> None:
     """Sends a moment's file and what goes with it to GitHub, and starts the
-    storyboard workflow (see reels.py)."""
+    storyboard workflow (see reels.py). Where the transcript is kept, the
+    file is not sent again if the release has it, and `corrected` - the
+    transcript put right by hand, as SubRip - goes up as its subtitles."""
     release_tag = reels.tag(moment_id)
     try:
         release = await github.ensure_release(release_tag, f"Moment {moment_id}")
-        await github.remove_assets(release, reels.STORYBOARD_ANSWERS)
-        await github.upload(release, reels.CLIP, path=clip)
+        gone = list(reels.STORYBOARD_ANSWERS)
+        if not keep_transcript:
+            gone.extend(reels.TRANSCRIPT_FILES)
+        elif corrected is None:
+            gone.append(reels.SUBTITLES)
+        await github.remove_assets(release, gone)
+        there = release.asset(reels.CLIP)
+        if not (keep_transcript and there is not None and there.size == clip.stat().st_size):
+            await github.upload(release, reels.CLIP, path=clip)
         await github.upload(release, reels.CONTEXT, data=json.dumps(context, ensure_ascii=False, indent=1).encode())
+        if corrected is not None:
+            await github.upload(release, reels.SUBTITLES, data=corrected.encode(subtitles.ENCODING))
         asked_at = _now_text()
         await github.dispatch("storyboard", {"tag": release_tag})
     except reels.GitHubTrouble as trouble:
@@ -6137,16 +6173,22 @@ async def _send_for_storyboard(github: reels.GitHub, moment_id: int, clip: Path,
     _update_reel(moment_id, state=reels.STORYBOARDING, asked_at=asked_at)
 
 
-async def _send_for_render(github: reels.GitHub, moment_id: int, variant: str, hook: str) -> None:
-    """Starts the render workflow for a moment's reel."""
+async def _send_for_render(
+    github: reels.GitHub, moment_id: int, variant: str, hook: str, choice: str, said: str | None, unsaid: bool
+) -> None:
+    """Starts the render workflow for a moment's reel: with the transcript as
+    its subtitles (`said`, as SubRip), or with the subtitles taken out of the
+    release where there is nothing left to say (`unsaid`)."""
     release_tag = reels.tag(moment_id)
     try:
         release = await github.release(release_tag)
         if release is None:
             _reel_failed(moment_id, "The moment's release is gone from GitHub. Make a new storyboard.")
             return
-        await github.remove_assets(release, reels.RENDER_ANSWERS)
-        await github.dispatch("render", {"tag": release_tag, "variant": variant, "hook": hook})
+        await github.remove_assets(release, [*reels.RENDER_ANSWERS, *([reels.SUBTITLES] if unsaid else [])])
+        if said is not None:
+            await github.upload(release, reels.SUBTITLES, data=said.encode(subtitles.ENCODING))
+        await github.dispatch("render", {"tag": release_tag, "variant": variant, "hook": hook, "subtitles": choice})
     except reels.GitHubTrouble as trouble:
         _reel_failed(moment_id, str(trouble))
         return
@@ -6154,7 +6196,9 @@ async def _send_for_render(github: reels.GitHub, moment_id: int, variant: str, h
         logger.exception("the reel of moment %d could not be asked for", moment_id)
         _reel_failed(moment_id, "Something went wrong. The server log says what.")
         return
-    logger.info("the reel of moment %d was asked for: variant %s, hook %r", moment_id, variant, hook)
+    logger.info(
+        "the reel of moment %d was asked for: variant %s, hook %r, subtitles %s", moment_id, variant, hook, choice
+    )
 
 
 async def _keep_making_reels() -> None:
@@ -6198,7 +6242,7 @@ async def _look_at_reel(github: reels.GitHub, reel) -> None:
     if state == reels.STORYBOARDING:
         asset = release.asset(reels.STORYBOARD) if release else None
         if asset is not None:
-            await _take_storyboard(github, moment_id, release, asset)
+            await _take_storyboard(github, reel, release, asset)
             return
         workflow, limit = "storyboard", reels.STORYBOARD_LIMIT
     else:
@@ -6215,13 +6259,26 @@ async def _look_at_reel(github: reels.GitHub, reel) -> None:
         _reel_failed(moment_id, f"Nothing came back from the {workflow} workflow in {minutes} minutes.")
 
 
-async def _take_storyboard(github: reels.GitHub, moment_id: int, release: reels.Release, asset: reels.Asset) -> None:
-    with tempfile.TemporaryDirectory(prefix="storyboard_") as folder:
-        path = Path(folder) / reels.STORYBOARD
+async def _fetched(github: reels.GitHub, asset: reels.Asset) -> bytes:
+    """A small file of a release, as its bytes."""
+    with tempfile.TemporaryDirectory(prefix="reel_") as folder:
+        path = Path(folder) / "file"
         await github.download(asset, path)
-        raw = path.read_bytes()
+        return path.read_bytes()
+
+
+async def _fetched_lines(github: reels.GitHub, release: reels.Release, name: str) -> list[subtitles.Line] | None:
+    """The lines of a SubRip file of a release, or None where it has none."""
+    asset = release.asset(name)
+    if asset is None:
+        return None
+    return subtitles.from_srt((await _fetched(github, asset)).decode("utf-8", errors="replace"))
+
+
+async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, asset: reels.Asset) -> None:
+    moment_id = reel["moment_id"]
     try:
-        storyboard = reels.read_storyboard(raw)
+        storyboard = reels.read_storyboard(await _fetched(github, asset))
     except reels.BadStoryboard as bad:
         _reel_failed(moment_id, str(bad))
         return
@@ -6230,18 +6287,27 @@ async def _take_storyboard(github: reels.GitHub, moment_id: int, release: reels.
     if contact is not None:
         await github.download(contact, _reel_file(moment_id, "contact.jpg"))
         contact_path = _reel_file(moment_id, "contact.jpg").relative_to(CLIPS_DIR).as_posix()
-    _update_reel(
-        moment_id,
-        state=reels.CHOOSING,
-        storyboard=json.dumps(storyboard, ensure_ascii=False),
-        contact_path=contact_path,
-        error=None,
-    )
+    heard = await _fetched_lines(github, release, reels.HEARD)
+    fields = {
+        "state": reels.CHOOSING,
+        "storyboard": json.dumps(storyboard, ensure_ascii=False),
+        "contact_path": contact_path,
+        "error": None,
+    }
+    if heard is not None:
+        fields["heard"] = subtitles.stored(heard)
+    # A transcript put right by hand is kept; otherwise the subtitles Claude
+    # proposed are the transcript, or what was heard where it proposed none.
+    if not reel["transcript_edited"]:
+        proposed = await _fetched_lines(github, release, reels.SUBTITLES)
+        transcript = proposed if proposed is not None else heard
+        fields["transcript"] = subtitles.stored(transcript) if transcript is not None else None
+    _update_reel(moment_id, **fields)
     logger.info("the storyboard of moment %d came back", moment_id)
     channel = _channel_of_moment(moment_id)
     if channel is not None and _notes().destinations:
         note = notify.storyboard_note(
-            channel, str(storyboard.get("summary") or ""), link=_link(dashboard_view.review_url(moment=moment_id))
+            channel, str(storyboard.get("summary") or ""), link=_link(dashboard_view.reels_url(moment_id))
         )
         _track_task(_notes().notify(note))
 
@@ -6257,7 +6323,7 @@ async def _take_reel(github: reels.GitHub, moment_id: int, asset: reels.Asset, r
             channel,
             reel["variant"] or "",
             reels.hook_shown(reel["hook"] or ""),
-            link=_link(dashboard_view.review_url(moment=moment_id)),
+            link=_link(dashboard_view.reels_url(moment_id)),
         )
         _track_task(_notes().notify(note, path))
 
@@ -6280,80 +6346,214 @@ def _stored_storyboard(reel) -> dict | None:
         return None
 
 
-def _reel_view(conn, row) -> dict:
-    """What the review page shows of a moment's reel (_reel.html)."""
+def _reel_link(conn, row) -> dict:
+    """What the review page says of a moment's reel: where it stands, and
+    the way to the Reels page, where everything about it is done."""
+    reel = get_reel(conn, row["id"])
+    return {
+        "url": dashboard_view.reels_url(row["id"]),
+        "state": reel["state"] if reel is not None else "",
+        "words": reels.state_words(reel["state"], reel["error"]) if reel is not None else "",
+    }
+
+
+def _transcript_lines(lines: list[subtitles.Line]) -> list[dict]:
+    return [
+        {
+            "start": dashboard_view.number_words(line.start, 3),
+            "end": dashboard_view.number_words(line.end, 3),
+            "start_words": reels.clock(line.start),
+            "end_words": reels.clock(line.end),
+            "text": line.text,
+        }
+        for line in lines
+    ]
+
+
+def _reel_storyboard(storyboard: dict, reel) -> dict:
+    """A storyboard as the Reels page offers it: the variant and the hook the
+    reel was last rendered with chosen - or the recommended variant and the
+    first hook - and the words of one's own it was rendered with offered
+    again."""
+    variants = [variant for variant in storyboard.get("variants", []) if isinstance(variant, dict)]
+    recommended = next((str(variant.get("id")) for variant in variants if variant.get("recommended")), None)
+    chosen = reel["variant"] or recommended
+    hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
+    used = reel["hook"]
+    chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
+    return {
+        "summary": str(storyboard.get("summary") or ""),
+        "thoughts": str(storyboard.get("thoughts") or ""),
+        "question": str(storyboard.get("question") or ""),
+        "own_hook": used if used and all(str(hook["text"]) != used for hook in hooks) else "",
+        "variants": [
+            {
+                "id": str(variant.get("id")),
+                "title": str(variant.get("title") or variant.get("structure") or ""),
+                "why": str(variant.get("why") or ""),
+                "duration": (
+                    dashboard_view.number_words(float(variant["duration"]), 1)
+                    if isinstance(variant.get("duration"), int | float)
+                    else None
+                ),
+                "recommended": bool(variant.get("recommended")),
+                "chosen": str(variant.get("id")) == chosen,
+                "subtitles": reels.subtitled(variant),
+            }
+            for variant in variants
+        ],
+        "hooks": [
+            {
+                "id": str(hook.get("id")),
+                "type": str(hook.get("type") or ""),
+                "words": reels.hook_shown(str(hook["text"])),
+                "chosen": str(hook["text"]) == chosen_hook,
+            }
+            for hook in hooks
+        ],
+    }
+
+
+def _reel_workspace(conn, row, today: date) -> dict:
+    """Everything the Reels page shows of one moment's reel
+    (_reel_workspace.html) - one that has not been asked for yet too."""
     moment_id = row["id"]
     reel = get_reel(conn, moment_id)
     state = reel["state"] if reel is not None else None
     storyboard = _stored_storyboard(reel)
+    clip = CLIPS_DIR / row["clip_path"] if row["clip_path"] else None
+    has_clip = clip is not None and clip.exists()
+    transcript = subtitles.read(reel["transcript"]) if reel is not None else None
+    heard = subtitles.read(reel["heard"]) if reel is not None else None
+    board = _stored_storyboard_version(reel)
     view = {
-        "url": f"/dashboard/moments/{moment_id}/reel",
+        "id": moment_id,
+        "channel": row["channel_slug"],
+        "title": row["title"] or "",
+        "when": dashboard_view.when_words(to_local_datetime(row["detected_at"]), today),
+        "review_url": dashboard_view.review_url(dashboard_view.SHOW_ALL, moment=moment_id),
+        "url": f"/dashboard/reels/{moment_id}",
         "ask_url": f"/moments/{moment_id}/reel",
         "render_url": f"/moments/{moment_id}/reel/render",
+        "transcript_url": f"/moments/{moment_id}/reel/transcript",
         "state": state or "",
         "busy": state in reels.BUSY,
+        "editable": state not in REEL_TRANSCRIPT_COMING,
         "words": reels.state_words(state, reel["error"] if reel is not None else None),
-        "storyboard": None,
+        "row_words": reels.row_words(state),
+        "has_clip": has_clip,
+        "clip_url": _clip_url(row["clip_path"], versioned=True) if has_clip else None,
+        # Footage was added to the moment's file since its clip was sent: the
+        # transcript's times are of the file as it was.
+        "stale": bool(reel is not None and reel["clip_stamp"] and has_clip and reels.stamp(clip) != reel["clip_stamp"]),
+        "board": board,
+        "storyboard": _reel_storyboard(storyboard, reel) if storyboard is not None else None,
         "contact_url": None,
         "reel_url": None,
-        "id": moment_id,
-        "variant": reel["variant"] if reel is not None else None,
-        "hook": reels.hook_shown(reel["hook"]) if reel is not None and reel["hook"] else None,
-        # Words of one's own the reel was last rendered with, offered again.
-        "own_hook": "",
+        "result_words": None,
+        "subtitles_on": False,
+        "transcript": None,
+        "heard": None,
     }
     if storyboard is not None:
-        variants = [variant for variant in storyboard.get("variants", []) if isinstance(variant, dict)]
-        chosen = view["variant"] or next(
-            (str(variant.get("id")) for variant in variants if variant.get("recommended")), None
-        )
-        hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
-        used = reel["hook"]
-        if used and all(str(hook["text"]) != used for hook in hooks):
-            view["own_hook"] = used
-        chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
-        view["storyboard"] = {
-            "summary": str(storyboard.get("summary") or ""),
-            "thoughts": str(storyboard.get("thoughts") or ""),
-            "question": str(storyboard.get("question") or ""),
-            "variants": [
-                {
-                    "id": str(variant.get("id")),
-                    "title": str(variant.get("title") or variant.get("structure") or ""),
-                    "structure": str(variant.get("structure") or ""),
-                    "why": str(variant.get("why") or ""),
-                    "duration": (
-                        dashboard_view.number_words(float(variant["duration"]), 1)
-                        if isinstance(variant.get("duration"), int | float)
-                        else None
-                    ),
-                    "recommended": bool(variant.get("recommended")),
-                    "chosen": str(variant.get("id")) == chosen,
-                }
-                for variant in variants
-            ],
-            "hooks": [
-                {
-                    "id": str(hook.get("id")),
-                    "type": str(hook.get("type") or ""),
-                    "words": reels.hook_shown(str(hook["text"])),
-                    "chosen": str(hook["text"]) == chosen_hook,
-                }
-                for hook in hooks
-            ],
-        }
+        chosen = next((variant for variant in view["storyboard"]["variants"] if variant["chosen"]), None)
+        # As the last render had them, where it said; otherwise as the
+        # chosen variant has them.
+        last = reel["subtitles"]
+        if last in (reels.WITH_SUBTITLES, reels.WITHOUT_SUBTITLES):
+            view["subtitles_on"] = last == reels.WITH_SUBTITLES
+        else:
+            view["subtitles_on"] = bool(chosen and chosen["subtitles"])
     if reel is not None and reel["contact_path"] and (CLIPS_DIR / reel["contact_path"]).exists():
         view["contact_url"] = _clip_url(reel["contact_path"], versioned=True)
     if reel is not None and reel["reel_path"] and (CLIPS_DIR / reel["reel_path"]).exists():
         view["reel_url"] = _clip_url(reel["reel_path"], versioned=True)
+        with_subtitles = {reels.WITH_SUBTITLES: ", with subtitles", reels.WITHOUT_SUBTITLES: ", without subtitles"}
+        view["result_words"] = (
+            f"Variant {reel['variant']}, hook: {reels.hook_shown(reel['hook'] or '')}"
+            f"{with_subtitles.get(reel['subtitles'] or '', '')}"
+        )
+    if transcript is not None:
+        length = _file_length(row)
+        view["transcript"] = {
+            "lines": _transcript_lines(transcript),
+            "edited": bool(reel["transcript_edited"]),
+            "length": dashboard_view.number_words(length, 3) if length is not None else "",
+        }
+        if heard is not None:
+            view["heard"] = _transcript_lines(heard)
     return view
+
+
+def _stored_storyboard_version(reel) -> str:
+    """What changes when another storyboard comes back: the page then shows
+    the reel anew rather than only where it stands."""
+    if reel is None:
+        return ""
+    return hashlib.sha1(f"{reel['storyboard'] or ''}|{reel['transcript'] is not None}".encode()).hexdigest()[:12]
+
+
+@app.get("/dashboard/reels", response_class=HTMLResponse)
+async def dashboard_reels(request: Request, moment: int | None = None):
+    """The Reels page: every reel that was asked for, the last first, and the
+    one that is open - its storyboard, the choice of a variant and a hook,
+    its transcript to put right, the reel itself. `moment` is the moment
+    whose reel to open - one that has none yet too, to make one of it;
+    left out, the first of the list."""
+    today = _today()
+    conn = get_connection()
+    try:
+        rows = get_reel_list(conn)
+        opened = get_moment(conn, moment) if moment is not None else None
+        if opened is None and moment is None and rows:
+            opened = get_moment(conn, rows[0]["moment_id"])
+        context = _page_context(conn, "reels")
+        context.update(
+            {
+                "reel_list": [
+                    {
+                        "id": row["moment_id"],
+                        "channel": row["channel_slug"],
+                        "title": row["title"] or "",
+                        "when": dashboard_view.since_words(to_local_datetime(row["detected_at"]), today),
+                        "words": reels.row_words(row["state"]),
+                        "href": dashboard_view.reels_url(row["moment_id"]),
+                        "current": opened is not None and row["moment_id"] == opened["id"],
+                    }
+                    for row in rows
+                ],
+                "reel": _reel_workspace(conn, opened, today) if opened is not None and settings.reels else None,
+                "missing": moment is not None and opened is None,
+            }
+        )
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "reels.html", context)
+
+
+@app.get("/dashboard/reels/{moment_id}", response_class=HTMLResponse)
+async def dashboard_reel(request: Request, moment_id: int):
+    """One moment's reel as the Reels page shows it, on its own - what the
+    page fetches after asking for a step, and while one goes on."""
+    if not settings.reels:
+        raise HTTPException(status_code=404, detail=REELS_NOT_SET_UP_WORDS)
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        view = _reel_workspace(conn, row, _today())
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "_reel_workspace.html", {"reel": view})
 
 
 @app.post("/moments/{moment_id}/reel")
 async def ask_for_reel(moment_id: int):
     """Sends a moment's file to GitHub and starts its storyboard (see
-    reels.py) - anew, where one was made before. Asked again while a step
-    of the reel goes on, nothing more is started."""
+    reels.py) - anew, where one was made before: from the same transcript
+    while the moment's file is the one it was heard from. Asked again while
+    a step of the reel goes on, nothing more is started."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
@@ -6371,34 +6571,83 @@ async def ask_for_reel(moment_id: int):
         if reel is None or reel["state"] not in reels.BUSY:
             if (busy := _moment_busy(moment_id)) is not None:
                 raise HTTPException(status_code=409, detail=busy)
-            context = _reel_context(conn, row)
+            clip = CLIPS_DIR / row["clip_path"]
+            sent = reels.stamp(clip)
+            keep = reel is not None and reel["heard"] is not None and reel["clip_stamp"] == sent
+            transcript = subtitles.read(reel["transcript"]) if keep else None
+            edited = keep and bool(reel["transcript_edited"])
+            corrected = subtitles.srt(transcript, 0.0) if edited and transcript and subtitles.said(transcript) else None
+            context = _reel_context(conn, row, corrected=corrected is not None)
             for file in _reel_files(moment_id):
                 file.unlink(missing_ok=True)
-            put_reel(
-                conn,
-                moment_id,
-                state=reels.SENDING,
-                asked_at=_now_text(),
-                storyboard=None,
-                contact_path=None,
-                variant=None,
-                hook=None,
-                reel_path=None,
-                error=None,
-            )
+            fields = {
+                "state": reels.SENDING,
+                "asked_at": _now_text(),
+                "storyboard": None,
+                "contact_path": None,
+                "variant": None,
+                "hook": None,
+                "reel_path": None,
+                "error": None,
+                "subtitles": None,
+                "clip_stamp": sent,
+            }
+            if not keep:
+                fields.update(transcript=None, heard=None, transcript_edited=0)
+            put_reel(conn, moment_id, **fields)
             _reels_sending.add(moment_id)
-            _track_task(_send_for_storyboard(github, moment_id, CLIPS_DIR / row["clip_path"], context))
+            _track_task(
+                _send_for_storyboard(github, moment_id, clip, context, keep_transcript=keep, corrected=corrected)
+            )
         reel = get_reel(conn, moment_id)
     finally:
         conn.close()
     return {"moment_id": moment_id, "state": reel["state"], "words": reels.state_words(reel["state"], reel["error"])}
 
 
+@app.post("/moments/{moment_id}/reel/transcript")
+async def save_reel_transcript(moment_id: int, request: Request):
+    """Keeps a reel's transcript as it was put right on the Reels page -
+    posted as JSON `lines`, each with its `start` and `end` in seconds of the
+    moment's file and its `text` (see reels.checked_transcript). The reel's
+    subtitles are made of it from then on, and a new storyboard goes by it."""
+    try:
+        asked = await request.json()
+    except ValueError:
+        asked = None
+    if not isinstance(asked, dict):
+        raise HTTPException(status_code=400, detail="Expected the transcript's lines as JSON.")
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        reel = get_reel(conn, moment_id)
+        if reel is None or reel["transcript"] is None:
+            raise HTTPException(status_code=409, detail="The reel has no transcript yet: it comes with its storyboard.")
+        if reel["state"] in REEL_TRANSCRIPT_COMING:
+            raise HTTPException(
+                status_code=409, detail="A new storyboard is being made, and a transcript with it. Try again then."
+            )
+        try:
+            lines = reels.checked_transcript(asked.get("lines"), _file_length(row))
+        except ValueError as wrong:
+            raise HTTPException(status_code=400, detail=str(wrong)) from None
+        put_reel(conn, moment_id, transcript=subtitles.stored(lines), transcript_edited=1)
+    finally:
+        conn.close()
+    logger.info("the transcript of moment %d's reel was put right: %d lines", moment_id, len(lines))
+    return {"moment_id": moment_id, "lines": len(lines)}
+
+
 @app.post("/moments/{moment_id}/reel/render")
 async def render_reel(moment_id: int, request: Request):
     """Renders a moment's reel with a variant of its storyboard and a hook -
-    the storyboard's (by its id) or words of one's own: posted as JSON
-    `variant` and `hook`. Again with another choice once one is there."""
+    the storyboard's (by its id) or words of one's own - and its subtitles
+    as the variant has them, or with them or without them: posted as JSON
+    `variant`, `hook` and `subtitles` ("auto", "on" or "off"; "auto" left
+    out). The subtitles are made of the reel's transcript. Again with
+    another choice once one is there."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
@@ -6410,6 +6659,9 @@ async def render_reel(moment_id: int, request: Request):
         asked = None
     if not isinstance(asked, dict) or not all(isinstance(asked.get(name), str) for name in ("variant", "hook")):
         raise HTTPException(status_code=400, detail="Expected variant and hook as JSON.")
+    choice = asked.get("subtitles", reels.SUBTITLES_AS_THE_VARIANT)
+    if choice not in reels.SUBTITLE_CHOICES:
+        raise HTTPException(status_code=400, detail="Subtitles are auto, on or off.")
     conn = get_connection()
     try:
         if get_moment(conn, moment_id) is None:
@@ -6425,28 +6677,31 @@ async def render_reel(moment_id: int, request: Request):
             hook = reels.chosen_hook(storyboard, asked["hook"])
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
-        put_reel(conn, moment_id, state=reels.RENDERING, asked_at=_now_text(), variant=variant, hook=hook, error=None)
+        # A reel from before transcripts were kept goes by what the release has.
+        transcript = subtitles.read(reel["transcript"])
+        said = None
+        if transcript is not None:
+            if subtitles.said(transcript):
+                said = subtitles.srt(transcript, 0.0)
+            elif choice == reels.WITH_SUBTITLES:
+                raise HTTPException(status_code=400, detail="The transcript is empty: there is nothing to subtitle.")
+            else:
+                choice = reels.WITHOUT_SUBTITLES
+        unsaid = transcript is not None and said is None
+        put_reel(
+            conn,
+            moment_id,
+            state=reels.RENDERING,
+            asked_at=_now_text(),
+            variant=variant,
+            hook=hook,
+            subtitles=choice,
+            error=None,
+        )
     finally:
         conn.close()
-    _track_task(_send_for_render(github, moment_id, variant, hook))
+    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid))
     return {"moment_id": moment_id, "state": reels.RENDERING, "words": reels.state_words(reels.RENDERING)}
-
-
-@app.get("/dashboard/moments/{moment_id}/reel", response_class=HTMLResponse)
-async def dashboard_reel(request: Request, moment_id: int):
-    """A moment's reel as the review page shows it, on its own - what the
-    page fetches after asking for a step, and while one goes on."""
-    if not settings.reels:
-        raise HTTPException(status_code=404, detail=REELS_NOT_SET_UP_WORDS)
-    conn = get_connection()
-    try:
-        row = get_moment(conn, moment_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
-        view = _reel_view(conn, row)
-    finally:
-        conn.close()
-    return templates.TemplateResponse(request, "_reel.html", {"reel": view})
 
 
 @app.get("/moments/{moment_id}/vod")

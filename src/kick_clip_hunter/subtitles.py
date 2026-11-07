@@ -14,6 +14,8 @@ it without touching a line already there, which may have been put right
 a subtitle, which is what the page shows to be corrected and what an editor
 takes away: SubRip (.srt), which every editor reads, timed to the video it
 goes with - the moment's whole file, or the cut the Trim dialog made of it.
+SubRip is read back too (from_srt): a reel's transcript comes back from
+where it is made as a file of it (see reels.py).
 
 Times are clip time, as everywhere on the review page: seconds from the
 clip's first frame, negative in the footage before it. A video's own times
@@ -283,6 +285,30 @@ def _timestamp(seconds: float) -> str:
     minutes, rest = divmod(rest, 60_000)
     whole, thousandths = divmod(rest, 1000)
     return f"{hours:02d}:{minutes:02d}:{whole:02d},{thousandths:03d}"
+
+
+_CUE_TIMES = re.compile(r"(\d+):(\d{1,2}):(\d{1,2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{1,2}):(\d{1,2})[,.](\d{1,3})")
+
+
+def from_srt(text: str) -> list[Line]:
+    """The lines of a SubRip file, on the video's own time, in the order
+    they are in it: a cue's rows are one line, joined by a space. A block
+    without times is skipped, and so is one with nothing to say."""
+    found = []
+    for block in re.split(r"\n\s*\n", text.lstrip("﻿").replace("\r", "").strip()):
+        rows = [row.strip() for row in block.split("\n") if row.strip()]
+        at = next((index for index, row in enumerate(rows) if _CUE_TIMES.search(row)), None)
+        if at is None:
+            continue
+        times = _CUE_TIMES.search(rows[at]).groups()
+        said = " ".join(rows[at + 1 :])
+        if said:
+            found.append(Line(_seconds(*times[:4]), _seconds(*times[4:]), said))
+    return found
+
+
+def _seconds(hours: str, minutes: str, seconds: str, fraction: str) -> float:
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(fraction.ljust(3, "0")) / 1000
 
 
 def name(video_name: str) -> str:

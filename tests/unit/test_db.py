@@ -2177,3 +2177,44 @@ class TestReels:
                 db.put_reel(conn, 7, state="sending", clip_path="x")
         finally:
             conn.close()
+
+
+class TestReelsFromBeforeTranscripts:
+    def test_the_transcript_columns_are_added_to_a_reels_table_without_them(self):
+        legacy_database(
+            "CREATE TABLE reels (moment_id INTEGER PRIMARY KEY, state TEXT NOT NULL, asked_at TEXT NOT NULL,"
+            " storyboard TEXT, contact_path TEXT, variant TEXT, hook TEXT, reel_path TEXT, error TEXT)",
+            "INSERT INTO reels (moment_id, state, asked_at) VALUES (3, 'done', '2026-01-01T00:00:00+00:00')",
+        )
+
+        connection = db.get_connection()
+        try:
+            reel = db.get_reel(connection, 3)
+            assert (reel["state"], reel["transcript"], reel["heard"], reel["transcript_edited"]) == (
+                "done",
+                None,
+                None,
+                0,
+            )
+            db.put_reel(connection, 3, transcript="[]", clip_stamp="1:2", subtitles="on")
+            assert db.get_reel(connection, 3)["clip_stamp"] == "1:2"
+        finally:
+            connection.close()
+
+    def test_the_reels_page_lists_each_reel_with_its_moment_the_last_asked_first(self):
+        connection = db.get_connection()
+        try:
+            first = store_moment(connection)
+            db.update_moment_title(connection, first, "First")
+            second = store_moment(connection, channel="other_channel")
+            db.put_reel(connection, first, state="done", asked_at="2026-01-01T10:00:00+00:00")
+            db.put_reel(connection, second, state="choosing", asked_at="2026-01-02T10:00:00+00:00")
+
+            listed = db.get_reel_list(connection)
+
+            assert [(row["moment_id"], row["channel_slug"], row["title"]) for row in listed] == [
+                (second, "other_channel", None),
+                (first, "some_channel", "First"),
+            ]
+        finally:
+            connection.close()

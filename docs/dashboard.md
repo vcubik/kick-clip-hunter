@@ -75,16 +75,10 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   that is there alone ("Transcribe the cut", `POST /moments/{id}/trim/subtitles`, followed as the
   dialog follows a cut being made), which takes seconds rather than the whole file's while: its
   lines are the moment's transcript, the tab says which stretch it was heard from and offers
-  "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Reel, under
-  the moment's tags where the service is set up for reels (see `reels.py` below), makes the
-  clip into a 9:16 reel by GitHub Actions: "Make a reel" sends the clip and its chat there
-  (`POST /moments/{id}/reel`) and a storyboard comes back minutes later - what is in the clip,
-  two or three variants (one recommended), three hooks and a sheet of frames; a variant and a
-  hook (or words of one's own, `|` breaking the line and `*word*` highlighted) are pressed and
-  "Render" asks for the reel (`POST /moments/{id}/reel/render`, `variant` and `hook`), which
-  plays there once it is back, with a download. While a step goes on the page fetches the
-  section (`GET /dashboard/moments/{id}/reel`) every five seconds; a storyboard and a reel are
-  also told of as notes. "New storyboard" starts over. Delete, under the moment's tags, asks once
+  "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Under the
+  moment's tags, where the service is set up for reels and the moment has a clip, "Make a
+  reel" - or, once one was asked for, "Open the reel" beside where it stands - leads to the
+  Reels page with the moment open there (below). Delete, under the moment's tags, asks once
   more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut, it is being transcribed or footage is being added to it; one whose
@@ -229,6 +223,35 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   Recordings page fetches that section again every couple of seconds (`GET
   /dashboard/recordings/{id}/moments`). An empty
   queue is the normal state, so that page then says what the service is doing instead.
+- Reels: `GET /dashboard/reels` (in the bar where the service is set up for reels, see
+  `reels.py` below) has every reel that was asked for, the one asked for last first, with where
+  it stands in a word ("Storyboard", "Choose", "Rendering", "Ready", "Failed"), and the one that
+  is open beside it - `?moment=` opens a moment's, one that has none yet too, which is how the
+  review page leads here. "Make a reel" (later "New storyboard") sends the moment's file and
+  its chat to GitHub (`POST /moments/{id}/reel`), and a storyboard comes back in a few minutes:
+  what is in the clip, two or three variants (one recommended, those with subtitles saying
+  so), three hooks and a sheet of frames - beside them the reel's transcript, under the
+  moment's file playing in a player of its own: a line a block, when it starts and ends
+  (typed as the Trim dialog takes a time, to the tenth of a second, in seconds of the file),
+  what is said, a button that plays the file from the line's start to its end, one that adds a
+  line after it and one that takes it out; "Add a line" adds one at the end, and what the
+  speech model heard is listed under it, each line with "Add". The line being said is marked as
+  the file plays, Enter goes on to the next line, and nothing is kept until "Save"
+  (`POST /moments/{id}/reel/transcript`, `lines`: each with `start`, `end` and `text`; refused,
+  saying which line, for one without its times or past the file's end; an empty one is left
+  out, the rest kept in the order they are said), and leaving the page with something not
+  saved asks first. "A: " and "B: " in front of a line colour it in the reel for who says it,
+  `*a word*` makes it stand out. A variant and a hook (or words of one's own, `|` breaking the
+  line and `*word*` highlighted) are pressed, subtitles switched on or off (as the pressed
+  variant has them to begin with), and "Render" (`POST /moments/{id}/reel/render`, `variant`,
+  `hook` and `subtitles`, after saving what is not saved in the transcript) has the reel made
+  with the transcript as its subtitles; it plays at the top once it is back, with a download
+  and what it was made with. While a step goes on the page fetches the reel
+  (`GET /dashboard/reels/{id}`) every five seconds and puts in place where it stands and the
+  reel - and the rest only once another storyboard is back, never over a transcript being put
+  right; a new storyboard of the same file keeps the transcript, the one put right by hand
+  going to Claude with it, and one of a file that footage was added to since is said to be of
+  the file as it was. A storyboard and a reel are also told of as notes, which lead here.
 - On a narrow screen: up to 1100 px wide the panes stack and the page scrolls - the queue (or
   the list of recordings, or Analyze's channel and period) above what is open in it, the chat
   under that. A moment opened from the queue is then scrolled into view, and so is what the

@@ -631,6 +631,11 @@ def recordings_url(recording: int | None = None, *, offset: int = 0) -> str:
     return "/dashboard/recordings" + (f"?{urlencode(query)}" if query else "")
 
 
+def reels_url(moment: int | None = None) -> str:
+    """The Reels page with one moment's reel open."""
+    return "/dashboard/reels" + (f"?{urlencode({'moment': moment})}" if moment is not None else "")
+
+
 # How many pages on either side of the one that is open are numbered in a
 # list's paging; the first and the last always are.
 PAGES_AROUND = 2

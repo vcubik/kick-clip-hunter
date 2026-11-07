@@ -1,0 +1,167 @@
+{#- One moment's reel on the Reels page (see reels.py): where it stands and the
+    way to ask for a storyboard; the storyboard, a variant and a hook chosen
+    from it, and the render; the reel once it is back; and the transcript
+    its subtitles are made of, put right line by line beside the clip it was
+    heard from. Also served on its own (/dashboard/reels/<id>), which the
+    script fetches while a step goes on: then it puts in place only where
+    the reel stands and the reel itself - the rest only once another
+    storyboard has come back (`data-board`), never over a transcript that is
+    being put right. -#}
+{% macro reel_line(line, editable=true) -%}
+<li class="reel-line" data-reel-line>
+  <div class="reel-line-head">
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Play this line" title="Plays the clip from where the line starts to where it ends" data-reel-play>
+      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
+    </button>
+    <input type="text" class="ch-input reel-time" value="{{ line.start_words if line else '' }}" aria-label="Starts at" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-start{% if not editable %} disabled{% endif %}>
+    <span class="reel-dash" aria-hidden="true">–</span>
+    <input type="text" class="ch-input reel-time" value="{{ line.end_words if line else '' }}" aria-label="Ends at" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-end{% if not editable %} disabled{% endif %}>
+    <span class="ch-gap"></span>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Add a line after this one" title="Adds a line after this one" data-reel-line-after{% if not editable %} disabled{% endif %}>+</button>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Remove this line" title="Removes this line" data-reel-line-remove{% if not editable %} disabled{% endif %}>×</button>
+  </div>
+  <textarea class="ch-input reel-text" rows="1" aria-label="What is said" data-reel-text{% if not editable %} disabled{% endif %}>{{ line.text if line else '' }}</textarea>
+</li>
+{%- endmacro %}
+<article class="reel" data-reel="{{ reel.url }}" data-reel-id="{{ reel.id }}" data-board="{{ reel.board }}" data-state="{{ reel.state }}" data-row-words="{{ reel.row_words }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
+<div class="stage">
+<div class="reel-in">
+  <header class="moment-head">
+    <div>
+      <h1 class="title">{{ reel.channel }}</h1>
+      <p class="moment-when">{% if reel.title %}{{ reel.title }}, {% endif %}{{ reel.when }}</p>
+    </div>
+    <p class="moment-clock"><a href="{{ reel.review_url }}">The moment on the review page</a></p>
+  </header>
+
+  {#- Where the reel stands, kept current while a step of it goes on. -#}
+  <div class="reel-standing" data-reel-region="standing">
+    {% if reel.has_clip %}
+    <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the clip to GitHub, where a storyboard of the reel is made from it in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
+    {% endif %}
+    <p class="status-line" role="status" data-status>
+      {%- if reel.words %}{{ reel.words }}
+      {%- elif reel.has_clip %}The clip goes to GitHub, where it is transcribed and a storyboard is made of it: a few minutes.
+      {%- else %}The moment has no clip to make a reel of.{% endif -%}
+    </p>
+    {% if reel.stale %}
+    <p class="reel-note">Footage was added to the moment's file since its clip was sent, so the transcript's times are those of the file as it was. A new storyboard sends the file as it is now, and has it heard anew.</p>
+    {% endif %}
+  </div>
+
+  <div class="reel-cols">
+    <div class="reel-col">
+      <div data-reel-region="result">
+        {% if reel.reel_url %}
+        <section class="reel-result" aria-label="The reel">
+          <video class="reel-video" src="{{ reel.reel_url }}" controls playsinline preload="metadata"></video>
+          <div class="reel-result-words">
+            <p>{{ reel.result_words }}</p>
+            <a class="ch-btn ch-btn-compact" href="{{ reel.reel_url }}" download="moment_{{ reel.id }}_reel.mp4">Download</a>
+          </div>
+        </section>
+        {% endif %}
+      </div>
+
+      {% if reel.storyboard %}
+      {% set board = reel.storyboard %}
+      <section class="reel-section" aria-labelledby="reel-board-{{ reel.id }}">
+        <h2 id="reel-board-{{ reel.id }}">Storyboard</h2>
+        {% if board.summary %}<p>{{ board.summary }}</p>{% endif %}
+        {% if board.thoughts %}<p class="reel-quiet">{{ board.thoughts }}</p>{% endif %}
+        {% if reel.contact_url %}
+        <a href="{{ reel.contact_url }}" target="_blank" rel="noopener"><img class="reel-contact" src="{{ reel.contact_url }}" alt="Frames of the clip, a few seconds apart"></a>
+        {% endif %}
+      </section>
+
+      <section class="reel-section" aria-labelledby="reel-choice-{{ reel.id }}" data-reel-choice data-status-scope>
+        <h2 id="reel-choice-{{ reel.id }}">Variant and hook</h2>
+        <div class="reel-options" role="group" aria-label="Variant" data-reel-variants>
+          {% for variant in board.variants %}
+          <button type="button" class="reel-option" aria-pressed="{{ 'true' if variant.chosen else 'false' }}" data-reel-variant="{{ variant.id }}" data-subtitled="{{ 'on' if variant.subtitles else 'off' }}">
+            <span class="reel-option-head"><b>{{ variant.id }}</b> {{ variant.title }}{% if variant.duration %}, {{ variant.duration }} s{% endif %}{% if variant.subtitles %}, subtitles{% endif %}{% if variant.recommended %}, recommended{% endif %}</span>
+            {% if variant.why %}<span>{{ variant.why }}</span>{% endif %}
+          </button>
+          {% endfor %}
+        </div>
+
+        <div class="reel-options" role="group" aria-label="Hook" data-reel-hooks>
+          {% for hook in board.hooks %}
+          <button type="button" class="reel-option" aria-pressed="{{ 'true' if hook.chosen else 'false' }}" data-reel-hook="{{ hook.id }}">
+            <span class="reel-option-head"><b>{{ hook.words }}</b>{% if hook.type %} {{ hook.type }}{% endif %}</span>
+          </button>
+          {% endfor %}
+          <label class="reel-own">
+            <span class="ch-cap">Or your own: | breaks the line, *a word* between stars stands out</span>
+            <input type="text" class="ch-input" maxlength="80" value="{{ board.own_hook }}" placeholder="NEARLY RAN|*HIM OVER?*" autocomplete="off" data-reel-own>
+          </label>
+        </div>
+
+        {% if board.question %}<p class="reel-quiet">{{ board.question }}</p>{% endif %}
+        <div class="reel-render">
+          {#- Made of the transcript, under it. As the chosen variant has them
+              to begin with. -#}
+          <span class="reel-subtitles" role="group" aria-label="Subtitles" data-reel-subtitles>
+            <span class="ch-cap">Subtitles</span>
+            <button type="button" class="ch-tag" aria-pressed="{{ 'false' if reel.subtitles_on else 'true' }}" data-value="off">Off</button>
+            <button type="button" class="ch-tag" aria-pressed="{{ 'true' if reel.subtitles_on else 'false' }}" data-value="on">On</button>
+          </span>
+          <button type="button" class="ch-btn ch-btn-primary" data-reel-render="{{ reel.render_url }}"{% if reel.busy %} disabled{% endif %}>Render</button>
+        </div>
+        <p class="status-line" role="status" data-status></p>
+      </section>
+      {% endif %}
+    </div>
+
+    <div class="reel-col">
+      <section class="reel-section" aria-labelledby="reel-transcript-{{ reel.id }}">
+        <h2 id="reel-transcript-{{ reel.id }}">Transcript</h2>
+        {% if reel.clip_url %}
+        <div class="reel-source">
+          <video src="{{ reel.clip_url }}" controls playsinline preload="metadata" data-reel-source></video>
+        </div>
+        {% endif %}
+        {% if reel.transcript %}
+        {% set transcript = reel.transcript %}
+        <div class="reel-transcript" data-reel-transcript="{{ reel.transcript_url }}" data-length="{{ transcript.length }}" data-status-scope>
+          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out.</p>
+          {% if not reel.editable %}
+          <p class="reel-note">A new storyboard is being made, and a transcript comes with it: until then this one cannot be changed.</p>
+          {% elif transcript.edited %}
+          <p class="reel-note">Put right by hand.</p>
+          {% endif %}
+          <ol class="reel-lines" data-reel-lines>
+            {% for line in transcript.lines %}{{ reel_line(line, reel.editable) }}{% endfor %}
+          </ol>
+          <template data-reel-line-template>{{ reel_line(none) }}</template>
+          <div class="reel-transcript-foot">
+            <button type="button" class="ch-btn ch-btn-compact" data-reel-line-add{% if not reel.editable %} disabled{% endif %}>Add a line</button>
+            <button type="button" class="ch-btn ch-btn-primary" data-reel-transcript-save{% if not reel.editable %} disabled{% endif %}>Save</button>
+            <p class="status-line" role="status" data-status></p>
+          </div>
+          {% if reel.heard %}
+          <details class="reel-heard">
+            <summary>As the speech model heard it</summary>
+            <ol class="reel-heard-lines">
+              {% for line in reel.heard %}
+              <li>
+                <span class="reel-heard-time">{{ line.start_words }}</span>
+                <span>{{ line.text }}</span>
+                <button type="button" class="ch-btn ch-btn-compact" title="Adds this line to the transcript" data-reel-take data-start="{{ line.start }}" data-end="{{ line.end }}" data-text="{{ line.text }}"{% if not reel.editable %} disabled{% endif %}>Add</button>
+              </li>
+              {% endfor %}
+            </ol>
+          </details>
+          {% endif %}
+        </div>
+        {% elif reel.storyboard %}
+        <p class="reel-quiet">This storyboard came back before transcripts were kept here: a new storyboard brings one with it.</p>
+        {% elif reel.state %}
+        <p class="reel-quiet">The transcript comes back with the storyboard.</p>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</div>
+</div>
+</article>

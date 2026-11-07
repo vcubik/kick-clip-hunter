@@ -339,3 +339,31 @@ class TestSubRip:
 
     def test_it_is_named_after_the_video_it_goes_with(self):
         assert subtitles.name("moment_12_trim.mp4") == "moment_12_trim.srt"
+
+
+class TestReadingSubRip:
+    """A SubRip file read back: what the speech model and Claude leave in a
+    reel's release (see reels.py)."""
+
+    def test_what_is_written_reads_back_the_same(self):
+        lines = [Line(1.0, 2.5, "Tak co?"), Line(3725.432, 3726.0, "A: *Jedeme* dál.")]
+
+        assert subtitles.from_srt(subtitles.srt(lines, start=0.0)) == lines
+
+    def test_a_cue_of_two_rows_is_one_line_and_a_mark_of_utf8_is_skipped(self):
+        text = "\ufeff1\n00:00:01,000 --> 00:00:02,500\nTak co,\nřekl\n"
+
+        assert subtitles.from_srt(text) == [Line(1.0, 2.5, "Tak co, řekl")]
+
+    def test_dots_and_short_fractions_are_read_too(self):
+        text = "1\n0:00:01.5 --> 0:00:02.25\nxy\n"
+
+        assert subtitles.from_srt(text) == [Line(1.5, 2.25, "xy")]
+
+    def test_a_block_without_times_or_words_is_skipped(self):
+        text = "1\nno times here\n\n2\n00:00:03,000 --> 00:00:04,000\n\n\n3\n00:00:05,000 --> 00:00:06,000\nsaid\n"
+
+        assert subtitles.from_srt(text) == [Line(5.0, 6.0, "said")]
+
+    def test_nothing_is_nothing(self):
+        assert subtitles.from_srt("") == []

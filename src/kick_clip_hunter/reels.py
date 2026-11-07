@@ -3,7 +3,7 @@ the reel tooling's own (REELS_REPO, reached with REELS_GITHUB_TOKEN), not
 here: transcribing a clip and rendering a reel need more than the small
 machine the service runs on.
 
-How it goes, a moment at a time, each step started from the review page:
+How it goes, a moment at a time, each step started from the Reels page:
 
 1. "Make a reel": the moment's file goes up into a release of that
    repository, tagged `moment-<id>` (`tag`), as `clip.mp4`, and with it
@@ -12,24 +12,34 @@ How it goes, a moment at a time, each step started from the review page:
    begins and ends, and the chat over the whole file - each message at the
    second of the file it belongs to, and the second most of chat laughed
    at. Then the `storyboard` workflow is dispatched. It transcribes the
-   clip and has Claude Code write `storyboard.json`: two or three variants
-   of the reel, each with what the render script is to be run with, and
-   three hooks to choose from - and `contact.jpg`, a sheet of frames from
-   the clip.
-2. The service looks at the release every `POLL_SECONDS` (`Reels.look`);
-   once `storyboard.json` is there it is fetched and kept, with the contact
-   sheet, and the page shows them.
-3. "Render" with a variant and a hook - one of the storyboard's, or words
-   of one's own - dispatches the `render` workflow, which puts `reel.mp4`
-   into the same release; the service fetches it the same way and keeps it
-   next to the moment's clip.
+   clip (`clip.srt`, and `clip.words.json` with the time of every word)
+   and has Claude Code write `storyboard.json`: two or three variants of
+   the reel, each with what the render script is to be run with, and three
+   hooks to choose from - and `contact.jpg`, a sheet of frames from the
+   clip, and where it proposes subtitles, `clip.subs.srt`: the transcript
+   put right and the speakers told apart ("A: ", "B: ").
+2. The service looks at the release every `POLL_SECONDS`; once
+   `storyboard.json` is there it is fetched and kept, with the contact
+   sheet and the transcript: the subtitles Claude proposed where there are
+   some, otherwise what the speech model heard (kept as well, as `heard`).
+3. The transcript is put right on the page as needed - a line's words, its
+   times, lines added and taken out (`checked_transcript`) - and the reel's
+   subtitles are made of it from then on.
+4. "Render" with a variant and a hook - one of the storyboard's, or words
+   of one's own - and with or without subtitles: the transcript goes up as
+   `clip.subs.srt` and the `render` workflow is dispatched, which puts
+   `reel.mp4` into the same release; the service fetches it the same way
+   and keeps it next to the moment's clip.
 
 What was there of an earlier storyboard or reel is taken out of the release
 before a step is asked again, so what the service finds there is always the
-answer to what it last asked. A workflow that fails is noticed by its run
-(each run is named `run_name`), where the token may read the repository's
-Actions; otherwise a step that has not come back within its limit
-(`STORYBOARD_LIMIT`, `RENDER_LIMIT`) is given up on.
+answer to what it last asked - but not the transcript, while the moment's
+file is the one it was heard from (`stamp`): a new storyboard is made from
+the same transcript, and one put right by hand goes up with it (and
+`context.json` says so), for Claude to go by. A workflow that fails is
+noticed by its run (each run is named `run_name`), where the token may read
+the repository's Actions; otherwise a step that has not come back within
+its limit (`STORYBOARD_LIMIT`, `RENDER_LIMIT`) is given up on.
 
 The repository's own side - the workflows, the skill, the render script -
 lives in that repository, not here.
@@ -48,7 +58,7 @@ from typing import Any
 
 import httpx
 
-from . import platforms
+from . import platforms, subtitles
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +89,30 @@ CONTEXT = "context.json"
 STORYBOARD = "storyboard.json"
 CONTACT = "contact.jpg"
 REEL = "reel.mp4"
-# What a step leaves in the release, taken out before it is asked again.
-STORYBOARD_ANSWERS = (STORYBOARD, CONTACT, "clip.srt", "clip.words.json", "clip.subs.srt", REEL)
+HEARD = "clip.srt"
+WORDS = "clip.words.json"
+SUBTITLES = "clip.subs.srt"
+# What a step leaves in the release, taken out before it is asked again -
+# the transcript only where the moment's file is not the one it was heard
+# from any more (see the module's docstring).
+STORYBOARD_ANSWERS = (STORYBOARD, CONTACT, REEL)
+TRANSCRIPT_FILES = (HEARD, WORDS, SUBTITLES)
 RENDER_ANSWERS = (REEL,)
+
+# How a render is asked to treat subtitles: as the variant has them, or
+# with them or without them whatever it has.
+SUBTITLES_AS_THE_VARIANT = "auto"
+WITH_SUBTITLES = "on"
+WITHOUT_SUBTITLES = "off"
+SUBTITLE_CHOICES = (SUBTITLES_AS_THE_VARIANT, WITH_SUBTITLES, WITHOUT_SUBTITLES)
 
 # Hook words of one's own are kept to what fits on two lines of the reel.
 HOOK_MOST_CHARACTERS = 80
+# A transcript put right on the page: as many lines as hours of talk would
+# make, each no longer than a subtitle can hold, and its times may run this
+# far past the end of the file (its length is known to the tenth).
+TRANSCRIPT_MOST_LINES = 1000
+TRANSCRIPT_SLACK_SECONDS = 0.5
 # The chat that goes along with the clip: enough for minutes of a busy one.
 CONTEXT_CHAT_LIMIT = 1500
 
@@ -149,9 +177,12 @@ def context(
     clip_start: float | None,
     clip_end: float | None,
     chat: Iterable[ChatLine],
+    transcript_corrected: bool = False,
 ) -> dict[str, Any]:
     """What goes up with a moment's file, for whoever makes its storyboard:
-    see the module's docstring. Times are seconds into the file."""
+    see the module's docstring. Times are seconds into the file.
+    `transcript_corrected` says that the subtitles that go up with it are
+    the transcript put right by hand."""
     lines = [line for line in chat if line.second >= 0][:CONTEXT_CHAT_LIMIT]
     platform, login = platforms.split(channel)
     return {
@@ -165,6 +196,7 @@ def context(
         "clip": None if clip_start is None or clip_end is None else {"start": clip_start, "end": clip_end},
         "peak": peak_second(lines),
         "chat": [{"t": round(line.second, 1), "user": line.sender, "text": line.text} for line in lines],
+        "transcript_corrected": transcript_corrected,
     }
 
 
@@ -218,6 +250,69 @@ def chosen_variant(storyboard: Mapping[str, Any], variant: str) -> str:
         if str(offered.get("id")).upper() == variant.strip().upper():
             return str(offered["id"])
     raise ValueError("The storyboard has no such variant.")
+
+
+# -- the transcript --------------------------------------------------------------
+
+
+def stamp(path: Path) -> str | None:
+    """Which file a moment's is: its size and when it was last written -
+    what changes when footage is added to it. None for one that is not
+    there."""
+    try:
+        found = path.stat()
+    except OSError:
+        return None
+    return f"{found.st_size}:{found.st_mtime_ns}"
+
+
+def clock(seconds: float) -> str:
+    """A time in a file to the tenth of a second, as the page writes it:
+    0:07.4, 12:05.0."""
+    tenths = round(max(seconds, 0.0) * 10)
+    minutes, tenths = divmod(tenths, 600)
+    return f"{minutes}:{tenths // 10:02d}.{tenths % 10}"
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def checked_transcript(posted: object, length: float | None) -> list[subtitles.Line]:
+    """A transcript as it was put right on the page - a list of lines, each
+    with its `start` and `end` in seconds of the file and its `text` - made
+    fit to be kept: each line's words on one row, at most a subtitle's worth
+    (subtitles.TEXT_MAX_CHARACTERS), a line left empty left out, the lines in
+    the order they are said. `length` is the file's, which no line may run
+    past. Raises ValueError, with which line is wrong and how - counted as
+    the page has them, from 1."""
+    if not isinstance(posted, list):
+        raise ValueError("Expected the transcript's lines.")
+    if len(posted) > TRANSCRIPT_MOST_LINES:
+        raise ValueError(f"A transcript has at most {TRANSCRIPT_MOST_LINES} lines.")
+    kept = []
+    for number, line in enumerate(posted, start=1):
+        if not isinstance(line, dict) or not isinstance(line.get("text"), str):
+            raise ValueError(f"Line {number}: expected its start, end and words.")
+        text = " ".join(line["text"].split())[: subtitles.TEXT_MAX_CHARACTERS].strip()
+        if not text:
+            continue
+        start, end = _number(line.get("start")), _number(line.get("end"))
+        if start is None or end is None:
+            raise ValueError(f"Line {number}: write when it starts and ends, like 0:07.4.")
+        if start < 0 or end <= start:
+            raise ValueError(f"Line {number}: it has to end after it starts.")
+        if length is not None and end > length + TRANSCRIPT_SLACK_SECONDS:
+            raise ValueError(f"Line {number}: the clip ends at {clock(length)}.")
+        kept.append(subtitles.Line(round(start, 3), round(end, 3), text))
+    return sorted(kept, key=lambda kept_line: (kept_line.start, kept_line.end))
+
+
+def subtitled(variant: Mapping[str, Any]) -> bool:
+    """Whether a variant of the storyboard has subtitles in it."""
+    return "--subs" in (variant.get("render_args") or [])
 
 
 # -- GitHub ---------------------------------------------------------------------
@@ -429,8 +524,20 @@ def hook_shown(hook: str) -> str:
     return " / ".join(part.strip() for part in hook.replace("*", "").split("|") if part.strip())
 
 
+def row_words(state: str | None) -> str:
+    """Where a reel stands in a word or two, for the Reels page's list."""
+    return {
+        SENDING: "Sending",
+        STORYBOARDING: "Storyboard",
+        CHOOSING: "Choose",
+        RENDERING: "Rendering",
+        DONE: "Ready",
+        FAILED: "Failed",
+    }.get(state or "", "")
+
+
 def state_words(state: str | None, error: str | None = None) -> str:
-    """What the review page says of where a moment's reel stands."""
+    """What the Reels page says of where a moment's reel stands."""
     return {
         None: "",
         SENDING: "Sending the clip to GitHub.",

@@ -94,7 +94,9 @@
   --w-handle: 12px;
   --w-thumb: 12px;        /* the thumb of a slider */
   --w-analysis: 1200px;
-  --h-reel: 480px;        /* a rendered reel, 9:16, on the review page */
+  --h-reel: 480px;        /* a rendered reel, 9:16, on the Reels page */
+  --h-reel-lines: 520px;  /* a reel's transcript, scrolled inside itself beside the clip */
+  --w-reel-time: 72px;    /* when a line of a reel's transcript starts or ends, typed */
   --w-gutter: 44px;
   --w-when: 152px;
   --w-label: 104px;       /* on a phone, the name in front of a value of a channel on the watchlist */
@@ -395,7 +397,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* ---- Review: the queue, the open moment, its chat ------------------ */
 
-.review, .recordings, .analyze { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
+.review, .recordings, .analyze, .reels { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: var(--w-queue) minmax(0, 1fr); }
 
 .queue { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .queue-head { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-12); }
@@ -454,22 +456,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .ch-tags + .ch-tags { margin-top: var(--space-8); }
 .moment-delete { margin-top: var(--space-12); }
 
-/* A moment's clip made into a reel (_reel.html): its storyboard's variants
-   and hooks are chosen as tags are, a row each. */
-.reel { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
-.reel-head { display: flex; align-items: center; gap: var(--space-12); }
-.reel-head h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
-.reel .status-line:empty { display: none; }
-.reel-board, .reel-done { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); margin-top: var(--space-8); max-width: 80ch; }
-.reel-thoughts { color: var(--text-2); }
-.reel-contact { display: block; max-width: 100%; }
-.reel-video { max-width: 100%; max-height: var(--h-reel); background: var(--video); }
-.reel-options { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
-.reel-option { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; padding: var(--space-8) 10px; border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; text-align: left; }
-.reel-option[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); }
-.reel-option:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
-.reel-option-head { font-stretch: var(--width-compact); }
-.reel-own { display: flex; flex-direction: column; gap: var(--space-4); margin-top: var(--space-4); }
+/* The way to a moment's reel, which is made on the Reels page. */
+.reel-link { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-12); font-size: 13px; color: var(--text-2); }
 
 /* What the per-clip analysis found, when it has run. */
 .analysis { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; }
@@ -876,13 +864,70 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .an-map td.an-self { background: var(--grid); }
 .an-map thead td { border: 0; background: none; }
 
+/* ---- Reels: the list, and the reel that is open -------------------- */
+
+/* Where it stands across the top; under it two columns - the reel, its
+   storyboard and the choice made from it, and beside them the clip it is
+   made of with the transcript that is put right against it. */
+.reel { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.reel-in { width: 100%; }
+.reel-standing { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-12); }
+.reel-standing .status-line { flex: 1 1 0; min-width: 0; margin-top: 0; }
+.reel-note { flex: 1 1 100%; font-size: 13px; color: var(--text-2); }
+.reel-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--space-24); margin-top: var(--space-16); }
+.reel-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); }
+.reel-section + .reel-section, .reel-result + .reel-section, [data-reel-region="result"]:has(.reel-result) + .reel-section { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
+.reel-section h2 { font-size: 14px; line-height: 20px; font-weight: 700; }
+.reel-section .status-line:empty { display: none; }
+.reel-quiet { color: var(--text-2); }
+.reel-contact { display: block; max-width: 100%; }
+.reel-result { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-12); }
+.reel-video { max-width: 100%; max-height: var(--h-reel); background: var(--video); }
+.reel-result-words { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); }
+
+/* A storyboard's variants and hooks are chosen as tags are, a row each. */
+.reel-options { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
+.reel-option { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; padding: var(--space-8) 10px; border: 0; border-radius: var(--radius-control); background-color: var(--quiet); color: var(--text); font-size: 13px; text-align: left; }
+.reel-option[aria-pressed="true"] { background-color: var(--lit); color: var(--on-lit); }
+.reel-option:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
+.reel-option-head { font-stretch: var(--width-compact); }
+.reel-own { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; margin-top: var(--space-4); }
+.reel-render { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.reel-subtitles { display: flex; align-items: center; gap: var(--space-4); }
+.reel-subtitles .ch-cap { margin-right: var(--space-4); }
+
+/* The transcript: a line a block - when it starts and ends, typed, with
+   playing it, adding one after it and taking it out on the same row, and
+   what is said under them. The line being said is marked as the clip
+   plays, as on the review page. */
+.reel-source { width: 100%; }
+.reel-source video { display: block; width: 100%; background: var(--video); }
+.reel-transcript { display: flex; flex-direction: column; gap: var(--space-8); width: 100%; }
+.reel-transcript .status-line { margin-top: 0; }
+.reel-lines { max-height: var(--h-reel-lines); margin: 0; padding: 0; overflow-y: auto; list-style: none; border-top: 1px solid var(--quiet); }
+.reel-line { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-8) var(--space-4) var(--space-8) 6px; border-bottom: 1px solid var(--quiet); border-left: 2px solid transparent; }
+.reel-line.is-now { background: var(--sunk); border-left-color: var(--lit); }
+.reel-line-head { display: flex; align-items: center; gap: var(--space-4); }
+.reel-time { width: var(--w-reel-time); height: var(--h-compact); padding: 0 var(--space-8); font-variant-numeric: tabular-nums; }
+.reel-dash { color: var(--text-2); }
+.reel-text { width: 100%; height: var(--h-compact); padding: 3px var(--space-8); line-height: 20px; resize: none; overflow: hidden; }
+.reel-transcript-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
+.reel-transcript-foot .status-line { flex: 1 1 0; min-width: 0; }
+.reel-heard summary { font-size: 13px; color: var(--text-2); cursor: pointer; }
+.reel-heard-lines { max-height: var(--h-reel-lines); margin: var(--space-8) 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.reel-heard-lines li { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); padding: var(--space-4) 0; border-bottom: 1px solid var(--quiet); font-size: 13px; }
+.reel-heard-time { font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; color: var(--text-2); }
+
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 
 @media (max-width: 1100px) {
   body { height: auto; min-height: 100vh; }
   .bar { flex-wrap: wrap; row-gap: var(--space-8); height: auto; padding-top: var(--space-8); padding-bottom: var(--space-8); }
   .bar-nav a { min-height: var(--h-tab); }
-  .review, .moment, .recordings, .recording, .analyze { display: block; }
+  .review, .moment, .recordings, .recording, .analyze, .reels, .reel { display: block; }
+  .reel-cols { display: block; }
+  .reel-col + .reel-col { margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); }
+  .reel-lines { max-height: none; }
   .queue { border-right: 0; border-bottom: 1px solid var(--line); }
   .queue-list, .chat-lines { flex: none; max-height: 340px; }
   .chat-lines::before { content: none; }
@@ -926,6 +971,8 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
   .bar-state { display: contents; }
   .bar-shutdown { margin-left: auto; }
   .bar-nav { order: 1; flex: 1 1 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+  /* With the Reels page too, two rows of four. */
+  .bar-nav:has(> a:nth-child(7)) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .bar-nav a { flex-wrap: wrap; justify-content: center; column-gap: var(--space-4); padding: var(--space-2) var(--space-4) 0; border-radius: var(--radius-control); background-color: var(--quiet); line-height: 16px; text-align: center; }
   .bar-flag:not(:empty) { margin-left: 0; }
   .bar .ch-lamp, .bar-meta, .bar-switch { order: 2; }
@@ -1010,7 +1057,7 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
     --w-thumb: 20px;
   }
   .ch-input, .ch-select { font-size: 16px; }
-  .transcript-text { padding-top: 7px; padding-bottom: 7px; }
+  .transcript-text, .reel-text { padding-top: 7px; padding-bottom: 7px; }
   .trim-check input, .ch-check input { width: 20px; height: 20px; }
   .set-chip-x { width: 32px; height: 32px; }
 }

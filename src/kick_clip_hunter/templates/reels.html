@@ -1,0 +1,48 @@
+{#- Reels made of moments' clips by GitHub Actions (see reels.py): the list on
+    the left, the one asked for last first, and the one that is open beside
+    it (_reel_workspace.html) - where it is asked for, its storyboard chosen
+    from, its transcript put right and the reel itself watched. A moment
+    that has no reel yet opens here too, from the review page, to make one. -#}
+{% extends "base.html" %}
+{% block title %}Reels{% endblock %}
+
+{% block main %}
+<main class="reels">
+<aside class="queue" aria-label="Reels">
+  <div class="queue-list">
+    {% for item in reel_list %}
+    <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %} data-reel-row="{{ item.id }}">
+      <b>{{ item.channel }}</b>
+      <span class="rec-length" data-reel-row-words>{{ item.words }}</span>
+      <span class="rec-when">{% if item.title %}{{ item.title }}, {% endif %}{{ item.when }}</span>
+    </a>
+    {% else %}
+    <p class="queue-empty">No reels yet</p>
+    {% endfor %}
+  </div>
+</aside>
+
+<div class="open">
+  {% if reel %}
+  {% include "_reel_workspace.html" %}
+  {% elif not reels_on %}
+  <section class="statement">
+    <h1 class="heading">Reels are not set up</h1>
+    <p class="lead">A moment's clip is made into a 9:16 reel by GitHub Actions in a repository of its own. Name it in .env as REELS_REPO, with a token for it as REELS_GITHUB_TOKEN, and restart the service.</p>
+  </section>
+  {% elif missing %}
+  <section class="statement">
+    <h1 class="heading">No such moment</h1>
+    <p class="lead">It may have been deleted.</p>
+    <a class="ch-btn" href="/dashboard">Go to Review</a>
+  </section>
+  {% else %}
+  <section class="statement">
+    <h1 class="heading">No reels yet</h1>
+    <p class="lead">A reel is made of a moment's clip. Open a moment on the review page and press Make a reel under it: it opens here, where the clip goes to GitHub and a storyboard is made of it.</p>
+    <a class="ch-btn" href="/dashboard">Go to Review</a>
+  </section>
+  {% endif %}
+</div>
+</main>
+{% endblock %}
