@@ -16,7 +16,15 @@ import pytest
 
 import replay_chat
 from kick_clip_hunter import db, detector, recorder, replay, tuning
-from tests.support.chat import ChatSim, StoredStream, exact_crowd, people, typical_evening
+from tests.support.chat import (
+    LATECOMER_SPACING,
+    ChatSim,
+    StoredStream,
+    exact_crowd,
+    latecomers,
+    people,
+    typical_evening,
+)
 from tests.support.data import add_chat, add_streamer
 
 START = datetime(2026, 3, 1, 18, 0, 0, tzinfo=timezone.utc)
@@ -293,10 +301,11 @@ class TestReplay:
         assert len(moments) == 2
         assert all("laugh" in moment.reasons for moment in moments)
         # Five minutes of warm-up, then the first reaction; the second one
-        # three minutes after it.
+        # three minutes after the last of those who joined it.
         first, second = (moment.time - START.timestamp() for moment in moments)
         assert 300 <= first <= 302
-        assert 480 <= second <= 485
+        joined_for = len(latecomers()) * LATECOMER_SPACING
+        assert first + joined_for + 180 <= second <= first + joined_for + 185
 
     def test_fires_at_exactly_the_instants_the_live_detector_would(self, stream):
         # The same script, once stored and replayed, once fed straight in.
@@ -388,17 +397,16 @@ class TestReplay:
         keywords = detector.classify_emote_names(["Sadge"])
 
         # Nobody laughs at Sadge: every moment is kept, or there would be none.
-        listened = replay.replay(messages, keywords, tuning.tuned({"laughing_share": 0}))
+        listened = replay.replay(messages, keywords, tuning.tuned({"laughing_per_root": 0}))
         ignored = replay.replay(
-            messages, keywords, tuning.tuned({"laughing_share": 0, "ignored_emote_words": ("sadge",)})
+            messages, keywords, tuning.tuned({"laughing_per_root": 0, "ignored_emote_words": ("sadge",)})
         )
 
         assert [moment.reasons for moment in listened] == [("emote_mention",)]
         assert ignored == []
 
-    # A channel that fires on fewer people laughing than it keeps a moment
-    # for. As recommended the two bars are the same share of the chat, and a
-    # moment fired by laughs always has enough laughing to be kept.
+    # A channel that fires on even fewer people laughing than recommended,
+    # well short of how many it keeps a moment for.
     @staticmethod
     def fires_early() -> detector.Settings:
         return with_detector(min_reaction_unique_fraction=detector.MIN_REACTION_UNIQUE_FRACTION / 2)
@@ -421,7 +429,7 @@ class TestReplay:
         self.busier_evening(stream, joining=0)
 
         assert replayed(detector=self.fires_early()) == []
-        assert len(replayed(detector=replace(self.fires_early(), keep_laughing_fraction=0))) == 1
+        assert len(replayed(detector=replace(self.fires_early(), keep_laughing_per_root=0))) == 1
 
     def test_and_kept_once_enough_people_join_in_within_the_minute(self, stream):
         settings = self.fires_early()
@@ -429,6 +437,10 @@ class TestReplay:
         self.busier_evening(stream, joining=needed)
 
         assert len(replayed(detector=settings)) == 1
+
+    # Enough joining that slowly evening to keep its moment: with those who
+    # fired it, as many as are needed in a chat bigger than forty and them.
+    ENOUGH = detector.laughing_needed(60) - detector._dynamic_min_reaction_unique(40)
 
     def evening_joined_slowly(self, stream, joining: int) -> int:
         """A chat of forty, a burst that fires, and `joining` more people
@@ -442,14 +454,14 @@ class TestReplay:
         return firing + joining
 
     def test_a_kept_moment_says_how_many_people_laughed_around_it(self, stream):
-        laughed = self.evening_joined_slowly(stream, joining=4)
+        laughed = self.evening_joined_slowly(stream, joining=self.ENOUGH)
 
         (moment,) = replayed()
 
         assert moment.laughing == laughed
 
     def test_the_same_count_is_had_afterwards_from_the_chat_around_it(self, stream):
-        self.evening_joined_slowly(stream, joining=4)
+        self.evening_joined_slowly(stream, joining=self.ENOUGH)
         (moment,) = replayed()
         messages, keywords = load()
 

@@ -1760,7 +1760,7 @@ def _session_should_close(session: _MomentSession, reaction_is_active: bool, now
 
 def _laughing_enough(session: _MomentSession, laughing: int) -> bool:
     """Whether a closed moment is kept, `laughing` people having laughed
-    around it (see detector.KEEP_LAUGHING_FRACTION). One asked for in chat
+    around it (see detector.KEEP_LAUGHING_PER_ROOT). One asked for in chat
     always is."""
     return session.asked_for or laughing >= detector.laughing_needed(
         session.baseline_unique_senders, session.tuned.detector

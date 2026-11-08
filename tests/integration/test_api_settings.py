@@ -385,8 +385,9 @@ class TestAMomentAndItsSettings:
     async def test_its_clip_is_framed_the_way_the_channel_is_set_up(self, service, framings):
         service.watch(CHANNEL)
         service.warm_up(CHANNEL)
-        await save(service, pre_roll_seconds=20, post_roll_seconds=3, context_after_seconds=0)
-        await save(service, CHANNEL, playback_delay_seconds=4)
+        # A crowd just big enough to fire is fewer than a moment is kept for.
+        await save(service, pre_roll_seconds=20, post_roll_seconds=3, context_after_seconds=0, laughing_per_root=0)
+        await save(service, CHANNEL, playback_delay_seconds=4, laughing_per_root=0)
         await use_own(service, CHANNEL)
 
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -407,6 +408,7 @@ class TestAMomentAndItsSettings:
         service.quiet_seconds = 0.5
         user_id = service.watch(CHANNEL)
         service.warm_up(CHANNEL)
+        await save(service, laughing_per_root=0)  # a crowd that only just fires is kept
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
         assert list(service.main._moment_sessions) == [CHANNEL]
 

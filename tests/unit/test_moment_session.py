@@ -140,7 +140,7 @@ class TestKeepingItOnceClosed:
 
     def test_by_the_settings_it_fired_under(self, session):
         session.baseline_unique_senders = self.CHAT
-        session.tuned = replace(session.tuned, detector=replace(session.tuned.detector, keep_laughing_fraction=0))
+        session.tuned = replace(session.tuned, detector=replace(session.tuned.detector, keep_laughing_per_root=0))
 
         assert main._laughing_enough(session, 0) is True
 

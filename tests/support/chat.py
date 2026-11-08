@@ -143,14 +143,34 @@ def exact_crowd() -> list[str]:
     return people(detector._dynamic_min_reaction_unique(10))
 
 
+def latecomers() -> list[str]:
+    """Those who join an `exact_crowd` reaction after it fired: with the
+    crowd, as many as a moment is kept for in a chat of twenty - more than
+    have chatted by then in the chats here."""
+    return people(detector.laughing_needed(20) - len(exact_crowd()), "latecomer")
+
+
+# How far apart the latecomers laugh: too far for two of them to be a
+# reaction that holds a moment open or fires another.
+LATECOMER_SPACING = detector.SHORT_WINDOW_SECONDS / 2 + 1
+
+
+def join_slowly(chat: ChatSim | StoredStream) -> None:
+    """The latecomers laugh, one at a time, after a reaction fired."""
+    chat.burst(latecomers(), "xd", spacing=LATECOMER_SPACING)
+
+
 def typical_evening(chat: ChatSim) -> None:
     """Five minutes of chat with one stray laugh in it, then two real
-    reactions three minutes apart: the first is over as soon as it fires,
-    the second keeps drawing in new people."""
+    reactions three minutes apart: the first is over as soon as it fires -
+    a few more people laugh over the next half minute, one at a time, enough
+    for it to be kept but too far apart to hold it open - the second keeps
+    drawing in new people."""
     chat.chatter(150)
     chat.say("viewer1", "xd")
     chat.chatter(150)
     chat.burst(exact_crowd(), "xDDD")
+    join_slowly(chat)
     chat.chatter(180)
     chat.burst(people(8, "second_wave"), "xDDD")
     chat.wait(3)

@@ -33,6 +33,13 @@ def crowd_needed() -> int:
     return detector._dynamic_min_reaction_unique(10)
 
 
+async def keep_every_moment(service) -> None:
+    """For a test about a moment's session rather than whether it is kept: a
+    crowd just big enough to fire is fewer people than a moment is kept for
+    (see TestKeepingAMoment)."""
+    await set_up(service, laughing_per_root=0)
+
+
 def window(moment) -> timedelta:
     return datetime.fromisoformat(moment["window_end"]) - datetime.fromisoformat(moment["window_start"])
 
@@ -115,6 +122,7 @@ class TestDetection:
     async def test_the_lookup_is_tried_again_for_the_next_moment(self, service, monkeypatch):
         monkeypatch.setattr(detector, "COOLDOWN_SECONDS", 0)
         service.watch(CHANNEL, live_for_seconds=1200)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
         service.api.failures["/channels"] = 503
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -162,6 +170,7 @@ class TestMomentSession:
         # Long enough that the session is certainly still open when checked.
         service.quiet_seconds = 0.5
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
 
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -172,6 +181,7 @@ class TestMomentSession:
 
     async def test_a_reaction_that_stops_at_the_trigger_is_not_extended(self, service):
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
 
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
@@ -201,6 +211,7 @@ class TestMomentSession:
     async def test_one_straggler_does_not_extend_it(self, service):
         service.quiet_seconds = 0.2
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
         await service.clock_tick()
@@ -225,6 +236,7 @@ class TestMomentSession:
     async def test_once_it_has_closed_a_new_reaction_is_a_new_moment(self, service, monkeypatch):
         monkeypatch.setattr(detector, "COOLDOWN_SECONDS", 0)
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
         await service.settle()
@@ -236,6 +248,7 @@ class TestMomentSession:
 
     async def test_without_buffered_footage_the_moment_is_kept_without_a_clip(self, service, caplog):
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
 
         with caplog.at_level(logging.INFO, logger="kick_clip_hunter"):
@@ -250,10 +263,9 @@ class TestMomentSession:
 
 class TestKeepingAMoment:
     """Once its session has closed, a moment is kept only if enough people
-    laughed around it (detector.laughing_needed) - on a channel whose own
-    reacting share puts that bar above what fires a moment. As recommended
-    the two are the same share of the chat, and a moment fired by laughs
-    always has enough people laughing."""
+    laughed around it (detector.laughing_needed), a bar above what fires a
+    moment. The channel here fires on half the recommended share, so a burst
+    that fires is well short of it."""
 
     CHATTERS = 40
     SHARE = detector.MIN_REACTION_UNIQUE_FRACTION / 2
@@ -323,7 +335,7 @@ class TestKeepingAMoment:
     async def test_a_channel_that_keeps_every_moment_keeps_it(self, service):
         fires, _keeps = self.sizes()
         service.watch(CHANNEL)
-        await set_up(service, reacting_share=self.SHARE, laughing_share=0)
+        await set_up(service, reacting_share=self.SHARE, laughing_per_root=0)
         service.warm_up(CHANNEL, chatters=self.CHATTERS)
 
         await service.crowd_laughs(CHANNEL, people=fires)
