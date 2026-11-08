@@ -6663,6 +6663,16 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
 REEL_QUESTIONS = (
     ("cut", "Cutting", (("", "Claude decides"), ("raw", "Don't cut, keep it all"), ("tighten", "Cut out dead air"))),
     (
+        "layout",
+        "On screen",
+        (
+            ("", "Claude decides"),
+            ("cam", "Webcam only"),
+            ("cam_game", "Webcam above gameplay"),
+            ("full", "The whole picture"),
+        ),
+    ),
+    (
         "kind",
         "What it is",
         (
