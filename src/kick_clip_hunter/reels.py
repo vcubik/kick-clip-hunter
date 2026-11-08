@@ -15,9 +15,10 @@ How it goes, a moment at a time, each step started from the Reels page:
    cut begins and ends, and the chat over the whole file - each message at
    the second of the file it belongs to, and the second most of chat
    laughed at - and the answers to the questions on the page
-   (`answers_asked`): whether to cut at all, where the joke is, the parts
-   that have to be in the reel, subtitles, a teaser and the like, and
-   whether to render the recommended reel straight away. Then the
+   (`answers_asked`): whether to cut at all, what is on screen (the
+   webcam alone, the webcam above the gameplay, the whole picture), where
+   the joke is, the parts that have to be in the reel, subtitles, a teaser
+   and the like, and whether to render the recommended reel straight away. Then the
    `storyboard` workflow is dispatched. It transcribes the
    clip (`clip.srt`, and `clip.words.json` with the time of every word)
    and has Claude Code write `storyboard.json`: two or three variants of
@@ -177,6 +178,10 @@ COMMENT_MOST_CHARACTERS = 2000
 ANSWER_CHOICES = {
     # "raw": the stretch as it is, uncut; "tighten": the dead air cut out.
     "cut": ("raw", "tighten"),
+    # What is on screen: "cam" the webcam alone (the game does not matter,
+    # he tells a story over it), "cam_game" the webcam above the gameplay,
+    # "full" the whole picture of the stream as it is.
+    "layout": ("cam", "cam_game", "full"),
     "kind": ("reaction", "fail", "casino", "talk", "game", "irl", "other"),
     "subtitles": ("yes", "no"),
     "teaser": ("yes", "no"),

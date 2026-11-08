@@ -1172,6 +1172,7 @@ class TestRemovingTheMoment:
 class TestQuestions:
     ANSWERS: ClassVar[dict] = {
         "cut": "raw",
+        "layout": "cam_game",
         "subtitles": "no",
         "who": "Pepa",
         "peak": BEFORE + 14.25,
@@ -1193,7 +1194,7 @@ class TestQuestions:
             for group in box.find(data_reel_answer=True)
         }
         assert pressed == {
-            "cut": "raw", "kind": "", "length": "", "hook_style": "", "subtitles": "no",
+            "cut": "raw", "layout": "cam_game", "kind": "", "length": "", "hook_style": "", "subtitles": "no",
             "teaser": "", "sfx": "", "emoji": "",
         }  # fmt: skip
         assert box.one(data_reel_who=True).attrs["value"] == "Pepa"

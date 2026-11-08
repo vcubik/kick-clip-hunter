@@ -475,6 +475,7 @@ class TestAnswers:
         answers = reels.answers_asked(
             {
                 "cut": "raw",
+                "layout": "cam",
                 "kind": "",
                 "subtitles": "no",
                 "who": "  Pepa   from the van ",
@@ -487,6 +488,7 @@ class TestAnswers:
 
         assert answers == {
             "cut": "raw",
+            "layout": "cam",
             "subtitles": "no",
             "who": "Pepa from the van",
             "peak": 12.346,
