@@ -43,6 +43,60 @@
   <textarea class="ch-input reel-comment-text" rows="2" maxlength="{{ reel.comment_most }}" placeholder="{{ placeholder }}" data-reel-comment="{{ kind }}"{% if disabled %} disabled{% endif %}>{{ value }}</textarea>
 </label>
 {%- endmacro %}
+{#- A part of the clip's file that has to be in the reel: from and to, set
+    where the clip's player is or typed, and a few words of what it is. -#}
+{% macro keep_part(part, questions) -%}
+<li class="reel-keep" data-reel-keep>
+  <input type="text" class="ch-input reel-time" value="{{ part.start if part else '' }}" aria-label="The part starts at" placeholder="0:00.0" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-keep-start>
+  <button type="button" class="ch-btn ch-btn-compact" title="Starts the part where the clip's player is" data-reel-here="start">Here</button>
+  <span class="reel-dash" aria-hidden="true">–</span>
+  <input type="text" class="ch-input reel-time" value="{{ part.end if part else '' }}" aria-label="The part ends at" placeholder="0:00.0" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-keep-end>
+  <button type="button" class="ch-btn ch-btn-compact" title="Ends the part where the clip's player is" data-reel-here="end">Here</button>
+  <input type="text" class="ch-input reel-keep-note" value="{{ part.note if part else '' }}" maxlength="{{ questions.note_most }}" aria-label="What the part is" placeholder="e.g. says he won't mess it up" autocomplete="off" data-reel-keep-note>
+  <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Remove this part" title="Removes this part" data-reel-keep-remove>×</button>
+</li>
+{%- endmacro %}
+{#- The questions that go with a storyboard, all of them left to Claude to
+    begin with: what is chosen goes up in context.json, and the storyboard
+    keeps to it (the reel repository checks it does). The answers that went
+    with the last storyboard are chosen again. Times are of the clip's file,
+    as the player beside the transcript has them. -#}
+{% macro questions_box(questions) -%}
+<details class="reel-questions" data-reel-questions{% if questions.answered %} open{% endif %}>
+  <summary>Questions for the storyboard{% if questions.answered %} (answered){% endif %}: choose what you know, the rest is left to Claude</summary>
+  <div class="reel-questions-body">
+    {% for question in questions.choices %}
+    <span class="reel-question" role="group" aria-label="{{ question.label }}" data-reel-answer="{{ question.name }}">
+      <span class="ch-cap">{{ question.label }}</span>
+      {% for option in question.options %}
+      <button type="button" class="ch-tag" aria-pressed="{{ 'true' if option.chosen else 'false' }}" data-value="{{ option.value }}">{{ option.label }}</button>
+      {% endfor %}
+    </span>
+    {% endfor %}
+    <label class="reel-question">
+      <span class="ch-cap">Who is in it</span>
+      <input type="text" class="ch-input reel-who" value="{{ questions.who }}" maxlength="{{ questions.who_most }}" placeholder="a name for the hook" autocomplete="off" data-reel-who>
+    </label>
+    <span class="reel-question" role="group" aria-label="Where the joke is">
+      <span class="ch-cap">The joke is at</span>
+      <input type="text" class="ch-input reel-time" value="{{ questions.peak }}" aria-label="The joke is at" placeholder="0:00.0" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-peak>
+      <button type="button" class="ch-btn ch-btn-compact" title="Sets the joke where the clip's player is" data-reel-here="peak">Here</button>
+    </span>
+    <div class="reel-question reel-keeps">
+      <span class="ch-cap">Has to be in the reel: parts that only work together, however far apart (he says he won't mess it up … and messes it up)</span>
+      <ol class="reel-keep-list" data-reel-keeps data-most="{{ questions.keep_most }}">
+        {% for part in questions.keep %}{{ keep_part(part, questions) }}{% endfor %}
+      </ol>
+      <template data-reel-keep-template>{{ keep_part(none, questions) }}</template>
+      <button type="button" class="ch-btn ch-btn-compact" data-reel-keep-add>Add a part</button>
+    </div>
+    <label class="reel-question reel-render-now">
+      <input type="checkbox" data-reel-render-now{% if questions.render_now %} checked{% endif %}>
+      <span>Render the recommended variant and hook straight away</span>
+    </label>
+  </div>
+</details>
+{%- endmacro %}
 <article class="reel" data-reel="{{ reel.url }}" data-reel-id="{{ reel.id }}" data-board="{{ reel.board }}" data-state="{{ reel.state }}" data-row-words="{{ reel.row_words }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
 <div class="stage">
 <div class="reel-in">
@@ -75,6 +129,7 @@
     </span>
     {% endif %}
     {% if reel.has_clip %}
+    {{ questions_box(reel.questions) }}
     {{ comment_field("storyboard", "Comment for the storyboard, if you like: what the clip is about, where to cut, what the hook should play on. Claude goes by it.", reel.storyboard_comment, "e.g. the joke is the second fall - start just before it", reel.busy) }}
     <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the clip to GitHub, where a storyboard of the reel is made from it in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
     {% endif %}

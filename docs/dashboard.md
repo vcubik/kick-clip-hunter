@@ -248,10 +248,18 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   the rest would be thrown away. It is cut out of the file as the Trim dialog cuts one, nothing
   re-encoded, so it begins on the last keyframe at or before its start. Above the button a
   comment for the storyboard can be written - what the clip is about, where to cut, what the
-  hook should play on - which Claude goes by; the one sent last is offered again. "Make a reel"
-  sends the stretch, its chat and the comment to GitHub (`POST /moments/{id}/reel`, `start`,
-  `end` and `comment`; a stretch that leaves out next to nothing is the whole file), and a
-  storyboard comes back in a few minutes:
+  hook should play on - which Claude goes by; the one sent last is offered again. Above it,
+  folded away until opened (and open once answered), are questions for the storyboard, each
+  left to Claude unless chosen: cut it or not ("Don't cut, keep it all", "Cut out dead air"),
+  what the clip is, its length, the hook's style, subtitles, a teaser, a sound effect, emoji,
+  who is in it, where the joke is and the parts that have to be in the reel - however far
+  apart, each with a few words of what it is - set where the player under the transcript is
+  ("Here") or typed, and "Render the recommended variant and hook straight away", which renders
+  them, subtitles as the variant has them, as soon as the storyboard is back (`reels.ANSWER_CHOICES`,
+  `reels.answers_asked`; the reel repository checks the storyboard keeps to them). "Make a reel"
+  sends the stretch, its chat, the comment and the answers to GitHub (`POST /moments/{id}/reel`,
+  `start`, `end`, `comment` and `answers`; a stretch that leaves out next to nothing is the
+  whole file), and a storyboard comes back in a few minutes:
   what is in the clip, two or three variants (one recommended, those with subtitles saying
   so), three hooks and a sheet of frames - beside them the reel's transcript, under the
   moment's file playing in a player of its own: a line a block, when it starts and ends

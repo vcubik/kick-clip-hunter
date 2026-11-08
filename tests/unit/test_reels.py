@@ -468,3 +468,99 @@ class TestWhatTheRenderSays:
         note = reels.rendered_note(json.dumps({"note": "x" * (reels.COMMENT_MOST_CHARACTERS + 5)}).encode())
 
         assert len(note) == reels.COMMENT_MOST_CHARACTERS
+
+
+class TestAnswers:
+    def test_what_is_answered_goes_along_tidied_and_the_rest_is_left_out(self):
+        answers = reels.answers_asked(
+            {
+                "cut": "raw",
+                "kind": "",
+                "subtitles": "no",
+                "who": "  Pepa   from the van ",
+                "peak": 12.34567,
+                "keep": [{"start": 30, "end": 33, "note": ""}, {"start": 1, "end": 4.5, "note": " says  he won't "}],
+                "render_now": True,
+            },
+            40.0,
+        )
+
+        assert answers == {
+            "cut": "raw",
+            "subtitles": "no",
+            "who": "Pepa from the van",
+            "peak": 12.346,
+            # In the order they are in the clip.
+            "keep": [{"start": 1.0, "end": 4.5, "note": "says he won't"}, {"start": 30.0, "end": 33.0, "note": ""}],
+            "render_now": True,
+        }
+
+    def test_none_answered_is_nothing(self):
+        assert reels.answers_asked(None, 40.0) == {}
+        assert reels.answers_asked({"cut": "", "keep": [], "render_now": False}, 40.0) == {}
+
+    @pytest.mark.parametrize(
+        ("posted", "said"),
+        [
+            ([], "Expected the answers"),
+            ({"cut": "some"}, "Cut is one of: raw, tighten"),
+            ({"who": 5}, "who is in the clip"),
+            ({"who": "x" * (reels.ANSWER_WHO_MOST + 1)}, "at most"),
+            ({"peak": "soon"}, "the joke's time"),
+            ({"peak": True}, "the joke's time"),
+            ({"peak": 41.0}, "not in the clip's file"),
+            ({"keep": {"start": 1}}, "as a list"),
+            ({"keep": [{"start": 5, "end": 5}]}, "end after it starts"),
+            ({"keep": [{"start": -1, "end": 5}]}, "not in the clip's file"),
+            ({"keep": [{"start": 1, "end": 2, "note": "x" * (reels.ANSWER_NOTE_MOST + 1)}]}, "at most"),
+            ({"keep": [{"start": 1, "end": 2}] * (reels.ANSWER_KEEP_MOST + 1)}, "At most"),
+        ],
+    )
+    def test_what_cannot_go_along_is_refused(self, posted, said):
+        with pytest.raises(ValueError, match=said):
+            reels.answers_asked(posted, 40.0)
+
+    def test_a_file_of_unknown_length_takes_any_time_after_its_start(self):
+        assert reels.answers_asked({"peak": 500}, None) == {"peak": 500.0}
+
+    def test_they_go_up_in_the_context(self):
+        made = {
+            "moment_id": 1, "channel": "some_channel", "title": None, "notes": None, "rating": None,
+            "clip_start": None, "clip_end": None, "chat": [],
+        }  # fmt: skip
+
+        assert reels.context(**made, answers={"cut": "tighten"})["answers"] == {"cut": "tighten"}
+        assert reels.context(**made)["answers"] == {}
+
+    def test_for_a_stretch_their_times_are_moved_and_what_is_outside_it_left_out(self):
+        answers = {
+            "cut": "raw",
+            "peak": 5.0,
+            "keep": [
+                {"start": 8, "end": 12, "note": "a"},
+                {"start": 18, "end": 25, "note": "b"},
+                {"start": 30, "end": 35, "note": "c"},
+            ],
+        }
+
+        moved = reels.answers_moved(answers, (10.0, 20.0))
+
+        # The joke was before the stretch; the parts are cut to it.
+        assert moved == {
+            "cut": "raw",
+            "keep": [{"start": 0.0, "end": 2.0, "note": "a"}, {"start": 8.0, "end": 10.0, "note": "b"}],
+        }
+        assert reels.answers_moved(answers, None) == answers
+
+
+class TestRecommended:
+    def test_the_storyboards_recommended_variant_and_hook(self):
+        storyboard = {
+            "variants": [{"id": "A"}, {"id": "B", "recommended": True}],
+            "hooks": [{"id": 1, "text": "ONE"}, {"id": 2, "text": "TWO", "recommended": True}],
+        }
+
+        assert reels.recommended(storyboard) == ("B", "2")
+
+    def test_where_it_recommends_none_the_first(self):
+        assert reels.recommended(STORYBOARD) == ("A", "1")

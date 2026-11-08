@@ -14,7 +14,11 @@ How it goes, a moment at a time, each step started from the Reels page:
    page (what to make of the clip), where in the file the clip the service
    cut begins and ends, and the chat over the whole file - each message at
    the second of the file it belongs to, and the second most of chat
-   laughed at. Then the `storyboard` workflow is dispatched. It transcribes the
+   laughed at - and the answers to the questions on the page
+   (`answers_asked`): whether to cut at all, where the joke is, the parts
+   that have to be in the reel, subtitles, a teaser and the like, and
+   whether to render the recommended reel straight away. Then the
+   `storyboard` workflow is dispatched. It transcribes the
    clip (`clip.srt`, and `clip.words.json` with the time of every word)
    and has Claude Code write `storyboard.json`: two or three variants of
    the reel, each with what the render script is to be run with, and three
@@ -25,6 +29,8 @@ How it goes, a moment at a time, each step started from the Reels page:
    `storyboard.json` is there it is fetched and kept, with the contact
    sheet and the transcript: the subtitles Claude proposed where there are
    some, otherwise what the speech model heard (kept as well, as `heard`).
+   Where the answers asked for it, the reel is rendered right away, with the
+   variant and the hook the storyboard recommends (`recommended`).
 3. The transcript is put right on the page as needed - a line's words, its
    times, lines added and taken out (`checked_transcript`) - and the reel's
    subtitles are made of it from then on.
@@ -91,10 +97,11 @@ TRANSFER_TIMEOUT_SECONDS = 600.0
 CHUNK_BYTES = 1024 * 1024
 
 POLL_SECONDS = 30
-# A storyboard takes a few minutes (most of it transcribing), a render one
-# or two; both are given far longer before the service gives up on them.
+# A storyboard takes a few minutes (most of it transcribing), a render a few
+# (Claude checks the reel, and may have it rendered once more);
+# both are given far longer before the service gives up on them.
 STORYBOARD_LIMIT = timedelta(minutes=40)
-RENDER_LIMIT = timedelta(minutes=30)
+RENDER_LIMIT = timedelta(minutes=45)
 
 # The states of a moment's reel, in the order it goes through them.
 SENDING = "sending"
@@ -164,6 +171,24 @@ EMOJI_SHORTCUT = re.compile(r"\{([A-Za-z0-9_]+)\}")
 # A comment written on the page to go with a step - for the storyboard, for
 # the render - or feedback on the reel: a few paragraphs at most.
 COMMENT_MOST_CHARACTERS = 2000
+# The questions on the page that go with a storyboard: each answered with one
+# of its choices, or left to Claude (left out).
+ANSWER_CHOICES = {
+    # "raw": the stretch as it is, uncut; "tighten": the dead air cut out.
+    "cut": ("raw", "tighten"),
+    "kind": ("reaction", "fail", "casino", "talk", "game", "irl", "other"),
+    "subtitles": ("yes", "no"),
+    "teaser": ("yes", "no"),
+    "length": ("short", "normal", "long"),
+    "hook_style": ("question", "shock", "irony"),
+    "emoji": ("yes", "no"),
+    "sfx": ("yes", "no"),
+}
+# Who is in the clip, in a few words; the parts that have to be in the reel,
+# each with a few words of what it is.
+ANSWER_WHO_MOST = 120
+ANSWER_NOTE_MOST = 200
+ANSWER_KEEP_MOST = 8
 # A transcript put right on the page: as many lines as hours of talk would
 # make, each no longer than a subtitle can hold, and its times may run this
 # far past the end of the file (its length is known to the tenth).
@@ -239,12 +264,14 @@ def context(
     chat: Iterable[ChatLine],
     transcript_corrected: bool = False,
     comment: str = "",
+    answers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What goes up with a moment's file, for whoever makes its storyboard:
     see the module's docstring. Times are seconds into the file.
     `transcript_corrected` says that the subtitles that go up with it are
     the transcript put right by hand; `comment` is what was written on the
-    page for the storyboard to go by."""
+    page for the storyboard to go by, and `answers` the answers to the
+    questions on it, timed to what goes up (`answers_moved`)."""
     lines = [line for line in chat if line.second >= 0][:CONTEXT_CHAT_LIMIT]
     platform, login = platforms.split(channel)
     return {
@@ -260,7 +287,101 @@ def context(
         "chat": [{"t": round(line.second, 1), "user": line.sender, "text": line.text} for line in lines],
         "transcript_corrected": transcript_corrected,
         "comment": comment,
+        "answers": dict(answers or {}),
     }
+
+
+def _seconds(value: object, length: float | None, what: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"Expected {what} as seconds of the clip's file.")
+    seconds = float(value)
+    if seconds < 0 or (length is not None and seconds > length + PART_SLACK_SECONDS):
+        raise ValueError(f"{what[0].upper()}{what[1:]} is not in the clip's file.")
+    return round(seconds, 3)
+
+
+def answers_asked(value: object, length: float | None) -> dict[str, Any]:
+    """The answers to the questions on the page, as they were posted, made
+    fit to go along: only the questions answered, times in seconds of the
+    moment's file (`length` long, where it is known). Raises ValueError, in
+    words for the page, for an answer that is not one of its choices."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Expected the answers as JSON.")
+    answers: dict[str, Any] = {}
+    for name, choices in ANSWER_CHOICES.items():
+        chosen = value.get(name) or ""
+        if chosen and chosen not in choices:
+            raise ValueError(f"{name.replace('_', ' ').capitalize()} is one of: {', '.join(choices)}.")
+        if chosen:
+            answers[name] = chosen
+    who = value.get("who") or ""
+    if not isinstance(who, str):
+        raise ValueError("Expected who is in the clip as words.")
+    who = " ".join(who.split())
+    if len(who) > ANSWER_WHO_MOST:
+        raise ValueError(f"Who is in the clip is at most {ANSWER_WHO_MOST} characters.")
+    if who:
+        answers["who"] = who
+    if value.get("peak") is not None:
+        answers["peak"] = _seconds(value["peak"], length, "the joke's time")
+    keep = value.get("keep") or []
+    if not isinstance(keep, list):
+        raise ValueError("Expected the parts to keep as a list.")
+    if len(keep) > ANSWER_KEEP_MOST:
+        raise ValueError(f"At most {ANSWER_KEEP_MOST} parts to keep.")
+    parts = []
+    for part in keep:
+        if not isinstance(part, dict):
+            raise ValueError("Expected each part to keep with its start and end.")
+        start = _seconds(part.get("start"), length, "the start of a part to keep")
+        end = _seconds(part.get("end"), length, "the end of a part to keep")
+        if end <= start:
+            raise ValueError("A part to keep has to end after it starts.")
+        note = part.get("note") or ""
+        if not isinstance(note, str):
+            raise ValueError("Expected what a part to keep is as words.")
+        note = " ".join(note.split())
+        if len(note) > ANSWER_NOTE_MOST:
+            raise ValueError(f"What a part to keep is, is at most {ANSWER_NOTE_MOST} characters.")
+        parts.append({"start": start, "end": end, "note": note})
+    if parts:
+        answers["keep"] = sorted(parts, key=lambda part: part["start"])
+    if value.get("render_now"):
+        answers["render_now"] = True
+    return answers
+
+
+def answers_moved(answers: Mapping[str, Any], part: tuple[float, float] | None) -> dict[str, Any]:
+    """The answers timed to the stretch of the file sent in its place
+    (`part`): the joke and the parts to keep moved by where it begins, and
+    what of them is not in it left out - as they are, where all of it is."""
+    moved = dict(answers)
+    if part is None:
+        return moved
+    offset, length = part[0], part[1] - part[0]
+    peak = moved.pop("peak", None)
+    if peak is not None and part[0] <= peak <= part[1]:
+        moved["peak"] = round(peak - offset, 3)
+    keep = []
+    for one in moved.pop("keep", []):
+        start, end = max(one["start"] - offset, 0.0), min(one["end"] - offset, length)
+        if end > start:
+            keep.append({**one, "start": round(start, 3), "end": round(end, 3)})
+    if keep:
+        moved["keep"] = keep
+    return moved
+
+
+def recommended(storyboard: Mapping[str, Any]) -> tuple[str, str]:
+    """The variant and the hook (its id) a storyboard recommends - its first
+    ones, where it says of none - for a reel rendered straight away."""
+    variants = [one for one in storyboard.get("variants", []) if isinstance(one, dict)]
+    variant = next((one for one in variants if one.get("recommended")), variants[0])
+    hooks = [one for one in storyboard.get("hooks", []) if isinstance(one, dict) and one.get("text")]
+    hook = next((one for one in hooks if one.get("recommended")), hooks[0])
+    return str(variant["id"]), str(hook["id"] if hook.get("id") is not None else hook["text"])
 
 
 def comment_asked(value: object) -> str:
