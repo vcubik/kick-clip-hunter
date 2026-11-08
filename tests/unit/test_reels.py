@@ -499,11 +499,17 @@ class TestAnswers:
         assert reels.answers_asked(None, 40.0) == {}
         assert reels.answers_asked({"cut": "", "keep": [], "render_now": False}, 40.0) == {}
 
+    def test_an_answer_that_is_none_of_the_choices_is_words_of_ones_own(self):
+        answers = reels.answers_asked({"cut": "  only the  first minute ", "kind": "   "}, 40.0)
+
+        assert answers == {"cut": "only the first minute"}
+
     @pytest.mark.parametrize(
         ("posted", "said"),
         [
             ([], "Expected the answers"),
-            ({"cut": "some"}, "Cut is one of: raw, tighten"),
+            ({"cut": 5}, "Expected the answer to Cut as words"),
+            ({"hook_style": "x" * (reels.ANSWER_OWN_MOST + 1)}, "of your own to Hook style is at most"),
             ({"who": 5}, "who is in the clip"),
             ({"who": "x" * (reels.ANSWER_WHO_MOST + 1)}, "at most"),
             ({"peak": "soon"}, "the joke's time"),

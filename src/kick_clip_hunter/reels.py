@@ -172,7 +172,8 @@ EMOJI_SHORTCUT = re.compile(r"\{([A-Za-z0-9_]+)\}")
 # the render - or feedback on the reel: a few paragraphs at most.
 COMMENT_MOST_CHARACTERS = 2000
 # The questions on the page that go with a storyboard: each answered with one
-# of its choices, or left to Claude (left out).
+# of its choices, or in words of one's own (at most ANSWER_OWN_MOST), or left
+# to Claude (left out).
 ANSWER_CHOICES = {
     # "raw": the stretch as it is, uncut; "tighten": the dead air cut out.
     "cut": ("raw", "tighten"),
@@ -187,6 +188,7 @@ ANSWER_CHOICES = {
 # Who is in the clip, in a few words; the parts that have to be in the reel,
 # each with a few words of what it is.
 ANSWER_WHO_MOST = 120
+ANSWER_OWN_MOST = 200
 ANSWER_NOTE_MOST = 200
 ANSWER_KEEP_MOST = 8
 # A transcript put right on the page: as many lines as hours of talk would
@@ -303,8 +305,10 @@ def _seconds(value: object, length: float | None, what: str) -> float:
 def answers_asked(value: object, length: float | None) -> dict[str, Any]:
     """The answers to the questions on the page, as they were posted, made
     fit to go along: only the questions answered, times in seconds of the
-    moment's file (`length` long, where it is known). Raises ValueError, in
-    words for the page, for an answer that is not one of its choices."""
+    moment's file (`length` long, where it is known). An answer that is not
+    one of its question's choices is words of one's own, tidied. Raises
+    ValueError, in words for the page, for one that is not words, or is too
+    long."""
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -312,8 +316,13 @@ def answers_asked(value: object, length: float | None) -> dict[str, Any]:
     answers: dict[str, Any] = {}
     for name, choices in ANSWER_CHOICES.items():
         chosen = value.get(name) or ""
-        if chosen and chosen not in choices:
-            raise ValueError(f"{name.replace('_', ' ').capitalize()} is one of: {', '.join(choices)}.")
+        what = name.replace("_", " ").capitalize()
+        if not isinstance(chosen, str):
+            raise ValueError(f"Expected the answer to {what} as words.")
+        if chosen not in choices:
+            chosen = " ".join(chosen.split())
+            if len(chosen) > ANSWER_OWN_MOST:
+                raise ValueError(f"An answer of your own to {what} is at most {ANSWER_OWN_MOST} characters.")
         if chosen:
             answers[name] = chosen
     who = value.get("who") or ""

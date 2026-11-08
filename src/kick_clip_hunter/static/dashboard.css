@@ -925,6 +925,7 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-question { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
 .reel-question > .ch-cap { min-width: 120px; margin-right: var(--space-4); }
 .reel-keeps > .ch-cap { flex: 1 1 100%; }
+.reel-answer-own { flex: 1 1 140px; min-width: 120px; height: var(--h-compact); padding: 0 var(--space-8); }
 .reel-who { flex: 1 1 200px; height: var(--h-compact); padding: 0 var(--space-8); }
 .reel-keep-list { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; margin: 0; padding: 0; list-style: none; }
 .reel-keep-list:empty { display: none; }

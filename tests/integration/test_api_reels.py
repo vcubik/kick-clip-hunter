@@ -1214,6 +1214,18 @@ class TestQuestions:
         assert all(
             group.one(aria_pressed="true").attrs["data-value"] == "" for group in box.find(data_reel_answer=True)
         )
+        assert all(field.attrs["value"] == "" for field in box.find(data_reel_answer_own=True))
+
+    async def test_an_answer_of_ones_own_goes_up_and_is_offered_again_in_its_field(self, reeling, github):
+        moment_id = clipped_moment()
+
+        await asked_for_storyboard(reeling, github, moment_id, answers={"length": "as long as the story needs"})
+
+        context = json.loads(github.asset(reels.tag(moment_id), "context.json"))
+        assert context["answers"] == {"length": "as long as the story needs"}
+        group = (await workspace(reeling, moment_id)).one(data_reel_answer="length")
+        assert group.find(aria_pressed="true") == []
+        assert group.one(data_reel_answer_own=True).attrs["value"] == "as long as the story needs"
 
     async def test_an_answer_that_cannot_go_along_is_refused_and_nothing_is_sent(self, reeling, github):
         moment_id = clipped_moment()

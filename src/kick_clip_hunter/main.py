@@ -6702,11 +6702,14 @@ def _reel_questions(answers: dict) -> dict:
                     {"value": value, "label": words, "chosen": answers.get(name, "") == value}
                     for value, words in options
                 ],
+                # An answer in words of one's own: none of the choices then.
+                "own": "" if answers.get(name, "") in reels.ANSWER_CHOICES[name] else answers.get(name, ""),
             }
             for name, label, options in REEL_QUESTIONS
         ],
         "who": answers.get("who", ""),
         "who_most": reels.ANSWER_WHO_MOST,
+        "own_most": reels.ANSWER_OWN_MOST,
         "note_most": reels.ANSWER_NOTE_MOST,
         "keep_most": reels.ANSWER_KEEP_MOST,
         "peak": reels.clock(peak) if isinstance(peak, int | float) else "",

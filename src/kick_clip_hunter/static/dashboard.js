@@ -1819,9 +1819,19 @@
   // joke is and the parts that have to be in the reel, in seconds of the
   // clip's file - typed, or set where the player beside the transcript is.
 
+  // A choice lets go of the words of one's own; words of one's own let go of
+  // the choice - and once taken out again, it is left to Claude.
   function chooseAnswer(button) {
-    for (const other of all("button", button.closest("[data-reel-answer]"))) {
-      other.setAttribute("aria-pressed", String(other === button));
+    const group = button.closest("[data-reel-answer]");
+    for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === button));
+    const own = one("[data-reel-answer-own]", group);
+    if (own) own.value = "";
+  }
+
+  function ownAnswer(field) {
+    const typed = field.value.trim() !== "";
+    for (const button of all("button", field.closest("[data-reel-answer]"))) {
+      button.setAttribute("aria-pressed", String(!typed && button.dataset.value === ""));
     }
   }
 
@@ -1868,7 +1878,8 @@
     if (!box) return { answers };
     for (const field of all("[aria-invalid]", box)) field.removeAttribute("aria-invalid");
     for (const group of all("[data-reel-answer]", box)) {
-      const value = one('[aria-pressed="true"]', group)?.dataset.value;
+      const own = one("[data-reel-answer-own]", group)?.value.trim();
+      const value = own || one('[aria-pressed="true"]', group)?.dataset.value;
       if (value) answers[group.dataset.reelAnswer] = value;
     }
     const who = one("[data-reel-who]", box).value.trim();
@@ -4047,6 +4058,8 @@
       say(target, "");
     } else if (target.matches("[data-reel-own]")) {
       ownHook(target);
+    } else if (target.matches("[data-reel-answer-own]")) {
+      ownAnswer(target);
     } else if (target.matches("[data-reel-comment]")) {
       grow(target);
       target.dataset.edited = "";

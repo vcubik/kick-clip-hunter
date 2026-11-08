@@ -71,6 +71,9 @@
       {% for option in question.options %}
       <button type="button" class="ch-tag" aria-pressed="{{ 'true' if option.chosen else 'false' }}" data-value="{{ option.value }}">{{ option.label }}</button>
       {% endfor %}
+      {#- Words of one's own instead of a choice: typing them lets go of the
+          choice, a choice clears them. -#}
+      <input type="text" class="ch-input reel-answer-own" value="{{ question.own }}" maxlength="{{ questions.own_most }}" aria-label="{{ question.label }}, in your own words" placeholder="or your own…" autocomplete="off" data-reel-answer-own>
     </span>
     {% endfor %}
     <label class="reel-question">

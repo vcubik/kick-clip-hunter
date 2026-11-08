@@ -250,7 +250,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   comment for the storyboard can be written - what the clip is about, where to cut, what the
   hook should play on - which Claude goes by; the one sent last is offered again. Above it,
   folded away until opened (and open once answered), are questions for the storyboard, each
-  left to Claude unless chosen: cut it or not ("Don't cut, keep it all", "Cut out dead air"),
+  left to Claude unless chosen - or answered in words of one's own in the field beside its
+  choices, which lets go of the choice: cut it or not ("Don't cut, keep it all", "Cut out dead air"),
   what the clip is, its length, the hook's style, subtitles, a teaser, a sound effect, emoji,
   who is in it, where the joke is and the parts that have to be in the reel - however far
   apart, each with a few words of what it is - set where the player under the transcript is
