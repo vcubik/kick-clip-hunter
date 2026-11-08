@@ -763,10 +763,12 @@ Module map (`src/kick_clip_hunter/`):
   cut by `recorder.trim_clip` to `moment_<id>_part.mp4`, kept as `reels.part_start`/`part_end`)
   - and `context.json` (credit, name and note, the comment written for the storyboard on the
   Reels page, where the clip lies in what is sent, chat over it at the second it belongs to, the
-  second most of chat laughed in)
+  second most of chat laughed in, the answers to the page's questions - `answers_asked`, kept as
+  `reels.storyboard_answers`, timed to the stretch by `answers_moved`)
   go up into a release tagged `moment-<id>` and the `storyboard` workflow is dispatched; the
   service looks at the release every `POLL_SECONDS` and takes `storyboard.json`, the contact
-  sheet and the transcript back - the subtitles Claude proposed (`clip.subs.srt`) where there
+  sheet and the transcript back - and where the answers asked for it, renders the variant and
+  hook the storyboard recommends straight away (`recommended`, `main._render_straight_away`) - the subtitles Claude proposed (`clip.subs.srt`) where there
   are some, otherwise what the speech model heard (`clip.srt`, kept as well as `heard`; read by
   `subtitles.from_srt`), moved to the moment's file's own seconds where only a stretch was sent
   (`moved`), and cut back to the stretch and timed to it whenever it goes up

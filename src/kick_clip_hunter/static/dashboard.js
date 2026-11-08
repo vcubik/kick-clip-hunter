@@ -1781,7 +1781,7 @@
   // What starts a step, and its comment, is off while one goes on.
   function dressReel(root) {
     const busy = root.hasAttribute("data-busy");
-    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"]';
+    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"], [data-reel-questions] input, [data-reel-questions] button';
     for (const control of all(starting, root)) control.disabled = busy;
     for (const box of all("[data-stretch]", root)) {
       box.hidden = false;
@@ -1813,10 +1813,111 @@
     }
   }
 
+  // ---- The questions that go with a storyboard ---------------------------
+  //
+  // Each answered with one of its choices, or left to Claude; where the
+  // joke is and the parts that have to be in the reel, in seconds of the
+  // clip's file - typed, or set where the player beside the transcript is.
+
+  // A choice lets go of the words of one's own; words of one's own let go of
+  // the choice - and once taken out again, it is left to Claude.
+  function chooseAnswer(button) {
+    const group = button.closest("[data-reel-answer]");
+    for (const other of all("button", group)) other.setAttribute("aria-pressed", String(other === button));
+    const own = one("[data-reel-answer-own]", group);
+    if (own) own.value = "";
+  }
+
+  function ownAnswer(field) {
+    const typed = field.value.trim() !== "";
+    for (const button of all("button", field.closest("[data-reel-answer]"))) {
+      button.setAttribute("aria-pressed", String(!typed && button.dataset.value === ""));
+    }
+  }
+
+  function reelSourceTime(root) {
+    const source = one("[data-reel-source]", root);
+    return source ? source.currentTime : null;
+  }
+
+  function answerHere(button) {
+    const time = reelSourceTime(reelOf(button));
+    if (time === null) {
+      say(button, "The clip's file is not here to play.");
+      return;
+    }
+    const which = button.dataset.reelHere;
+    const field =
+      which === "peak"
+        ? one("[data-reel-peak]", reelOf(button))
+        : one(which === "start" ? "[data-reel-keep-start]" : "[data-reel-keep-end]", button.closest("[data-reel-keep]"));
+    field.value = tenthsWords(time);
+    field.removeAttribute("aria-invalid");
+  }
+
+  // A part to keep, starting where the player is.
+  function addKeepPart(button) {
+    const box = button.closest(".reel-keeps");
+    const list = one("[data-reel-keeps]", box);
+    if (list.children.length >= Number(list.dataset.most)) {
+      say(button, `At most ${list.dataset.most} parts.`);
+      return;
+    }
+    const part = one("[data-reel-keep-template]", box).content.firstElementChild.cloneNode(true);
+    list.append(part);
+    const time = reelSourceTime(reelOf(box));
+    if (time !== null) one("[data-reel-keep-start]", part).value = tenthsWords(time);
+    one("[data-reel-keep-start]", part).focus();
+  }
+
+  // The answers as they go up - or the field that holds no time where one
+  // has to be.
+  function reelAnswers(root) {
+    const box = one("[data-reel-questions]", root);
+    const answers = {};
+    if (!box) return { answers };
+    for (const field of all("[aria-invalid]", box)) field.removeAttribute("aria-invalid");
+    for (const group of all("[data-reel-answer]", box)) {
+      const own = one("[data-reel-answer-own]", group)?.value.trim();
+      const value = own || one('[aria-pressed="true"]', group)?.dataset.value;
+      if (value) answers[group.dataset.reelAnswer] = value;
+    }
+    const who = one("[data-reel-who]", box).value.trim();
+    if (who) answers.who = who;
+    const peak = one("[data-reel-peak]", box);
+    if (peak.value.trim()) {
+      const time = lineTime(peak);
+      if (time === null) return { wrong: peak };
+      answers.peak = time;
+    }
+    const keep = [];
+    for (const part of all("[data-reel-keep]", box)) {
+      const startField = one("[data-reel-keep-start]", part);
+      const endField = one("[data-reel-keep-end]", part);
+      if (!startField.value.trim() && !endField.value.trim()) continue;
+      const start = lineTime(startField);
+      const end = lineTime(endField);
+      if (start === null) return { wrong: startField };
+      if (end === null || end <= start) return { wrong: endField };
+      keep.push({ start, end, note: one("[data-reel-keep-note]", part).value.trim() });
+    }
+    if (keep.length) answers.keep = keep;
+    if (one("[data-reel-render-now]", box).checked) answers.render_now = true;
+    return { answers };
+  }
+
   async function askReel(button) {
     const root = reelOf(button);
     if (reelUnsaved(root)) {
       say(button, "Save the transcript first: what you changed in it would be lost.");
+      return;
+    }
+    const { answers, wrong } = reelAnswers(root);
+    if (wrong) {
+      wrong.closest("details").open = true;
+      wrong.setAttribute("aria-invalid", "true");
+      wrong.focus();
+      say(button, "That is not a time, or a part ends before it starts. Write it like 0:12.5.");
       return;
     }
     button.disabled = true;
@@ -1824,7 +1925,7 @@
     // The stretch of the file shown above the button - all of it, unless
     // another was chosen.
     const stretch = one("[data-stretch]", root);
-    const asked = { ...(stretch ? stretchAt(stretch) : {}), comment: reelComment(root, "storyboard") };
+    const asked = { ...(stretch ? stretchAt(stretch) : {}), comment: reelComment(root, "storyboard"), answers };
     const response = await post(button.dataset.reelAsk, asked);
     if (!root.isConnected) return;
     if (!response || !response.ok) {
@@ -3660,6 +3761,10 @@
     ["[data-stretch-here]", (button) => stretchHere(stretchOf(button), button.dataset.stretchHere)],
     ["[data-stretch-reset]", (button) => resetStretch(stretchOf(button))],
     ["[data-reel-ask]", askReel],
+    ["[data-reel-answer] button", chooseAnswer],
+    ["[data-reel-here]", answerHere],
+    ["[data-reel-keep-add]", addKeepPart],
+    ["[data-reel-keep-remove]", (button) => button.closest("[data-reel-keep]").remove()],
     ["[data-reel-variant], [data-reel-hook]", chooseReel],
     ["[data-reel-emoji]", addReelEmoji],
     ["[data-reel-subtitles] button", (button) => setReelSubtitles(reelOf(button), button.dataset.value)],
@@ -3953,6 +4058,8 @@
       say(target, "");
     } else if (target.matches("[data-reel-own]")) {
       ownHook(target);
+    } else if (target.matches("[data-reel-answer-own]")) {
+      ownAnswer(target);
     } else if (target.matches("[data-reel-comment]")) {
       grow(target);
       target.dataset.edited = "";

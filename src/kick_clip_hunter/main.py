@@ -6204,12 +6204,19 @@ def _reel_subtitles(transcript: list[subtitles.Line], part: tuple[float, float] 
 
 
 def _reel_context(
-    conn, row, *, corrected: bool = False, part: tuple[float, float] | None = None, comment: str = ""
+    conn,
+    row,
+    *,
+    corrected: bool = False,
+    part: tuple[float, float] | None = None,
+    comment: str = "",
+    answers: dict | None = None,
 ) -> dict:
     """What goes up with a moment's file (see reels.context): its chat over
     the whole file, placed against the picture as the review page places it
     - or over the stretch of it sent in its place (`part`), and timed to that
-    - and the comment written for the storyboard."""
+    - and the comment written for the storyboard, and the answers to the
+    questions on the page, timed as the chat is."""
     before = row["context_before"] or 0.0
     after = row["context_after"] or 0.0
     clip_seconds = row["clip_duration"]
@@ -6269,6 +6276,7 @@ def _reel_context(
         chat=lines,
         transcript_corrected=corrected,
         comment=comment,
+        answers=reels.answers_moved(answers or {}, part),
     )
 
 
@@ -6489,12 +6497,45 @@ async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, a
         fields["transcript"] = subtitles.stored(transcript) if transcript is not None else None
     _update_reel(moment_id, **fields)
     logger.info("the storyboard of moment %d came back", moment_id)
+    if _reel_answers(reel).get("render_now"):
+        _render_straight_away(github, moment_id, storyboard)
     channel = _channel_of_moment(moment_id)
     if channel is not None and _notes().destinations:
         note = notify.storyboard_note(
             channel, str(storyboard.get("summary") or ""), link=_link(dashboard_view.reels_url(moment_id))
         )
         _track_task(_notes().notify(note))
+
+
+def _reel_answers(reel) -> dict:
+    """The answers to the questions on the page that went with a reel's last
+    storyboard (see reels.answers_asked) - none where there were none."""
+    if reel is None or not reel["storyboard_answers"]:
+        return {}
+    try:
+        answers = json.loads(reel["storyboard_answers"])
+    except ValueError:
+        return {}
+    return answers if isinstance(answers, dict) else {}
+
+
+def _render_straight_away(github: reels.GitHub, moment_id: int, storyboard: dict) -> None:
+    """Renders the reel its storyboard recommends - the variant, the hook,
+    the subtitles as the variant has them - as soon as the storyboard is
+    back, where the answers to the questions asked for that."""
+    variant, hook = reels.recommended(storyboard)
+    conn = get_connection()
+    try:
+        reel = get_reel(conn, moment_id)
+        if reel is None or reel["state"] != reels.CHOOSING:
+            return
+        _start_render(github, conn, moment_id, reel, storyboard, variant, hook, reels.SUBTITLES_AS_THE_VARIANT)
+    except ValueError as wrong:
+        logger.warning("the reel of moment %d could not be rendered straight away: %s", moment_id, wrong)
+        return
+    finally:
+        conn.close()
+    logger.info("the reel of moment %d is rendered straight away: variant %s, hook %s", moment_id, variant, hook)
 
 
 async def _take_reel(github: reels.GitHub, release: reels.Release, asset: reels.Asset, reel) -> None:
@@ -6616,6 +6657,72 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
     }
 
 
+# The questions on the Reels page that go with a storyboard, each with its
+# choices as the page words them (see reels.ANSWER_CHOICES); the first, ""
+# for each, leaves it to Claude.
+REEL_QUESTIONS = (
+    ("cut", "Cutting", (("", "Claude decides"), ("raw", "Don't cut, keep it all"), ("tighten", "Cut out dead air"))),
+    (
+        "kind",
+        "What it is",
+        (
+            ("", "Claude decides"),
+            ("reaction", "Reaction"),
+            ("fail", "Fail"),
+            ("casino", "Casino"),
+            ("talk", "Talk"),
+            ("game", "Game"),
+            ("irl", "IRL"),
+            ("other", "Other"),
+        ),
+    ),
+    (
+        "length",
+        "Length",
+        (("", "Claude decides"), ("short", "Short, ~15 s"), ("normal", "~23 s"), ("long", "30 s and more")),
+    ),
+    ("hook_style", "Hook", (("", "Claude decides"), ("question", "Question"), ("shock", "Shock"), ("irony", "Irony"))),
+    ("subtitles", "Subtitles", (("", "Claude decides"), ("yes", "Yes"), ("no", "No"))),
+    ("teaser", "Teaser first", (("", "Claude decides"), ("yes", "Yes"), ("no", "No"))),
+    ("sfx", "Sound effect", (("", "Claude decides"), ("yes", "Yes"), ("no", "No"))),
+    ("emoji", "Emoji in the hook", (("", "Claude decides"), ("yes", "Yes"), ("no", "No"))),
+)
+
+
+def _reel_questions(answers: dict) -> dict:
+    """The questions on the Reels page, with the answers that went with the
+    last storyboard chosen again (see reels.answers_asked)."""
+    peak = answers.get("peak")
+    return {
+        "choices": [
+            {
+                "name": name,
+                "label": label,
+                "options": [
+                    {"value": value, "label": words, "chosen": answers.get(name, "") == value}
+                    for value, words in options
+                ],
+                # An answer in words of one's own: none of the choices then.
+                "own": "" if answers.get(name, "") in reels.ANSWER_CHOICES[name] else answers.get(name, ""),
+            }
+            for name, label, options in REEL_QUESTIONS
+        ],
+        "who": answers.get("who", ""),
+        "who_most": reels.ANSWER_WHO_MOST,
+        "own_most": reels.ANSWER_OWN_MOST,
+        "note_most": reels.ANSWER_NOTE_MOST,
+        "keep_most": reels.ANSWER_KEEP_MOST,
+        "peak": reels.clock(peak) if isinstance(peak, int | float) else "",
+        "keep": [
+            {"start": reels.clock(part["start"]), "end": reels.clock(part["end"]), "note": part.get("note", "")}
+            for part in answers.get("keep", [])
+            if isinstance(part, dict)
+        ],
+        "render_now": bool(answers.get("render_now")),
+        "answered": bool(answers),
+    }
+
+
 def _reel_workspace(conn, row, today: date) -> dict:
     """Everything the Reels page shows of one moment's reel
     (_reel_workspace.html) - one that has not been asked for yet too."""
@@ -6668,6 +6775,7 @@ def _reel_workspace(conn, row, today: date) -> dict:
         # again; what Claude made of the render's; feedback on the reel.
         "comment_most": reels.COMMENT_MOST_CHARACTERS,
         "storyboard_comment": (reel["storyboard_comment"] or "") if reel is not None else "",
+        "questions": _reel_questions(_reel_answers(reel)),
         "render_comment": (reel["render_comment"] or "") if reel is not None else "",
         "render_note": None,
         "feedback_open": False,
@@ -6825,6 +6933,7 @@ async def ask_for_reel(moment_id: int, request: Request):
             try:
                 part = reels.part_asked(asked.get("start"), asked.get("end"), _file_length(row))
                 comment = reels.comment_asked(asked.get("comment"))
+                answers = reels.answers_asked(asked.get("answers"), _file_length(row))
             except ValueError as wrong:
                 raise HTTPException(status_code=400, detail=str(wrong)) from None
             clip = CLIPS_DIR / row["clip_path"]
@@ -6853,7 +6962,9 @@ async def ask_for_reel(moment_id: int, request: Request):
             corrected = None
             if edited and transcript and subtitles.said(transcript):
                 corrected = _reel_subtitles(transcript, part) or None
-            context = _reel_context(conn, row, corrected=corrected is not None, part=part, comment=comment)
+            context = _reel_context(
+                conn, row, corrected=corrected is not None, part=part, comment=comment, answers=answers
+            )
             fields = {
                 "state": reels.SENDING,
                 "asked_at": _now_text(),
@@ -6868,6 +6979,7 @@ async def ask_for_reel(moment_id: int, request: Request):
                 "part_start": part[0] if part else None,
                 "part_end": part[1] if part else None,
                 "storyboard_comment": comment or None,
+                "storyboard_answers": json.dumps(answers, ensure_ascii=False) if answers else None,
                 # Of the storyboard before, and of its reel.
                 "render_comment": None,
                 "render_note": None,
@@ -6961,40 +7073,59 @@ async def render_reel(moment_id: int, request: Request):
         if reel["state"] in reels.BUSY:
             raise HTTPException(status_code=409, detail=reels.state_words(reel["state"]))
         try:
-            variant = reels.chosen_variant(storyboard, asked["variant"])
-            hook = reels.chosen_hook(storyboard, asked["hook"])
+            _start_render(github, conn, moment_id, reel, storyboard, asked["variant"], asked["hook"], choice, comment)
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
-        # A reel from before transcripts were kept goes by what the release has.
-        transcript = subtitles.read(reel["transcript"])
-        said = None
-        if transcript is not None:
-            # Of the stretch that was sent alone, where only that was.
-            if subtitles.said(transcript) and (cues := _reel_subtitles(transcript, _reel_part(reel))):
-                said = cues
-            elif choice == reels.WITH_SUBTITLES:
-                raise HTTPException(status_code=400, detail="The transcript is empty: there is nothing to subtitle.")
-            else:
-                choice = reels.WITHOUT_SUBTITLES
-        unsaid = transcript is not None and said is None
-        put_reel(
-            conn,
-            moment_id,
-            state=reels.RENDERING,
-            asked_at=_now_text(),
-            variant=variant,
-            hook=hook,
-            subtitles=choice,
-            render_comment=comment or None,
-            render_note=None,
-            feedback=None,
-            feedback_sent=0,
-            error=None,
-        )
     finally:
         conn.close()
-    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid, comment))
     return {"moment_id": moment_id, "state": reels.RENDERING, "words": reels.state_words(reels.RENDERING)}
+
+
+def _start_render(
+    github: reels.GitHub,
+    conn,
+    moment_id: int,
+    reel,
+    storyboard: dict,
+    variant_asked: str,
+    hook_asked: str,
+    choice: str,
+    comment: str = "",
+) -> None:
+    """Stores that a moment's reel is being rendered with a variant of its
+    storyboard and a hook, and starts the render (see render_reel) - asked
+    for on the page, or straight away where the answers to the questions
+    asked for that. Raises ValueError, in words for the page, for a variant
+    or a hook the storyboard has not, or subtitles where nothing is said."""
+    variant = reels.chosen_variant(storyboard, variant_asked)
+    hook = reels.chosen_hook(storyboard, hook_asked)
+    # A reel from before transcripts were kept goes by what the release has.
+    transcript = subtitles.read(reel["transcript"])
+    said = None
+    if transcript is not None:
+        # Of the stretch that was sent alone, where only that was.
+        if subtitles.said(transcript) and (cues := _reel_subtitles(transcript, _reel_part(reel))):
+            said = cues
+        elif choice == reels.WITH_SUBTITLES:
+            raise ValueError("The transcript is empty: there is nothing to subtitle.")
+        else:
+            choice = reels.WITHOUT_SUBTITLES
+    unsaid = transcript is not None and said is None
+    put_reel(
+        conn,
+        moment_id,
+        state=reels.RENDERING,
+        asked_at=_now_text(),
+        variant=variant,
+        hook=hook,
+        subtitles=choice,
+        render_comment=comment or None,
+        render_note=None,
+        feedback=None,
+        feedback_sent=0,
+        error=None,
+    )
+    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid, comment))
 
 
 async def _send_feedback(github: reels.GitHub, moment_id: int, record: dict) -> None:

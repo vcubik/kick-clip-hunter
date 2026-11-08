@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import ClassVar
 
 import pytest
 
@@ -1166,3 +1167,109 @@ class TestRemovingTheMoment:
         assert response.status_code == 200
         assert reel_of(moment_id) is None
         assert not contact.exists()
+
+
+class TestQuestions:
+    ANSWERS: ClassVar[dict] = {
+        "cut": "raw",
+        "subtitles": "no",
+        "who": "Pepa",
+        "peak": BEFORE + 14.25,
+        "keep": [{"start": BEFORE + 1, "end": BEFORE + 4.5, "note": "says he won't"}],
+    }
+
+    async def test_the_answers_go_up_in_the_context_and_are_offered_again(self, reeling, github):
+        moment_id = clipped_moment()
+
+        await asked_for_storyboard(reeling, github, moment_id, answers=self.ANSWERS)
+
+        context = json.loads(github.asset(reels.tag(moment_id), "context.json"))
+        assert context["answers"] == self.ANSWERS
+        opened = await workspace(reeling, moment_id)
+        box = opened.one(data_reel_questions=True)
+        assert "open" in box.attrs
+        pressed = {
+            group.attrs["data-reel-answer"]: group.one(aria_pressed="true").attrs["data-value"]
+            for group in box.find(data_reel_answer=True)
+        }
+        assert pressed == {
+            "cut": "raw", "kind": "", "length": "", "hook_style": "", "subtitles": "no",
+            "teaser": "", "sfx": "", "emoji": "",
+        }  # fmt: skip
+        assert box.one(data_reel_who=True).attrs["value"] == "Pepa"
+        assert box.one(data_reel_peak=True).attrs["value"] == "0:19.2"
+        part = box.one(data_reel_keeps=True).one(data_reel_keep=True)
+        assert part.one(data_reel_keep_start=True).attrs["value"] == "0:06.0"
+        assert part.one(data_reel_keep_end=True).attrs["value"] == "0:09.5"
+        assert part.one(data_reel_keep_note=True).attrs["value"] == "says he won't"
+        # Not to be sent again while the storyboard is made.
+        assert "disabled" in opened.one(data_reel_ask=True).attrs
+
+    async def test_unasked_the_questions_are_folded_away_and_left_to_claude(self, reeling, github):
+        moment_id = clipped_moment()
+
+        box = (await workspace(reeling, moment_id)).one(data_reel_questions=True)
+
+        assert "open" not in box.attrs
+        assert all(
+            group.one(aria_pressed="true").attrs["data-value"] == "" for group in box.find(data_reel_answer=True)
+        )
+        assert all(field.attrs["value"] == "" for field in box.find(data_reel_answer_own=True))
+
+    async def test_an_answer_of_ones_own_goes_up_and_is_offered_again_in_its_field(self, reeling, github):
+        moment_id = clipped_moment()
+
+        await asked_for_storyboard(reeling, github, moment_id, answers={"length": "as long as the story needs"})
+
+        context = json.loads(github.asset(reels.tag(moment_id), "context.json"))
+        assert context["answers"] == {"length": "as long as the story needs"}
+        group = (await workspace(reeling, moment_id)).one(data_reel_answer="length")
+        assert group.find(aria_pressed="true") == []
+        assert group.one(data_reel_answer_own=True).attrs["value"] == "as long as the story needs"
+
+    async def test_an_answer_that_cannot_go_along_is_refused_and_nothing_is_sent(self, reeling, github):
+        moment_id = clipped_moment()
+
+        response = await ask(reeling, moment_id, answers={"keep": [{"start": 3, "end": 2}]})
+
+        assert response.status_code == 400
+        assert "end after it starts" in response.json()["detail"]
+        assert github.dispatches == []
+        assert reel_of(moment_id) is None
+
+    async def test_asked_to_render_straight_away_the_recommended_reel_is_rendered_once_the_storyboard_is_back(
+        self, reeling, github
+    ):
+        moment_id = clipped_moment()
+        await asked_for_storyboard(reeling, github, moment_id, answers={"render_now": True})
+        hooks = [STORYBOARD["hooks"][0], {**STORYBOARD["hooks"][1], "recommended": True}]
+        answer(github, moment_id, storyboard={**STORYBOARD, "hooks": hooks})
+
+        await reeling.main._look_at_reels()
+
+        await async_wait_until(lambda: len(github.dispatches) == 2, "the render to be asked for")
+        tag = reels.tag(moment_id)
+        assert github.dispatches[-1] == (
+            "render",
+            {"tag": tag, "variant": "B", "hook": "WAS IT *GREEN?*", "subtitles": "auto", "comment": ""},
+        )
+        reel = reel_of(moment_id)
+        assert (reel["state"], reel["variant"], reel["hook"]) == (reels.RENDERING, "B", "WAS IT *GREEN?*")
+
+    async def test_otherwise_the_storyboard_waits_for_a_choice(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        assert reel_of(moment_id)["state"] == reels.CHOOSING
+        assert [event for event, _ in github.dispatches] == ["storyboard"]
+
+    async def test_a_new_storyboard_goes_by_its_own_answers(self, reeling, github):
+        moment_id = clipped_moment()
+        await asked_for_storyboard(reeling, github, moment_id, answers={"cut": "raw"})
+        answer(github, moment_id)
+        await reeling.main._look_at_reels()
+
+        await asked_for_storyboard(reeling, github, moment_id)
+
+        assert reel_of(moment_id)["storyboard_answers"] is None
+        assert json.loads(github.asset(reels.tag(moment_id), "context.json"))["answers"] == {}
