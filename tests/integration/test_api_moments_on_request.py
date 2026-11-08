@@ -310,7 +310,7 @@ class TestAMomentCaught:
 
     async def react(self, service) -> dict:
         service.warm_up(CHANNEL)
-        await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
+        await service.crowd_laughs(CHANNEL, people=detector.laughing_needed(20))  # enough to keep it
         await service.settle()
         (found,) = service.moments()
         return dict(found)
@@ -390,7 +390,7 @@ class TestAMomentCaught:
         await service.client.post(f"/channels/{CHANNEL}/moments_auto_cut?how=automatic")
         monkeypatch.setattr(vod_footage, "VOD_BEHIND_SECONDS", -3600)
         service.warm_up(CHANNEL)
-        await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
+        await service.crowd_laughs(CHANNEL, people=detector.laughing_needed(20))  # enough to keep it
         # Tracked for clips again while the moment is open.
         await track(service, "clips")
         await service.settle()

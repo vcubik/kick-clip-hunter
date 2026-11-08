@@ -23,7 +23,7 @@ import pytest
 from kick_clip_hunter import dashboard_view as view
 from kick_clip_hunter import db, detector, recorder, recording_manager, recording_moments, replay, stream_recording
 from kick_clip_hunter import tuning as tuning_module
-from tests.support.chat import StoredStream, exact_crowd, people
+from tests.support.chat import StoredStream, exact_crowd, join_slowly, latecomers, people
 from tests.support.data import T0, add_moment, add_stream_recording, add_streamer, stream_recordings
 from tests.support.html import Element, parse
 from tests.support.media import decodes_cleanly, make_video, probe, require_ffmpeg
@@ -60,6 +60,7 @@ def stream_chat(*, began: datetime = T0, channel: str = CHAT_NAME, broadcaster_u
         chat.say("viewer1", "xd")
         chat.chatter(lead / 2 + FIRST)
         chat.burst(exact_crowd(), "xDDD")
+        join_slowly(chat)
         chat.chatter(BETWEEN)
         chat.burst(people(8, "second_wave"), "xDDD")
         chat.wait(3)
@@ -532,8 +533,8 @@ class TestMakingAMomentOfOne:
         assert moment["current_message_rate"] == first.spike.current_message_rate
         assert (moment["emote_count"], moment["keyword_hits"]) == (first.spike.emote_count, first.spike.keyword_hits)
         assert moment["rating"] is None and moment["stream_elapsed_seconds"] is None
-        # Everyone in the crowd laughed, and nobody else near it.
-        assert moment["laughing"] == first.laughing == len(exact_crowd())
+        # Everyone in the crowd laughed, then the latecomers, and nobody else.
+        assert moment["laughing"] == first.laughing == len(exact_crowd()) + len(latecomers())
 
     async def test_its_file_is_cut_out_of_the_recording_clip_and_context_in_one(self, service, footage):
         stream_chat()

@@ -383,14 +383,14 @@ SETTINGS: tuple[Setting, ...] = (
         least=1, most=1000,
     ),
     Setting(
-        "laughing_share", MOMENTS, NUMBER,
-        "Share of chat that has to laugh to keep a moment",
-        f"Once a moment has closed, it is kept only if this part of the people who chatted lately laughed "
-        f"from {_WINDOW} seconds before it fired to {detector.KEEP_LAUGHING_SECONDS} seconds after - never "
-        f"more than {detector.KEEP_LAUGHING_MOST} people, never fewer than the least above. At 0 every moment "
-        "is kept.",
-        (DETECTOR + "keep_laughing_fraction",),
-        least=0, most=1,
+        "laughing_per_root", MOMENTS, NUMBER,
+        "People laughing to keep a moment, per root of the chat",
+        f"Once a moment has closed, it is kept only if enough people laughed from {_WINDOW} seconds before it "
+        f"fired to {detector.KEEP_LAUGHING_SECONDS} seconds after: this times the square root of how many "
+        "chatted lately - at 1.8, 6 in a chat of 12, 11 of 40, 19 of 110. Never more than half the chat, "
+        "never fewer than the least above. Higher means fewer moments; at 0 every moment is kept.",
+        (DETECTOR + "keep_laughing_per_root",),
+        least=0, most=20,
     ),
     Setting(
         "lull_seconds", MOMENTS, WHOLE,

@@ -60,7 +60,8 @@ open and extend the clip for as long as that's true. Most moments don't
 qualify and get a short fixed-length clip. Once it has closed, a moment is
 only kept if enough people laughed around it (laughing_people,
 laughing_needed): a burst of three people is enough to fire, and a burst
-nobody else joined in was what most of the worst-rated moments were.
+nobody else joined in was what most of the worst-rated moments were. How
+many it takes grows with the square root of the chat (KEEP_LAUGHING_PER_ROOT).
 
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
@@ -154,17 +155,23 @@ MIN_REACTION_UNIQUE_CEILING = 12
 # was most of the moments rated worst. Whether more people joined in over the
 # next minute was, of everything measured on ~630 hand-rated moments, what
 # told a usable clip from a useless one best (far better than the score).
-# How many are needed scales with the chat like the firing floor does, never
-# below that floor (min_absolute_unique) - a small channel is not held to a
-# bigger one's bar - and never above KEEP_LAUGHING_MOST. On the rated set,
-# 0.15 dropped 19 of ~260 unusable moments for 1 of ~180 usable ones, the
-# small channels included; 0 keeps every moment. Since the firing floor became
-# the same share of the chat (MIN_REACTION_UNIQUE_FRACTION), a moment fired by
-# people laughing already has enough of them as recommended: what this drops
-# is one fired by other emotes or 7TV names that nobody laughed at, or any
-# moment on a channel whose own settings fire on fewer people than this asks.
-KEEP_LAUGHING_FRACTION = 0.15
-KEEP_LAUGHING_MOST = 5
+#
+# How many are needed grows with the square root of how many people chatted
+# lately: KEEP_LAUGHING_PER_ROOT times it - 6 in a chat of 12, 8 of 20, 11 of
+# 40, 19 of 110, 53 of 875. A share of the chat (it used to be 0.15, never
+# more than 5 people) treats a laugh in a small chat and in a big one alike,
+# which held most chats - 15 to 40 people - to 3-5 laughing, about five
+# moments an hour each once the service watched many channels; a share big
+# enough to matter there asked hundreds in a big chat. On a replay of ~315 h
+# of stored chat (thirteen channels), 1.8 cut 4.8 moments/hour to 2.6, kept
+# 169 of the 203 rated 3 or more and 25 of the 26 rated 5, and dropped half
+# of the 230 rated 1-2 - as many as a fixed floor of 8 with a share of 0.25,
+# without that one's taking every moment from the smallest and the biggest
+# chats. In a very small chat the root comes to most of it, so never more
+# than KEEP_LAUGHING_MOST_SHARE of the chat is asked for, and never fewer
+# than the firing floor (min_absolute_unique). 0 keeps every moment.
+KEEP_LAUGHING_PER_ROOT = 1.8
+KEEP_LAUGHING_MOST_SHARE = 0.5
 KEEP_LAUGHING_SECONDS = 60
 
 
@@ -525,7 +532,7 @@ class Settings:
     min_absolute_unique: int
     min_reaction_unique_fraction: float
     min_reaction_unique_ceiling: int
-    keep_laughing_fraction: float
+    keep_laughing_per_root: float
     emote_spike_multiplier: float
     laugh_multiplier: float
     laugh_unique_sender_multiplier: float
@@ -558,7 +565,7 @@ def recommended() -> Settings:
         min_absolute_unique=MIN_ABSOLUTE_UNIQUE,
         min_reaction_unique_fraction=MIN_REACTION_UNIQUE_FRACTION,
         min_reaction_unique_ceiling=MIN_REACTION_UNIQUE_CEILING,
-        keep_laughing_fraction=KEEP_LAUGHING_FRACTION,
+        keep_laughing_per_root=KEEP_LAUGHING_PER_ROOT,
         emote_spike_multiplier=EMOTE_SPIKE_MULTIPLIER,
         laugh_multiplier=LAUGH_MULTIPLIER,
         laugh_unique_sender_multiplier=LAUGH_UNIQUE_SENDER_MULTIPLIER,
@@ -916,15 +923,19 @@ def reaction_active(
 
 def laughing_needed(baseline_unique_senders: int, settings: Settings | None = None) -> int:
     """How many distinct people have to have laughed around a moment for it
-    to be kept (see KEEP_LAUGHING_FRACTION), in a chat where this many
+    to be kept (see KEEP_LAUGHING_PER_ROOT), in a chat where this many
     people chatted in the baseline window. 0 when the channel keeps every
     moment."""
     settings = settings or recommended()
-    if settings.keep_laughing_fraction <= 0:
+    if settings.keep_laughing_per_root <= 0:
         return 0
+    chatters = max(0, baseline_unique_senders)
     return max(
         settings.min_absolute_unique,
-        min(KEEP_LAUGHING_MOST, round(baseline_unique_senders * settings.keep_laughing_fraction)),
+        min(
+            round(settings.keep_laughing_per_root * math.sqrt(chatters)),
+            math.ceil(chatters * KEEP_LAUGHING_MOST_SHARE),
+        ),
     )
 
 

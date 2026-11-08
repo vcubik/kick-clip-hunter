@@ -76,6 +76,15 @@ def record_live_stream(hls, recording, ts_segments, *, break_at: int | None = No
     return channel_recorder
 
 
+async def keep_every_moment(service) -> None:
+    """A crowd just big enough to fire is fewer people than a moment is kept
+    for (detector.laughing_needed), and a bigger one holds it open past its
+    base length. What is kept is the integration tests' to say; here the
+    moment goes all the way to its clip."""
+    response = await service.client.post("/tuning", json={"values": {"laughing_per_root": 0}})
+    assert response.status_code == 200, response.text
+
+
 async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     service, hls, recording, ts_segments, scaled_down_clip_geometry, monkeypatch
 ):
@@ -99,6 +108,7 @@ async def test_a_chat_reaction_becomes_a_clip_on_the_dashboard(
     await service.client.post("/settings/transcript?enabled=1")
 
     # Chat erupts: signed webhook deliveries, one per message.
+    await keep_every_moment(service)
     await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
 
     # The detector fired exactly one moment, timed against the live stream...
@@ -182,6 +192,7 @@ async def test_a_break_in_the_stream_right_before_the_reaction_still_yields_a_pl
     assert len({segment.group for segment in channel_recorder._stored_segments()}) == 2
     service.warm_up(CHANNEL)
 
+    await keep_every_moment(service)
     await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
     await service.settle()
 
@@ -198,6 +209,7 @@ async def test_without_a_recording_the_moment_is_still_detected_and_shown(servic
     service.watch(CHANNEL)
     service.warm_up(CHANNEL)
 
+    await keep_every_moment(service)
     await service.crowd_laughs(CHANNEL, people=detector._dynamic_min_reaction_unique(10))
     await service.settle()
 
