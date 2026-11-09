@@ -197,8 +197,9 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- went with the last storyboard, as JSON (see reels.answers_asked).
 -- `variant_own` is a variant of one's own the last render was asked for
 -- with, written on the page (`variant` is then the one it is built on);
--- `kept_lines` the lines of the transcript ticked to be in the reel, as
--- JSON (see reels.kept_stored).
+-- `kept_lines` the lines of the transcript ticked to be in the reel, and
+-- `cut_lines` those marked to be cut out of it, as JSON (see
+-- reels.marked_stored).
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -223,7 +224,8 @@ CREATE TABLE IF NOT EXISTS reels (
     feedback_sent INTEGER NOT NULL DEFAULT 0,
     storyboard_answers TEXT,
     variant_own TEXT,
-    kept_lines TEXT
+    kept_lines TEXT,
+    cut_lines TEXT
 );
 
 -- Several moments' clips made into one reel (see reels.py): a compilation,
@@ -274,6 +276,7 @@ CREATE TABLE IF NOT EXISTS compilation_reels (
     storyboard_answers TEXT,
     variant_own TEXT,
     kept_lines TEXT,
+    cut_lines TEXT,
     joined TEXT
 );
 """
@@ -543,9 +546,13 @@ def get_connection() -> sqlite3.Connection:
         ("storyboard_answers", "TEXT"),
         ("variant_own", "TEXT"),
         ("kept_lines", "TEXT"),
+        ("cut_lines", "TEXT"),
     ):
         if name not in reel_columns:
             conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
+    compilation_reel_columns = {row[1] for row in conn.execute("PRAGMA table_info(compilation_reels)")}
+    if "cut_lines" not in compilation_reel_columns:
+        conn.execute("ALTER TABLE compilation_reels ADD COLUMN cut_lines TEXT")
 
     return conn
 
@@ -2084,6 +2091,7 @@ REEL_FIELDS = (
     "storyboard_answers",
     "variant_own",
     "kept_lines",
+    "cut_lines",
 )
 
 

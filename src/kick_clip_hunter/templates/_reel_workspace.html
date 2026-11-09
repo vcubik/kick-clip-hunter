@@ -18,10 +18,15 @@
     <span class="reel-dash" aria-hidden="true">–</span>
     <input type="text" class="ch-input reel-time" value="{{ line.end_words if line else '' }}" aria-label="Ends at" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-end{% if not editable %} disabled{% endif %}>
     {#- Ticked: the line has to be in the reel, and the render does not
-        cut it out (see reels.kept_lines). -#}
+        cut it out - or it is to be cut out, and the render leaves it out
+        (see reels.marked_lines). One or the other, never both. -#}
     <label class="reel-line-keep" title="This line has to be in the reel: the render does not cut it out">
       <input type="checkbox" data-reel-keep-line{% if line and line.keep %} checked{% endif %}{% if not editable %} disabled{% endif %}>
       <span>In the reel</span>
+    </label>
+    <label class="reel-line-keep" title="This line is to be cut out: the render leaves it out of the reel">
+      <input type="checkbox" data-reel-cut-line{% if line and line.cut %} checked{% endif %}{% if not editable %} disabled{% endif %}>
+      <span>Cut out</span>
     </label>
     <span class="ch-gap"></span>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Add a line after this one" title="Adds a line after this one" data-reel-line-after{% if not editable %} disabled{% endif %}>+</button>
@@ -336,7 +341,7 @@
         {% if reel.transcript %}
         {% set transcript = reel.transcript %}
         <div class="reel-transcript" data-reel-transcript="{{ reel.transcript_url }}" data-length="{{ transcript.length }}" data-status-scope>
-          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out. A line ticked "In the reel" is not cut out of it.</p>
+          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out. A line ticked "In the reel" is not cut out of it, and one ticked "Cut out" is left out of it.</p>
           {% if not reel.editable %}
           <p class="reel-note">A new storyboard is being made, and a transcript comes with it: until then this one cannot be changed.</p>
           {% elif transcript.edited %}

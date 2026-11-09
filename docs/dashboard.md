@@ -270,12 +270,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   moment's file playing in a player of its own: a line a block, when it starts and ends
   (typed as the Trim dialog takes a time, to the tenth of a second, in seconds of the file),
   what is said, a button that plays the file from the line's start to its end, one that adds a
-  line after it and one that takes it out, and "In the reel": a line ticked so has to be in the
-  reel, and the render does not cut it out; "Add a line" adds one at the end, and what the
+  line after it and one that takes it out, "In the reel": a line ticked so has to be in the
+  reel, and the render does not cut it out - and "Cut out", the other way round: a line ticked
+  so is left out of the reel, its words struck through on the page (ticking one unticks the
+  other); "Add a line" adds one at the end, and what the
   speech model heard is listed under it, each line with "Add". The line being said is marked as
   the file plays, Enter goes on to the next line, and nothing is kept until "Save"
-  (`POST /moments/{id}/reel/transcript`, `lines`: each with `start`, `end`, `text` and `keep`; refused,
-  saying which line, for one without its times or past the file's end; an empty one is left
+  (`POST /moments/{id}/reel/transcript`, `lines`: each with `start`, `end`, `text`, `keep` and `cut`; refused,
+  saying which line, for one without its times, past the file's end or both kept and cut out; an empty one is left
   out, the rest kept in the order they are said), and leaving the page with something not
   saved asks first. "A: " and "B: " in front of a line colour it in the reel for who says it,
   `*a word*` makes it stand out. A variant - or, where none is pressed, one of one's own
@@ -291,7 +293,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   change in the variant (Claude reworks it by that first), and "Render"
   (`POST /moments/{id}/reel/render`, `variant` - "" for one's own, in `variant_own` - `hook`,
   `subtitles` and `comment`, after saving what is not saved in the transcript) has the reel made
-  with the transcript as its subtitles and its ticked lines kept in it;
+  with the transcript as its subtitles, its lines ticked "In the reel" kept in it and those
+  ticked "Cut out" left out of it;
   it plays at the top once it is back, with a download, what it was made with and what Claude
   made of the comment. Under it, feedback on the reel - what works, what does not - goes with
   "Send feedback" (`POST /moments/{id}/reel/feedback`, `feedback`) to the reel repository,
