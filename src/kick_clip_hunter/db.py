@@ -225,6 +225,57 @@ CREATE TABLE IF NOT EXISTS reels (
     variant_own TEXT,
     kept_lines TEXT
 );
+
+-- Several moments' clips made into one reel (see reels.py): a compilation,
+-- `theme` what ties them together, in a few words written on the Reels
+-- page. Its parts are in the order they go up in, each a stretch of its
+-- moment's file in seconds of that file (none: all of it). The newest
+-- compilation that has no reel yet is the one moments are added to.
+CREATE TABLE IF NOT EXISTS compilations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    theme TEXT
+);
+
+CREATE TABLE IF NOT EXISTS compilation_parts (
+    compilation_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    moment_id INTEGER NOT NULL,
+    part_start REAL,
+    part_end REAL,
+    PRIMARY KEY (compilation_id, position)
+);
+
+-- A compilation's reel: as a moment's (the reels table), but of the parts
+-- joined into one file by the storyboard workflow - its transcript, and
+-- every time on the page, in seconds of that joined file; `joined` says
+-- where each part lies in it (JSON, see reels.read_joined), `clip_stamp`
+-- which stretches of which files were sent.
+CREATE TABLE IF NOT EXISTS compilation_reels (
+    compilation_id INTEGER PRIMARY KEY,
+    state TEXT NOT NULL,
+    asked_at TEXT NOT NULL,
+    storyboard TEXT,
+    contact_path TEXT,
+    variant TEXT,
+    hook TEXT,
+    reel_path TEXT,
+    error TEXT,
+    transcript TEXT,
+    heard TEXT,
+    transcript_edited INTEGER NOT NULL DEFAULT 0,
+    clip_stamp TEXT,
+    subtitles TEXT,
+    storyboard_comment TEXT,
+    render_comment TEXT,
+    render_note TEXT,
+    feedback TEXT,
+    feedback_sent INTEGER NOT NULL DEFAULT 0,
+    storyboard_answers TEXT,
+    variant_own TEXT,
+    kept_lines TEXT,
+    joined TEXT
+);
 """
 
 
@@ -2036,10 +2087,45 @@ REEL_FIELDS = (
 )
 
 
+# What is kept of a compilation's reel: what is kept of a moment's, but of
+# the joined file it was made of, so no stretch of it - and where each part
+# lies in that file.
+COMPILATION_REEL_FIELDS = (*(name for name in REEL_FIELDS if name not in ("part_start", "part_end")), "joined")
+# Each kind of reel's table, the column that says whose it is, its fields.
+_REEL_TABLES = {
+    "reels": ("moment_id", REEL_FIELDS),
+    "compilation_reels": ("compilation_id", COMPILATION_REEL_FIELDS),
+}
+
+
+def _get_reel_in(conn: sqlite3.Connection, table: str, key: int) -> sqlite3.Row | None:
+    column, _ = _REEL_TABLES[table]
+    conn.row_factory = sqlite3.Row
+    return conn.execute(f"SELECT * FROM {table} WHERE {column} = ?", (key,)).fetchone()
+
+
+def _put_reel_in(conn: sqlite3.Connection, table: str, key: int, fields: dict[str, object]) -> None:
+    column, known = _REEL_TABLES[table]
+    unknown = set(fields) - set(known)
+    if unknown:
+        raise ValueError(f"not fields of a reel: {sorted(unknown)}")
+    if _get_reel_in(conn, table, key) is None:
+        names = (column, *fields)
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})",
+            (key, *fields.values()),
+        )
+    elif fields:
+        conn.execute(
+            f"UPDATE {table} SET {', '.join(f'{name} = ?' for name in fields)} WHERE {column} = ?",
+            (*fields.values(), key),
+        )
+    conn.commit()
+
+
 def get_reel(conn: sqlite3.Connection, moment_id: int) -> sqlite3.Row | None:
     """Where a moment's reel stands, or None where none was asked for."""
-    conn.row_factory = sqlite3.Row
-    return conn.execute("SELECT * FROM reels WHERE moment_id = ?", (moment_id,)).fetchone()
+    return _get_reel_in(conn, "reels", moment_id)
 
 
 def get_reels_in(conn: sqlite3.Connection, states: Iterable[str]) -> list[sqlite3.Row]:
@@ -2054,21 +2140,28 @@ def get_reels_in(conn: sqlite3.Connection, states: Iterable[str]) -> list[sqlite
 def put_reel(conn: sqlite3.Connection, moment_id: int, **fields: object) -> None:
     """Stores what is given of a moment's reel (see REEL_FIELDS); a reel
     asked for the first time needs at least `state` and `asked_at`."""
-    unknown = set(fields) - set(REEL_FIELDS)
-    if unknown:
-        raise ValueError(f"not fields of a reel: {sorted(unknown)}")
-    if get_reel(conn, moment_id) is None:
-        names = ("moment_id", *fields)
-        conn.execute(
-            f"INSERT INTO reels ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})",
-            (moment_id, *fields.values()),
-        )
-    elif fields:
-        conn.execute(
-            f"UPDATE reels SET {', '.join(f'{name} = ?' for name in fields)} WHERE moment_id = ?",
-            (*fields.values(), moment_id),
-        )
-    conn.commit()
+    _put_reel_in(conn, "reels", moment_id, fields)
+
+
+def get_compilation_reel(conn: sqlite3.Connection, compilation_id: int) -> sqlite3.Row | None:
+    """Where a compilation's reel stands, or None where none was asked for."""
+    return _get_reel_in(conn, "compilation_reels", compilation_id)
+
+
+def get_compilation_reels_in(conn: sqlite3.Connection, states: Iterable[str]) -> list[sqlite3.Row]:
+    """The compilations' reels in any of these states, oldest first."""
+    states = tuple(states)
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        f"SELECT * FROM compilation_reels WHERE state IN ({', '.join('?' * len(states))}) ORDER BY compilation_id",
+        states,
+    ).fetchall()
+
+
+def put_compilation_reel(conn: sqlite3.Connection, compilation_id: int, **fields: object) -> None:
+    """Stores what is given of a compilation's reel (see
+    COMPILATION_REEL_FIELDS), as put_reel does a moment's."""
+    _put_reel_in(conn, "compilation_reels", compilation_id, fields)
 
 
 def get_reel_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -2088,4 +2181,121 @@ def get_reel_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def delete_reel(conn: sqlite3.Connection, moment_id: int) -> None:
     """Forgets a moment's reel - its files are the caller's to remove."""
     conn.execute("DELETE FROM reels WHERE moment_id = ?", (moment_id,))
+    conn.commit()
+
+
+# -- compilations (see reels.py) ------------------------------------------------
+
+
+def add_compilation(conn: sqlite3.Connection, theme: str | None = None) -> int:
+    """A new compilation with no parts yet: its id."""
+    cursor = conn.execute(
+        "INSERT INTO compilations (created_at, theme) VALUES (?, ?)",
+        (datetime.now(timezone.utc).isoformat(), theme),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def get_compilation(conn: sqlite3.Connection, compilation_id: int) -> sqlite3.Row | None:
+    conn.row_factory = sqlite3.Row
+    return conn.execute("SELECT * FROM compilations WHERE id = ?", (compilation_id,)).fetchone()
+
+
+def get_open_compilation(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The compilation moments are added to: the newest one no reel was
+    asked for yet - None where there is none."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT * FROM compilations
+        WHERE id NOT IN (SELECT compilation_id FROM compilation_reels)
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+
+
+def set_compilation_theme(conn: sqlite3.Connection, compilation_id: int, theme: str | None) -> None:
+    conn.execute("UPDATE compilations SET theme = ? WHERE id = ?", (theme, compilation_id))
+    conn.commit()
+
+
+def get_compilation_parts(conn: sqlite3.Connection, compilation_id: int) -> list[sqlite3.Row]:
+    """A compilation's parts in their order, each with its moment's row as
+    the review page has it (`moments.*`), and where its stretch is."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT moments.*, parts.position, parts.moment_id, parts.part_start, parts.part_end
+        FROM compilation_parts AS parts JOIN moments ON moments.id = parts.moment_id
+        WHERE parts.compilation_id = ?
+        ORDER BY parts.position
+        """,
+        (compilation_id,),
+    ).fetchall()
+
+
+def set_compilation_parts(
+    conn: sqlite3.Connection, compilation_id: int, parts: Iterable[tuple[int, float | None, float | None]]
+) -> None:
+    """A compilation's parts, in this order, in place of those it had: each
+    its moment's id and the stretch of the moment's file (None, None: all
+    of it)."""
+    conn.execute("DELETE FROM compilation_parts WHERE compilation_id = ?", (compilation_id,))
+    conn.executemany(
+        "INSERT INTO compilation_parts (compilation_id, position, moment_id, part_start, part_end)"
+        " VALUES (?, ?, ?, ?, ?)",
+        [(compilation_id, position, *part) for position, part in enumerate(parts)],
+    )
+    conn.commit()
+
+
+def get_compilation_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every compilation with how many parts it has, the channel of its
+    first, where its reel stands (None where none was asked for) and when
+    that was: for the Reels page's list."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT compilations.id, compilations.created_at, compilations.theme,
+               compilation_reels.state, compilation_reels.asked_at, compilation_reels.error,
+               (SELECT COUNT(*) FROM compilation_parts WHERE compilation_id = compilations.id) AS parts,
+               (SELECT moments.channel_slug FROM compilation_parts
+                JOIN moments ON moments.id = compilation_parts.moment_id
+                WHERE compilation_id = compilations.id ORDER BY position LIMIT 1) AS channel_slug
+        FROM compilations LEFT JOIN compilation_reels ON compilation_reels.compilation_id = compilations.id
+        ORDER BY COALESCE(compilation_reels.asked_at, compilations.created_at) DESC, compilations.id DESC
+        """
+    ).fetchall()
+
+
+def compilations_with_moment(conn: sqlite3.Connection, moment_id: int) -> list[int]:
+    """The compilations a moment is a part of."""
+    return [
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT compilation_id FROM compilation_parts WHERE moment_id = ? ORDER BY compilation_id",
+            (moment_id,),
+        )
+    ]
+
+
+def drop_moment_from_compilations(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Takes a moment out of every compilation it is a part of, the parts
+    after it moving up."""
+    for compilation_id in compilations_with_moment(conn, moment_id):
+        kept = [
+            (row["moment_id"], row["part_start"], row["part_end"])
+            for row in get_compilation_parts(conn, compilation_id)
+            if row["moment_id"] != moment_id
+        ]
+        set_compilation_parts(conn, compilation_id, kept)
+
+
+def delete_compilation(conn: sqlite3.Connection, compilation_id: int) -> None:
+    """Forgets a compilation, its parts and its reel - its files are the
+    caller's to remove."""
+    conn.execute("DELETE FROM compilation_parts WHERE compilation_id = ?", (compilation_id,))
+    conn.execute("DELETE FROM compilation_reels WHERE compilation_id = ?", (compilation_id,))
+    conn.execute("DELETE FROM compilations WHERE id = ?", (compilation_id,))
     conn.commit()

@@ -161,7 +161,8 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
   allows no other page to (Twitch); only addresses the service signed
 - `reels.py` — a moment's clip made into a 9:16 reel by GitHub Actions in another repository
   (`REELS_REPO`): clip up into a release, storyboard and transcript back, the transcript put
-  right on the Reels page, the chosen variant rendered there with it as subtitles
+  right on the Reels page, the chosen variant rendered there with it as subtitles; several
+  moments' clips can be one reel too (a compilation, joined by the workflow)
 - `clip_creator.py` — manual official Kick clips via the site's internal API
 - `transcriber.py`, `audio_events.py`, `frame_encoder.py`, `sound_events.py`, `ml_loading.py` —
   optional per-clip local ML capture (off by default), lazily loaded under one lock

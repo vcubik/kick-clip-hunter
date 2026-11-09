@@ -86,7 +86,10 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   "Transcribe the rest", and a later cut or the rest is added without touching a line put right. Under the
   moment's tags, where the service is set up for reels and the moment has a clip, "Make a
   reel" - or, once one was asked for, "Open the reel" beside where it stands - leads to the
-  Reels page with the moment open there (below). Delete, under the moment's tags, asks once
+  Reels page with the moment open there (below); beside it, "Add to compilation" puts the
+  moment's clip into the compilation being put together - one reel of several clips, below -
+  (`POST /moments/{id}/compilation`), after which it reads "Open the compilation" with how many
+  clips it has. Delete, under the moment's tags, asks once
   more and removes the moment for good (`POST /moments/{id}/delete`): its row and every file
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut, it is being transcribed or footage is being added to it; one whose
@@ -304,6 +307,31 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   transcript (another stretch is heard anew), the one put right by hand
   going to Claude with it, and one of a file that footage was added to since is said to be of
   the file as it was. A storyboard and a reel are also told of as notes, which lead here.
+  A compilation - one reel of several clips: two streamers arguing, three mishaps on the same
+  road - is in the same list, "N clips" beside it, and opens (`?compilation=`, and
+  `GET /dashboard/reels/compilations/{id}` while a step goes on) with the same questions,
+  storyboard, transcript, render and feedback as a moment's reel, where everything is of the
+  one clip its clips were joined into. Clips are added on the review page ("Add to
+  compilation" puts it in the newest compilation that has no reel yet, or starts one). Above
+  the questions are its theme ("SILNICE V THAJSKU 💀", the hook goes by it) and its clips in
+  the order they go up in - each with its channel, a link to it on the review page, ↑ / ↓ to
+  move it, × to take it out, and its file in a player with the stretch of it that is sent, set
+  as a moment's stretch is ("Start here", "End here", "Whole file"; the default is the
+  moment's clip itself, without the context around it). What is changed there is saved at
+  once (`POST /compilations/{id}`, `theme` and `parts`: each `moment_id`, `start`, `end`);
+  "Delete the compilation" asks twice and forgets it and its reel, not the moments
+  (`POST /compilations/{id}/delete`). It takes 2 to 8 clips (`reels.COMPILATION_LEAST_PARTS`,
+  `COMPILATION_MOST_PARTS`). Its questions are a moment's without the ones of a time in a file
+  (where the joke is, what has to be in the reel, what the clip is), with the
+  lengths of several clips (~20 s, ~35 s, 45 s and more), and three of its own: the
+  transition between clips (a plain cut, a white flash, a whoosh), a label on each clip (none,
+  its number, a few words of Claude's) and the order (as put in, or Claude's with the best
+  last) - `reels.COMPILATION_ANSWER_CHOICES`. "Make a reel" (`POST /compilations/{id}/reel`,
+  `theme`, `parts`, `comment`, `answers`) cuts each clip's stretch as the moment's is cut and
+  sends them; once the storyboard is back, buttons above the transcript say where each clip is
+  in the joined one and play it from there. The transcript, render and feedback routes are a
+  moment's under `/compilations/{id}/reel/`. A moment that is deleted leaves the compilations
+  it was in, and is not deleted while one of them is being sent.
 - On a narrow screen: up to 1100 px wide the panes stack and the page scrolls - the queue (or
   the list of recordings, or Analyze's channel and period) above what is open in it, the chat
   under that. A moment opened from the queue is then scrolled into view, and so is what the

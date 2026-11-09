@@ -11,7 +11,7 @@
 <aside class="queue" aria-label="Reels">
   <div class="queue-list">
     {% for item in reel_list %}
-    <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %} data-reel-row="{{ item.id }}">
+    <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %} data-reel-row="{{ item.key }}">
       <b>{{ item.channel }}</b>
       <span class="rec-length" data-reel-row-words>{{ item.words }}</span>
       <span class="rec-when">{% if item.title %}{{ item.title }}, {% endif %}{{ item.when }}</span>

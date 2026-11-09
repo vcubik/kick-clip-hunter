@@ -72,6 +72,23 @@ noticed by its run (each run is named `run_name`), where the token may read
 the repository's Actions; otherwise a step that has not come back within
 its limit (`STORYBOARD_LIMIT`, `RENDER_LIMIT`) is given up on.
 
+A compilation is a reel made of several moments' clips - a few stretches of
+one stream that belong together, or of several - and goes the same way, in
+a release of its own (`compilation_tag`). Moments are added to it from the
+review page, its parts put in order and each cut to a stretch of its
+moment's file on the Reels page, and "Make a reel" sends each stretch,
+cut out as above, as `part-1.mp4`, `part-2.mp4`, ... (`part_name`) with
+one `context.json` (`compilation_context`): what ties them together (the
+theme), and each part's own context as a moment's above, its chat timed to
+the part. The storyboard workflow joins the parts into one `clip.mp4`,
+puts it into the release, and says where each part lies in it in
+`parts.json` (`read_joined`); from then on a compilation's reel goes as a
+moment's does, with the joined file as the moment's file - its transcript,
+and every time on the page, in seconds of it. Its questions are a moment's
+and a compilation's own (`COMPILATION_ANSWER_CHOICES`): how one part goes
+over into the next, whether each part is labelled, and whether Claude may
+put them in another order.
+
 The repository's own side - the workflows, the skill, the render script -
 lives in that repository, not here.
 """
@@ -118,6 +135,9 @@ FAILED = "failed"
 BUSY = frozenset({SENDING, STORYBOARDING, RENDERING})
 
 CLIP = "clip.mp4"
+# Where the parts of a compilation lie in the clip the storyboard workflow
+# joined them into (see read_joined).
+JOINED = "parts.json"
 CONTEXT = "context.json"
 STORYBOARD = "storyboard.json"
 CONTACT = "contact.jpg"
@@ -194,6 +214,29 @@ ANSWER_CHOICES = {
     "emoji": ("yes", "no"),
     "sfx": ("yes", "no"),
 }
+# A compilation's questions: a moment's that are of the reel as a whole -
+# not where the joke is in a file, or what has to be in the reel, which
+# are of one file - and its own:
+COMPILATION_ANSWER_CHOICES = {
+    **{name: ANSWER_CHOICES[name] for name in ("cut", "layout", "length", "hook_style", "subtitles", "sfx", "emoji")},
+    # How one part goes over into the next: a plain cut, a white flash, a
+    # whoosh of a sound.
+    "transition": ("cut", "flash", "whoosh"),
+    # On the picture of each part: nothing but the hook over all of them,
+    # its number ("#2"), or a few words of Claude's ("AND THEN THIS…").
+    "labels": ("none", "numbers", "captions"),
+    # The parts in the order they were put in, or as Claude finds best -
+    # the best of them last.
+    "order": ("mine", "best_last"),
+    # The best of the parts for a second or two before the first, as a
+    # moment's teaser is.
+    "teaser": ANSWER_CHOICES["teaser"],
+}
+# A compilation has at least two parts, and no more than a reel can hold.
+COMPILATION_LEAST_PARTS = 2
+COMPILATION_MOST_PARTS = 8
+# What ties the parts together, in a few words: the hook is made of it.
+THEME_MOST_CHARACTERS = 160
 # Who is in the clip, in a few words; the parts that have to be in the reel,
 # each with a few words of what it is.
 ANSWER_WHO_MOST = 120
@@ -223,6 +266,16 @@ _CREDIT = {
 def tag(moment_id: int) -> str:
     """The release a moment's reel is made in."""
     return f"moment-{moment_id}"
+
+
+def compilation_tag(compilation_id: int) -> str:
+    """The release a compilation's reel is made in."""
+    return f"compilation-{compilation_id}"
+
+
+def part_name(number: int) -> str:
+    """What a compilation's part is called in its release, counted from 1."""
+    return f"part-{number}.mp4"
 
 
 def run_name(workflow: str, release: str) -> str:
@@ -302,6 +355,87 @@ def context(
     }
 
 
+def compilation_context(
+    *,
+    compilation_id: int,
+    theme: str,
+    parts: list[dict[str, Any]],
+    transcript_corrected: bool = False,
+    comment: str = "",
+    answers: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """What goes up with a compilation's parts (see the module's
+    docstring): what ties them together, and each part's own context - as
+    `context` makes it of the stretch that goes up, in seconds of it - with
+    the file it goes up as. The channel and how it is credited are the
+    first part's; `credits` are each channel's once, in the order of the
+    parts. The rest is as a moment's."""
+    first = parts[0] if parts else {}
+    return {
+        "kind": "compilation",
+        "compilation_id": compilation_id,
+        "theme": theme,
+        "streamer": first.get("streamer", ""),
+        "platform": first.get("platform", ""),
+        "credit": first.get("credit", ""),
+        "credits": list(dict.fromkeys(part["credit"] for part in parts)),
+        "parts": [{"file": part_name(number), **part} for number, part in enumerate(parts, start=1)],
+        "transcript_corrected": transcript_corrected,
+        "comment": comment,
+        "answers": dict(answers or {}),
+    }
+
+
+def theme_asked(value: object) -> str:
+    """What ties a compilation's parts together, as it was written on the
+    page: on one row, "" for nothing. Raises ValueError, in words for the
+    page, for what is not words, or is too long."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("Expected what ties the clips together as words.")
+    theme = " ".join(value.split())
+    if len(theme) > THEME_MOST_CHARACTERS:
+        raise ValueError(f"What ties the clips together is at most {THEME_MOST_CHARACTERS} characters.")
+    return theme
+
+
+def read_joined(raw: bytes) -> list[tuple[float, float]]:
+    """Where each of a compilation's parts lies in the clip the storyboard
+    workflow joined them into, as its parts.json says - a list, in their
+    order, each with its `start` and `end` in seconds of that clip. Raises
+    BadStoryboard for one that does not say that."""
+    try:
+        joined = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BadStoryboard(f"parts.json is not JSON: {error}") from None
+    if not isinstance(joined, list) or not joined:
+        raise BadStoryboard("parts.json does not say where the clips are in the joined one.")
+    spans = []
+    for part in joined:
+        start = _number(part.get("start")) if isinstance(part, dict) else None
+        end = _number(part.get("end")) if isinstance(part, dict) else None
+        if start is None or end is None or start < 0 or end <= start:
+            raise BadStoryboard("parts.json has a clip that does not end after it starts.")
+        spans.append((round(start, 3), round(end, 3)))
+    return spans
+
+
+def joined_stored(spans: Iterable[tuple[float, float]]) -> str:
+    """Where each part of a compilation lies in its joined clip, as it is
+    kept (compilation_reels.joined)."""
+    return json.dumps([[start, end] for start, end in spans])
+
+
+def joined_read(text: str | None) -> list[tuple[float, float]]:
+    """Where each part of a compilation lies in its joined clip (see
+    joined_stored); none where that is not known."""
+    try:
+        return [(float(start), float(end)) for start, end in json.loads(text)] if text else []
+    except (ValueError, TypeError):
+        return []
+
+
 def _seconds(value: object, length: float | None, what: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         raise ValueError(f"Expected {what} as seconds of the clip's file.")
@@ -311,19 +445,25 @@ def _seconds(value: object, length: float | None, what: str) -> float:
     return round(seconds, 3)
 
 
-def answers_asked(value: object, length: float | None) -> dict[str, Any]:
+def answers_asked(
+    value: object, length: float | None, choices_of: Mapping[str, tuple[str, ...]] = ANSWER_CHOICES
+) -> dict[str, Any]:
     """The answers to the questions on the page, as they were posted, made
     fit to go along: only the questions answered, times in seconds of the
     moment's file (`length` long, where it is known). An answer that is not
-    one of its question's choices is words of one's own, tidied. Raises
-    ValueError, in words for the page, for one that is not words, or is too
-    long."""
+    one of its question's choices is words of one's own, tidied. A
+    compilation's questions (`choices_of`) are COMPILATION_ANSWER_CHOICES,
+    and none of them is of a time in a file: where the joke is and what has
+    to be in the reel are left out. Raises ValueError, in words for the
+    page, for one that is not words, or is too long."""
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise ValueError("Expected the answers as JSON.")
+    if choices_of is COMPILATION_ANSWER_CHOICES:
+        value = {name: answer for name, answer in value.items() if name not in ("peak", "keep")}
     answers: dict[str, Any] = {}
-    for name, choices in ANSWER_CHOICES.items():
+    for name, choices in choices_of.items():
         chosen = value.get(name) or ""
         what = name.replace("_", " ").capitalize()
         if not isinstance(chosen, str):
@@ -420,7 +560,7 @@ def comment_asked(value: object) -> str:
 
 def feedback(
     *,
-    moment_id: int,
+    moment_id: int | None,
     channel: str,
     title: str | None,
     storyboard: Mapping[str, Any] | None,
@@ -433,19 +573,23 @@ def feedback(
     rendered_at: str,
     words: str,
     variant_own: str | None = None,
+    compilation_id: int | None = None,
 ) -> dict[str, Any]:
     """What goes up as feedback on a moment's reel (see the module's
     docstring): the words, and what the reel was made of and with - so it
     can be recorded on its own. `rendered_at` is when the reel was asked
     for, which tells one reel of the moment from another; `variant_own` the
     variant of one's own it was made by, where it was (`variant` is then
-    the one it was built on)."""
+    the one it was built on). Of a compilation's reel, `compilation_id`
+    says whose it is (`moment_id` is then None, and `channel` its first
+    part's)."""
     platform, login = platforms.split(channel)
     offered = (storyboard or {}).get("variants", [])
     chosen = next((one for one in offered if isinstance(one, dict) and str(one.get("id")) == variant), {})
     return {
-        "tag": tag(moment_id),
+        "tag": compilation_tag(compilation_id) if compilation_id is not None else tag(moment_id),
         "moment_id": moment_id,
+        **({"compilation_id": compilation_id} if compilation_id is not None else {}),
         "streamer": login,
         "platform": platform,
         "credit": credit(channel),
@@ -913,11 +1057,12 @@ def row_words(state: str | None) -> str:
     }.get(state or "", "")
 
 
-def state_words(state: str | None, error: str | None = None) -> str:
-    """What the Reels page says of where a moment's reel stands."""
+def state_words(state: str | None, error: str | None = None, *, several: bool = False) -> str:
+    """What the Reels page says of where a moment's reel stands - or a
+    compilation's, made of `several` clips."""
     return {
         None: "",
-        SENDING: "Sending the clip to GitHub.",
+        SENDING: "Sending the clips to GitHub." if several else "Sending the clip to GitHub.",
         STORYBOARDING: "The storyboard is being made. That takes a few minutes.",
         CHOOSING: "Choose a variant and a hook.",
         RENDERING: "The reel is being rendered. That takes a minute or two.",

@@ -603,3 +603,73 @@ class TestKeptLines:
         ]
         assert reels.kept_lines(transcript, kept, (5.0, 10.0)) == []
         assert len(reels.kept_lines(transcript, kept, None)) == 2
+
+
+class TestCompilations:
+    def test_its_release_and_its_parts_are_named(self):
+        assert reels.compilation_tag(3) == "compilation-3"
+        assert [reels.part_name(number) for number in (1, 2)] == ["part-1.mp4", "part-2.mp4"]
+
+    def test_what_goes_up_is_each_parts_context_with_the_file_it_goes_up_as(self):
+        first = {"moment_id": 1, "streamer": "a", "platform": "kick", "credit": "kick.com/a"}
+        second = {"moment_id": 2, "streamer": "b", "platform": "kick", "credit": "kick.com/b"}
+        third = {"moment_id": 3, "streamer": "a", "platform": "kick", "credit": "kick.com/a"}
+
+        context = reels.compilation_context(
+            compilation_id=4,
+            theme="roads",
+            parts=[first, second, third],
+            comment="best last",
+            answers={"order": "mine"},
+        )
+
+        assert context == {
+            "kind": "compilation",
+            "compilation_id": 4,
+            "theme": "roads",
+            "streamer": "a",
+            "platform": "kick",
+            "credit": "kick.com/a",
+            "credits": ["kick.com/a", "kick.com/b"],
+            "parts": [
+                {"file": "part-1.mp4", **first},
+                {"file": "part-2.mp4", **second},
+                {"file": "part-3.mp4", **third},
+            ],
+            "transcript_corrected": False,
+            "comment": "best last",
+            "answers": {"order": "mine"},
+        }
+
+    def test_its_theme_is_one_row_and_not_too_long(self):
+        assert reels.theme_asked("  the   roads\nin Thailand ") == "the roads in Thailand"
+        assert reels.theme_asked(None) == ""
+        with pytest.raises(ValueError, match="as words"):
+            reels.theme_asked(3)
+        with pytest.raises(ValueError, match=f"at most {reels.THEME_MOST_CHARACTERS}"):
+            reels.theme_asked("x" * (reels.THEME_MOST_CHARACTERS + 1))
+
+    def test_its_answers_are_its_own_questions_and_none_of_a_time_in_a_file(self):
+        posted = {"transition": "flash", "labels": "a few words of mine", "kind": "fail", "peak": 3, "keep": []}
+
+        answers = reels.answers_asked(posted, None, reels.COMPILATION_ANSWER_CHOICES)
+
+        assert answers == {"transition": "flash", "labels": "a few words of mine"}
+
+    def test_where_the_parts_were_joined_is_read_and_kept(self):
+        raw = json.dumps([{"start": 0, "end": 6.25}, {"start": 6.25, "end": 12.5}]).encode()
+
+        spans = reels.read_joined(raw)
+
+        assert spans == [(0.0, 6.25), (6.25, 12.5)]
+        assert reels.joined_read(reels.joined_stored(spans)) == spans
+        assert reels.joined_read(None) == []
+        assert reels.joined_read("not json") == []
+
+    @pytest.mark.parametrize("raw", [b"nope", b"[]", b"{}", b'[{"start": 3, "end": 2}]', b'[{"start": "0", "end": 2}]'])
+    def test_a_parts_json_that_does_not_say_where_they_are_is_bad(self, raw):
+        with pytest.raises(reels.BadStoryboard):
+            reels.read_joined(raw)
+
+    def test_its_state_speaks_of_clips(self):
+        assert reels.state_words(reels.SENDING, several=True) == "Sending the clips to GitHub."

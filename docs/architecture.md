@@ -792,7 +792,20 @@ Module map (`src/kick_clip_hunter/`):
   `_keep_making_reels` loop does the looking, the routes are `POST /moments/{id}/reel`,
   `POST /moments/{id}/reel/transcript`, `POST /moments/{id}/reel/render`,
   `POST /moments/{id}/reel/feedback`, the Reels page
-  `GET /dashboard/reels` and its `GET /dashboard/reels/{id}`. The workflows, the skill and the
+  `GET /dashboard/reels` and its `GET /dashboard/reels/{id}`. A compilation - one reel of
+  several moments' clips (the `compilations`, `compilation_parts` and `compilation_reels`
+  tables) - goes the same way in a release tagged `compilation-<id>`: each clip's stretch is cut
+  as a moment's is and goes up as `part-<n>.mp4`, with `context.json` (`compilation_context`:
+  its theme, each part's own context and its answers - `COMPILATION_ANSWER_CHOICES`, transition,
+  labels and order among them); the `storyboard` workflow joins them into `clip.mp4` and says
+  where each one is in it in `parts.json` (`read_joined`, kept as `compilation_reels.joined`),
+  and from there everything is in seconds of the joined clip, the joined clip taken back to
+  play beside the transcript, which is kept while every part's stretch is the one it was heard
+  from. main.py's `ReelOf` says whose reel a step is of, so that every step above - sending,
+  looking, taking back, rendering, feedback - is the same code for both; the compilation routes
+  are `POST /moments/{id}/compilation`, `POST /compilations/{id}` (theme and parts),
+  `POST /compilations/{id}/delete`, `POST /compilations/{id}/reel` and the same three under it
+  as a moment's, and `GET /dashboard/reels/compilations/{id}`. The workflows, the skill and the
   render script live in that repository, not here.
 - `vod_footage.py` — a moment's file made longer, before its clip or after it, with footage
   of the broadcast from the broadcast's own recording, days later too (`lengthen`; the

@@ -86,6 +86,9 @@
       <span class="ch-cap">Who is in it</span>
       <input type="text" class="ch-input reel-who" value="{{ questions.who }}" maxlength="{{ questions.who_most }}" placeholder="a name for the hook" autocomplete="off" data-reel-who>
     </label>
+    {#- Of a time in the clip's file: a moment's alone - a compilation's
+        clips are joined into one file only on GitHub. -#}
+    {% if questions.timed %}
     <span class="reel-question" role="group" aria-label="Where the joke is">
       <span class="ch-cap">The joke is at</span>
       <input type="text" class="ch-input reel-time" value="{{ questions.peak }}" aria-label="The joke is at" placeholder="0:00.0" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-peak>
@@ -99,6 +102,7 @@
       <template data-reel-keep-template>{{ keep_part(none, questions) }}</template>
       <button type="button" class="ch-btn ch-btn-compact" data-reel-keep-add>Add a part</button>
     </div>
+    {% endif %}
     <label class="reel-question reel-render-now">
       <input type="checkbox" data-reel-render-now{% if questions.render_now %} checked{% endif %}>
       <span>Render the recommended variant and hook straight away</span>
@@ -106,7 +110,7 @@
   </div>
 </details>
 {%- endmacro %}
-<article class="reel" data-reel="{{ reel.url }}" data-reel-id="{{ reel.id }}" data-board="{{ reel.board }}" data-state="{{ reel.state }}" data-row-words="{{ reel.row_words }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
+<article class="reel" data-reel="{{ reel.url }}" data-reel-id="{{ reel.row_key }}" data-reel-kind="{{ reel.kind }}" data-board="{{ reel.board }}" data-state="{{ reel.state }}" data-row-words="{{ reel.row_words }}"{% if reel.busy %} data-busy{% endif %} data-status-scope>
 <div class="stage">
 <div class="reel-in">
   <header class="moment-head">
@@ -114,8 +118,64 @@
       <h1 class="title">{{ reel.channel }}</h1>
       <p class="moment-when">{% if reel.title %}{{ reel.title }}, {% endif %}{{ reel.when }}</p>
     </div>
-    <p class="moment-clock"><a href="{{ reel.review_url }}">The moment on the review page</a></p>
+    {% if reel.review_url %}<p class="moment-clock"><a href="{{ reel.review_url }}">The moment on the review page</a></p>{% endif %}
   </header>
+
+  {% if reel.compilation %}
+  {#- A compilation's clips, in the order they go up in: each the stretch of
+      its moment's file - the clip the service cut, to begin with - typed,
+      or set where its own player is; moved up and down, and taken out.
+      What ties them together goes with them. The script keeps every change
+      at once, and none while a step of the reel goes on. -#}
+  {% set comp = reel.compilation %}
+  <section class="reel-section compilation" aria-labelledby="compilation-{{ reel.id }}" data-compilation="{{ comp.save_url }}" data-least="{{ comp.least }}" data-status-scope>
+    <h2 id="compilation-{{ reel.id }}">Clips</h2>
+    <label class="reel-comment">
+      <span class="ch-cap">What ties them together, in a few words: the hook is made of it</span>
+      <input type="text" class="ch-input" value="{{ comp.theme }}" maxlength="{{ comp.theme_most }}" placeholder="e.g. the roads in Thailand" autocomplete="off" data-compilation-theme{% if reel.busy %} disabled{% endif %}>
+    </label>
+    <ol class="compilation-parts" data-compilation-parts>
+      {% for part in comp.parts %}
+      <li class="compilation-part" data-part data-moment-id="{{ part.moment_id }}">
+        <div class="compilation-part-head">
+          <b class="compilation-number" data-part-number>{{ loop.index }}</b>
+          <span class="compilation-part-name"><b>{{ part.channel }}</b>{% if part.title %}, {{ part.title }}{% endif %}, {{ part.when }}</span>
+          <a href="{{ part.review_url }}">Review</a>
+          <span class="ch-gap"></span>
+          <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Move this clip up" title="Moves this clip up" data-part-move="up"{% if reel.busy %} disabled{% endif %}>↑</button>
+          <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Move this clip down" title="Moves this clip down" data-part-move="down"{% if reel.busy %} disabled{% endif %}>↓</button>
+          <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Take this clip out" title="Takes this clip out of the compilation" data-part-remove{% if reel.busy %} disabled{% endif %}>×</button>
+        </div>
+        {% if part.clip_url %}
+        <video class="compilation-source" src="{{ part.clip_url }}" controls playsinline preload="metadata" data-part-source></video>
+        {% endif %}
+        {% if part.stretch %}
+        {% set stretch = part.stretch %}
+        <span class="trim-range stretch" role="group" aria-label="The stretch of this clip's file that goes into the reel" title="A time in the clip's file, written like 0:12.5." hidden data-stretch="part" data-clip="{{ stretch.length }}" data-start="{{ stretch.start }}" data-end="{{ stretch.end }}" data-reset-start="0" data-reset-end="{{ stretch.length }}" data-lowest="0" data-highest="{{ stretch.length }}" data-least="{{ stretch.least }}">
+          <span class="stretch-end"><label>From <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="Start of the stretch, as a time" data-stretch-type="start"{% if reel.busy %} disabled{% endif %}></label>
+            <button type="button" class="ch-btn ch-btn-compact" title="Starts the stretch where this clip's player is" data-stretch-here="start"{% if reel.busy %} disabled{% endif %}>Start here</button>
+          </span>
+          <span class="stretch-end"><label>to <input type="text" class="ch-input trim-time" value="" autocomplete="off" spellcheck="false" aria-label="End of the stretch, as a time" data-stretch-type="end"{% if reel.busy %} disabled{% endif %}></label>
+            <button type="button" class="ch-btn ch-btn-compact" title="Ends the stretch where this clip's player is" data-stretch-here="end"{% if reel.busy %} disabled{% endif %}>End here</button>
+          </span>
+          <b data-stretch-length></b>
+          <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Takes the whole of the clip's file" data-stretch-reset{% if reel.busy %} disabled{% endif %}>Whole file</button>
+        </span>
+        {% elif not part.has_clip %}
+        <p class="reel-note">This moment has no clip any more: take it out.</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if comp.parts|length < comp.least %}
+    <p class="reel-quiet">A compilation is made of at least {{ comp.least }} clips, and at most {{ comp.most }}. Add them on the review page, with Add to compilation under a moment.</p>
+    {% endif %}
+    <div class="reel-render">
+      <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Forgets the compilation and its reel, not the moments" data-compilation-delete="{{ comp.delete_url }}"{% if reel.busy %} disabled{% endif %}>Delete the compilation</button>
+      <p class="status-line" role="status" data-status></p>
+    </div>
+  </section>
+  {% endif %}
 
   {#- Where the reel stands, kept current while a step of it goes on. -#}
   <div class="reel-standing" data-reel-region="standing">
@@ -139,11 +199,17 @@
     {% endif %}
     {% if reel.has_clip %}
     {{ questions_box(reel.questions) }}
+    {% if reel.compilation %}
+    {{ comment_field("storyboard", "Comment for the storyboard, if you like: what the clips have in common, which is the best, what the hook should play on. Claude goes by it.", reel.storyboard_comment, "e.g. three near misses on the same road - the third is the best", reel.busy) }}
+    {% else %}
     {{ comment_field("storyboard", "Comment for the storyboard, if you like: what the clip is about, where to cut, what the hook should play on. Claude goes by it.", reel.storyboard_comment, "e.g. the joke is the second fall - start just before it", reel.busy) }}
-    <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the clip to GitHub, where a storyboard of the reel is made from it in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
+    {% endif %}
+    <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the {{ 'clips' if reel.compilation else 'clip' }} to GitHub, where a storyboard of the reel is made in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
     {% endif %}
     <p class="status-line" role="status" data-status>
       {%- if reel.words %}{{ reel.words }}
+      {%- elif reel.compilation and reel.has_clip %}Each clip - the stretch of its file above - goes to GitHub, where they are joined into one, transcribed, and a storyboard is made of them: a few minutes.
+      {%- elif reel.compilation %}
       {%- elif reel.has_clip %}The clip's file - or the stretch of it above - goes to GitHub, where it is transcribed and a storyboard is made of it: a few minutes.
       {%- else %}The moment has no clip to make a reel of.{% endif -%}
     </p>
@@ -161,7 +227,7 @@
           <div class="reel-result-words">
             <p>{{ reel.result_words }}</p>
             {% if reel.render_note %}<p class="reel-quiet" data-reel-render-note>Claude, of your comment: {{ reel.render_note }}</p>{% endif %}
-            <a class="ch-btn ch-btn-compact" href="{{ reel.reel_url }}" download="moment_{{ reel.id }}_reel.mp4">Download</a>
+            <a class="ch-btn ch-btn-compact" href="{{ reel.reel_url }}" download="{{ reel.download_name }}">Download</a>
           </div>
         </section>
         {% if reel.feedback_open %}
@@ -257,6 +323,15 @@
         <div class="reel-source">
           <video src="{{ reel.clip_url }}" controls playsinline preload="metadata" data-reel-source></video>
         </div>
+        {% endif %}
+        {% if reel.compilation and reel.compilation.joined %}
+        {#- Where each clip of a compilation is in the one they were joined
+            into, which the transcript's times are of: a press plays it. -#}
+        <p class="compilation-joined" role="group" aria-label="The clips in the joined one">
+          {% for part in reel.compilation.joined %}
+          <button type="button" class="ch-tag" title="Plays clip {{ part.number }}, {{ part.start_words }} to {{ part.end_words }}" data-reel-seek="{{ part.start }}">{{ part.number }}: {{ part.start_words }}</button>
+          {% endfor %}
+        </p>
         {% endif %}
         {% if reel.transcript %}
         {% set transcript = reel.transcript %}
