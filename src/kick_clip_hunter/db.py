@@ -195,6 +195,10 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- once it was back and `feedback_sent` whether GitHub took it.
 -- `storyboard_answers` are the answers to the questions on the page that
 -- went with the last storyboard, as JSON (see reels.answers_asked).
+-- `variant_own` is a variant of one's own the last render was asked for
+-- with, written on the page (`variant` is then the one it is built on);
+-- `kept_lines` the lines of the transcript ticked to be in the reel, as
+-- JSON (see reels.kept_stored).
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -217,7 +221,9 @@ CREATE TABLE IF NOT EXISTS reels (
     render_note TEXT,
     feedback TEXT,
     feedback_sent INTEGER NOT NULL DEFAULT 0,
-    storyboard_answers TEXT
+    storyboard_answers TEXT,
+    variant_own TEXT,
+    kept_lines TEXT
 );
 """
 
@@ -484,6 +490,8 @@ def get_connection() -> sqlite3.Connection:
         ("feedback", "TEXT"),
         ("feedback_sent", "INTEGER NOT NULL DEFAULT 0"),
         ("storyboard_answers", "TEXT"),
+        ("variant_own", "TEXT"),
+        ("kept_lines", "TEXT"),
     ):
         if name not in reel_columns:
             conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
@@ -2023,6 +2031,8 @@ REEL_FIELDS = (
     "feedback",
     "feedback_sent",
     "storyboard_answers",
+    "variant_own",
+    "kept_lines",
 )
 
 

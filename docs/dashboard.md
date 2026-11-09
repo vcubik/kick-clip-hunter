@@ -267,14 +267,17 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   moment's file playing in a player of its own: a line a block, when it starts and ends
   (typed as the Trim dialog takes a time, to the tenth of a second, in seconds of the file),
   what is said, a button that plays the file from the line's start to its end, one that adds a
-  line after it and one that takes it out; "Add a line" adds one at the end, and what the
+  line after it and one that takes it out, and "In the reel": a line ticked so has to be in the
+  reel, and the render does not cut it out; "Add a line" adds one at the end, and what the
   speech model heard is listed under it, each line with "Add". The line being said is marked as
   the file plays, Enter goes on to the next line, and nothing is kept until "Save"
-  (`POST /moments/{id}/reel/transcript`, `lines`: each with `start`, `end` and `text`; refused,
+  (`POST /moments/{id}/reel/transcript`, `lines`: each with `start`, `end`, `text` and `keep`; refused,
   saying which line, for one without its times or past the file's end; an empty one is left
   out, the rest kept in the order they are said), and leaving the page with something not
   saved asks first. "A: " and "B: " in front of a line colour it in the reel for who says it,
-  `*a word*` makes it stand out. A variant and a hook (or words of one's own, `|` breaking the
+  `*a word*` makes it stand out. A variant - or, where none is pressed, one of one's own
+  described in the field under them (typing in it lets go of the one pressed; Claude builds it
+  on the recommended one before the render) - and a hook (or words of one's own, `|` breaking the
   line and `*word*` highlighted) are pressed - an emoji shortcut in a hook (`{rofl}`, `{lebka}`,
   any case; `reels.EMOJI_CODES`, kept in step with the render script's) shown as its emoji, and
   one the render script does not know struck through, as the reel leaves it out. The words of
@@ -283,8 +286,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   the hook's 80 characters. Subtitles are switched on or off (as the pressed
   variant has them to begin with), a comment for the render written if there is something to
   change in the variant (Claude reworks it by that first), and "Render"
-  (`POST /moments/{id}/reel/render`, `variant`, `hook`, `subtitles` and `comment`, after saving
-  what is not saved in the transcript) has the reel made with the transcript as its subtitles;
+  (`POST /moments/{id}/reel/render`, `variant` - "" for one's own, in `variant_own` - `hook`,
+  `subtitles` and `comment`, after saving what is not saved in the transcript) has the reel made
+  with the transcript as its subtitles and its ticked lines kept in it;
   it plays at the top once it is back, with a download, what it was made with and what Claude
   made of the comment. Under it, feedback on the reel - what works, what does not - goes with
   "Send feedback" (`POST /moments/{id}/reel/feedback`, `feedback`) to the reel repository,

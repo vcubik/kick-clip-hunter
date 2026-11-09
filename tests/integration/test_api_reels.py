@@ -466,7 +466,7 @@ class TestPuttingTheTranscriptRight:
             ],
         )
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 0}
         assert transcript_of(moment_id) == [
             subtitles.Line(1.2, 2.5, "A: Watch out!"),
             subtitles.Line(3.0, 4.6, "He has a *red* now?"),
@@ -519,6 +519,125 @@ class TestPuttingTheTranscriptRight:
         assert all("disabled" in field.attrs for field in editor.one(data_reel_lines=True).find(data_reel_text=True))
 
 
+class TestLinesKeptInTheReel:
+    async def test_ticked_lines_are_kept_offered_again_and_go_up_with_the_render(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id, proposed=PROPOSED)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "A: Watch out!", "keep": False},
+                {"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?", "keep": True},
+                {"start": 5.0, "end": 6.0, "text": "  ", "keep": True},
+            ],
+        )
+        lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1}
+        assert ["checked" in line.one(data_reel_keep_line=True).attrs for line in lines] == [False, True]
+        assert payload["keep"] == [{"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?"}]
+
+    async def test_ticks_go_with_a_transcript_a_new_storyboard_replaces(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "keep": True}])
+        # Not put right by hand any more: the next storyboard brings its own.
+        set_reel(moment_id, transcript_edited=0)
+
+        await storyboard_back(reeling, github, moment_id)
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert reel_of(moment_id)["kept_lines"] is None
+        assert payload["keep"] == []
+
+    async def test_only_ticked_lines_in_the_stretch_go_up_timed_to_it(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        set_reel(moment_id, part_start=2.0, part_end=12.0)
+        await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 0.5, "end": 1.5, "text": "before the stretch", "keep": True},
+                {"start": 1.5, "end": 3.0, "text": "into the stretch", "keep": True},
+                {"start": 5.0, "end": 6.0, "text": "in it", "keep": True},
+            ],
+        )
+
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert payload["keep"] == [
+            {"start": 0.0, "end": 1.0, "text": "into the stretch"},
+            {"start": 3.0, "end": 4.0, "text": "in it"},
+        ]
+
+
+class TestAVariantOfOnesOwn:
+    async def test_it_goes_up_on_the_recommended_variant_and_is_offered_again(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        payload = await rendered(
+            reeling, github, moment_id, "", "1", variant_own="  Only the second fall,\nthe webcam alone. "
+        )
+
+        assert (payload["variant"], payload["own"]) == ("B", "Only the second fall,\nthe webcam alone.")
+        reel = reel_of(moment_id)
+        assert (reel["variant"], reel["variant_own"]) == ("B", "Only the second fall,\nthe webcam alone.")
+        github.answer_reel(reels.tag(moment_id), b"the reel")
+        await reeling.main._look_at_reels()
+        opened = await workspace(reeling, moment_id)
+        assert opened.one(data_reel_own_variant=True).text == "Only the second fall, the webcam alone."
+        assert all(variant.attrs["aria-pressed"] == "false" for variant in opened.find(data_reel_variant=True))
+        assert "Your own variant, hook: NEARLY RAN / HIM OVER?" in opened.text
+
+    async def test_a_chosen_variant_wins_over_words_of_ones_own(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        payload = await rendered(reeling, github, moment_id, "A", "1", variant_own="Something else.")
+
+        assert (payload["variant"], payload["own"]) == ("A", "")
+        assert reel_of(moment_id)["variant_own"] is None
+        opened = await workspace(reeling, moment_id)
+        assert opened.one(data_reel_variant="A").attrs["aria-pressed"] == "true"
+
+    async def test_its_feedback_says_it_was_ones_own(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await rendered(reeling, github, moment_id, "", "1", variant_own="Only the second fall.")
+        github.answer_reel(reels.tag(moment_id), b"the reel")
+        await reeling.main._look_at_reels()
+
+        response = await reeling.client.post(f"/moments/{moment_id}/reel/feedback", json={"feedback": "Good."})
+
+        assert response.status_code == 200, response.text
+        sent = json.loads(github.asset(reels.tag(moment_id), reels.FEEDBACK))
+        assert (sent["variant"], sent["variant_own"]) == ("B", "Only the second fall.")
+
+    @pytest.mark.parametrize(
+        ("own", "said"),
+        [
+            ("", "Choose a variant, or describe your own."),
+            ("   ", "Choose a variant, or describe your own."),
+            ("x" * (reels.COMMENT_MOST_CHARACTERS + 1), "at most"),
+            (["no"], "Expected the comment as words."),
+        ],
+    )
+    async def test_none_or_one_that_cannot_go_along_is_refused(self, reeling, github, own, said):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await render(reeling, moment_id, "", "1", variant_own=own)
+
+        assert response.status_code == 400
+        assert said in response.json()["detail"]
+        assert [event for event, _ in github.dispatches] == ["storyboard"]
+
+
 class TestRendering:
     async def test_the_chosen_variant_and_hook_start_the_render_and_the_reel_comes_back(self, reeling, github):
         moment_id = clipped_moment()
@@ -527,7 +646,15 @@ class TestRendering:
         payload = await rendered(reeling, github, moment_id, "a", "2")
 
         tag = reels.tag(moment_id)
-        assert payload == {"tag": tag, "variant": "A", "hook": "WAS IT *GREEN?*", "subtitles": "auto", "comment": ""}
+        assert payload == {
+            "tag": tag,
+            "variant": "A",
+            "hook": "WAS IT *GREEN?*",
+            "subtitles": "auto",
+            "comment": "",
+            "own": "",
+            "keep": [],
+        }
         assert reel_of(moment_id)["state"] == reels.RENDERING
 
         github.answer_reel(tag, b"the reel")
@@ -1071,6 +1198,7 @@ class TestFeedback:
             "storyboard_comment": "The second fall.",
             "variant": "B",
             "variant_title": "Teaser first",
+            "variant_own": "",
             "hook": "NEARLY RAN|*HIM OVER?*",
             "subtitles": "on",
             "render_comment": "End sooner.",
@@ -1252,7 +1380,15 @@ class TestQuestions:
         tag = reels.tag(moment_id)
         assert github.dispatches[-1] == (
             "render",
-            {"tag": tag, "variant": "B", "hook": "WAS IT *GREEN?*", "subtitles": "auto", "comment": ""},
+            {
+                "tag": tag,
+                "variant": "B",
+                "hook": "WAS IT *GREEN?*",
+                "subtitles": "auto",
+                "comment": "",
+                "own": "",
+                "keep": [],
+            },
         )
         reel = reel_of(moment_id)
         assert (reel["state"], reel["variant"], reel["hook"]) == (reels.RENDERING, "B", "WAS IT *GREEN?*")

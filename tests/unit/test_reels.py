@@ -572,3 +572,34 @@ class TestRecommended:
 
     def test_where_it_recommends_none_the_first(self):
         assert reels.recommended(STORYBOARD) == ("A", "1")
+
+
+class TestKeptLines:
+    def test_kept_as_when_each_ticked_line_starts_and_ends_and_read_back(self):
+        posted = [
+            {"start": 3.0, "end": 4.0, "text": "two", "keep": True},
+            {"start": 1.0, "end": 2.0, "text": "one", "keep": False},
+            {"start": 5.0, "end": 6.0, "text": "  ", "keep": True},
+            {"start": 7.0, "end": 8.0, "text": "three", "keep": "yes"},
+        ]
+
+        kept = reels.kept_asked(posted, None)
+
+        assert kept == [(3.0, 4.0)]
+        assert reels.kept_read(reels.kept_stored(kept)) == {(3.0, 4.0)}
+        assert reels.kept_stored([]) is None
+
+    @pytest.mark.parametrize("stored", [None, "", "not json", '{"a": 1}', "[[1]]", '[["x", 2]]'])
+    def test_what_cannot_be_read_is_none_kept(self, stored):
+        assert reels.kept_read(stored) == set()
+
+    def test_the_kept_lines_of_a_stretch_cut_to_it_and_timed_to_it(self):
+        transcript = [Line(1.0, 3.0, "into it"), Line(4.0, 5.0, "in it"), Line(6.0, 7.0, "not ticked")]
+        kept = {(1.0, 3.0), (4.0, 5.0), (9.0, 9.5)}
+
+        assert reels.kept_lines(transcript, kept, (2.0, 10.0)) == [
+            {"start": 0.0, "end": 1.0, "text": "into it"},
+            {"start": 2.0, "end": 3.0, "text": "in it"},
+        ]
+        assert reels.kept_lines(transcript, kept, (5.0, 10.0)) == []
+        assert len(reels.kept_lines(transcript, kept, None)) == 2

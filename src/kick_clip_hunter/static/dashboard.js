@@ -1781,7 +1781,7 @@
   // What starts a step, and its comment, is off while one goes on.
   function dressReel(root) {
     const busy = root.hasAttribute("data-busy");
-    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"], [data-reel-questions] input, [data-reel-questions] button';
+    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"], [data-reel-comment="variant"], [data-reel-questions] input, [data-reel-questions] button';
     for (const control of all(starting, root)) control.disabled = busy;
     for (const box of all("[data-stretch]", root)) {
       box.hidden = false;
@@ -1939,7 +1939,8 @@
 
   // A variant or a hook chosen: the one pressed in its group. A variant sets
   // the subtitles as it has them; one of the storyboard's hooks drops the
-  // words of one's own.
+  // words of one's own. A variant of one's own is kept as it is typed, and
+  // goes only where none of the storyboard's is chosen.
   function chooseReel(button) {
     const group = button.closest("[data-reel-variants], [data-reel-hooks]");
     for (const other of all("[data-reel-variant], [data-reel-hook]", group)) {
@@ -1950,6 +1951,14 @@
     if (own && button.matches("[data-reel-hook]")) {
       own.value = "";
       showOwnHook(own);
+    }
+  }
+
+  // A variant of one's own typed in: none of the storyboard's is chosen.
+  function ownVariant(field) {
+    if (!field.value.trim()) return;
+    for (const variant of all("[data-reel-variant]", field.closest("[data-reel-variants]"))) {
+      variant.setAttribute("aria-pressed", "false");
     }
   }
 
@@ -2035,8 +2044,13 @@
     const own = one("[data-reel-own]", root);
     const hook = own && own.value.trim() ? own.value.trim() : one('[data-reel-hook][aria-pressed="true"]', root)?.dataset.reelHook;
     const subtitles = one('[data-reel-subtitles] [aria-pressed="true"]', root)?.dataset.value || "auto";
-    if (!variant || !hook) {
-      say(button, "Choose a variant and a hook first.");
+    const ownVariantWords = variant ? "" : reelComment(root, "variant").trim();
+    if (!variant && !ownVariantWords) {
+      say(button, "Choose a variant, or describe your own.");
+      return;
+    }
+    if (!hook) {
+      say(button, "Choose a hook, or write one.");
       return;
     }
     // The subtitles are made of the transcript as it is saved.
@@ -2048,7 +2062,13 @@
     button.disabled = true;
     say(button, "Asking for the reel.");
     const comment = reelComment(root, "render");
-    const response = await post(button.dataset.reelRender, { variant: variant.dataset.reelVariant, hook, subtitles, comment });
+    const response = await post(button.dataset.reelRender, {
+      variant: variant ? variant.dataset.reelVariant : "",
+      variant_own: ownVariantWords,
+      hook,
+      subtitles,
+      comment,
+    });
     if (!root.isConnected) return;
     if (!response || !response.ok) {
       button.disabled = false;
@@ -2056,6 +2076,7 @@
       return;
     }
     reelCommentSent(root, "render");
+    reelCommentSent(root, "variant");
     say(button, "");
     await refreshReel(root);
   }
@@ -2267,7 +2288,7 @@
         say(editor, `Line ${number}: write when it starts and ends, like 0:07.4.`);
         return false;
       }
-      lines.push({ start: start ?? 0, end: end ?? 0, text });
+      lines.push({ start: start ?? 0, end: end ?? 0, text, keep: one("[data-reel-keep-line]", line).checked });
     }
     const save = one("[data-reel-transcript-save]", editor);
     save.disabled = true;
@@ -4064,7 +4085,8 @@
       grow(target);
       target.dataset.edited = "";
       if (target.dataset.reelComment === "feedback") say(target, "Not sent yet.");
-    } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end]")) {
+      if (target.matches("[data-reel-own-variant]")) ownVariant(target);
+    } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end], [data-reel-keep-line]")) {
       if (target.matches("[data-reel-text]")) grow(target);
       reelEdited(target);
     } else if (target.matches("[data-notify-field]")) {

@@ -34,12 +34,16 @@ How it goes, a moment at a time, each step started from the Reels page:
    variant and the hook the storyboard recommends (`recommended`).
 3. The transcript is put right on the page as needed - a line's words, its
    times, lines added and taken out (`checked_transcript`) - and the reel's
-   subtitles are made of it from then on.
+   subtitles are made of it from then on. A line can be ticked to be in the
+   reel (`kept_asked`): the render is not to cut it out.
 4. "Render" with a variant and a hook - one of the storyboard's, or words
    of one's own - and with or without subtitles, and a comment on what to
-   change in the variant where one was written: the transcript goes up as
-   `clip.subs.srt` and the `render` workflow is dispatched, which has
-   Claude rework the variant by the comment, where there is one, and puts
+   change in the variant where one was written; in place of a variant, one
+   of one's own can be described. The transcript goes up as
+   `clip.subs.srt` and the `render` workflow is dispatched with the ticked
+   lines (`kept_lines`), which has Claude rework the variant - by the
+   comment, into the variant of one's own, around the ticked lines - where
+   any of them asks for it, and puts
    `reel.mp4` into the same release, with `render.json`: what it was
    rendered with, and what Claude made of the comment (`rendered_note`).
    The service fetches them the same way and keeps the reel next to the
@@ -428,11 +432,14 @@ def feedback(
     render_note: str | None,
     rendered_at: str,
     words: str,
+    variant_own: str | None = None,
 ) -> dict[str, Any]:
     """What goes up as feedback on a moment's reel (see the module's
     docstring): the words, and what the reel was made of and with - so it
     can be recorded on its own. `rendered_at` is when the reel was asked
-    for, which tells one reel of the moment from another."""
+    for, which tells one reel of the moment from another; `variant_own` the
+    variant of one's own it was made by, where it was (`variant` is then
+    the one it was built on)."""
     platform, login = platforms.split(channel)
     offered = (storyboard or {}).get("variants", [])
     chosen = next((one for one in offered if isinstance(one, dict) and str(one.get("id")) == variant), {})
@@ -447,6 +454,7 @@ def feedback(
         "storyboard_comment": storyboard_comment or "",
         "variant": variant or "",
         "variant_title": str(chosen.get("title") or chosen.get("structure") or ""),
+        "variant_own": variant_own or "",
         "hook": hook or "",
         "subtitles": subtitles_asked or SUBTITLES_AS_THE_VARIANT,
         "render_comment": render_comment or "",
@@ -604,6 +612,55 @@ def checked_transcript(posted: object, length: float | None) -> list[subtitles.L
             raise ValueError(f"Line {number}: the clip ends at {clock(length)}.")
         kept.append(subtitles.Line(round(start, 3), round(end, 3), text))
     return sorted(kept, key=lambda kept_line: (kept_line.start, kept_line.end))
+
+
+def kept_asked(posted: object, length: float | None) -> list[subtitles.Span]:
+    """The lines of a transcript put right on the page that were ticked to
+    be in the reel (`keep` true), as when each starts and ends - checked as
+    checked_transcript checks them, a line left empty left out."""
+    if not isinstance(posted, list):
+        return []
+    ticked = [line for line in posted if isinstance(line, dict) and line.get("keep") is True]
+    return [(line.start, line.end) for line in checked_transcript(ticked, length)]
+
+
+def kept_stored(spans: Iterable[subtitles.Span]) -> str | None:
+    """Which lines of a transcript are to be in the reel, as they are kept on
+    the reel (reels.kept_lines) - None for none."""
+    spans = sorted(set(spans))
+    return json.dumps([[start, end] for start, end in spans]) if spans else None
+
+
+def kept_read(text: str | None) -> set[subtitles.Span]:
+    """Which lines of a transcript are to be in the reel (see kept_stored):
+    when each starts and ends, as the transcript has them."""
+    try:
+        kept = json.loads(text) if text else []
+        return {(round(float(start), 3), round(float(end), 3)) for start, end in kept}
+    except (ValueError, TypeError):
+        return set()
+
+
+def is_kept(line: subtitles.Line, kept: set[subtitles.Span]) -> bool:
+    return (round(line.start, 3), round(line.end, 3)) in kept
+
+
+def kept_lines(
+    transcript: Iterable[subtitles.Line], kept: set[subtitles.Span], part: tuple[float, float] | None
+) -> list[dict[str, Any]]:
+    """The lines of a transcript that have to be in the reel, as they go up
+    with its render: timed to what was sent (only the stretch `part` of the
+    file, where only that was), and only those in it - cut to it where it
+    cuts into them."""
+    start, end = part if part is not None else (0.0, math.inf)
+    lines = []
+    for line in transcript:
+        if not is_kept(line, kept) or not line.text.strip():
+            continue
+        shown = (max(line.start, start) - start, min(line.end, end) - start)
+        if shown[1] > shown[0]:
+            lines.append({"start": round(shown[0], 3), "end": round(shown[1], 3), "text": line.text})
+    return lines
 
 
 def subtitled(variant: Mapping[str, Any]) -> bool:
