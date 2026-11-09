@@ -6352,11 +6352,16 @@ async def _send_for_render(
     said: str | None,
     unsaid: bool,
     comment: str = "",
+    own: str = "",
+    keep: list[dict] | None = None,
 ) -> None:
     """Starts the render workflow for a moment's reel: with the transcript as
     its subtitles (`said`, as SubRip), or with the subtitles taken out of the
     release where there is nothing left to say (`unsaid`) - and with the
-    comment on what to change in the variant, where one was written."""
+    comment on what to change in the variant, where one was written, the
+    variant of one's own to build in its place, where one was, and the
+    lines of the transcript that have to be in the reel (`keep`, timed to
+    what was sent; see reels.kept_lines)."""
     release_tag = reels.tag(moment_id)
     try:
         release = await github.release(release_tag)
@@ -6368,7 +6373,15 @@ async def _send_for_render(
             await github.upload(release, reels.SUBTITLES, data=said.encode(subtitles.ENCODING))
         await github.dispatch(
             "render",
-            {"tag": release_tag, "variant": variant, "hook": hook, "subtitles": choice, "comment": comment},
+            {
+                "tag": release_tag,
+                "variant": variant,
+                "hook": hook,
+                "subtitles": choice,
+                "comment": comment,
+                "own": own,
+                "keep": keep or [],
+            },
         )
     except reels.GitHubTrouble as trouble:
         _reel_failed(moment_id, str(trouble))
@@ -6378,12 +6391,14 @@ async def _send_for_render(
         _reel_failed(moment_id, "Something went wrong. The server log says what.")
         return
     logger.info(
-        "the reel of moment %d was asked for: variant %s, hook %r, subtitles %s%s",
+        "the reel of moment %d was asked for: variant %s%s, hook %r, subtitles %s%s, %d lines to keep",
         moment_id,
         variant,
+        " (one of your own built on it)" if own else "",
         hook,
         choice,
         ", with a comment" if comment else "",
+        len(keep or []),
     )
 
 
@@ -6495,6 +6510,8 @@ async def _take_storyboard(github: reels.GitHub, reel, release: reels.Release, a
         proposed = await _fetched_lines(github, release, reels.SUBTITLES, part)
         transcript = proposed if proposed is not None else heard
         fields["transcript"] = subtitles.stored(transcript) if transcript is not None else None
+        # Lines ticked to be in the reel were of the transcript that is gone.
+        fields["kept_lines"] = None
     _update_reel(moment_id, **fields)
     logger.info("the storyboard of moment %d came back", moment_id)
     if _reel_answers(reel).get("render_now"):
@@ -6594,9 +6611,10 @@ def _reel_link(conn, row) -> dict:
     }
 
 
-def _transcript_lines(lines: list[subtitles.Line]) -> list[dict]:
+def _transcript_lines(lines: list[subtitles.Line], kept: set[subtitles.Span] | None = None) -> list[dict]:
     return [
         {
+            "keep": reels.is_kept(line, kept or set()),
             "start": dashboard_view.number_words(line.start, 3),
             "end": dashboard_view.number_words(line.end, 3),
             "start_words": reels.clock(line.start),
@@ -6614,7 +6632,10 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
     again."""
     variants = [variant for variant in storyboard.get("variants", []) if isinstance(variant, dict)]
     recommended = next((str(variant.get("id")) for variant in variants if variant.get("recommended")), None)
-    chosen = reel["variant"] or recommended
+    # A variant of one's own the reel was last rendered with: none of the
+    # storyboard's chosen, and the words offered again.
+    own_variant = reel["variant_own"] or ""
+    chosen = None if own_variant else (reel["variant"] or recommended)
     hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
     used = reel["hook"]
     chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
@@ -6623,6 +6644,8 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
         "summary": str(storyboard.get("summary") or ""),
         "thoughts": str(storyboard.get("thoughts") or ""),
         "question": str(storyboard.get("question") or ""),
+        "own_variant": own_variant,
+        "own_variant_most": reels.COMMENT_MOST_CHARACTERS,
         "own_hook": own,
         "own_pieces": reels.hook_pieces(own) if own else [],
         "own_most": reels.HOOK_MOST_TYPED,
@@ -6806,8 +6829,9 @@ def _reel_workspace(conn, row, today: date) -> dict:
     if reel is not None and reel["reel_path"] and (CLIPS_DIR / reel["reel_path"]).exists():
         view["reel_url"] = _clip_url(reel["reel_path"], versioned=True)
         with_subtitles = {reels.WITH_SUBTITLES: ", with subtitles", reels.WITHOUT_SUBTITLES: ", without subtitles"}
+        variant_words = "Your own variant" if reel["variant_own"] else f"Variant {reel['variant']}"
         view["result_words"] = (
-            f"Variant {reel['variant']}, hook: {reels.hook_shown(reel['hook'] or '')}"
+            f"{variant_words}, hook: {reels.hook_shown(reel['hook'] or '')}"
             f"{with_subtitles.get(reel['subtitles'] or '', '')}"
         )
         if state == reels.DONE:
@@ -6816,7 +6840,7 @@ def _reel_workspace(conn, row, today: date) -> dict:
     if transcript is not None:
         length = _file_length(row)
         view["transcript"] = {
-            "lines": _transcript_lines(transcript),
+            "lines": _transcript_lines(transcript, reels.kept_read(reel["kept_lines"])),
             "edited": bool(reel["transcript_edited"]),
             "length": dashboard_view.number_words(length, 3) if length is not None else "",
         }
@@ -7013,8 +7037,10 @@ async def ask_for_reel(moment_id: int, request: Request):
 async def save_reel_transcript(moment_id: int, request: Request):
     """Keeps a reel's transcript as it was put right on the Reels page -
     posted as JSON `lines`, each with its `start` and `end` in seconds of the
-    moment's file and its `text` (see reels.checked_transcript). The reel's
-    subtitles are made of it from then on, and a new storyboard goes by it."""
+    moment's file and its `text` (see reels.checked_transcript), and `keep`
+    true where the line has to be in the reel (see reels.kept_asked). The
+    reel's subtitles are made of it from then on, a new storyboard goes by
+    it, and a render keeps the lines ticked in the reel."""
     try:
         asked = await request.json()
     except ValueError:
@@ -7035,13 +7061,25 @@ async def save_reel_transcript(moment_id: int, request: Request):
             )
         try:
             lines = reels.checked_transcript(asked.get("lines"), _file_length(row))
+            kept = reels.kept_asked(asked.get("lines"), _file_length(row))
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
-        put_reel(conn, moment_id, transcript=subtitles.stored(lines), transcript_edited=1)
+        put_reel(
+            conn,
+            moment_id,
+            transcript=subtitles.stored(lines),
+            transcript_edited=1,
+            kept_lines=reels.kept_stored(kept),
+        )
     finally:
         conn.close()
-    logger.info("the transcript of moment %d's reel was put right: %d lines", moment_id, len(lines))
-    return {"moment_id": moment_id, "lines": len(lines)}
+    logger.info(
+        "the transcript of moment %d's reel was put right: %d lines, %d to be in the reel",
+        moment_id,
+        len(lines),
+        len(kept),
+    )
+    return {"moment_id": moment_id, "lines": len(lines), "kept": len(kept)}
 
 
 @app.post("/moments/{moment_id}/reel/render")
@@ -7051,9 +7089,12 @@ async def render_reel(moment_id: int, request: Request):
     as the variant has them, or with them or without them: posted as JSON
     `variant`, `hook` and `subtitles` ("auto", "on" or "off"; "auto" left
     out), and a `comment` on what to change in the variant, which Claude
-    reworks it by before it is rendered. The subtitles are made of the
-    reel's transcript. Again with another choice once one is there - a new
-    reel, so the feedback on the one before is done with."""
+    reworks it by before it is rendered. In place of a variant ("" for
+    none), `variant_own` describes one of one's own, which Claude builds
+    before it is rendered. The subtitles are made of the reel's transcript,
+    and its lines ticked to be in the reel go along for Claude to keep in
+    it. Again with another choice once one is there - a new reel, so the
+    feedback on the one before is done with."""
     if _shutdown_requested:
         raise HTTPException(status_code=409, detail="The service is shutting down.")
     github = _github()
@@ -7070,6 +7111,7 @@ async def render_reel(moment_id: int, request: Request):
         raise HTTPException(status_code=400, detail="Subtitles are auto, on or off.")
     try:
         comment = reels.comment_asked(asked.get("comment"))
+        own = reels.comment_asked(asked.get("variant_own"))
     except ValueError as wrong:
         raise HTTPException(status_code=400, detail=str(wrong)) from None
     conn = get_connection()
@@ -7083,7 +7125,9 @@ async def render_reel(moment_id: int, request: Request):
         if reel["state"] in reels.BUSY:
             raise HTTPException(status_code=409, detail=reels.state_words(reel["state"]))
         try:
-            _start_render(github, conn, moment_id, reel, storyboard, asked["variant"], asked["hook"], choice, comment)
+            _start_render(
+                github, conn, moment_id, reel, storyboard, asked["variant"], asked["hook"], choice, comment, own
+            )
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
     finally:
@@ -7101,13 +7145,21 @@ def _start_render(
     hook_asked: str,
     choice: str,
     comment: str = "",
+    own: str = "",
 ) -> None:
     """Stores that a moment's reel is being rendered with a variant of its
-    storyboard and a hook, and starts the render (see render_reel) - asked
-    for on the page, or straight away where the answers to the questions
-    asked for that. Raises ValueError, in words for the page, for a variant
-    or a hook the storyboard has not, or subtitles where nothing is said."""
-    variant = reels.chosen_variant(storyboard, variant_asked)
+    storyboard - or one of one's own (`own`, where no variant is asked
+    for), built on the one the storyboard recommends - and a hook, and
+    starts the render (see render_reel) - asked for on the page, or straight
+    away where the answers to the questions asked for that. Raises
+    ValueError, in words for the page, for neither, a variant or a hook the
+    storyboard has not, or subtitles where nothing is said."""
+    if variant_asked.strip():
+        variant, own = reels.chosen_variant(storyboard, variant_asked), ""
+    elif own:
+        variant = reels.recommended(storyboard)[0]
+    else:
+        raise ValueError("Choose a variant, or describe your own.")
     hook = reels.chosen_hook(storyboard, hook_asked)
     # A reel from before transcripts were kept goes by what the release has.
     transcript = subtitles.read(reel["transcript"])
@@ -7121,12 +7173,14 @@ def _start_render(
         else:
             choice = reels.WITHOUT_SUBTITLES
     unsaid = transcript is not None and said is None
+    keep = reels.kept_lines(transcript or [], reels.kept_read(reel["kept_lines"]), _reel_part(reel))
     put_reel(
         conn,
         moment_id,
         state=reels.RENDERING,
         asked_at=_now_text(),
         variant=variant,
+        variant_own=own or None,
         hook=hook,
         subtitles=choice,
         render_comment=comment or None,
@@ -7135,7 +7189,7 @@ def _start_render(
         feedback_sent=0,
         error=None,
     )
-    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid, comment))
+    _track_task(_send_for_render(github, moment_id, variant, hook, choice, said, unsaid, comment, own, keep))
 
 
 async def _send_feedback(github: reels.GitHub, moment_id: int, record: dict) -> None:
@@ -7191,6 +7245,7 @@ async def give_reel_feedback(moment_id: int, request: Request):
             storyboard=_stored_storyboard(reel),
             storyboard_comment=reel["storyboard_comment"],
             variant=reel["variant"],
+            variant_own=reel["variant_own"],
             hook=reel["hook"],
             subtitles_asked=reel["subtitles"],
             render_comment=reel["render_comment"],

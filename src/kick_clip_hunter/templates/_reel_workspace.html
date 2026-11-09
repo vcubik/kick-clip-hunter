@@ -17,6 +17,12 @@
     <input type="text" class="ch-input reel-time" value="{{ line.start_words if line else '' }}" aria-label="Starts at" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-start{% if not editable %} disabled{% endif %}>
     <span class="reel-dash" aria-hidden="true">–</span>
     <input type="text" class="ch-input reel-time" value="{{ line.end_words if line else '' }}" aria-label="Ends at" inputmode="decimal" autocomplete="off" spellcheck="false" data-reel-end{% if not editable %} disabled{% endif %}>
+    {#- Ticked: the line has to be in the reel, and the render does not
+        cut it out (see reels.kept_lines). -#}
+    <label class="reel-line-keep" title="This line has to be in the reel: the render does not cut it out">
+      <input type="checkbox" data-reel-keep-line{% if line and line.keep %} checked{% endif %}{% if not editable %} disabled{% endif %}>
+      <span>In the reel</span>
+    </label>
     <span class="ch-gap"></span>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Add a line after this one" title="Adds a line after this one" data-reel-line-after{% if not editable %} disabled{% endif %}>+</button>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Remove this line" title="Removes this line" data-reel-line-remove{% if not editable %} disabled{% endif %}>×</button>
@@ -195,6 +201,13 @@
             {% if variant.why %}<span>{{ variant.why }}</span>{% endif %}
           </button>
           {% endfor %}
+          {#- A variant of one's own, for where none of the storyboard's is
+              chosen: typing it lets go of the one chosen. Claude builds it,
+              on the recommended one, before it is rendered. -#}
+          <label class="reel-own">
+            <span class="ch-cap">Or your own, where none above is chosen: what the reel is to be. Claude builds it before it is rendered.</span>
+            <textarea class="ch-input reel-comment-text" rows="2" maxlength="{{ board.own_variant_most }}" placeholder="e.g. only the second fall, from his warning to the laugh, the webcam alone" data-reel-comment="variant" data-reel-own-variant{% if reel.busy %} disabled{% endif %}>{{ board.own_variant }}</textarea>
+          </label>
         </div>
 
         <div class="reel-options" role="group" aria-label="Hook" data-reel-hooks>
@@ -248,7 +261,7 @@
         {% if reel.transcript %}
         {% set transcript = reel.transcript %}
         <div class="reel-transcript" data-reel-transcript="{{ reel.transcript_url }}" data-length="{{ transcript.length }}" data-status-scope>
-          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out.</p>
+          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out. A line ticked "In the reel" is not cut out of it.</p>
           {% if not reel.editable %}
           <p class="reel-note">A new storyboard is being made, and a transcript comes with it: until then this one cannot be changed.</p>
           {% elif transcript.edited %}
