@@ -6447,14 +6447,15 @@ async def _send_for_render(
     comment: str = "",
     own: str = "",
     keep: list[dict] | None = None,
+    cut: list[dict] | None = None,
 ) -> None:
     """Starts the render workflow for a moment's reel: with the transcript as
     its subtitles (`said`, as SubRip), or with the subtitles taken out of the
     release where there is nothing left to say (`unsaid`) - and with the
     comment on what to change in the variant, where one was written, the
-    variant of one's own to build in its place, where one was, and the
-    lines of the transcript that have to be in the reel (`keep`, timed to
-    what was sent; see reels.kept_lines)."""
+    variant of one's own to build in its place, where one was, the lines of
+    the transcript that have to be in the reel (`keep`) and those to be cut
+    out of it (`cut`), each timed to what was sent (see reels.marked_lines)."""
     release_tag = reel_of.tag
     try:
         release = await github.release(release_tag)
@@ -6474,6 +6475,7 @@ async def _send_for_render(
                 "comment": comment,
                 "own": own,
                 "keep": keep or [],
+                "cut": cut or [],
             },
         )
     except reels.GitHubTrouble as trouble:
@@ -6484,7 +6486,7 @@ async def _send_for_render(
         _reel_failed(reel_of, "Something went wrong. The server log says what.")
         return
     logger.info(
-        "the reel of %s was asked for: variant %s%s, hook %r, subtitles %s%s, %d lines to keep",
+        "the reel of %s was asked for: variant %s%s, hook %r, subtitles %s%s, %d lines to keep, %d to cut out",
         reel_of,
         variant,
         " (one of your own built on it)" if own else "",
@@ -6492,6 +6494,7 @@ async def _send_for_render(
         choice,
         ", with a comment" if comment else "",
         len(keep or []),
+        len(cut or []),
     )
 
 
@@ -6623,8 +6626,10 @@ async def _take_storyboard(
         proposed = await _fetched_lines(github, release, reels.SUBTITLES, part)
         transcript = proposed if proposed is not None else heard
         fields["transcript"] = subtitles.stored(transcript) if transcript is not None else None
-        # Lines ticked to be in the reel were of the transcript that is gone.
+        # Lines marked to be in the reel or cut out of it were of the
+        # transcript that is gone.
         fields["kept_lines"] = None
+        fields["cut_lines"] = None
     _update_reel(reel_of, **fields)
     logger.info("the storyboard of %s came back", reel_of)
     if _reel_answers(reel).get("render_now"):
@@ -6732,10 +6737,13 @@ def _reel_link(conn, row) -> dict:
     }
 
 
-def _transcript_lines(lines: list[subtitles.Line], kept: set[subtitles.Span] | None = None) -> list[dict]:
+def _transcript_lines(
+    lines: list[subtitles.Line], kept: set[subtitles.Span] | None = None, cut: set[subtitles.Span] | None = None
+) -> list[dict]:
     return [
         {
-            "keep": reels.is_kept(line, kept or set()),
+            "keep": reels.is_marked(line, kept or set()),
+            "cut": reels.is_marked(line, cut or set()),
             "start": dashboard_view.number_words(line.start, 3),
             "end": dashboard_view.number_words(line.end, 3),
             "start_words": reels.clock(line.start),
@@ -6986,7 +6994,9 @@ def _reel_view(reel_of: ReelOf, reel, *, length: float | None, clip_url: str | N
             view["feedback_open"] = True
     if transcript is not None:
         view["transcript"] = {
-            "lines": _transcript_lines(transcript, reels.kept_read(reel["kept_lines"])),
+            "lines": _transcript_lines(
+                transcript, reels.marked_read(reel["kept_lines"]), reels.marked_read(reel["cut_lines"])
+            ),
             "edited": bool(reel["transcript_edited"]),
             "length": dashboard_view.number_words(length, 3) if length is not None else "",
         }
@@ -7677,10 +7687,11 @@ async def _asked_json(request: Request, what: str) -> dict:
 async def save_reel_transcript(moment_id: int, request: Request):
     """Keeps a reel's transcript as it was put right on the Reels page -
     posted as JSON `lines`, each with its `start` and `end` in seconds of the
-    moment's file and its `text` (see reels.checked_transcript), and `keep`
-    true where the line has to be in the reel (see reels.kept_asked). The
-    reel's subtitles are made of it from then on, a new storyboard goes by
-    it, and a render keeps the lines ticked in the reel."""
+    moment's file and its `text` (see reels.checked_transcript), `keep`
+    true where the line has to be in the reel and `cut` true where it is to
+    be cut out of it (see reels.marks_asked). The reel's subtitles are made
+    of it from then on, a new storyboard goes by it, and a render keeps the
+    lines ticked in the reel and leaves out those marked to be cut out."""
     return await _save_reel_transcript(_moment_reel(moment_id), request)
 
 
@@ -7707,16 +7718,26 @@ async def _save_reel_transcript(reel_of: ReelOf, request: Request) -> dict:
         length = _reel_length(conn, reel_of, reel)
         try:
             lines = reels.checked_transcript(asked.get("lines"), length)
-            kept = reels.kept_asked(asked.get("lines"), length)
+            kept, cut = reels.marks_asked(asked.get("lines"), length)
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
-        reel_of.put(conn, transcript=subtitles.stored(lines), transcript_edited=1, kept_lines=reels.kept_stored(kept))
+        reel_of.put(
+            conn,
+            transcript=subtitles.stored(lines),
+            transcript_edited=1,
+            kept_lines=reels.marked_stored(kept),
+            cut_lines=reels.marked_stored(cut),
+        )
     finally:
         conn.close()
     logger.info(
-        "the transcript of the reel of %s was put right: %d lines, %d to be in the reel", reel_of, len(lines), len(kept)
+        "the transcript of the reel of %s was put right: %d lines, %d to be in the reel, %d to be cut out",
+        reel_of,
+        len(lines),
+        len(kept),
+        len(cut),
     )
-    return {f"{reel_of.kind}_id": reel_of.id, "lines": len(lines), "kept": len(kept)}
+    return {f"{reel_of.kind}_id": reel_of.id, "lines": len(lines), "kept": len(kept), "cut": len(cut)}
 
 
 @app.post("/moments/{moment_id}/reel/render")
@@ -7822,7 +7843,8 @@ def _start_render(
         else:
             choice = reels.WITHOUT_SUBTITLES
     unsaid = transcript is not None and said is None
-    keep = reels.kept_lines(transcript or [], reels.kept_read(reel["kept_lines"]), _reel_part(reel))
+    keep = reels.marked_lines(transcript or [], reels.marked_read(reel["kept_lines"]), _reel_part(reel))
+    cut = reels.marked_lines(transcript or [], reels.marked_read(reel["cut_lines"]), _reel_part(reel))
     reel_of.put(
         conn,
         state=reels.RENDERING,
@@ -7837,7 +7859,7 @@ def _start_render(
         feedback_sent=0,
         error=None,
     )
-    _track_task(_send_for_render(github, reel_of, variant, hook, choice, said, unsaid, comment, own, keep))
+    _track_task(_send_for_render(github, reel_of, variant, hook, choice, said, unsaid, comment, own, keep, cut))
 
 
 async def _send_feedback(github: reels.GitHub, reel_of: ReelOf, record: dict) -> None:

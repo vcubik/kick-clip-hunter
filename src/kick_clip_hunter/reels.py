@@ -35,15 +35,17 @@ How it goes, a moment at a time, each step started from the Reels page:
 3. The transcript is put right on the page as needed - a line's words, its
    times, lines added and taken out (`checked_transcript`) - and the reel's
    subtitles are made of it from then on. A line can be ticked to be in the
-   reel (`kept_asked`): the render is not to cut it out.
+   reel, or marked to be cut out of it (`marks_asked`): the render is not
+   to cut the one out, and is to leave the other out.
 4. "Render" with a variant and a hook - one of the storyboard's, or words
    of one's own - and with or without subtitles, and a comment on what to
    change in the variant where one was written; in place of a variant, one
    of one's own can be described. The transcript goes up as
-   `clip.subs.srt` and the `render` workflow is dispatched with the ticked
-   lines (`kept_lines`), which has Claude rework the variant - by the
-   comment, into the variant of one's own, around the ticked lines - where
-   any of them asks for it, and puts
+   `clip.subs.srt` and the `render` workflow is dispatched with the marked
+   lines (`marked_lines`: `keep` and `cut`), which has Claude rework the
+   variant - by the comment, into the variant of one's own, around the
+   lines ticked and without those to be cut out - where any of them asks
+   for it, and puts
    `reel.mp4` into the same release, with `render.json`: what it was
    rendered with, and what Claude made of the comment (`rendered_note`).
    The service fetches them the same way and keeps the reel next to the
@@ -758,48 +760,58 @@ def checked_transcript(posted: object, length: float | None) -> list[subtitles.L
     return sorted(kept, key=lambda kept_line: (kept_line.start, kept_line.end))
 
 
-def kept_asked(posted: object, length: float | None) -> list[subtitles.Span]:
+def marks_asked(posted: object, length: float | None) -> tuple[list[subtitles.Span], list[subtitles.Span]]:
     """The lines of a transcript put right on the page that were ticked to
-    be in the reel (`keep` true), as when each starts and ends - checked as
-    checked_transcript checks them, a line left empty left out."""
+    be in the reel (`keep` true) and those marked to be cut out of it (`cut`
+    true), as when each starts and ends - checked as checked_transcript
+    checks them, a line left empty left out. Raises ValueError, in words for
+    the page, for a line marked both ways."""
     if not isinstance(posted, list):
-        return []
-    ticked = [line for line in posted if isinstance(line, dict) and line.get("keep") is True]
-    return [(line.start, line.end) for line in checked_transcript(ticked, length)]
+        return [], []
+    for number, line in enumerate(posted, 1):
+        if isinstance(line, dict) and line.get("keep") is True and line.get("cut") is True:
+            raise ValueError(f"Line {number}: it cannot be both in the reel and cut out of it.")
+
+    def marked(mark: str) -> list[subtitles.Span]:
+        ticked = [line for line in posted if isinstance(line, dict) and line.get(mark) is True]
+        return [(line.start, line.end) for line in checked_transcript(ticked, length)]
+
+    return marked("keep"), marked("cut")
 
 
-def kept_stored(spans: Iterable[subtitles.Span]) -> str | None:
-    """Which lines of a transcript are to be in the reel, as they are kept on
-    the reel (reels.kept_lines) - None for none."""
+def marked_stored(spans: Iterable[subtitles.Span]) -> str | None:
+    """Which lines of a transcript are marked - to be in the reel, or to be
+    cut out of it - as they are kept on the reel (`kept_lines`,
+    `cut_lines`); None for none."""
     spans = sorted(set(spans))
     return json.dumps([[start, end] for start, end in spans]) if spans else None
 
 
-def kept_read(text: str | None) -> set[subtitles.Span]:
-    """Which lines of a transcript are to be in the reel (see kept_stored):
-    when each starts and ends, as the transcript has them."""
+def marked_read(text: str | None) -> set[subtitles.Span]:
+    """Which lines of a transcript are marked (see marked_stored): when each
+    starts and ends, as the transcript has them."""
     try:
-        kept = json.loads(text) if text else []
-        return {(round(float(start), 3), round(float(end), 3)) for start, end in kept}
+        marked = json.loads(text) if text else []
+        return {(round(float(start), 3), round(float(end), 3)) for start, end in marked}
     except (ValueError, TypeError):
         return set()
 
 
-def is_kept(line: subtitles.Line, kept: set[subtitles.Span]) -> bool:
-    return (round(line.start, 3), round(line.end, 3)) in kept
+def is_marked(line: subtitles.Line, marked: set[subtitles.Span]) -> bool:
+    return (round(line.start, 3), round(line.end, 3)) in marked
 
 
-def kept_lines(
-    transcript: Iterable[subtitles.Line], kept: set[subtitles.Span], part: tuple[float, float] | None
+def marked_lines(
+    transcript: Iterable[subtitles.Line], marked: set[subtitles.Span], part: tuple[float, float] | None
 ) -> list[dict[str, Any]]:
-    """The lines of a transcript that have to be in the reel, as they go up
-    with its render: timed to what was sent (only the stretch `part` of the
-    file, where only that was), and only those in it - cut to it where it
-    cuts into them."""
+    """The marked lines of a transcript - those that have to be in the reel,
+    or those to be cut out of it - as they go up with its render: timed to
+    what was sent (only the stretch `part` of the file, where only that
+    was), and only those in it - cut to it where it cuts into them."""
     start, end = part if part is not None else (0.0, math.inf)
     lines = []
     for line in transcript:
-        if not is_kept(line, kept) or not line.text.strip():
+        if not is_marked(line, marked) or not line.text.strip():
             continue
         shown = (max(line.start, start) - start, min(line.end, end) - start)
         if shown[1] > shown[0]:

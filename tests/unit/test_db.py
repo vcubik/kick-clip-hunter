@@ -193,6 +193,20 @@ class TestUpgradingOlderDatabases:
         finally:
             connection.close()
 
+    def test_reels_from_before_lines_to_cut_out_gain_the_column(self):
+        legacy_database(
+            "CREATE TABLE reels (moment_id INTEGER PRIMARY KEY, state TEXT NOT NULL, asked_at TEXT NOT NULL)",
+            "CREATE TABLE compilation_reels (compilation_id INTEGER PRIMARY KEY, state TEXT NOT NULL, "
+            "asked_at TEXT NOT NULL)",
+        )
+
+        connection = db.get_connection()
+        try:
+            assert "cut_lines" in columns(connection, "reels")
+            assert "cut_lines" in columns(connection, "compilation_reels")
+        finally:
+            connection.close()
+
     def test_the_short_lived_feedback_column_becomes_the_rating(self):
         legacy_database(
             self.OLD_MOMENTS.format(extra=", feedback TEXT"),

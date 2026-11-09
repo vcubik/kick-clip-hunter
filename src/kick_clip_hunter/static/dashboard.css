@@ -962,10 +962,12 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-lines { max-height: var(--h-reel-lines); margin: 0; padding: 0; overflow-y: auto; list-style: none; border-top: 1px solid var(--quiet); }
 .reel-line { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-8) var(--space-4) var(--space-8) 6px; border-bottom: 1px solid var(--quiet); border-left: 2px solid transparent; }
 .reel-line.is-now { background: var(--sunk); border-left-color: var(--lit); }
-.reel-line-head { display: flex; align-items: center; gap: var(--space-4); }
+.reel-line-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
 /* A line ticked to be in the reel. */
 .reel-line-keep { display: flex; align-items: center; gap: var(--space-4); margin-left: var(--space-4); font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .reel-line-keep:has(input:checked) { color: var(--text); font-weight: 600; }
+/* A line marked to be cut out of the reel: its words struck through. */
+.reel-line:has([data-reel-cut-line]:checked) .reel-text { text-decoration: line-through; color: var(--text-2); }
 .reel-time { width: var(--w-reel-time); height: var(--h-compact); padding: 0 var(--space-8); font-variant-numeric: tabular-nums; }
 .reel-dash { color: var(--text-2); }
 .reel-text { width: 100%; height: var(--h-compact); padding: 3px var(--space-8); line-height: 20px; resize: none; overflow: hidden; }

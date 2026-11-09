@@ -466,7 +466,7 @@ class TestPuttingTheTranscriptRight:
             ],
         )
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 0}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 0, "cut": 0}
         assert transcript_of(moment_id) == [
             subtitles.Line(1.2, 2.5, "A: Watch out!"),
             subtitles.Line(3.0, 4.6, "He has a *red* now?"),
@@ -536,7 +536,7 @@ class TestLinesKeptInTheReel:
         lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
         payload = await rendered(reeling, github, moment_id, "B", "1")
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 0}
         assert ["checked" in line.one(data_reel_keep_line=True).attrs for line in lines] == [False, True]
         assert payload["keep"] == [{"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?"}]
 
@@ -573,6 +573,58 @@ class TestLinesKeptInTheReel:
             {"start": 0.0, "end": 1.0, "text": "into the stretch"},
             {"start": 3.0, "end": 4.0, "text": "in it"},
         ]
+
+
+class TestLinesCutOutOfTheReel:
+    async def test_marked_lines_are_kept_offered_again_and_go_up_with_the_render(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id, proposed=PROPOSED)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "A: Watch out!", "cut": True},
+                {"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?", "keep": True, "cut": False},
+            ],
+        )
+        lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 1}
+        assert ["checked" in line.one(data_reel_cut_line=True).attrs for line in lines] == [True, False]
+        assert ["checked" in line.one(data_reel_keep_line=True).attrs for line in lines] == [False, True]
+        assert payload["cut"] == [{"start": 1.2, "end": 2.5, "text": "A: Watch out!"}]
+        assert payload["keep"] == [{"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?"}]
+
+    async def test_a_line_both_kept_and_cut_out_is_refused_saying_which(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "watch out"},
+                {"start": 3.0, "end": 4.6, "text": "a red now?", "keep": True, "cut": True},
+            ],
+        )
+
+        assert response.status_code == 400
+        assert "Line 2" in response.json()["detail"]
+        assert reel_of(moment_id)["cut_lines"] is None
+
+    async def test_marks_go_with_a_transcript_a_new_storyboard_replaces(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "cut": True}])
+        set_reel(moment_id, transcript_edited=0)
+
+        await storyboard_back(reeling, github, moment_id)
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert reel_of(moment_id)["cut_lines"] is None
+        assert payload["cut"] == []
 
 
 class TestAVariantOfOnesOwn:
@@ -654,6 +706,7 @@ class TestRendering:
             "comment": "",
             "own": "",
             "keep": [],
+            "cut": [],
         }
         assert reel_of(moment_id)["state"] == reels.RENDERING
 
@@ -1388,6 +1441,7 @@ class TestQuestions:
                 "comment": "",
                 "own": "",
                 "keep": [],
+                "cut": [],
             },
         )
         reel = reel_of(moment_id)

@@ -2409,7 +2409,13 @@
         say(editor, `Line ${number}: write when it starts and ends, like 0:07.4.`);
         return false;
       }
-      lines.push({ start: start ?? 0, end: end ?? 0, text, keep: one("[data-reel-keep-line]", line).checked });
+      lines.push({
+        start: start ?? 0,
+        end: end ?? 0,
+        text,
+        keep: one("[data-reel-keep-line]", line).checked,
+        cut: one("[data-reel-cut-line]", line).checked,
+      });
     }
     const save = one("[data-reel-transcript-save]", editor);
     save.disabled = true;
@@ -4212,8 +4218,13 @@
       target.dataset.edited = "";
       if (target.dataset.reelComment === "feedback") say(target, "Not sent yet.");
       if (target.matches("[data-reel-own-variant]")) ownVariant(target);
-    } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end], [data-reel-keep-line]")) {
+    } else if (target.matches("[data-reel-text], [data-reel-start], [data-reel-end], [data-reel-keep-line], [data-reel-cut-line]")) {
       if (target.matches("[data-reel-text]")) grow(target);
+      // A line is in the reel or cut out of it, not both.
+      if (target.matches("[data-reel-keep-line], [data-reel-cut-line]") && target.checked) {
+        const other = target.matches("[data-reel-keep-line]") ? "[data-reel-cut-line]" : "[data-reel-keep-line]";
+        one(other, target.closest("[data-reel-line]")).checked = false;
+      }
       reelEdited(target);
     } else if (target.matches("[data-notify-field]")) {
       delete target.dataset.remove;
