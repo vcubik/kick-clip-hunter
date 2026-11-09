@@ -1387,3 +1387,4 @@ class TestReelsUrl:
     def test_the_page_and_a_moment_open_on_it(self):
         assert view.reels_url() == "/dashboard/reels"
         assert view.reels_url(7) == "/dashboard/reels?moment=7"
+        assert view.compilation_url(3) == "/dashboard/reels?compilation=3"

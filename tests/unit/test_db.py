@@ -2249,3 +2249,87 @@ class TestReelsFromBeforeTranscripts:
             ]
         finally:
             connection.close()
+
+
+class TestCompilations:
+    @staticmethod
+    def moment(conn, channel: str = "some_channel") -> int:
+        return db.insert_moment(
+            conn,
+            broadcaster_user_id=1,
+            channel_slug=channel,
+            window_start="2026-01-01T00:00:00+00:00",
+            window_end="2026-01-01T00:00:10+00:00",
+            detected_at="2026-01-01T00:00:10+00:00",
+            score=5.0,
+            reason="laugh",
+            message_count=10,
+            baseline_message_rate=1.0,
+            current_message_rate=5.0,
+            emote_count=3,
+            keyword_hits=2,
+        )
+
+    def test_parts_are_kept_in_order_with_their_moments(self, conn):
+        first, second = self.moment(conn), self.moment(conn, "other")
+        compilation_id = db.add_compilation(conn)
+
+        db.set_compilation_parts(conn, compilation_id, [(second, None, None), (first, 2.5, 9.0)])
+
+        parts = db.get_compilation_parts(conn, compilation_id)
+        assert [(row["moment_id"], row["part_start"], row["part_end"], row["channel_slug"]) for row in parts] == [
+            (second, None, None, "other"),
+            (first, 2.5, 9.0, "some_channel"),
+        ]
+        assert db.compilations_with_moment(conn, first) == [compilation_id]
+
+    def test_the_open_one_is_the_newest_with_no_reel(self, conn):
+        older = db.add_compilation(conn)
+        newer = db.add_compilation(conn)
+        assert db.get_open_compilation(conn)["id"] == newer
+
+        db.put_compilation_reel(conn, newer, state="sending", asked_at="2026-01-01T00:00:00+00:00")
+
+        assert db.get_open_compilation(conn)["id"] == older
+        db.put_compilation_reel(conn, older, state="sending", asked_at="2026-01-01T00:00:00+00:00")
+        assert db.get_open_compilation(conn) is None
+
+    def test_its_reel_is_kept_as_a_moments_with_where_the_parts_were_joined(self, conn):
+        compilation_id = db.add_compilation(conn, "roads")
+
+        db.put_compilation_reel(conn, compilation_id, state="choosing", asked_at="2026-01-01T00:00:00+00:00")
+        db.put_compilation_reel(conn, compilation_id, joined="[[0, 6]]")
+
+        reel = db.get_compilation_reel(conn, compilation_id)
+        assert (reel["state"], reel["joined"]) == ("choosing", "[[0, 6]]")
+        assert [row["compilation_id"] for row in db.get_compilation_reels_in(conn, ["choosing"])] == [compilation_id]
+        with pytest.raises(ValueError, match="part_start"):
+            db.put_compilation_reel(conn, compilation_id, part_start=1.0)
+
+    def test_the_list_says_how_many_clips_and_where_its_reel_stands(self, conn):
+        first = self.moment(conn)
+        draft = db.add_compilation(conn, "roads")
+        db.set_compilation_parts(conn, draft, [(first, None, None)])
+        sent = db.add_compilation(conn)
+        db.put_compilation_reel(conn, sent, state="choosing", asked_at="2099-01-01T00:00:00+00:00")
+
+        listed = db.get_compilation_list(conn)
+
+        assert [(row["id"], row["parts"], row["state"], row["channel_slug"]) for row in listed] == [
+            (sent, 0, "choosing", None),
+            (draft, 1, None, "some_channel"),
+        ]
+
+    def test_a_moment_dropped_leaves_the_rest_in_order_and_deleting_forgets_everything(self, conn):
+        first, second, third = (self.moment(conn) for _ in range(3))
+        compilation_id = db.add_compilation(conn)
+        db.set_compilation_parts(conn, compilation_id, [(first, None, None), (second, 1.0, 2.0), (third, None, None)])
+        db.put_compilation_reel(conn, compilation_id, state="done", asked_at="2026-01-01T00:00:00+00:00")
+
+        db.drop_moment_from_compilations(conn, second)
+
+        assert [row["moment_id"] for row in db.get_compilation_parts(conn, compilation_id)] == [first, third]
+        db.delete_compilation(conn, compilation_id)
+        assert db.get_compilation(conn, compilation_id) is None
+        assert db.get_compilation_parts(conn, compilation_id) == []
+        assert db.get_compilation_reel(conn, compilation_id) is None

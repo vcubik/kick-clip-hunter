@@ -214,6 +214,18 @@
     <a class="ch-btn ch-btn-compact" href="{{ reel.url }}" data-reel-link>{{ "Open the reel" if reel.state else "Make a reel" }}</a>
     {% if reel.words %}<span>{{ reel.words }}</span>{% endif %}
   </p>
+  {#- Or the clip as one of several in one reel: added to the compilation
+      clips are added to, which is put together on the Reels page. -#}
+  {% set compilation = reel.compilation %}
+  <p class="compilation-link" data-compilation-link data-status-scope>
+    {% if compilation.in_it %}
+    <a class="ch-btn ch-btn-compact" href="{{ compilation.url }}">Open the compilation</a>
+    <span data-status>In the compilation: {{ compilation.parts }} clip{{ '' if compilation.parts == 1 else 's' }}.</span>
+    {% else %}
+    <button type="button" class="ch-btn ch-btn-compact" title="Adds this clip to a reel made of several clips, put together on the Reels page" data-compilation-add="{{ compilation.add_url }}">Add to compilation</button>
+    <span data-status>{% if compilation.url %}<a href="{{ compilation.url }}">The compilation</a> has {{ compilation.parts }} clip{{ '' if compilation.parts == 1 else 's' }}.{% endif %}</span>
+    {% endif %}
+  </p>
   {% endif %}
 
   {#- Del on the keyboard asks the same, and Del again deletes. -#}

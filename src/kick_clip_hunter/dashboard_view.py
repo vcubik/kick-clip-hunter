@@ -653,6 +653,12 @@ def reels_url(moment: int | None = None) -> str:
     return "/dashboard/reels" + (f"?{urlencode({'moment': moment})}" if moment is not None else "")
 
 
+def compilation_url(compilation: int) -> str:
+    """The Reels page with a compilation open: several moments' clips made
+    into one reel (see reels.py)."""
+    return f"/dashboard/reels?{urlencode({'compilation': compilation})}"
+
+
 # How many pages on either side of the one that is open are numbered in a
 # list's paging; the first and the last always are.
 PAGES_AROUND = 2

@@ -1620,10 +1620,12 @@
   const stretchOf = (element) => element.closest("[data-stretch]");
 
   // The player whose place an end is set to, and where it is: the VOD's on
-  // the review page, in clip time; the moment's file on the Reels page.
+  // the review page, in clip time; the moment's file on the Reels page, or
+  // a compilation's part's own.
   function stretchPlayer(box) {
-    if (box.dataset.stretch === "reel") {
-      const video = one("[data-reel-source]", reelOf(box));
+    if (box.dataset.stretch === "reel" || box.dataset.stretch === "part") {
+      const video =
+        box.dataset.stretch === "part" ? one("[data-part-source]", box.closest("[data-part]")) : one("[data-reel-source]", reelOf(box));
       return video ? { time: video.currentTime } : null;
     }
     const video = one("video[data-vod]", box.closest(".moment"));
@@ -1671,6 +1673,7 @@
     box.dataset.chosen = "";
     say(box, "");
     showStretch(box);
+    stretchChanged(box);
   }
 
   function resetStretch(box) {
@@ -1679,6 +1682,12 @@
     delete box.dataset.chosen;
     say(box, "");
     showStretch(box);
+    stretchChanged(box);
+  }
+
+  // A compilation's part's stretch is kept as soon as it is changed.
+  function stretchChanged(box) {
+    if (box.dataset.stretch === "part") saveCompilation(compilationOf(box));
   }
 
   // An end of the stretch set where the player beside it is.
@@ -1781,7 +1790,7 @@
   // What starts a step, and its comment, is off while one goes on.
   function dressReel(root) {
     const busy = root.hasAttribute("data-busy");
-    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"], [data-reel-comment="variant"], [data-reel-questions] input, [data-reel-questions] button';
+    const starting = '[data-reel-ask], [data-reel-render], [data-stretch] input, [data-stretch] button, [data-reel-comment="storyboard"], [data-reel-comment="render"], [data-reel-comment="variant"], [data-reel-questions] input, [data-reel-questions] button, [data-compilation] input, [data-compilation] button';
     for (const control of all(starting, root)) control.disabled = busy;
     for (const box of all("[data-stretch]", root)) {
       box.hidden = false;
@@ -1884,8 +1893,9 @@
     }
     const who = one("[data-reel-who]", box).value.trim();
     if (who) answers.who = who;
+    // A compilation's questions have none of a time in a file.
     const peak = one("[data-reel-peak]", box);
-    if (peak.value.trim()) {
+    if (peak && peak.value.trim()) {
       const time = lineTime(peak);
       if (time === null) return { wrong: peak };
       answers.peak = time;
@@ -1920,12 +1930,21 @@
       say(button, "That is not a time, or a part ends before it starts. Write it like 0:12.5.");
       return;
     }
+    // A compilation's clips as they are on the page, each the stretch of its
+    // moment's file; otherwise the stretch of the moment's file shown above
+    // the button - all of it, unless another was chosen.
+    const box = one("[data-compilation]", root);
+    if (box && all("[data-part]", box).length < Number(box.dataset.least)) {
+      say(button, `A compilation is made of at least ${box.dataset.least} clips. Add them on the review page.`);
+      return;
+    }
     button.disabled = true;
     say(button, "Asking for a storyboard.");
-    // The stretch of the file shown above the button - all of it, unless
-    // another was chosen.
-    const stretch = one("[data-stretch]", root);
-    const asked = { ...(stretch ? stretchAt(stretch) : {}), comment: reelComment(root, "storyboard"), answers };
+    const stretch = box ? null : one("[data-stretch]", root);
+    const comment = reelComment(root, "storyboard");
+    const asked = box
+      ? { theme: compilationTheme(box), parts: compilationParts(box), comment, answers }
+      : { ...(stretch ? stretchAt(stretch) : {}), comment, answers };
     const response = await post(button.dataset.reelAsk, asked);
     if (!root.isConnected) return;
     if (!response || !response.ok) {
@@ -2146,6 +2165,108 @@
     clearTimeout(reelWatch);
     const busy = one("[data-reel][data-busy]");
     reelWatch = busy ? setTimeout(() => refreshReel(busy), REEL_POLL_MS) : null;
+  }
+
+  // Plays the clip a reel's times are of from a time: where a part of a
+  // compilation is in the clip its parts were joined into.
+  function seekReelSource(button) {
+    const source = one("[data-reel-source]", reelOf(button));
+    if (!source) return;
+    source.dataset.until = "";
+    source.currentTime = Number(button.dataset.reelSeek);
+    source.play().catch(() => {});
+  }
+
+  // ---- A compilation ----------------------------------------------------
+  //
+  // Several moments' clips made into one reel: each added on the review
+  // page, to the compilation clips are added to, and put in order and cut
+  // to a stretch of its moment's file on the Reels page - where every
+  // change is kept as soon as it is made.
+
+  const compilationOf = (element) => element.closest("[data-compilation]");
+  const compilationTheme = (box) => one("[data-compilation-theme]", box)?.value ?? "";
+
+  function compilationParts(box) {
+    return all("[data-part]", box).map((part) => {
+      const stretch = one("[data-stretch]", part);
+      return { moment_id: Number(part.dataset.momentId), ...(stretch ? stretchAt(stretch) : {}) };
+    });
+  }
+
+  async function saveCompilation(box, words = "Kept.") {
+    if (!box) return;
+    const response = await post(box.dataset.compilation, { theme: compilationTheme(box), parts: compilationParts(box) });
+    if (!box.isConnected) return;
+    if (!response || !response.ok) {
+      say(box, response ? await problem(response, "Could not keep the change. Try again.") : "Could not reach the service.");
+      return;
+    }
+    say(box, words);
+  }
+
+  function numberParts(box) {
+    all("[data-part]", box).forEach((part, index) => {
+      one("[data-part-number]", part).textContent = String(index + 1);
+    });
+  }
+
+  function moveCompilationPart(button) {
+    const part = button.closest("[data-part]");
+    const box = compilationOf(part);
+    const other = button.dataset.partMove === "up" ? part.previousElementSibling : part.nextElementSibling;
+    if (!other) return;
+    if (button.dataset.partMove === "up") other.before(part);
+    else other.after(part);
+    numberParts(box);
+    saveCompilation(box, "Moved.");
+  }
+
+  function removeCompilationPart(button) {
+    const box = compilationOf(button);
+    button.closest("[data-part]").remove();
+    numberParts(box);
+    saveCompilation(box, "Taken out. It stays on the review page.");
+  }
+
+  // Pressed once it asks, pressed again it deletes - the moments stay.
+  async function deleteCompilation(button) {
+    if (button.dataset.sure !== "yes") {
+      button.dataset.sure = "yes";
+      button.textContent = "Delete it for good";
+      say(button, "Press again to delete the compilation and its reel. The moments stay.");
+      return;
+    }
+    button.disabled = true;
+    const response = await post(button.dataset.compilationDelete);
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not delete the compilation. Try again.") : "Could not reach the service.");
+      return;
+    }
+    window.location.assign((await response.json()).url);
+  }
+
+  // On the review page: the moment's clip added to the compilation, and the
+  // way to it in place of the button.
+  async function addToCompilation(button) {
+    button.disabled = true;
+    say(button, "Adding.");
+    const response = await post(button.dataset.compilationAdd);
+    if (!button.isConnected) return;
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not add the clip. Try again.") : "Could not reach the service.");
+      return;
+    }
+    const standing = await response.json();
+    const open = document.createElement("a");
+    open.className = "ch-btn ch-btn-compact";
+    open.href = standing.url;
+    open.textContent = "Open the compilation";
+    const line = button.closest("[data-compilation-link]");
+    button.replaceWith(open);
+    say(line, standing.words);
   }
 
   // ---- A reel's transcript ----------------------------------------------
@@ -3796,6 +3917,11 @@
     ["[data-reel-take]", takeHeardLine],
     ["[data-reel-transcript-save]", (button) => saveReelTranscript(reelEditorOf(button))],
     ["[data-reel-feedback]", sendReelFeedback],
+    ["[data-reel-seek]", seekReelSource],
+    ["[data-compilation-add]", addToCompilation],
+    ["[data-part-move]", moveCompilationPart],
+    ["[data-part-remove]", removeCompilationPart],
+    ["[data-compilation-delete]", deleteCompilation],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],
@@ -4108,6 +4234,7 @@
     else if (target.matches("[data-transcript-line]")) correctLine(target);
     else if (target.matches("[data-trim-type]")) typeTrim(target);
     else if (target.matches("[data-stretch-type]")) typeStretch(target);
+    else if (target.matches("[data-compilation-theme]")) saveCompilation(compilationOf(target));
     else if (target.matches("[data-trim-chat]")) wantTrimChat(target);
     else if (target.matches("[data-trim-where]")) {
       keepTrimChoice(TRIM_WHERE_KEY, target.value);

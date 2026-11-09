@@ -96,6 +96,7 @@
   --w-analysis: 1200px;
   --h-reel: 480px;        /* a rendered reel, 9:16, on the Reels page */
   --h-reel-lines: 520px;  /* a reel's transcript, scrolled inside itself beside the clip */
+  --h-reel-part: 240px;   /* a compilation's clip, played where its stretch is chosen */
   --w-reel-time: 72px;    /* when a line of a reel's transcript starts or ends, typed */
   --h-reel-comment: 160px; /* a comment written to go with a reel, before it scrolls inside itself */
   --w-gutter: 44px;
@@ -461,7 +462,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .moment-delete { margin-top: var(--space-12); }
 
 /* The way to a moment's reel, which is made on the Reels page. */
-.reel-link { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-12); font-size: 13px; color: var(--text-2); }
+.reel-link, .compilation-link { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-12); font-size: 13px; color: var(--text-2); }
 
 /* What the per-clip analysis found, when it has run. */
 .analysis { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--quiet); font-size: 13px; }
@@ -933,6 +934,20 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-keep-note { flex: 1 1 160px; height: var(--h-compact); padding: 0 var(--space-8); }
 .reel-render-now { font-size: 13px; }
 .reel-questions [aria-invalid="true"] { outline: 2px solid #e5484d; }
+/* A compilation's clips: a block each - its number, whose it is and the
+   buttons that move it or take it out on one row, its own player, and the
+   stretch of its file under them - and where each is in the clip they were
+   joined into, as tags over the transcript. */
+.compilation { width: 100%; }
+.compilation-parts { display: flex; flex-direction: column; width: 100%; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--quiet); }
+.compilation-parts:empty { display: none; }
+.compilation-part { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); padding: var(--space-8) 0; border-bottom: 1px solid var(--quiet); }
+.compilation-part-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); width: 100%; font-size: 13px; }
+.compilation-part-name { min-width: 0; color: var(--text-2); }
+.compilation-part-name b { color: var(--text); }
+.compilation-number { font-variant-numeric: tabular-nums; }
+.compilation-source { display: block; width: 100%; max-height: var(--h-reel-part); background: var(--video); }
+.compilation-joined { display: flex; flex-wrap: wrap; gap: var(--space-4); }
 .reel-subtitles { display: flex; align-items: center; gap: var(--space-4); }
 .reel-subtitles .ch-cap { margin-right: var(--space-4); }
 
