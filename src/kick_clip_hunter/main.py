@@ -6822,6 +6822,7 @@ REEL_QUESTIONS = (
             ("cam", "Webcam only"),
             ("cam_game", "Webcam above gameplay"),
             ("full", "The whole picture"),
+            ("react", "Webcam on top, screen below (reaction / gaming)"),
         ),
     ),
     (
