@@ -796,6 +796,44 @@ class TestRendering:
         assert opened.one(data_reel_own=True).attrs["value"] == "MY OWN|*HOOK*"
         assert all(hook.attrs["aria-pressed"] == "false" for hook in opened.find(data_reel_hook=True))
 
+    async def test_no_hook_renders_nothing_at_the_top_and_is_chosen_again(self, reeling, github, told):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        first = await workspace(reeling, moment_id)
+        assert first.one(data_reel_no_hook=True).attrs["aria-pressed"] == "false"
+
+        payload = await rendered(reeling, github, moment_id, "B", "", no_hook=True)
+        told.sent.clear()
+        github.answer_reel(reels.tag(moment_id), b"the reel")
+        await reeling.main._look_at_reels()
+        await async_wait_until(lambda: told.sent, "the note")
+
+        assert payload["hook"] == ""
+        assert reel_of(moment_id)["hook"] == reels.NO_HOOK
+        opened = await workspace(reeling, moment_id)
+        assert opened.one(data_reel_no_hook=True).attrs["aria-pressed"] == "true"
+        assert all(hook.attrs["aria-pressed"] == "false" for hook in opened.find(data_reel_hook=True))
+        assert opened.one(data_reel_own=True).attrs["value"] == ""
+        assert "Variant B, hook: none" in opened.one(data_reel_region="result").text
+        assert "Variant B, hook: none" in told.sent[0]["shown"]
+
+    async def test_no_hook_lets_the_words_sent_with_it_go(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        payload = await rendered(reeling, github, moment_id, "B", "1", no_hook=True)
+
+        assert payload["hook"] == ""
+
+    async def test_no_hook_that_is_not_true_or_false_is_refused(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await render(reeling, moment_id, "B", "", no_hook="yes")
+
+        assert response.status_code == 400
+        assert len(github.dispatches) == 1
+
     async def test_emoji_shortcuts_go_up_as_typed_and_the_page_shows_them_as_emoji(self, reeling, github):
         moment_id = clipped_moment()
         await storyboard_back(reeling, github, moment_id)

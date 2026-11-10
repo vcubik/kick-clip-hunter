@@ -6689,7 +6689,7 @@ async def _take_reel(github: reels.GitHub, reel_of: ReelOf, release: reels.Relea
     channel = _channel_of(reel_of)
     if channel is not None and _notes().destinations:
         note = notify.reel_note(
-            channel, reel["variant"] or "", reels.hook_shown(reel["hook"] or ""), link=_link(reel_of.url)
+            channel, reel["variant"] or "", reels.hook_said(reel["hook"]), link=_link(reel_of.url)
         )
         _track_task(_notes().notify(note, path))
 
@@ -6757,8 +6757,8 @@ def _transcript_lines(
 def _reel_storyboard(storyboard: dict, reel) -> dict:
     """A storyboard as the Reels page offers it: the variant and the hook the
     reel was last rendered with chosen - or the recommended variant and the
-    first hook - and the words of one's own it was rendered with offered
-    again."""
+    first hook, or none where the reel was rendered without one - and the
+    words of one's own it was rendered with offered again."""
     variants = [variant for variant in storyboard.get("variants", []) if isinstance(variant, dict)]
     recommended = next((str(variant.get("id")) for variant in variants if variant.get("recommended")), None)
     # A variant of one's own the reel was last rendered with: none of the
@@ -6767,7 +6767,8 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
     chosen = None if own_variant else (reel["variant"] or recommended)
     hooks = [hook for hook in storyboard.get("hooks", []) if isinstance(hook, dict) and hook.get("text")]
     used = reel["hook"]
-    chosen_hook = used if used else (str(hooks[0]["text"]) if hooks else None)
+    no_hook = used == reels.NO_HOOK
+    chosen_hook = used if used or no_hook else (str(hooks[0]["text"]) if hooks else None)
     own = used if used and all(str(hook["text"]) != used for hook in hooks) else ""
     return {
         "summary": str(storyboard.get("summary") or ""),
@@ -6776,6 +6777,7 @@ def _reel_storyboard(storyboard: dict, reel) -> dict:
         "own_variant": own_variant,
         "own_variant_most": reels.COMMENT_MOST_CHARACTERS,
         "own_hook": own,
+        "no_hook": no_hook,
         "own_pieces": reels.hook_pieces(own) if own else [],
         "own_most": reels.HOOK_MOST_TYPED,
         "emoji": reels.EMOJI_PICKS,
@@ -6987,7 +6989,7 @@ def _reel_view(reel_of: ReelOf, reel, *, length: float | None, clip_url: str | N
         with_subtitles = {reels.WITH_SUBTITLES: ", with subtitles", reels.WITHOUT_SUBTITLES: ", without subtitles"}
         variant_words = "Your own variant" if reel["variant_own"] else f"Variant {reel['variant']}"
         view["result_words"] = (
-            f"{variant_words}, hook: {reels.hook_shown(reel['hook'] or '')}"
+            f"{variant_words}, hook: {reels.hook_said(reel['hook'])}"
             f"{with_subtitles.get(reel['subtitles'] or '', '')}"
         )
         if state == reels.DONE:
@@ -7744,7 +7746,8 @@ async def _save_reel_transcript(reel_of: ReelOf, request: Request) -> dict:
 @app.post("/moments/{moment_id}/reel/render")
 async def render_reel(moment_id: int, request: Request):
     """Renders a moment's reel with a variant of its storyboard and a hook -
-    the storyboard's (by its id) or words of one's own - and its subtitles
+    the storyboard's (by its id) or words of one's own, or none at all
+    where `no_hook` is true (nothing at the top of the reel) - and its subtitles
     as the variant has them, or with them or without them: posted as JSON
     `variant`, `hook` and `subtitles` ("auto", "on" or "off"; "auto" left
     out), and a `comment` on what to change in the variant, which Claude
@@ -7775,6 +7778,10 @@ async def _render_reel(reel_of: ReelOf, request: Request) -> dict:
         asked = None
     if not isinstance(asked, dict) or not all(isinstance(asked.get(name), str) for name in ("variant", "hook")):
         raise HTTPException(status_code=400, detail="Expected variant and hook as JSON.")
+    # Asked for with no hook at all: the hook's words are then not looked at.
+    no_hook = asked.get("no_hook", False)
+    if not isinstance(no_hook, bool):
+        raise HTTPException(status_code=400, detail="Expected no_hook as true or false.")
     choice = asked.get("subtitles", reels.SUBTITLES_AS_THE_VARIANT)
     if choice not in reels.SUBTITLE_CHOICES:
         raise HTTPException(status_code=400, detail="Subtitles are auto, on or off.")
@@ -7797,7 +7804,16 @@ async def _render_reel(reel_of: ReelOf, request: Request) -> dict:
             raise HTTPException(status_code=409, detail=reels.state_words(reel["state"]))
         try:
             _start_render(
-                github, conn, reel_of, reel, storyboard, asked["variant"], asked["hook"], choice, comment, own
+                github,
+                conn,
+                reel_of,
+                reel,
+                storyboard,
+                asked["variant"],
+                None if no_hook else asked["hook"],
+                choice,
+                comment,
+                own,
             )
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
@@ -7813,14 +7829,15 @@ def _start_render(
     reel,
     storyboard: dict,
     variant_asked: str,
-    hook_asked: str,
+    hook_asked: str | None,
     choice: str,
     comment: str = "",
     own: str = "",
 ) -> None:
     """Stores that a reel is being rendered with a variant of its
     storyboard - or one of one's own (`own`, where no variant is asked
-    for), built on the one the storyboard recommends - and a hook, and
+    for), built on the one the storyboard recommends - and a hook (none
+    at all where `hook_asked` is None: reels.NO_HOOK), and
     starts the render (see render_reel) - asked for on the page, or straight
     away where the answers to the questions asked for that. Raises
     ValueError, in words for the page, for neither, a variant or a hook the
@@ -7831,7 +7848,7 @@ def _start_render(
         variant = reels.recommended(storyboard)[0]
     else:
         raise ValueError("Choose a variant, or describe your own.")
-    hook = reels.chosen_hook(storyboard, hook_asked)
+    hook = reels.NO_HOOK if hook_asked is None else reels.chosen_hook(storyboard, hook_asked)
     # A reel from before transcripts were kept goes by what the release has.
     transcript = subtitles.read(reel["transcript"])
     said = None

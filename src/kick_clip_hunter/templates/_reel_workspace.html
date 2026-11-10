@@ -287,6 +287,10 @@
             <span class="reel-option-head"><b>{{ hook_words(hook.pieces) }}</b>{% if hook.type %} {{ hook.type }}{% endif %}</span>
           </button>
           {% endfor %}
+          {#- No hook at all: nothing written at the top of the reel. -#}
+          <button type="button" class="reel-option" aria-pressed="{{ 'true' if board.no_hook else 'false' }}" data-reel-no-hook>
+            <span class="reel-option-head"><b>No hook</b> nothing written at the top</span>
+          </button>
           <label class="reel-own">
             <span class="ch-cap">Or your own: | breaks the line, *a word* between stars stands out, {rofl} and the like are emoji</span>
             <input type="text" class="ch-input" maxlength="{{ board.own_most }}" value="{{ board.own_hook }}" placeholder="NEARLY RAN|*HIM OVER?* {rofl}" autocomplete="off" spellcheck="false" data-reel-own>

@@ -1958,16 +1958,16 @@
 
   // A variant or a hook chosen: the one pressed in its group. A variant sets
   // the subtitles as it has them; one of the storyboard's hooks drops the
-  // words of one's own. A variant of one's own is kept as it is typed, and
-  // goes only where none of the storyboard's is chosen.
+  // words of one's own, and so does "No hook". A variant of one's own is kept
+  // as it is typed, and goes only where none of the storyboard's is chosen.
   function chooseReel(button) {
     const group = button.closest("[data-reel-variants], [data-reel-hooks]");
-    for (const other of all("[data-reel-variant], [data-reel-hook]", group)) {
+    for (const other of all("[data-reel-variant], [data-reel-hook], [data-reel-no-hook]", group)) {
       other.setAttribute("aria-pressed", other === button ? "true" : "false");
     }
     if (button.matches("[data-reel-variant]")) setReelSubtitles(reelOf(button), button.dataset.subtitled);
     const own = one("[data-reel-own]", group);
-    if (own && button.matches("[data-reel-hook]")) {
+    if (own && button.matches("[data-reel-hook], [data-reel-no-hook]")) {
       own.value = "";
       showOwnHook(own);
     }
@@ -1992,7 +1992,7 @@
   function ownHook(field) {
     const group = field.closest("[data-reel-hooks]");
     if (field.value.trim()) {
-      for (const hook of all("[data-reel-hook]", group)) hook.setAttribute("aria-pressed", "false");
+      for (const hook of all("[data-reel-hook], [data-reel-no-hook]", group)) hook.setAttribute("aria-pressed", "false");
     }
     showOwnHook(field);
   }
@@ -2061,14 +2061,17 @@
     const root = reelOf(button);
     const variant = one('[data-reel-variant][aria-pressed="true"]', root);
     const own = one("[data-reel-own]", root);
-    const hook = own && own.value.trim() ? own.value.trim() : one('[data-reel-hook][aria-pressed="true"]', root)?.dataset.reelHook;
+    const typed = own ? own.value.trim() : "";
+    const hook = typed || one('[data-reel-hook][aria-pressed="true"]', root)?.dataset.reelHook;
+    // Nothing at the top of the reel: "No hook" chosen, and no words typed.
+    const noHook = !typed && Boolean(one('[data-reel-no-hook][aria-pressed="true"]', root));
     const subtitles = one('[data-reel-subtitles] [aria-pressed="true"]', root)?.dataset.value || "auto";
     const ownVariantWords = variant ? "" : reelComment(root, "variant").trim();
     if (!variant && !ownVariantWords) {
       say(button, "Choose a variant, or describe your own.");
       return;
     }
-    if (!hook) {
+    if (!hook && !noHook) {
       say(button, "Choose a hook, or write one.");
       return;
     }
@@ -2084,7 +2087,8 @@
     const response = await post(button.dataset.reelRender, {
       variant: variant ? variant.dataset.reelVariant : "",
       variant_own: ownVariantWords,
-      hook,
+      hook: noHook ? "" : hook,
+      no_hook: noHook,
       subtitles,
       comment,
     });
@@ -3913,7 +3917,7 @@
     ["[data-reel-here]", answerHere],
     ["[data-reel-keep-add]", addKeepPart],
     ["[data-reel-keep-remove]", (button) => button.closest("[data-reel-keep]").remove()],
-    ["[data-reel-variant], [data-reel-hook]", chooseReel],
+    ["[data-reel-variant], [data-reel-hook], [data-reel-no-hook]", chooseReel],
     ["[data-reel-emoji]", addReelEmoji],
     ["[data-reel-subtitles] button", (button) => setReelSubtitles(reelOf(button), button.dataset.value)],
     ["[data-reel-render]", renderReel],

@@ -284,7 +284,7 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   `*a word*` makes it stand out. A variant - or, where none is pressed, one of one's own
   described in the field under them (typing in it lets go of the one pressed; Claude builds it
   on the recommended one before the render) - and a hook (or words of one's own, `|` breaking the
-  line and `*word*` highlighted) are pressed - an emoji shortcut in a hook (`{rofl}`, `{lebka}`,
+  line and `*word*` highlighted, or "No hook" for nothing written at the top) are pressed - an emoji shortcut in a hook (`{rofl}`, `{lebka}`,
   any case; `reels.EMOJI_CODES`, kept in step with the render script's) shown as its emoji, and
   one the render script does not know struck through, as the reel leaves it out. The words of
   one's own are shown so under the field as they are typed, and the emoji buttons under them put
@@ -292,8 +292,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   the hook's 80 characters. Subtitles are switched on or off (as the pressed
   variant has them to begin with), a comment for the render written if there is something to
   change in the variant (Claude reworks it by that first), and "Render"
-  (`POST /moments/{id}/reel/render`, `variant` - "" for one's own, in `variant_own` - `hook`,
-  `subtitles` and `comment`, after saving what is not saved in the transcript) has the reel made
+  (`POST /moments/{id}/reel/render`, `variant` - "" for one's own, in `variant_own` - `hook`
+  (`no_hook` true for none), `subtitles` and `comment`, after saving what is not saved in the transcript) has the reel made
   with the transcript as its subtitles, its lines ticked "In the reel" kept in it and those
   ticked "Cut out" left out of it;
   it plays at the top once it is back, with a download, what it was made with and what Claude

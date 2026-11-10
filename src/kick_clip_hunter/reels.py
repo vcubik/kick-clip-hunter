@@ -653,6 +653,18 @@ def rendered_note(raw: bytes) -> str:
     return note.strip()[:COMMENT_MOST_CHARACTERS] if isinstance(note, str) else ""
 
 
+# The hook of a reel asked for with none: nothing at the top. The render
+# workflow takes empty words for that, and a reel stores them so - where a
+# reel not rendered yet has no hook at all (None).
+NO_HOOK = ""
+
+
+def hook_said(hook: str | None) -> str:
+    """A reel's hook in words for the page and the notes: as the reel shows
+    it (hook_shown), or that it has none."""
+    return hook_shown(hook) if hook else "none"
+
+
 def chosen_hook(storyboard: Mapping[str, Any], hook: str) -> str:
     """The words of the hook asked for: a storyboard hook's id stands for
     its words, anything else is the words themselves. Raises ValueError
