@@ -121,6 +121,13 @@ class TestChoosing:
         with pytest.raises(ValueError, match="at most"):
             reels.chosen_hook(STORYBOARD, "{x}" * (reels.HOOK_MOST_TYPED // 3 + 1))
 
+    @pytest.mark.parametrize(
+        ("hook", "said"),
+        [("NEARLY|*RAN* {rofl}", "NEARLY / RAN 🤣"), (reels.NO_HOOK, "none"), (None, "none")],
+    )
+    def test_a_reels_hook_is_said_as_the_reel_shows_it_or_as_none(self, hook, said):
+        assert reels.hook_said(hook) == said
+
 
 class TestWords:
     def test_a_hook_is_shown_without_its_marks(self):
