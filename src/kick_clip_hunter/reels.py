@@ -206,8 +206,10 @@ ANSWER_CHOICES = {
     "cut": ("raw", "tighten"),
     # What is on screen: "cam" the webcam alone (the game does not matter,
     # he tells a story over it), "cam_game" the webcam above the gameplay,
-    # "full" the whole picture of the stream as it is.
-    "layout": ("cam", "cam_game", "full"),
+    # "full" the whole picture of the stream as it is, "react" the webcam on
+    # top and what he reacts to or plays below it, over the reel's full
+    # height (a reaction or a game).
+    "layout": ("cam", "cam_game", "full", "react"),
     "kind": ("reaction", "fail", "casino", "talk", "game", "irl", "other"),
     "subtitles": ("yes", "no"),
     "teaser": ("yes", "no"),

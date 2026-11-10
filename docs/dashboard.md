@@ -256,7 +256,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   left to Claude unless chosen - or answered in words of one's own in the field beside its
   choices, which lets go of the choice: cut it or not ("Don't cut, keep it all", "Cut out dead air"),
   what is on screen ("Webcam only" - a story told over a game that does not matter, "Webcam above
-  gameplay", "The whole picture"), what the clip is, its length, the hook's style, subtitles, a teaser, a sound effect, emoji,
+  gameplay", "The whole picture", "Webcam on top, screen below (reaction / gaming)" - the full height
+  of the reel, what he reacts to or plays found on the screen by itself), what the clip is, its length, the hook's style, subtitles, a teaser, a sound effect, emoji,
   who is in it, where the joke is and the parts that have to be in the reel - however far
   apart, each with a few words of what it is - set where the player under the transcript is
   ("Here") or typed, and "Render the recommended variant and hook straight away", which renders

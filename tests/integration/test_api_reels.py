@@ -1387,6 +1387,17 @@ class TestQuestions:
         # Not to be sent again while the storyboard is made.
         assert "disabled" in opened.one(data_reel_ask=True).attrs
 
+    async def test_the_full_height_reaction_layout_can_be_chosen(self, reeling, github):
+        moment_id = clipped_moment()
+
+        await asked_for_storyboard(reeling, github, moment_id, answers={"layout": "react"})
+
+        context = json.loads(github.asset(reels.tag(moment_id), "context.json"))
+        assert context["answers"] == {"layout": "react"}
+        box = (await workspace(reeling, moment_id)).one(data_reel_questions=True)
+        layout = box.one(data_reel_answer="layout")
+        assert layout.one(aria_pressed="true").attrs["data-value"] == "react"
+
     async def test_unasked_the_questions_are_folded_away_and_left_to_claude(self, reeling, github):
         moment_id = clipped_moment()
 
