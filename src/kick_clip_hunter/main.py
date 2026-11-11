@@ -40,7 +40,6 @@ from . import (
     kick_auth,
     kick_chat,
     kick_client,
-    kick_stream,
     notify,
     platforms,
     recorder,
@@ -8040,8 +8039,8 @@ async def moment_vod(moment_id: int):
         "moment_id": moment_id,
         "source": vod_relay.address(vod.master) if platform in VOD_RELAYED else vod.master,
         "lead": round(lead, 3),
-        # Kick's link starts a little into the clip; Twitch's where it begins.
-        "start": kick_stream.WATCH_LATER_SECONDS if platform == platforms.KICK else 0.0,
+        # Played from a little into the clip, as the link to its page is.
+        "start": platforms.WATCH_LATER_SECONDS,
     }
 
 

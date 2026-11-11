@@ -60,7 +60,17 @@ import httpx
 
 from . import twitch_client
 from .config import load_settings
-from .platforms import VODS_FOR_SUBSCRIBERS, VODS_HIDDEN, VODS_NONE, VODS_PUBLIC, NoVod, StreamUrlError, StreamUrls, Vod
+from .platforms import (
+    VODS_FOR_SUBSCRIBERS,
+    VODS_HIDDEN,
+    VODS_NONE,
+    VODS_PUBLIC,
+    WATCH_LATER_SECONDS,
+    NoVod,
+    StreamUrlError,
+    StreamUrls,
+    Vod,
+)
 from .streamlink_support import NOT_INSTALLED, Options, Streamlink, StreamlinkError
 
 logger = logging.getLogger("kick_clip_hunter")
@@ -239,14 +249,15 @@ def watch_link(video_id: str, seconds: float) -> str:
 
 async def watch_link_at(login: str, when: datetime) -> str:
     """Where the channel's stream that was on at `when` is watched on
-    twitch.tv from then on: its past broadcast - of a stream that is on as
+    twitch.tv from then on - WATCH_LATER_SECONDS later, rather: its past
+    broadcast - of a stream that is on as
     well, which Twitch plays as it goes along. Raises NoVod, saying why,
     where there is none."""
     video = await _asked_archive_at(login, when)
     began = _began(video)
     if began is None:
         raise NoVod("Twitch does not say when the past broadcast of that stream began.")
-    return watch_link(str(video["id"]), (when - began).total_seconds())
+    return watch_link(str(video["id"]), (when - began).total_seconds() + WATCH_LATER_SECONDS)
 
 
 async def vod_access(login: str) -> str | None:

@@ -55,6 +55,12 @@ VODS_PUBLIC = "public"
 VODS_FOR_SUBSCRIBERS = "subscribers"
 VODS_HIDDEN = "hidden"
 VODS_NONE = "none"
+# How much later than where a moment's clip would begin a VOD is played from
+# where a person watches it (a link to its page on Kick or Twitch, the review
+# page's player of it): a clip begins well before what chat reacted to, and
+# whoever watches wants to get there sooner. Only where it is played from -
+# a clip cut from the VOD is framed as it always is.
+WATCH_LATER_SECONDS = 15
 
 # What stands between a channel's name on its platform and the platform's.
 # Neither Kick's names nor Twitch's can have one, nor YouTube's or TikTok's

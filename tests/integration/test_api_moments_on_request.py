@@ -15,7 +15,7 @@ from kick_clip_hunter import (
     dashboard_view,
     db,
     detector,
-    kick_stream,
+    platforms,
     recorder,
     recording_manager,
     tuning,
@@ -324,7 +324,7 @@ class TestAMomentCaught:
         first_at = datetime.fromisoformat(found["window_start"]) - timedelta(
             seconds=tuned.pre_roll_seconds + tuned.playback_delay_seconds
         )
-        seconds = int((first_at - began).total_seconds()) + kick_stream.WATCH_LATER_SECONDS
+        seconds = int((first_at - began).total_seconds()) + platforms.WATCH_LATER_SECONDS
         return f"https://kick.com/{CHANNEL}/videos/{site_video_id(channel.videos[0])}?t={seconds}"
 
     async def test_it_is_kept_without_a_clip_with_where_it_is_watched_in_the_vod(self, service, notified, vod, channel):
@@ -722,7 +722,7 @@ class TestItsVodPlayedOnThePage:
             "source": vod.master_url,
             "lead": pytest.approx((clip_from - self.VOD_START).total_seconds(), abs=0.001),
             # Where the link to the VOD on Kick starts.
-            "start": kick_stream.WATCH_LATER_SECONDS,
+            "start": platforms.WATCH_LATER_SECONDS,
         }
         # Only the playlist was asked for, none of the footage.
         assert vod.segment_requests() == []
@@ -833,8 +833,8 @@ class TestATwitchVodPlayedOnThePage:
         tuned = tuning.recommended()
         clip_from = START + timedelta(seconds=116 - tuned.pre_roll_seconds - tuned.playback_delay_seconds)
         assert found["lead"] == pytest.approx((clip_from - START).total_seconds(), abs=0.001)
-        # The link to the past broadcast on Twitch starts where the clip would.
-        assert found["start"] == 0.0
+        # Played from as far into the clip as the link to the past broadcast.
+        assert found["start"] == platforms.WATCH_LATER_SECONDS
 
     async def test_the_page_follows_the_vod_to_its_footage_through_the_service(self, service, vod, kept):
         master = await self.relay(service, (await self.where(service, kept))["source"])
