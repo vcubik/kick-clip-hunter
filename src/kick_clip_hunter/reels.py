@@ -36,7 +36,9 @@ How it goes, a moment at a time, each step started from the Reels page:
    times, lines added and taken out (`checked_transcript`) - and the reel's
    subtitles are made of it from then on. A line can be ticked to be in the
    reel, or marked to be cut out of it (`marks_asked`): the render is not
-   to cut the one out, and is to leave the other out.
+   to cut the one out, and is to leave the other out. A line can also be
+   given a message of chat (`chats_asked`) - the streamer reading out what
+   someone wrote - which the reel shows in place of its subtitles.
 4. "Render" with a variant and a hook - one of the storyboard's, or words
    of one's own - and with or without subtitles, and a comment on what to
    change in the variant where one was written; in place of a variant, one
@@ -45,7 +47,8 @@ How it goes, a moment at a time, each step started from the Reels page:
    lines (`marked_lines`: `keep` and `cut`), which has Claude rework the
    variant - by the comment, into the variant of one's own, around the
    lines ticked and without those to be cut out - where any of them asks
-   for it, and puts
+   for it. The messages of chat lines were given go up with it as one page
+   (CHAT_PAGE) and when each is shown (CHAT_TIMES, see chat_times). It puts
    `reel.mp4` into the same release, with `render.json`: what it was
    rendered with, and what Claude made of the comment (`rendered_note`).
    The service fetches them the same way and keeps the reel next to the
@@ -822,14 +825,109 @@ def marked_lines(
     or those to be cut out of it - as they go up with its render: timed to
     what was sent (only the stretch `part` of the file, where only that
     was), and only those in it - cut to it where it cuts into them."""
-    start, end = part if part is not None else (0.0, math.inf)
     lines = []
     for line in transcript:
         if not is_marked(line, marked) or not line.text.strip():
             continue
-        shown = (max(line.start, start) - start, min(line.end, end) - start)
-        if shown[1] > shown[0]:
-            lines.append({"start": round(shown[0], 3), "end": round(shown[1], 3), "text": line.text})
+        shown = _shown(line, part)
+        if shown is not None:
+            lines.append({"start": shown[0], "end": shown[1], "text": line.text})
+    return lines
+
+
+def _shown(line: subtitles.Line, part: tuple[float, float] | None) -> tuple[float, float] | None:
+    """When a line of the transcript is in what was sent, timed to it - cut
+    to the stretch `part` where that cuts into it; None where it is not in
+    it at all."""
+    start, end = part if part is not None else (0.0, math.inf)
+    shown = (max(line.start, start) - start, min(line.end, end) - start)
+    return (round(shown[0], 3), round(shown[1], 3)) if shown[1] > shown[0] else None
+
+
+# -- a chat message in place of a line's subtitles -------------------------------
+
+# A line of the transcript can be shown in the reel as a message of chat in
+# place of its subtitles - the streamer reading out what someone wrote: the
+# message as chat had it, its writer's badges and name in their colour, its
+# emotes as pictures, growing slowly while it is read. It goes up with the
+# render as one page with every such message on it (CHAT_PAGE, each in a box
+# of its own, `card-1`, `card-2`, ...), which the render workflow takes a
+# picture of, and when each is shown (CHAT_TIMES, see chat_times).
+CHAT_PAGE = "chat.html"
+CHAT_TIMES = "chat.json"
+CHAT_FILES = (CHAT_PAGE, CHAT_TIMES)
+# The chat offered for a line: what was written from this long before it
+# starts to this long after it ends, in seconds of the file - a question is
+# read out a while after it was asked, seldom before.
+CHAT_OFFERED_BEFORE = 90.0
+CHAT_OFFERED_AFTER = 5.0
+# A message's id as it is posted: far longer than any platform's.
+CHAT_ID_MOST = 200
+
+
+def chats_asked(posted: object, length: float | None) -> dict[subtitles.Span, str]:
+    """The lines of a transcript put right on the page that are to be shown
+    as a message of chat (`chat`: the message's id), as when each starts and
+    ends - checked as checked_transcript checks them, a line left empty left
+    out. Raises ValueError, in words for the page, for a line that is also
+    marked to be cut out of the reel, or a message that is not one."""
+    if not isinstance(posted, list):
+        return {}
+    chosen: list[tuple[dict, str]] = []
+    for number, line in enumerate(posted, 1):
+        if not isinstance(line, dict) or line.get("chat") in (None, ""):
+            continue
+        message = line["chat"]
+        if not isinstance(message, str) or len(message) > CHAT_ID_MOST:
+            raise ValueError(f"Line {number}: that is not a message of chat.")
+        if line.get("cut") is True:
+            raise ValueError(f"Line {number}: it cannot be cut out of the reel and shown as a message of chat.")
+        chosen.append((line, message))
+    found: dict[subtitles.Span, str] = {}
+    for line, message in chosen:
+        checked = checked_transcript([line], length)
+        if checked:
+            found[(checked[0].start, checked[0].end)] = message
+    return found
+
+
+def chats_stored(chosen: Mapping[subtitles.Span, str]) -> str | None:
+    """Which lines of a transcript are shown as a message of chat, and which
+    message, as it is kept on the reel (`chat_lines`); None for none."""
+    if not chosen:
+        return None
+    return json.dumps([[start, end, message] for (start, end), message in sorted(chosen.items())])
+
+
+def chats_read(text: str | None) -> dict[subtitles.Span, str]:
+    """Which lines of a transcript are shown as a message of chat (see
+    chats_stored): the message's id by when the line starts and ends."""
+    try:
+        stored = json.loads(text) if text else []
+        return {(round(float(start), 3), round(float(end), 3)): str(message) for start, end, message in stored}
+    except (ValueError, TypeError):
+        return {}
+
+
+def chat_of(line: subtitles.Line, chosen: Mapping[subtitles.Span, str]) -> str | None:
+    """The id of the message a line of the transcript is shown as, if any."""
+    return chosen.get((round(line.start, 3), round(line.end, 3)))
+
+
+def chat_times(
+    transcript: Iterable[subtitles.Line], chosen: Mapping[subtitles.Span, str], part: tuple[float, float] | None
+) -> list[dict[str, Any]]:
+    """The lines of a transcript shown as a message of chat, as they go up
+    with its render: timed to what was sent (only the stretch `part` of the
+    file, where only that was), only those in it, each with the id of its
+    message (`message`) - the page that goes with them names each message's
+    box after it."""
+    lines = []
+    for line in transcript:
+        message = chat_of(line, chosen)
+        shown = _shown(line, part) if message is not None else None
+        if shown is not None:
+            lines.append({"start": shown[0], "end": shown[1], "text": line.text, "message": message})
     return lines
 
 

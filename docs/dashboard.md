@@ -300,7 +300,15 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   (`POST /moments/{id}/reel/render`, `variant` - "" for one's own, in `variant_own` - `hook`
   (`no_hook` true for none), `subtitles` and `comment`, after saving what is not saved in the transcript) has the reel made
   with the transcript as its subtitles, its lines ticked "In the reel" kept in it and those
-  ticked "Cut out" left out of it;
+  ticked "Cut out" left out of it, and a line given a message of chat shown as that message in
+  place of its subtitles - the streamer reading it out: "Chat" on a moment's line (not a
+  compilation's) offers the chat from 90 seconds before the line to 5 after it
+  (`GET /dashboard/reels/{id}/chat?start=&end=`, `reels.CHAT_OFFERED_BEFORE`/`_AFTER`), as the
+  review page shows it, and the one picked shows under the line until × takes it off (it goes
+  with Save as the line's `chat`, the message's id; a line cut out cannot have one). The render
+  sends a page of those messages, each drawn as chat had it - badges, name in its colour, emotes
+  - with when each is shown (`reels.CHAT_PAGE`, `CHAT_TIMES`); the reel repository draws them and
+  each grows slowly while it is read out;
   it plays at the top once it is back, with a download, what it was made with and what Claude
   made of the comment. Under it, feedback on the reel - what works, what does not - goes with
   "Send feedback" (`POST /moments/{id}/reel/feedback`, `feedback`) to the reel repository,

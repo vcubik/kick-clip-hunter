@@ -1,0 +1,73 @@
+/* The page the messages of chat a reel shows in place of subtitles are
+   drawn from (see reels.CHAT_PAGE): each message in a box of its own, as
+   chat showed it - the writer's badges, their name in its colour, the
+   emotes as pictures - on a dark panel, so that it reads over any picture.
+   The render workflow takes a picture of each box, with nothing around
+   it, at twice this size: a box here 480px wide is 960 of the reel's 1080.
+   The page is sent whole, so the service fills in the font itself. */
+
+@font-face {
+  font-family: Archivo;
+  src: url("fonts/Archivo-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+}
+
+:root {
+  --text: #FFFFFF;
+  --panel: rgba(16, 18, 20, 0.94);
+  --panel-edge: rgba(255, 255, 255, 0.14);
+  --shadow: rgba(0, 0, 0, 0.55);
+
+  /* Chat usernames nobody's own colour is known for; the review page's. */
+  --nick-1: #FFC2D2;
+  --nick-2: #9AD8FF;
+  --nick-3: #9CE8C2;
+  --nick-4: #DCCBFF;
+  --nick-5: #FFC7A1;
+  --nick-6: #8FE3E3;
+
+  --card-width: 480px;
+  --card-pad: 14px 18px;
+  --card-radius: 16px;
+  --card-gap: 40px;       /* between boxes, so no picture takes in another */
+  --shadow-room: 14px;    /* the shadow is in the box's picture */
+  --emote: 34px;          /* a little taller than a line of text */
+  --badge: 24px;
+}
+
+html, body { margin: 0; background: transparent; }
+body {
+  font: 600 25px/34px Archivo, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+}
+
+/* The box a picture is taken of: the panel and its shadow, nothing else. */
+.reel-card {
+  display: block;
+  width: fit-content;
+  max-width: var(--card-width);
+  padding: var(--shadow-room);
+  margin-bottom: var(--card-gap);
+}
+
+.reel-card .ch-chat {
+  margin: 0;
+  padding: var(--card-pad);
+  border-radius: var(--card-radius);
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--panel-edge), 0 6px var(--shadow-room) var(--shadow);
+  overflow-wrap: anywhere;
+}
+.ch-chat b { margin-right: 8px; font-weight: 800; }
+.ch-nick-1 { color: var(--nick-1); }
+.ch-nick-2 { color: var(--nick-2); }
+.ch-nick-3 { color: var(--nick-3); }
+.ch-nick-4 { color: var(--nick-4); }
+.ch-nick-5 { color: var(--nick-5); }
+.ch-nick-6 { color: var(--nick-6); }
+
+/* The markup gives an emote's width for a line of the review page; here it
+   only gives its shape. */
+.ch-emote { width: auto; height: var(--emote); margin: 0 2px; vertical-align: -9px; }
+.ch-badge { width: var(--badge); height: var(--badge); margin-right: 5px; vertical-align: -4px; border-radius: 4px; }

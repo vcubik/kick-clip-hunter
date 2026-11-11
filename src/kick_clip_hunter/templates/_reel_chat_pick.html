@@ -1,0 +1,20 @@
+{#- The chat a line of a reel's transcript can be shown as (see
+    main.dashboard_reel_chat): each message as chat showed it, with the
+    second of the clip's file it came at, to be picked. The script puts the
+    one picked under the line. A line of chat is a paragraph elsewhere; in
+    a button it is a span. -#}
+{% from "_chat_line.html" import chat_name, chat_text with context -%}
+{% if lines %}
+<ol class="reel-chat-pick">
+  {% for line in lines %}
+  <li>
+    <button type="button" class="reel-chat-option" data-reel-chat-option="{{ line.id }}" data-second="{{ line.second }}">
+      <span class="reel-heard-time">{{ line.second_words }}</span>
+      <span class="ch-chat">{{ chat_name(line) }} {{ chat_text(line.parts) }}</span>
+    </button>
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="reel-quiet">No chat around this line.</p>
+{% endif %}

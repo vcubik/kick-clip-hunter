@@ -96,6 +96,7 @@
   --w-analysis: 1200px;
   --h-reel: 480px;        /* a rendered reel, 9:16, on the Reels page */
   --h-reel-lines: 520px;  /* a reel's transcript, scrolled inside itself beside the clip */
+  --h-reel-chat: 240px;   /* the chat offered for a line of a reel's transcript, scrolled inside itself */
   --h-reel-part: 240px;   /* a compilation's clip, played where its stretch is chosen */
   --w-reel-time: 72px;    /* when a line of a reel's transcript starts or ends, typed */
   --h-reel-comment: 160px; /* a comment written to go with a reel, before it scrolls inside itself */
@@ -984,6 +985,19 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-heard-lines { max-height: var(--h-reel-lines); margin: var(--space-8) 0 0; padding: 0; overflow-y: auto; list-style: none; }
 .reel-heard-lines li { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); padding: var(--space-4) 0; border-bottom: 1px solid var(--quiet); font-size: 13px; }
 .reel-heard-time { font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; color: var(--text-2); }
+/* A line shown in the reel as a message of chat: the message under it, and
+   the chat offered to pick it from. */
+.reel-line-chat { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-4) var(--space-8); padding: var(--space-4) var(--space-8); border-left: 2px solid var(--lit); background: var(--sunk); }
+.reel-line-chat[hidden] { display: none; }
+.reel-line-chat .ch-cap { grid-column: 1 / -1; }
+.reel-line-chat-shown { min-width: 0; font-size: 13px; }
+.reel-line-chat-shown .ch-chat { display: block; padding: 0; border: 0; }
+.reel-line:has([data-reel-chat]:not([data-reel-chat=""])) .reel-text { color: var(--text-2); }
+.reel-chat-picker { max-height: var(--h-reel-chat); overflow-y: auto; border: 1px solid var(--quiet); }
+.reel-chat-pick { margin: 0; padding: 0; list-style: none; }
+.reel-chat-option { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: var(--space-8); width: 100%; padding: var(--space-4) var(--space-8); border: 0; border-bottom: 1px solid var(--quiet); background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; }
+.reel-chat-option:hover, .reel-chat-option:focus-visible { background: var(--sunk); }
+.reel-chat-option .ch-chat { padding: 0; border: 0; }
 
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 

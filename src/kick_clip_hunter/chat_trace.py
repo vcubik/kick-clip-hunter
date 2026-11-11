@@ -476,6 +476,8 @@ def chat_lines(
         own_colour, own_badges = identities.get(nick, (None, chat_identity.NO_BADGES))
         lines.append(
             {
+                # Where it was looked up with it: what picks the message out.
+                "id": message["message_id"] if "message_id" in message.keys() else None,
                 "nick": nick,
                 "colour": nick_colour(nick),
                 "own_colour": chat_identity.readable(own_colour) if own_colour else None,

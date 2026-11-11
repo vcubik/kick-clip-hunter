@@ -1,0 +1,22 @@
+{#- The page the messages of chat a reel shows in place of subtitles are
+    drawn from (reels.CHAT_PAGE, see main._reel_chat_cards): each message
+    in a box of its own, named for the render workflow to find it, as the
+    review page's chat has it. Sent whole: its stylesheet in it, the font
+    and the placeholder badges in that; only emotes and a channel's own
+    badges are fetched from where they are. -#}
+{% from "_chat_line.html" import chat_line with context -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat</title>
+<style>
+{{ css | safe }}
+</style>
+</head>
+<body>
+{% for card in cards %}
+<div class="reel-card" id="{{ card.id }}">{{ chat_line(card.line, lazy=false) }}</div>
+{% endfor %}
+</body>
+</html>
