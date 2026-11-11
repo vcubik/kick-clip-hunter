@@ -72,6 +72,7 @@ from .db import (
     TUNING_FOR_ALL,
     ChatRow,
     add_channel_rename,
+    add_moment_tag,
     add_subscription_drop,
     count_channel_chat,
     count_channel_chatters,
@@ -112,6 +113,7 @@ from .db import (
     get_moment,
     get_moment_channels,
     get_moment_names,
+    get_moment_tags,
     get_moment_times,
     get_notify_setup,
     get_recent_moments,
@@ -125,6 +127,7 @@ from .db import (
     get_streamer_by_slug,
     get_streamers,
     get_subscription_drops,
+    get_tag_counts,
     get_tuning,
     get_tuning_in_force,
     insert_chat_messages,
@@ -136,6 +139,7 @@ from .db import (
     put_reel,
     recordings_saved_between,
     remove_channel_chat,
+    remove_moment_tag,
     remove_streamer,
     rename_streamer,
     replace_notify_setup,
@@ -3354,6 +3358,11 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_type": row["stream_type"],
         "moment_type": row["moment_type"],
         "notes": row["notes"] or "",
+        # Tags of one's own, and every tag there is to pick from when another
+        # is given.
+        "tags": get_moment_tags(conn, row["id"]),
+        "known_tags": [tag for tag, _count in get_tag_counts(conn)],
+        "tag_max": dashboard_view.TAG_MAX_LENGTH,
         "title": row["title"] or "",
         "title_max": MOMENT_TITLE_MAX_LENGTH,
         "analysis": [
@@ -3426,6 +3435,16 @@ def _open_moment(conn, row, today: date) -> dict:
         # make it of.
         "reel": _reel_link(conn, row) if settings.reels and row["clip_path"] else None,
     }
+
+
+def _tag_choices(conn, chosen: str) -> list[dict]:
+    """What the review queue can be narrowed to by tag: every tag a moment
+    has, with how many have it - and the chosen one even where no moment has
+    it any more, so the list still says what was chosen."""
+    counts = dict(get_tag_counts(conn))
+    if chosen:
+        counts.setdefault(chosen, 0)
+    return [{"tag": name, "label": f"{name} ({counts[name]})"} for name in sorted(counts)]
 
 
 def _trim_dialog() -> dict:
@@ -3731,6 +3750,7 @@ async def dashboard(
     order: str = dashboard_view.ORDER_NEWEST,
     downloaded: str = dashboard_view.DOWNLOADED_ANY,
     on_disk: str = dashboard_view.ON_DISK_ANY,
+    tag: str = "",
     offset: int = 0,
     moment: int | None = None,
 ):
@@ -3740,7 +3760,8 @@ async def dashboard(
     channel, `order` says whether the newest or the most laughing come first,
     `downloaded` keeps only the moments downloaded from Trim or only the
     others, `on_disk` only those whose clip is on disk or only the others
-    (a link into the VOD and nothing more), and `offset` pages through it. `moment` is the one to open; left
+    (a link into the VOD and nothing more), `tag` only those given that tag,
+    and `offset` pages through it. `moment` is the one to open; left
     out, it is the first of the list, and with an empty list the page says
     what the service is doing instead.
     """
@@ -3751,12 +3772,13 @@ async def dashboard(
     taken = dashboard_view.DOWNLOADED_FILTERS[downloaded]
     on_disk = on_disk if on_disk in dashboard_view.ON_DISKS else dashboard_view.ON_DISK_ANY
     kept = dashboard_view.ON_DISK_FILTERS[on_disk]
+    tag = dashboard_view.tag_name(tag)
     today = _today()
 
     conn = get_connection()
     try:
         counts = {
-            name: count_moments(conn, channel_slug=channel, downloaded=taken, on_disk=kept, **filters)
+            name: count_moments(conn, channel_slug=channel, downloaded=taken, on_disk=kept, tag=tag, **filters)
             for name, filters in SHOW_FILTERS.items()
         }
         # A list gets shorter as its moments are rated, so a page that was
@@ -3769,6 +3791,7 @@ async def dashboard(
             channel_slug=channel,
             downloaded=taken,
             on_disk=kept,
+            tag=tag or None,
             most_laughing=order == dashboard_view.ORDER_LAUGHING,
             **SHOW_FILTERS[show],
         )
@@ -3778,7 +3801,14 @@ async def dashboard(
         for group in groups:
             for item in group["rows"]:
                 item["href"] = dashboard_view.review_url(
-                    show, channel, order=order, downloaded=downloaded, on_disk=on_disk, offset=offset, moment=item["id"]
+                    show,
+                    channel,
+                    order=order,
+                    downloaded=downloaded,
+                    on_disk=on_disk,
+                    tag=tag,
+                    offset=offset,
+                    moment=item["id"],
                 )
                 chat = activity.get(item["id"])
                 item["spark"] = chat_trace.spark_paths(chat["all"], chat["laugh"], spark_top) if chat else None
@@ -3799,6 +3829,7 @@ async def dashboard(
                 today,
                 downloaded,
                 on_disk,
+                tag,
             )
 
         context = _page_context(conn, "review")
@@ -3811,7 +3842,7 @@ async def dashboard(
                         "label": dashboard_view.SHOW_LABELS[name],
                         "count": counts[name],
                         "href": dashboard_view.review_url(
-                            name, channel, order=order, downloaded=downloaded, on_disk=on_disk
+                            name, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag
                         ),
                         "current": name == show,
                     }
@@ -3833,6 +3864,10 @@ async def dashboard(
                     {"on_disk": name, "label": dashboard_view.ON_DISK_LABELS[name]}
                     for name in dashboard_view.ON_DISKS
                 ],
+                "tag": tag,
+                # Every tag there is, and the chosen one even where no moment
+                # has it any more, so the list still says what was chosen.
+                "tags": _tag_choices(conn, tag),
                 "groups": groups,
                 "empty": empty,
                 "paging": dashboard_view.pages(
@@ -3840,7 +3875,7 @@ async def dashboard(
                     MOMENTS_PAGE_SIZE,
                     counts[show],
                     lambda other: dashboard_view.review_url(
-                        show, channel, order=order, downloaded=downloaded, on_disk=on_disk, offset=other
+                        show, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag, offset=other
                     ),
                 ),
                 # The list's ends in its paging: newer and older, or more and fewer laughing.
@@ -3853,7 +3888,7 @@ async def dashboard(
                 # Offered from an empty list when there is something to go through elsewhere.
                 "rated_href": (
                     dashboard_view.review_url(
-                        dashboard_view.SHOW_ALL, channel, order=order, downloaded=downloaded, on_disk=on_disk
+                        dashboard_view.SHOW_ALL, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag
                     )
                     if show != dashboard_view.SHOW_ALL and counts[dashboard_view.SHOW_ALL]
                     else None
@@ -8066,6 +8101,48 @@ async def set_moment_title(moment_id: int, request: Request):
     finally:
         conn.close()
     return {"moment_id": moment_id, "title": title or None}
+
+
+@app.post("/moments/{moment_id}/tags")
+async def add_tag(moment_id: int, request: Request):
+    """Gives a moment a tag of one's own (`tag`, kept as
+    dashboard_view.tag_name has it); answers with every tag it has now."""
+    data = await request.json()
+    tag = dashboard_view.tag_name(str(data.get("tag") or ""))
+    if not tag:
+        raise HTTPException(status_code=400, detail="A tag needs a word in it.")
+
+    conn = get_connection()
+    try:
+        if get_moment(conn, moment_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        tags = get_moment_tags(conn, moment_id)
+        if tag not in tags and len(tags) >= dashboard_view.TAGS_PER_MOMENT:
+            raise HTTPException(
+                status_code=400, detail=f"A moment can have {dashboard_view.TAGS_PER_MOMENT} tags at the most."
+            )
+        add_moment_tag(conn, moment_id, tag)
+        tags = get_moment_tags(conn, moment_id)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "tag": tag, "tags": tags}
+
+
+@app.post("/moments/{moment_id}/tags/remove")
+async def remove_tag(moment_id: int, request: Request):
+    """Takes a tag away from a moment; answers with the tags it has left."""
+    data = await request.json()
+    tag = dashboard_view.tag_name(str(data.get("tag") or ""))
+
+    conn = get_connection()
+    try:
+        if get_moment(conn, moment_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        remove_moment_tag(conn, moment_id, tag)
+        tags = get_moment_tags(conn, moment_id)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "tags": tags}
 
 
 @app.post("/moments/{moment_id}/notes")

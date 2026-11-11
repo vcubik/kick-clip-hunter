@@ -563,6 +563,12 @@ class TestReviewUrl:
             "/dashboard?show=all&downloaded=no&on_disk=yes&offset=50"
         )
 
+    def test_a_tag_is_spelled_out_when_chosen(self):
+        assert view.review_url(tag="") == "/dashboard"
+        assert view.review_url(view.SHOW_ALL, on_disk=view.ON_DISK_YES, tag="chat war", offset=50) == (
+            "/dashboard?show=all&on_disk=yes&tag=chat+war&offset=50"
+        )
+
     def test_a_channel_name_is_made_safe_for_an_address(self):
         assert view.review_url(channel='a&b="c"') == "/dashboard?channel=a%26b%3D%22c%22"
 
@@ -669,6 +675,13 @@ class TestAnEmptyList:
         assert view.empty_queue_words(view.SHOW_ALL, None, None, TODAY, on_disk=view.ON_DISK_YES)["queue"] == (
             "No moments yet"
         )
+
+    def test_a_list_narrowed_to_a_tag_says_that_is_why(self):
+        tagged = view.empty_queue_words(view.SHOW_BEST, "channel_a", local(2, 14), TODAY, tag="funny")
+
+        assert tagged["queue"] == "Nothing tagged 'funny' here"
+        assert tagged["heading"] == "No clips from channel_a tagged 'funny' here"
+        assert view.empty_queue_words(view.SHOW_ALL, None, None, TODAY, tag="funny")["queue"] == "No moments yet"
 
     def test_before_the_first_moment_a_narrowed_list_has_nothing_yet_either(self):
         for downloaded in view.DOWNLOADEDS:
@@ -1388,3 +1401,19 @@ class TestReelsUrl:
         assert view.reels_url() == "/dashboard/reels"
         assert view.reels_url(7) == "/dashboard/reels?moment=7"
         assert view.compilation_url(3) == "/dashboard/reels?compilation=3"
+
+
+class TestTagName:
+    def test_a_tag_is_kept_in_small_letters_with_single_spaces(self):
+        assert view.tag_name("  Chat   WAR 	") == "chat war"
+        assert view.tag_name("Šílenství") == "šílenství"
+
+    def test_nothing_written_is_no_tag(self):
+        assert view.tag_name("") == ""
+        assert view.tag_name("   ") == ""
+
+    def test_a_long_tag_is_cut_to_the_most_a_tag_can_be(self):
+        cut = view.tag_name("word " * view.TAG_MAX_LENGTH)
+
+        assert len(cut) <= view.TAG_MAX_LENGTH
+        assert cut == cut.strip()

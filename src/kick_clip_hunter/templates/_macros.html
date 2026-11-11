@@ -64,3 +64,8 @@
 {% macro taken_icon(size=12) -%}
 <svg aria-hidden="true" width="{{ size }}" height="{{ size }}" viewBox="0 0 12 12"><path d="M6 1v6.5M3 5l3 3 3-3M1.5 10.5h9" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
 {%- endmacro %}
+
+{#- A tag of one's own on the open moment, with the cross that takes it away. -#}
+{% macro own_tag(tag) -%}
+<li class="own-tag" data-own-tag="{{ tag }}"><span>{{ tag }}</span><button type="button" class="own-tag-x" aria-label="Remove the tag {{ tag }}" title="Remove" data-own-tag-remove><svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path></svg></button></li>
+{%- endmacro %}

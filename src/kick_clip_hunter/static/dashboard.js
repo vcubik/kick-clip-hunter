@@ -246,6 +246,64 @@
     }
   }
 
+  // Tags of one's own: the chips the service says the moment has now.
+  function showOwnTags(group, tags) {
+    const template = one("[data-own-tag-template]", group).content.firstElementChild;
+    one("[data-own-tags]", group).replaceChildren(
+      ...tags.map((tag) => {
+        const chip = template.cloneNode(true);
+        chip.dataset.ownTag = tag;
+        one("span", chip).textContent = tag;
+        one("[data-own-tag-remove]", chip).setAttribute("aria-label", `Remove the tag ${tag}`);
+        return chip;
+      }),
+    );
+  }
+
+  // A tag new to the page is offered in the queue's list of tags too.
+  function knowTag(tag) {
+    const filter = one("[data-tag-filter]");
+    if (!filter || all("option", filter).some((option) => option.value === tag)) return;
+    const option = document.createElement("option");
+    option.value = option.textContent = tag;
+    filter.append(option);
+  }
+
+  async function addOwnTag(input) {
+    const article = input.closest(".moment");
+    if (!input.value.trim()) return;
+    const response = await post(`/moments/${article.dataset.moment}/tags`, { tag: input.value });
+    if (!response) {
+      say(article, "Could not reach the service.");
+      return;
+    }
+    if (!response.ok) {
+      say(article, await problem(response, "Could not add the tag. Try again."));
+      return;
+    }
+    const saved = await response.json();
+    input.value = "";
+    showOwnTags(input.closest(".own-tags"), saved.tags);
+    knowTag(saved.tag);
+    say(article, "");
+  }
+
+  // From the keyboard the focus goes back to the field the next tag is
+  // typed in, as the cross it was on is gone.
+  async function removeOwnTag(button) {
+    const article = button.closest(".moment");
+    const group = button.closest(".own-tags");
+    const tag = button.closest("[data-own-tag]").dataset.ownTag;
+    const response = await post(`/moments/${article.dataset.moment}/tags/remove`, { tag });
+    if (!response || !response.ok) {
+      say(article, "Could not remove the tag. Try again.");
+      return;
+    }
+    showOwnTags(group, (await response.json()).tags);
+    one("[data-own-tag-input]", group).focus();
+    say(article, "");
+  }
+
   // Saves the note if it was changed since it was last saved. Called when
   // the field is left, and before the moment it belongs to is swapped out.
   async function saveNote(field = one("[data-note]")) {
@@ -3897,6 +3955,8 @@
     ["a.ch-row", (row, event) => isPlainClick(event) && (event.preventDefault(), openMoment(row, { play: true }))],
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
+    ["[data-own-tag-remove]", removeOwnTag],
+    ["[data-own-tag-add]", (button) => addOwnTag(one("[data-own-tag-input]", button.closest(".own-tags")))],
     ["[data-trim-open]", openTrim],
     ["[data-trim-close]", (button) => trimOf(button).close()],
     ["[data-trim-play]", (button) => toggleTrimPlay(trimOf(button))],
@@ -4159,6 +4219,16 @@
     if (target.matches("[data-reel-text]") && event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       nextReelLine(target);
+      return;
+    }
+    // Enter adds the tag typed; Escape leaves the field for the review's keys.
+    if (target.matches("[data-own-tag-input]")) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addOwnTag(target);
+      } else if (event.key === "Escape") {
+        target.blur();
+      }
       return;
     }
     // Enter beside a list adds what was typed to it, rather than save the

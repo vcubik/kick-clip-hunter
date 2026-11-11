@@ -67,6 +67,18 @@ ON_DISK_LABELS = {
 # What each of them asks of the database (db.get_recent_moments).
 ON_DISK_FILTERS = {ON_DISK_ANY: None, ON_DISK_YES: True, ON_DISK_NO: False}
 
+# A tag of one's own given to a moment: a word or a few, kept in small
+# letters with its spaces made single, so "Fail" and " fail " are one tag.
+TAG_MAX_LENGTH = 32
+# The most tags one moment can have.
+TAGS_PER_MOMENT = 20
+
+
+def tag_name(text: str) -> str:
+    """A tag as it is kept: in small letters, single spaces, no longer than
+    TAG_MAX_LENGTH - empty where nothing was written."""
+    return " ".join(text.split()).lower()[:TAG_MAX_LENGTH].strip()
+
 # How many colours chat usernames are spread over (nick-1 to nick-6 in the
 # stylesheet).
 NICK_COLOURS = 6
@@ -614,12 +626,13 @@ def review_url(
     order: str = ORDER_NEWEST,
     downloaded: str = DOWNLOADED_ANY,
     on_disk: str = ON_DISK_ANY,
+    tag: str = "",
     offset: int = 0,
     moment: int | None = None,
 ) -> str:
     """The review page for one list, channel, order, downloaded or not, on
-    disk or not, page and open moment. Whatever is at its default is left out, so the plain
-    address is the unrated list, newest first."""
+    disk or not, tag, page and open moment. Whatever is at its default is
+    left out, so the plain address is the unrated list, newest first."""
     query: dict[str, Any] = {}
     if show != SHOW_UNRATED:
         query["show"] = show
@@ -631,6 +644,8 @@ def review_url(
         query["downloaded"] = downloaded
     if on_disk != ON_DISK_ANY:
         query["on_disk"] = on_disk
+    if tag:
+        query["tag"] = tag
     if offset:
         query["offset"] = offset
     if moment is not None:
@@ -777,6 +792,7 @@ def empty_queue_words(
     today: date,
     downloaded: str = DOWNLOADED_ANY,
     on_disk: str = ON_DISK_ANY,
+    tag: str = "",
 ) -> dict[str, str]:
     """What to say when the chosen list has nothing in it: a few words for
     the queue, a heading for the rest of the page and, where the state of the
@@ -784,8 +800,14 @@ def empty_queue_words(
     `newest` is when the last moment of any rating was detected (on that
     channel, if one is chosen), or None if there has never been one. A list
     narrowed to downloaded moments or the others, or to those on disk or the
-    others, says that is what left it empty."""
+    others, or to a tag, says that is what left it empty."""
     of_channel = f" from {channel}" if channel else ""
+    if newest is not None and tag:
+        return {
+            "queue": f"Nothing tagged '{tag}' here",
+            "heading": f"No clips{of_channel} tagged '{tag}' here",
+            "lead": "A tag is given to a moment under its rating, and taken away there again.",
+        }
     if newest is not None and downloaded == DOWNLOADED_YES:
         return {
             "queue": "Nothing downloaded here",

@@ -3,7 +3,7 @@
     (/dashboard/moments/<id>) so the page can open another moment without
     loading the queue around it again. -#}
 {% from "_chat_line.html" import chat_line with context -%}
-{% from "_macros.html" import delete, taken_icon -%}
+{% from "_macros.html" import delete, own_tag, taken_icon -%}
 <article class="moment" data-moment="{{ moment.id }}" data-channel="{{ moment.channel }}" data-rating="{{ moment.rating or 0 }}" data-downloaded="{{ 'true' if moment.downloaded else 'false' }}" data-on-disk="{{ 'true' if moment.on_disk else 'false' }}" data-status-scope>
 <div class="stage">
 <div class="stage-in">
@@ -204,6 +204,22 @@
     {% for value, label in stream_types %}
     <button type="button" class="ch-tag" aria-pressed="{{ 'true' if moment.stream_type == value else 'false' }}" data-tag="stream_type" data-value="{{ value }}">{{ label }}</button>
     {% endfor %}
+  </div>
+
+  {#- Tags of one's own, as many as wanted: typed (or picked from the ones
+      there are) and added with Enter, taken away with the cross. The queue
+      can be narrowed to one of them. -#}
+  <div class="ch-tags own-tags" role="group" aria-label="Tags">
+    <span>Tags</span>
+    <ul class="own-tag-list" aria-label="Tags of this moment" data-own-tags>
+      {%- for tag in moment.tags %}{{ own_tag(tag) }}{% endfor -%}
+    </ul>
+    <input type="text" class="ch-input own-tag-add" maxlength="{{ moment.tag_max }}" list="own-tag-names-{{ moment.id }}" placeholder="Add a tag" aria-label="Add a tag" autocomplete="off" spellcheck="false" data-own-tag-input>
+    <datalist id="own-tag-names-{{ moment.id }}" data-own-tag-names>
+      {%- for tag in moment.known_tags %}<option value="{{ tag }}"></option>{% endfor -%}
+    </datalist>
+    <button type="button" class="ch-btn ch-btn-compact" data-own-tag-add>Add</button>
+    <template data-own-tag-template>{{ own_tag("") }}</template>
   </div>
 
   {#- The moment's clip made into a reel: everything about that is done on
