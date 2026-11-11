@@ -58,8 +58,8 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   moment is not removed while it goes on. Chat and its trace are there before the clip: the
   trace is drawn on the stretch the clip would hold. Where the moment's stream's VOD was found
   when it was caught, "Watch on Kick" / "Watch on Twitch", beside how far into the stream it
-  was, opens it there in a new tab, from where its clip begins - on Kick 10 s later, nearer to
-  what chat reacted to (`kick_stream.WATCH_LATER_SECONDS`; the clip itself is not moved), and
+  was, opens it there in a new tab, from where its clip begins - 15 s later, nearer to
+  what chat reacted to (`platforms.WATCH_LATER_SECONDS`; the clip itself is not moved), and
   counted by the VOD's own clock, as the player below goes, where its playlist could be read
   when the moment was kept (`moments.watch_url`). On Kick the VOD also plays on the page, in the clip's place: "Play
   from the VOD" - or Space, or pressing the trace, which starts it there - asks where it is

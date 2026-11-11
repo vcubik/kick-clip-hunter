@@ -17,6 +17,7 @@ from kick_clip_hunter.platforms import (
     VODS_HIDDEN,
     VODS_NONE,
     VODS_PUBLIC,
+    WATCH_LATER_SECONDS,
     NoVod,
     StreamUrlError,
     StreamUrls,
@@ -326,7 +327,8 @@ class TestWhereAPastBroadcastIsWatched:
 
         link = await twitch_stream.watch_link_at("some_channel", BEGAN + timedelta(hours=6, seconds=5))
 
-        assert link == "https://www.twitch.tv/videos/777?t=6h0m5s"
+        # A little later than asked: nearer to what chat reacted to.
+        assert link == twitch_stream.watch_link("777", 6 * 3600 + 5 + WATCH_LATER_SECONDS)
 
     @pytest.mark.anyio
     async def test_a_time_no_past_broadcast_holds_has_none(self, twitch_api):

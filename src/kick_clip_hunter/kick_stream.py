@@ -51,6 +51,7 @@ from .platforms import (
     VODS_HIDDEN,
     VODS_NONE,
     VODS_PUBLIC,
+    WATCH_LATER_SECONDS,
     NoVod,
     StreamUrlError,
     StreamUrls,
@@ -71,11 +72,6 @@ SUBSCRIBERS_ONLY = "subscriber_only"
 SITE = "https://kick.com"
 SITE_PUBLIC = "public"
 SITE_SUBSCRIBERS_ONLY = "sub_only"
-# How much later than the time asked for a link to a VOD on kick.com starts
-# its player: a moment's clip begins well before what chat reacted to, and
-# whoever follows the link wants to get there sooner. Only the link - a
-# clip cut from the VOD is framed as it always is.
-WATCH_LATER_SECONDS = 10
 # What keeps a moment's clip from being cut from a channel's VOD once its
 # stream is over, by what the site lists of its VODs (see vod_access).
 VOD_TROUBLE = {

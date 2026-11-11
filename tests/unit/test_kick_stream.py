@@ -16,6 +16,7 @@ from kick_clip_hunter.platforms import (
     VODS_HIDDEN,
     VODS_NONE,
     VODS_PUBLIC,
+    WATCH_LATER_SECONDS,
     NoVod,
     StreamUrlError,
     StreamUrls,
@@ -140,7 +141,7 @@ class TestWhereAVodIsWatched:
 
         # A little later than asked: the moment itself comes some way into
         # its clip.
-        seconds = 3605 + kick_stream.WATCH_LATER_SECONDS
+        seconds = 3605 + WATCH_LATER_SECONDS
         assert link == f"https://kick.com/some_channel/videos/{site_video_id(channel.videos[0])}?t={seconds}"
         # By the channel's id on the site, which kick.com's own page of it says.
         assert kick_api.calls("GET", "web.kick.com/api/v1/channels/2/videos") == [{}]
@@ -155,7 +156,7 @@ class TestWhereAVodIsWatched:
 
         link = await kick_stream.watch_link_at("some_channel", T0 + minutes(60), into=3604.6)
 
-        seconds = 3604 + kick_stream.WATCH_LATER_SECONDS
+        seconds = 3604 + WATCH_LATER_SECONDS
         assert link == f"https://kick.com/some_channel/videos/{site_video_id(channel.videos[0])}?t={seconds}"
 
     @pytest.mark.anyio
@@ -165,7 +166,7 @@ class TestWhereAVodIsWatched:
 
         link = await kick_stream.watch_link_at("some_channel", T0 + minutes(5))
 
-        assert link.endswith(f"/videos/{site_video_id(channel.videos[0])}?t={300 + kick_stream.WATCH_LATER_SECONDS}")
+        assert link.endswith(f"/videos/{site_video_id(channel.videos[0])}?t={300 + WATCH_LATER_SECONDS}")
 
     @pytest.mark.anyio
     async def test_a_time_no_stream_was_in_has_none(self, kick_api):
