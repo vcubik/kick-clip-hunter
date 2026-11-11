@@ -279,6 +279,16 @@ CREATE TABLE IF NOT EXISTS compilation_reels (
     cut_lines TEXT,
     joined TEXT
 );
+
+-- Tags of one's own given to a moment on the review page, as many as
+-- wanted: a word or a few, kept in small letters, and the review queue
+-- narrowed to the moments that have one.
+CREATE TABLE IF NOT EXISTS moment_tags (
+    moment_id INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (moment_id, tag)
+);
+CREATE INDEX IF NOT EXISTS moment_tags_by_tag ON moment_tags (tag);
 """
 
 
@@ -974,6 +984,7 @@ def _moment_filter(
     min_rating: int | None,
     downloaded: bool | None = None,
     on_disk: bool | None = None,
+    tag: str | None = None,
 ) -> tuple[str, list]:
     """The WHERE clause (empty when nothing is filtered) and its parameters
     for the ways the dashboard narrows the list of moments down. `downloaded`
@@ -981,7 +992,8 @@ def _moment_filter(
     (True) or only the others (False); `on_disk` only the moments whose clip
     is kept here (True) or only those without one - a moment of a channel
     tracked for moments whose clip was never cut from the VOD, or one whose
-    recording failed (False). None keeps both."""
+    recording failed (False). None keeps both. `tag` keeps only the moments
+    given that tag."""
     conditions: list[str] = []
     params: list = []
     if channel_slug:
@@ -996,6 +1008,9 @@ def _moment_filter(
         conditions.append("downloaded_at IS NOT NULL" if downloaded else "downloaded_at IS NULL")
     if on_disk is not None:
         conditions.append("clip_path IS NOT NULL" if on_disk else "clip_path IS NULL")
+    if tag:
+        conditions.append("id IN (SELECT moment_id FROM moment_tags WHERE tag = ?)")
+        params.append(tag)
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
@@ -1009,15 +1024,17 @@ def get_recent_moments(
     min_rating: int | None = None,
     downloaded: bool | None = None,
     on_disk: bool | None = None,
+    tag: str | None = None,
     most_laughing: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
     not rated yet, only those rated `min_rating` or higher, or only those
-    downloaded or not, or with their clip on disk or not (see _moment_filter). With
+    downloaded or not, or with their clip on disk or not, or only those given
+    a tag (see _moment_filter). With
     `most_laughing`, the ones the most people laughed around come first
     instead, those not counted last, and newest first among equals."""
     conn.row_factory = sqlite3.Row
-    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag)
     order = "laughing IS NULL, laughing DESC, " if most_laughing else ""
     return conn.execute(
         f"""
@@ -1044,8 +1061,9 @@ def count_moments(
     min_rating: int | None = None,
     downloaded: bool | None = None,
     on_disk: bool | None = None,
+    tag: str | None = None,
 ) -> int:
-    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag)
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
 
 
@@ -1619,7 +1637,9 @@ def insert_moment(
 
 
 def delete_moment(conn: sqlite3.Connection, moment_id: int) -> None:
-    """Removes a moment's row - its files are the caller's to remove."""
+    """Removes a moment's row and its tags - its files are the caller's to
+    remove."""
+    conn.execute("DELETE FROM moment_tags WHERE moment_id = ?", (moment_id,))
     conn.execute("DELETE FROM moments WHERE id = ?", (moment_id,))
     conn.commit()
 
@@ -1791,6 +1811,32 @@ def get_moments_without_laughing(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def update_moment_title(conn: sqlite3.Connection, moment_id: int, title: str | None) -> None:
     conn.execute("UPDATE moments SET title = ? WHERE id = ?", (title, moment_id))
     conn.commit()
+
+
+def get_moment_tags(conn: sqlite3.Connection, moment_id: int) -> list[str]:
+    """The tags a moment was given, in the order of the alphabet."""
+    rows = conn.execute("SELECT tag FROM moment_tags WHERE moment_id = ? ORDER BY tag", (moment_id,))
+    return [row[0] for row in rows]
+
+
+def add_moment_tag(conn: sqlite3.Connection, moment_id: int, tag: str) -> None:
+    """Gives a moment a tag; one it has already is left as it is."""
+    conn.execute("INSERT OR IGNORE INTO moment_tags (moment_id, tag) VALUES (?, ?)", (moment_id, tag))
+    conn.commit()
+
+
+def remove_moment_tag(conn: sqlite3.Connection, moment_id: int, tag: str) -> None:
+    conn.execute("DELETE FROM moment_tags WHERE moment_id = ? AND tag = ?", (moment_id, tag))
+    conn.commit()
+
+
+def get_tag_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
+    """Every tag a moment has, with how many moments have it, in the order
+    of the alphabet: what the review queue can be narrowed by."""
+    return [
+        (tag, count)
+        for tag, count in conn.execute("SELECT tag, COUNT(*) FROM moment_tags GROUP BY tag ORDER BY tag")
+    ]
 
 
 def update_moment_notes(conn: sqlite3.Connection, moment_id: int, notes: str | None) -> None:

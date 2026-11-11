@@ -27,7 +27,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   rating, and beside when it was in the open moment (`moments.downloaded_at`), and the queue
   can be narrowed to those moments or to the others (`?downloaded=yes|no`; the counts on its
   tabs follow) - and, beside that, to the moments whose clip is on disk or to those that are
-  only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). After it, "Add before" and "Add after" put that much more of
+  only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). Under the moment's kind and stream kind
+  are tags of one's own, as many as wanted (`moment_tags`): typed - or picked from the tags
+  there are - and added with Enter or "Add" (`POST /moments/{id}/tags`, `tag`), taken away with
+  the cross (`POST /moments/{id}/tags/remove`), kept in small letters with single spaces
+  (`dashboard_view.tag_name`). Once any moment has one, the queue can be narrowed to a tag
+  (`?tag=`, the list offering every tag with how many moments have it). After it, "Add before" and "Add after" put that much more of
   the stream into the moment's file - 15 s to 2 min, chosen in the list in front of them, which
   the script remembers - ahead of its first frame or after its last, from the stream's own
   recording: its VOD on Kick and Twitch, days later too, and on YouTube the stream wound back

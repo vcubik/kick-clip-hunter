@@ -39,6 +39,15 @@
         <option value="{{ option.on_disk }}"{% if option.on_disk == on_disk %} selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
       </select>
+      {#- Only the moments given one tag of one's own. Offered once a moment has one. -#}
+      {% if tags %}
+      <select class="ch-select" id="tag-filter" name="tag" aria-label="Tag" data-submit-on-change data-tag-filter>
+        <option value=""{% if not tag %} selected{% endif %}>Any tag</option>
+        {% for option in tags %}
+        <option value="{{ option.tag }}"{% if option.tag == tag %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
       <noscript><button type="submit" class="ch-btn ch-btn-quiet ch-btn-compact">Show</button></noscript>
     </form>
   </div>

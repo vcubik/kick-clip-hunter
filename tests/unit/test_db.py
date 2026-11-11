@@ -1665,6 +1665,22 @@ class TestMoments:
         assert db.count_moments(conn, min_rating=4, on_disk=False) == 1
         assert db.count_moments(conn, channel_slug="channel_a", on_disk=False, downloaded=False) == 1
 
+    def test_or_to_what_was_given_a_tag(self, conn):
+        self.rated(conn, {"plain": None, "funny": None, "b_funny": 5, "b_both": 4})
+        for row in db.get_recent_moments(conn):
+            if row["reason"].endswith(("funny", "both")):
+                db.add_moment_tag(conn, row["id"], "funny")
+            if row["reason"].endswith("both"):
+                db.add_moment_tag(conn, row["id"], "fail")
+
+        assert [row["reason"] for row in db.get_recent_moments(conn, tag="funny")] == ["b_both", "b_funny", "funny"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, tag="fail")] == ["b_both"]
+        assert db.get_recent_moments(conn, tag="nobody's") == []
+        assert len(db.get_recent_moments(conn, tag=None)) == 4
+        assert db.count_moments(conn, tag="funny") == 3
+        assert db.count_moments(conn, tag="funny", unrated=True) == 1
+        assert db.count_moments(conn, channel_slug="channel_b", tag="funny", min_rating=5) == 1
+
     def test_a_narrowed_list_is_paged_like_the_full_one(self, conn):
         self.rated(conn, {"a": None, "rated": 2, "b": None, "c": None})
 
@@ -2347,3 +2363,46 @@ class TestCompilations:
         assert db.get_compilation(conn, compilation_id) is None
         assert db.get_compilation_parts(conn, compilation_id) == []
         assert db.get_compilation_reel(conn, compilation_id) is None
+
+
+class TestMomentTags:
+    def test_a_moment_has_no_tags_to_begin_with(self, conn):
+        assert db.get_moment_tags(conn, store_moment(conn)) == []
+        assert db.get_tag_counts(conn) == []
+
+    def test_tags_are_kept_once_each_in_the_order_of_the_alphabet(self, conn):
+        moment_id = store_moment(conn)
+
+        for tag in ("rage", "funny", "rage"):
+            db.add_moment_tag(conn, moment_id, tag)
+
+        assert db.get_moment_tags(conn, moment_id) == ["funny", "rage"]
+
+    def test_every_tag_is_counted_over_the_moments_that_have_it(self, conn):
+        first, second, third = (store_moment(conn) for _ in range(3))
+        db.add_moment_tag(conn, first, "funny")
+        db.add_moment_tag(conn, second, "funny")
+        db.add_moment_tag(conn, second, "chat war")
+        db.add_moment_tag(conn, third, "zzz")
+
+        assert db.get_tag_counts(conn) == [("chat war", 1), ("funny", 2), ("zzz", 1)]
+
+    def test_a_tag_can_be_taken_away_from_one_moment(self, conn):
+        first, second = store_moment(conn), store_moment(conn)
+        for moment_id in (first, second):
+            db.add_moment_tag(conn, moment_id, "funny")
+
+        db.remove_moment_tag(conn, first, "funny")
+        db.remove_moment_tag(conn, first, "never given")
+
+        assert db.get_moment_tags(conn, first) == []
+        assert db.get_moment_tags(conn, second) == ["funny"]
+
+    def test_a_deleted_moment_takes_its_tags_with_it(self, conn):
+        gone, kept = store_moment(conn), store_moment(conn)
+        db.add_moment_tag(conn, gone, "funny")
+        db.add_moment_tag(conn, kept, "fail")
+
+        db.delete_moment(conn, gone)
+
+        assert db.get_tag_counts(conn) == [("fail", 1)]

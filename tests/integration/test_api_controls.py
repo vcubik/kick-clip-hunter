@@ -192,6 +192,47 @@ class TestTags:
         assert "must be one of" in response.json()["detail"]
         assert moment(moment_id)[field] in {"irl", "funny"}
 
+    async def test_a_tag_of_ones_own_can_be_given_and_taken_away(self, service):
+        moment_id = add_moment()
+
+        given = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "  Chat   War "})
+        await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "funny"})
+        again = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "FUNNY"})
+
+        assert given.json() == {"moment_id": moment_id, "tag": "chat war", "tags": ["chat war"]}
+        assert again.json()["tags"] == ["chat war", "funny"]
+
+        taken = await service.client.post(f"/moments/{moment_id}/tags/remove", json={"tag": "Chat War"})
+
+        assert taken.json() == {"moment_id": moment_id, "tags": ["funny"]}
+
+    async def test_a_tag_with_no_word_in_it_is_refused(self, service):
+        moment_id = add_moment()
+
+        response = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "   "})
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "A tag needs a word in it."
+
+    async def test_a_moment_can_have_only_so_many_tags(self, service, monkeypatch):
+        monkeypatch.setattr(service.main.dashboard_view, "TAGS_PER_MOMENT", 2)
+        moment_id = add_moment()
+        for tag in ("one", "two"):
+            await service.client.post(f"/moments/{moment_id}/tags", json={"tag": tag})
+
+        refused = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "three"})
+        had = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "two"})
+
+        assert refused.status_code == 400
+        assert "2 tags at the most" in refused.json()["detail"]
+        assert had.json()["tags"] == ["one", "two"]
+
+    @pytest.mark.parametrize("path", ["tags", "tags/remove"])
+    async def test_tags_of_a_moment_that_does_not_exist_are_refused(self, service, path):
+        response = await service.client.post(f"/moments/999/{path}", json={"tag": "funny"})
+
+        assert response.status_code == 404
+
     async def test_the_two_tags_do_not_share_a_vocabulary(self, service):
         moment_id = add_moment()
 

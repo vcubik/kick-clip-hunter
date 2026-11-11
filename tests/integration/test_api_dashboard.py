@@ -1877,6 +1877,75 @@ class TestOnDiskFilter:
         assert vod.attrs["data-on-disk"] == "false"
 
 
+class TestTagFilter:
+    @pytest.fixture(autouse=True)
+    async def tagged_moments(self, service):
+        self.plain = add_moment(detected_at=T0)
+        self.funny = add_moment(detected_at=T0 + minutes(1))
+        self.both = add_moment(detected_at=T0 + minutes(2), rating=5)
+        for moment_id, tag in ((self.funny, "funny"), (self.both, "funny"), (self.both, "chat war")):
+            response = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": tag})
+            assert response.status_code == 200
+
+    def options(self, page: Element) -> list[tuple[str, str]]:
+        return [(option.attrs["value"], option.text) for option in page.one("select", id="tag-filter").find("option")]
+
+    async def test_the_list_can_keep_only_the_moments_given_a_tag(self, service):
+        assert queued(await review(service, show="all", tag="funny")) == [self.both, self.funny]
+        assert queued(await review(service, show="all", tag="chat war")) == [self.both]
+        assert queued(await review(service, tag="funny")) == [self.funny]
+        assert queued(await review(service, show="all", tag="Funny ")) == [self.both, self.funny]
+
+    async def test_every_tag_there_is_is_offered_with_how_many_have_it(self, service):
+        assert self.options(await review(service)) == [
+            ("", "Any tag"),
+            ("chat war", "chat war (1)"),
+            ("funny", "funny (2)"),
+        ]
+
+    async def test_a_chosen_tag_no_moment_has_any_more_still_says_it_was_chosen(self, service):
+        page = await review(service, tag="gone")
+
+        (chosen,) = page.one("select", id="tag-filter").find("option", selected=True)
+        assert (chosen.attrs["value"], chosen.text) == ("gone", "gone (0)")
+        assert page.one("p", class_="queue-empty").text == "Nothing tagged 'gone' here"
+
+    async def test_the_counts_on_the_tabs_are_of_the_narrowed_list(self, service):
+        assert tabs(await review(service, tag="funny")) == ["Unrated 1", "All 2", "Best 1"]
+
+    async def test_the_choice_stays_while_moving_about_the_list(self, service):
+        page = await review(service, show="all", tag="chat war")
+
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?show=all&tag=chat+war&moment={self.both}"
+        tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
+        assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["best"] == (
+            "/dashboard?show=best&tag=chat+war"
+        )
+
+    async def test_without_a_tag_given_to_any_moment_nothing_is_offered(self, service):
+        for moment_id, tag in ((self.funny, "funny"), (self.both, "funny"), (self.both, "chat war")):
+            await service.client.post(f"/moments/{moment_id}/tags/remove", json={"tag": tag})
+
+        assert (await review(service)).find("select", id="tag-filter") == []
+
+    async def test_the_open_moment_shows_its_tags_and_offers_every_tag_there_is(self, service):
+        article = open_moment(await review(service, show="all", moment=self.funny))
+
+        assert [chip.attrs["data-own-tag"] for chip in article.one("ul", class_="own-tag-list").find("li")] == ["funny"]
+        names = article.one("datalist").find("option")
+        assert [option.attrs["value"] for option in names] == ["chat war", "funny"]
+        assert article.one("input", class_="own-tag-add").attrs["maxlength"] == str(view.TAG_MAX_LENGTH)
+
+    async def test_a_tag_is_text_on_the_page_not_markup(self, service):
+        await service.client.post(f"/moments/{self.plain}/tags", json={"tag": "<b>bold</b>"})
+
+        article = open_moment(await review(service, show="all", moment=self.plain))
+
+        (chip,) = article.one("ul", class_="own-tag-list").find("li")
+        assert chip.one("span").text == "<b>bold</b>"
+        assert chip.find("b") == []
+
+
 class TestChannelFilter:
     @pytest.fixture(autouse=True)
     def moments_of_two_channels(self, service):
