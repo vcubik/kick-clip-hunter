@@ -868,9 +868,10 @@ CHAT_ID_MOST = 200
 def chats_asked(posted: object, length: float | None) -> dict[subtitles.Span, str]:
     """The lines of a transcript put right on the page that are to be shown
     as a message of chat (`chat`: the message's id), as when each starts and
-    ends - checked as checked_transcript checks them, a line left empty left
-    out. Raises ValueError, in words for the page, for a line that is also
-    marked to be cut out of the reel, or a message that is not one."""
+    ends - checked as checked_transcript checks them. Raises ValueError, in
+    words for the page, for a line that is also marked to be cut out of the
+    reel, a line with no words (checked_transcript leaves it out, which
+    would drop its message without a word), or a message that is not one."""
     if not isinstance(posted, list):
         return {}
     chosen: list[tuple[dict, str]] = []
@@ -882,6 +883,8 @@ def chats_asked(posted: object, length: float | None) -> dict[subtitles.Span, st
             raise ValueError(f"Line {number}: that is not a message of chat.")
         if line.get("cut") is True:
             raise ValueError(f"Line {number}: it cannot be cut out of the reel and shown as a message of chat.")
+        if not isinstance(line.get("text"), str) or not line["text"].strip():
+            raise ValueError(f"Line {number}: write what is said in it - a line with no words is left out.")
         chosen.append((line, message))
     found: dict[subtitles.Span, str] = {}
     for line, message in chosen:

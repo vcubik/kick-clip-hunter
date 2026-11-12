@@ -2526,6 +2526,13 @@
 
   function pickReelChat(option) {
     const line = option.closest("[data-reel-line]");
+    // A line with no words of its own would be left out when saved, and the
+    // message with it: it takes the message's words (emotes by name).
+    const words = one("[data-reel-text]", line);
+    const said = one(".ch-chat > span", option);
+    if (!words.value.trim() && said) {
+      words.value = [...said.childNodes].map((part) => (part.nodeName === "IMG" ? part.alt : part.textContent)).join("").trim();
+    }
     setReelChat(line, option.dataset.reelChatOption, true, one(".ch-chat", option));
     one("[data-reel-chat-pick]", line)?.focus();
   }
@@ -2571,13 +2578,21 @@
         say(editor, `Line ${number}: click the message in the chat list to pick it, or press Chat again to close the list.`);
         return false;
       }
+      const chat = one("[data-reel-chat]", line)?.dataset.reelChat || "";
+      if (chat && !text.trim()) {
+        const field = one("[data-reel-text]", line);
+        field.setAttribute("aria-invalid", "true");
+        field.focus();
+        say(editor, `Line ${number}: write what is said in it - a line with no words is left out, and its chat message with it.`);
+        return false;
+      }
       lines.push({
         start: start ?? 0,
         end: end ?? 0,
         text,
         keep: one("[data-reel-keep-line]", line).checked,
         cut: one("[data-reel-cut-line]", line).checked,
-        chat: one("[data-reel-chat]", line)?.dataset.reelChat || "",
+        chat,
       });
     }
     const save = one("[data-reel-transcript-save]", editor);

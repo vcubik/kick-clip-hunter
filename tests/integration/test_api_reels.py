@@ -793,6 +793,23 @@ class TestALineShownAsChat:
         assert "Line 2" in response.json()["detail"]
         assert reel_of(moment_id)["chat_lines"] is None
 
+    async def test_a_line_with_no_words_shown_as_chat_is_refused_not_left_out_with_its_message(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "watch out"},
+                {"start": 3.0, "end": 4.6, "text": "", "chat": "message-1"},
+            ],
+        )
+
+        assert response.status_code == 400
+        assert "Line 2" in response.json()["detail"]
+        assert reel_of(moment_id)["chat_lines"] is None
+
     async def test_choices_go_with_a_transcript_a_new_storyboard_replaces(self, reeling, github):
         moment_id = clipped_moment()
         await storyboard_back(reeling, github, moment_id)
