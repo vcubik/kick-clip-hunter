@@ -58,7 +58,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   footage around - or the whole stretch, where it holds none of the clip. The clip is cut from the
   stream's VOD (`vod_footage.cut`), framed as the channel's clips are framed now, once the VOD
   reaches the end of the moment's footage - which can take a minute while the stream is on, said
-  as "Waiting for the stream's VOD" - and the moment is then like any other; refused until chat
+  as "Waiting for the stream's VOD" - and the moment is then like any other. One moment's
+  footage is fetched from a VOD at a time, its clip cut or footage added to it; the others say
+  "Queued" until their turn. Refused until chat
   has stopped reacting to it (whether it is kept is known a minute after it fired), and the
   moment is not removed while it goes on. Chat and its trace are there before the clip: the
   trace is drawn on the stretch the clip would hold. Where the moment's stream's VOD was found

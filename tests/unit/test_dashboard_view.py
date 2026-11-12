@@ -805,8 +805,19 @@ class TestFootageInWords:
 
         assert words[0].isupper() and words.endswith(".")
 
-    def test_the_busy_states_are_vod_footages_own_steps(self):
-        assert view.FOOTAGE_BUSY == {vod_footage.FINDING, vod_footage.FETCHING, vod_footage.JOINING}
+    def test_the_busy_states_are_vod_footages_own_steps_and_waiting_for_a_turn_at_them(self):
+        assert view.FOOTAGE_BUSY == {
+            view.FOOTAGE_QUEUED,
+            vod_footage.FINDING,
+            vod_footage.FETCHING,
+            vod_footage.JOINING,
+        }
+
+    def test_queued_it_says_another_moment_goes_first(self):
+        assert view.footage_words(view.FOOTAGE_QUEUED) == (
+            "Queued: footage of another moment is being fetched from a VOD."
+        )
+        assert view.vod_clip_words(view.FOOTAGE_QUEUED) == view.footage_words(view.FOOTAGE_QUEUED)
 
     def test_fetching_says_how_far_it_has_got(self):
         assert view.footage_words(view.FOOTAGE_FETCHING, 0.427) == "Fetching the footage from the VOD: 42 %."

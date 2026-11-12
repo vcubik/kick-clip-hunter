@@ -349,7 +349,10 @@ Module map (`src/kick_clip_hunter/`):
   holds none of it - after waiting for the VOD to reach the end of it
   (`vod_footage.VOD_BEHIND_SECONDS` past it, `_wait_for_vod`), with `vod_footage.cut`, and
   stored as a clip the recorder cut would be - then the analysis steps run on it; where it
-  stands is in memory (`_vod_clips`), as footage being added is. Before that, `GET
+  stands is in memory (`_vod_clips`), as footage being added is. Footage is fetched from a VOD
+  for one moment at a time (`_vod_turn`, one lock for both): the others wait in the order they
+  were asked for, as "Queued" (`dashboard_view.FOOTAGE_QUEUED`), and give up at shutdown -
+  waiting for the VOD to reach the end of a moment holds no one's turn. Before that, `GET
   /moments/{id}/vod` says where the review page plays such a moment from its stream's VOD:
   the VOD's playlist and how far into it the clip would begin (`_vod_place`, by
   `vod_footage.seconds_in`) - of a Kick or Twitch channel's (`VOD_PLAYED_HERE`); Twitch's
