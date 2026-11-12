@@ -199,7 +199,8 @@ CREATE TABLE IF NOT EXISTS stream_recordings (
 -- with, written on the page (`variant` is then the one it is built on);
 -- `kept_lines` the lines of the transcript ticked to be in the reel, and
 -- `cut_lines` those marked to be cut out of it, as JSON (see
--- reels.marked_stored).
+-- reels.marked_stored); `chat_lines` those shown as a message of chat in
+-- place of their subtitles, with the message's id (see reels.chats_stored).
 CREATE TABLE IF NOT EXISTS reels (
     moment_id INTEGER PRIMARY KEY,
     state TEXT NOT NULL,
@@ -225,7 +226,8 @@ CREATE TABLE IF NOT EXISTS reels (
     storyboard_answers TEXT,
     variant_own TEXT,
     kept_lines TEXT,
-    cut_lines TEXT
+    cut_lines TEXT,
+    chat_lines TEXT
 );
 
 -- Several moments' clips made into one reel (see reels.py): a compilation,
@@ -277,7 +279,8 @@ CREATE TABLE IF NOT EXISTS compilation_reels (
     variant_own TEXT,
     kept_lines TEXT,
     cut_lines TEXT,
-    joined TEXT
+    joined TEXT,
+    chat_lines TEXT
 );
 
 -- Tags of one's own given to a moment on the review page, as many as
@@ -557,12 +560,14 @@ def get_connection() -> sqlite3.Connection:
         ("variant_own", "TEXT"),
         ("kept_lines", "TEXT"),
         ("cut_lines", "TEXT"),
+        ("chat_lines", "TEXT"),
     ):
         if name not in reel_columns:
             conn.execute(f"ALTER TABLE reels ADD COLUMN {name} {kind}")
     compilation_reel_columns = {row[1] for row in conn.execute("PRAGMA table_info(compilation_reels)")}
-    if "cut_lines" not in compilation_reel_columns:
-        conn.execute("ALTER TABLE compilation_reels ADD COLUMN cut_lines TEXT")
+    for name in ("cut_lines", "chat_lines"):
+        if name not in compilation_reel_columns:
+            conn.execute(f"ALTER TABLE compilation_reels ADD COLUMN {name} TEXT")
 
     return conn
 
@@ -1136,7 +1141,7 @@ def get_chat_between(
     conn.row_factory = sqlite3.Row
     return conn.execute(
         """
-        SELECT received_at, sender_username, content
+        SELECT message_id, received_at, sender_username, content
         FROM chat_messages
         WHERE channel_slug = ? AND received_at BETWEEN ? AND ?
         ORDER BY received_at
@@ -2138,6 +2143,7 @@ REEL_FIELDS = (
     "variant_own",
     "kept_lines",
     "cut_lines",
+    "chat_lines",
 )
 
 

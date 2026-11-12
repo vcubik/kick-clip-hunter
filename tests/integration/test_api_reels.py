@@ -466,7 +466,7 @@ class TestPuttingTheTranscriptRight:
             ],
         )
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 0, "cut": 0}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 0, "cut": 0, "chat": 0}
         assert transcript_of(moment_id) == [
             subtitles.Line(1.2, 2.5, "A: Watch out!"),
             subtitles.Line(3.0, 4.6, "He has a *red* now?"),
@@ -536,7 +536,7 @@ class TestLinesKeptInTheReel:
         lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
         payload = await rendered(reeling, github, moment_id, "B", "1")
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 0}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 0, "chat": 0}
         assert ["checked" in line.one(data_reel_keep_line=True).attrs for line in lines] == [False, True]
         assert payload["keep"] == [{"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?"}]
 
@@ -591,7 +591,7 @@ class TestLinesCutOutOfTheReel:
         lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
         payload = await rendered(reeling, github, moment_id, "B", "1")
 
-        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 1}
+        assert response.json() == {"moment_id": moment_id, "lines": 2, "kept": 1, "cut": 1, "chat": 0}
         assert ["checked" in line.one(data_reel_cut_line=True).attrs for line in lines] == [True, False]
         assert ["checked" in line.one(data_reel_keep_line=True).attrs for line in lines] == [False, True]
         assert payload["cut"] == [{"start": 1.2, "end": 2.5, "text": "A: Watch out!"}]
@@ -625,6 +625,172 @@ class TestLinesCutOutOfTheReel:
 
         assert reel_of(moment_id)["cut_lines"] is None
         assert payload["cut"] == []
+
+
+def chat_offered(response) -> list[tuple[str, str]]:
+    """The chat offered for a line: each message's id and its words."""
+    return [
+        (option.attrs["data-reel-chat-option"], option.one(class_="ch-chat").text)
+        for option in parse(response.text).find(data_reel_chat_option=True)
+    ]
+
+
+async def offered(service, moment_id: int, start: float, end: float) -> list[tuple[str, str]]:
+    response = await service.client.get(f"/dashboard/reels/{moment_id}/chat", params={"start": start, "end": end})
+    assert response.status_code == 200, response.text
+    return chat_offered(response)
+
+
+class TestALineShownAsChat:
+    async def test_the_chat_around_a_line_is_offered_as_chat_showed_it(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "is that a red car?", T0 + timedelta(seconds=1))
+        add_chat(CHANNEL, "fan", "xdddd", T0 + timedelta(seconds=3))
+        await storyboard_back(reeling, github, moment_id)
+
+        # The line in seconds of the moment's file: chat's clip time + BEFORE.
+        found = await offered(reeling, moment_id, BEFORE + 2.0, BEFORE + 4.0)
+
+        assert [said for _, said in found] == ["asker is that a red car?", "fan xdddd"]
+        assert all(message for message, _ in found)
+
+    async def test_chat_from_well_after_the_line_is_not_offered(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "a question", T0)
+        add_chat(CHANNEL, "soon", "just after", T0 + timedelta(seconds=2 + reels.CHAT_OFFERED_AFTER - 1))
+        add_chat(CHANNEL, "late", "too late", T0 + timedelta(seconds=2 + reels.CHAT_OFFERED_AFTER + 1))
+        await storyboard_back(reeling, github, moment_id)
+
+        found = await offered(reeling, moment_id, BEFORE + 1, BEFORE + 2)
+
+        assert [said for _, said in found] == ["asker a question", "soon just after"]
+
+    async def test_a_picked_message_is_kept_shown_under_its_line_and_goes_up_with_the_render(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "is that a red car?", T0 + timedelta(seconds=1))
+        await storyboard_back(reeling, github, moment_id, proposed=PROPOSED)
+        ((message, _),) = await offered(reeling, moment_id, 1.2, 2.5)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "A: Watch out!"},
+                {"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?", "chat": message},
+            ],
+        )
+        lines = (await workspace(reeling, moment_id)).one(data_reel_lines=True).find(data_reel_line=True)
+        payload = await rendered(reeling, github, moment_id, "B", "1")
+
+        assert response.json()["chat"] == 1
+        assert [line.one(data_reel_chat=True).attrs["data-reel-chat"] for line in lines] == ["", message]
+        assert lines[1].one(data_reel_chat_shown=True).text == "asker is that a red car?"
+        tag = reels.tag(moment_id)
+        assert json.loads(github.asset(tag, reels.CHAT_TIMES)) == [
+            {"start": 3.0, "end": 4.6, "text": "B: He has a *red* now?", "card": "card-1"}
+        ]
+        card = parse(github.asset(tag, reels.CHAT_PAGE).decode()).one(id="card-1")
+        assert card.one(class_="ch-chat").text == "asker is that a red car?"
+        # The subtitles still have the line: the render shows the message in its place.
+        assert lines_of(github.asset(tag, reels.SUBTITLES))[1].text == "B: He has a *red* now?"
+        assert payload["tag"] == tag
+
+    async def test_the_page_it_is_drawn_from_needs_nothing_of_the_service(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "is that a red car?", T0 + timedelta(seconds=1))
+        conn = db.get_connection()
+        try:
+            badges = json.dumps([{"type": "moderator"}])
+            db.set_chat_identity(conn, USER_ID, "asker", "#FF0000", badges)
+        finally:
+            conn.close()
+        await storyboard_back(reeling, github, moment_id)
+        ((message, _),) = await offered(reeling, moment_id, 1.2, 2.5)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "chat": message}])
+
+        await rendered(reeling, github, moment_id, "B", "1")
+
+        page_text = github.asset(reels.tag(moment_id), reels.CHAT_PAGE).decode()
+        card = parse(page_text).one(id="card-1")
+        assert card.one(class_="ch-badge").attrs["src"].startswith("data:image/svg+xml;base64,")
+        assert "data:font/ttf;base64," in page_text
+        assert "/static/" not in page_text
+
+    async def test_a_line_only_partly_in_the_stretch_sent_is_timed_to_it(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "a question", T0 + timedelta(seconds=1))
+        await storyboard_back(reeling, github, moment_id)
+        set_reel(moment_id, part_start=2.0, part_end=12.0)
+        ((message, _),) = await offered(reeling, moment_id, 1.5, 3.0)
+        await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 0.5, "end": 1.5, "text": "before the stretch", "chat": message},
+                {"start": 1.5, "end": 3.0, "text": "into the stretch", "chat": message},
+            ],
+        )
+
+        await rendered(reeling, github, moment_id, "B", "1")
+
+        assert json.loads(github.asset(reels.tag(moment_id), reels.CHAT_TIMES)) == [
+            {"start": 0.0, "end": 1.0, "text": "into the stretch", "card": "card-1"}
+        ]
+
+    async def test_a_render_without_one_takes_the_last_ones_out_of_the_release(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "a question", T0 + timedelta(seconds=1))
+        await storyboard_back(reeling, github, moment_id)
+        ((message, _),) = await offered(reeling, moment_id, 1.2, 2.5)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "chat": message}])
+        await rendered(reeling, github, moment_id, "B", "1")
+        github.answer_reel(reels.tag(moment_id), b"the reel")
+        await reeling.main._look_at_reels()
+
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "chat": ""}])
+        await rendered(reeling, github, moment_id, "B", "1")
+
+        assert reel_of(moment_id)["chat_lines"] is None
+        assert github.asset(reels.tag(moment_id), reels.CHAT_PAGE) is None
+        assert github.asset(reels.tag(moment_id), reels.CHAT_TIMES) is None
+
+    async def test_a_message_gone_from_the_chat_leaves_its_line_as_subtitles(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "chat": "message-gone"}])
+
+        line = (await workspace(reeling, moment_id)).one(data_reel_lines=True).one(data_reel_line=True)
+        await rendered(reeling, github, moment_id, "B", "1")
+
+        assert "no longer in the moment's chat" in line.one(data_reel_chat_shown=True).text
+        assert github.asset(reels.tag(moment_id), reels.CHAT_PAGE) is None
+
+    async def test_a_line_both_cut_out_and_shown_as_chat_is_refused_saying_which(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "watch out"},
+                {"start": 3.0, "end": 4.6, "text": "a red now?", "cut": True, "chat": "message-1"},
+            ],
+        )
+
+        assert response.status_code == 400
+        assert "Line 2" in response.json()["detail"]
+        assert reel_of(moment_id)["chat_lines"] is None
+
+    async def test_choices_go_with_a_transcript_a_new_storyboard_replaces(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+        await save(reeling, moment_id, [{"start": 1.2, "end": 2.5, "text": "watch out", "chat": "message-1"}])
+        set_reel(moment_id, transcript_edited=0)
+
+        await storyboard_back(reeling, github, moment_id)
+
+        assert reel_of(moment_id)["chat_lines"] is None
 
 
 class TestAVariantOfOnesOwn:

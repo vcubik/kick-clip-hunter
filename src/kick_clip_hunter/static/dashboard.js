@@ -2454,6 +2454,73 @@
     else field.blur();
   }
 
+  // A line shown in the reel as a message of chat, in place of its
+  // subtitles: the chat around it is fetched and offered under it, the
+  // nearest message to where the line starts in view, and the one picked
+  // put under the line as chat had it.
+  async function toggleReelChat(button) {
+    const line = button.closest("[data-reel-line]");
+    const picker = one("[data-reel-chat-picker]", line);
+    if (!picker.hidden) {
+      picker.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      return;
+    }
+    const editor = reelEditorOf(line);
+    const start = lineTime(one("[data-reel-start]", line));
+    if (start === null) {
+      say(editor, "Write when the line starts, like 0:07.4.");
+      return;
+    }
+    const end = lineTime(one("[data-reel-end]", line)) ?? start;
+    button.setAttribute("aria-expanded", "true");
+    picker.hidden = false;
+    picker.textContent = "Loading the chat around the line.";
+    let markup = null;
+    try {
+      const response = await fetch(`${editor.dataset.reelChatUrl}?start=${start}&end=${Math.max(end, start)}`);
+      if (response.ok) markup = await response.text();
+    } catch {
+      // said below
+    }
+    if (picker.hidden) return;
+    if (markup === null) {
+      picker.textContent = "Could not load the chat. Try again.";
+      return;
+    }
+    picker.innerHTML = markup;
+    const options = all("[data-reel-chat-option]", picker);
+    const chosen = one("[data-reel-chat]", line).dataset.reelChat;
+    const near = options.find((option) => option.dataset.reelChatOption === chosen)
+      || options.reduce((best, option) => (
+        best && Math.abs(Number(best.dataset.second) - start) <= Math.abs(Number(option.dataset.second) - start) ? best : option
+      ), null);
+    near?.scrollIntoView({ block: "center" });
+    near?.focus({ preventScroll: true });
+  }
+
+  function pickReelChat(option) {
+    const line = option.closest("[data-reel-line]");
+    setReelChat(line, option.dataset.reelChatOption, true, one(".ch-chat", option));
+    one("[data-reel-chat-pick]", line)?.focus();
+  }
+
+  // Shows a line as the message `id` is (its markup `shown`), or as
+  // subtitles again where `id` is null - and closes the chat offered.
+  function setReelChat(line, id, edited = true, shown = null) {
+    const holder = one("[data-reel-chat]", line);
+    if (!holder) return;
+    if (!id && !holder.dataset.reelChat) return;
+    holder.dataset.reelChat = id || "";
+    holder.hidden = !id;
+    const place = one("[data-reel-chat-shown]", holder);
+    place.replaceChildren(...(shown ? [shown.cloneNode(true)] : []));
+    if (id) one("[data-reel-cut-line]", line).checked = false;
+    one("[data-reel-chat-picker]", line).hidden = true;
+    one("[data-reel-chat-pick]", line)?.setAttribute("aria-expanded", "false");
+    if (edited) reelEdited(one("[data-reel-text]", line));
+  }
+
   // Keeps the transcript as it is on the page, and shows it as the service
   // has it then - in the order its lines are said. True once it is kept.
   async function saveReelTranscript(editor) {
@@ -2477,6 +2544,7 @@
         text,
         keep: one("[data-reel-keep-line]", line).checked,
         cut: one("[data-reel-cut-line]", line).checked,
+        chat: one("[data-reel-chat]", line)?.dataset.reelChat || "",
       });
     }
     const save = one("[data-reel-transcript-save]", editor);
@@ -3985,6 +4053,9 @@
     ["[data-reel-line-after], [data-reel-line-add]", addReelLine],
     ["[data-reel-line-remove]", removeReelLine],
     ["[data-reel-take]", takeHeardLine],
+    ["[data-reel-chat-pick]", toggleReelChat],
+    ["[data-reel-chat-option]", pickReelChat],
+    ["[data-reel-chat-clear]", (button) => setReelChat(button.closest("[data-reel-line]"), null)],
     ["[data-reel-transcript-save]", (button) => saveReelTranscript(reelEditorOf(button))],
     ["[data-reel-feedback]", sendReelFeedback],
     ["[data-reel-seek]", seekReelSource],
@@ -4299,6 +4370,8 @@
         const other = target.matches("[data-reel-keep-line]") ? "[data-reel-cut-line]" : "[data-reel-keep-line]";
         one(other, target.closest("[data-reel-line]")).checked = false;
       }
+      // A line cut out of the reel is not shown in it as chat either.
+      if (target.matches("[data-reel-cut-line]") && target.checked) setReelChat(target.closest("[data-reel-line]"), null, false);
       reelEdited(target);
     } else if (target.matches("[data-notify-field]")) {
       delete target.dataset.remove;

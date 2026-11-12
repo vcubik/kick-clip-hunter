@@ -624,6 +624,53 @@ class TestMarkedLines:
         assert len(reels.marked_lines(transcript, marked, None)) == 2
 
 
+class TestLinesShownAsChat:
+    def test_kept_as_when_each_line_starts_and_ends_with_its_message_and_read_back(self):
+        posted = [
+            {"start": 3.0, "end": 4.0, "text": "two", "chat": "message-2"},
+            {"start": 1.0, "end": 2.0, "text": "one", "chat": ""},
+            {"start": 5.0, "end": 6.0, "text": "  ", "chat": "message-3"},
+            {"start": 7.0, "end": 8.0, "text": "three"},
+        ]
+
+        chosen = reels.chats_asked(posted, None)
+
+        assert chosen == {(3.0, 4.0): "message-2"}
+        assert reels.chats_read(reels.chats_stored(chosen)) == chosen
+        assert reels.chats_stored({}) is None
+        assert reels.chats_asked(None, None) == {}
+
+    @pytest.mark.parametrize(
+        ("line", "said"),
+        [
+            ({"chat": "message-1", "cut": True}, "cut out"),
+            ({"chat": 5}, "not a message"),
+            ({"chat": "m" * (reels.CHAT_ID_MOST + 1)}, "not a message"),
+        ],
+    )
+    def test_what_cannot_be_shown_is_refused_saying_which_line(self, line, said):
+        posted = [{"start": 1.0, "end": 2.0, "text": "one"}, {"start": 3.0, "end": 4.0, "text": "two", **line}]
+
+        with pytest.raises(ValueError, match=f"Line 2.*{said}"):
+            reels.chats_asked(posted, None)
+
+    @pytest.mark.parametrize("stored", [None, "", "not json", '{"a": 1}', "[[1, 2]]", '[["x", 2, "m"]]'])
+    def test_what_cannot_be_read_is_none_shown(self, stored):
+        assert reels.chats_read(stored) == {}
+
+    def test_the_lines_of_a_stretch_cut_to_it_and_timed_to_it_with_their_message(self):
+        transcript = [Line(1.0, 3.0, "into it"), Line(4.0, 5.0, "in it"), Line(6.0, 7.0, "said")]
+        chosen = {(1.0, 3.0): "m-1", (4.0, 5.0): "m-2"}
+
+        assert reels.chat_times(transcript, chosen, (2.0, 10.0)) == [
+            {"start": 0.0, "end": 1.0, "text": "into it", "message": "m-1"},
+            {"start": 2.0, "end": 3.0, "text": "in it", "message": "m-2"},
+        ]
+        assert reels.chat_times(transcript, chosen, (5.0, 10.0)) == []
+        assert reels.chat_of(transcript[1], chosen) == "m-2"
+        assert reels.chat_of(transcript[2], chosen) is None
+
+
 class TestCompilations:
     def test_its_release_and_its_parts_are_named(self):
         assert reels.compilation_tag(3) == "compilation-3"

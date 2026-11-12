@@ -8,7 +8,8 @@
     the reel stands and the reel itself - the rest only once another
     storyboard has come back (`data-board`), never over a transcript that is
     being put right. -#}
-{% macro reel_line(line, editable=true) -%}
+{% from "_chat_line.html" import chat_name, chat_text with context -%}
+{% macro reel_line(line, editable=true, chat=false) -%}
 <li class="reel-line" data-reel-line>
   <div class="reel-line-head">
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Play this line" title="Plays the clip from where the line starts to where it ends" data-reel-play>
@@ -28,11 +29,30 @@
       <input type="checkbox" data-reel-cut-line{% if line and line.cut %} checked{% endif %}{% if not editable %} disabled{% endif %}>
       <span>Cut out</span>
     </label>
+    {#- In place of its subtitles, the line can be shown in the reel as a
+        message of chat - the one the streamer reads out: picked from the
+        chat around the line (see reels.chats_asked). -#}
+    {% if chat %}
+    <button type="button" class="ch-btn ch-btn-compact" aria-expanded="false" title="Shows a message of chat in the reel in place of this line's subtitles" data-reel-chat-pick{% if not editable %} disabled{% endif %}>Chat</button>
+    {% endif %}
     <span class="ch-gap"></span>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Add a line after this one" title="Adds a line after this one" data-reel-line-after{% if not editable %} disabled{% endif %}>+</button>
     <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Remove this line" title="Removes this line" data-reel-line-remove{% if not editable %} disabled{% endif %}>×</button>
   </div>
   <textarea class="ch-input reel-text" rows="1" aria-label="What is said" data-reel-text{% if not editable %} disabled{% endif %}>{{ line.text if line else '' }}</textarea>
+  {% if chat %}
+  {#- The message the line is shown as, where one was picked: as chat had
+      it. `data-reel-chat` holds its id; the script puts one picked here. -#}
+  <div class="reel-line-chat" data-reel-chat="{{ line.chat if line else '' }}"{% if not (line and line.chat) %} hidden{% endif %}>
+    <span class="ch-cap">In the reel as this message of chat, not as subtitles:</span>
+    <div class="reel-line-chat-shown" data-reel-chat-shown>
+      {%- if line and line.chat_line %}<span class="ch-chat">{{ chat_name(line.chat_line) }} {{ chat_text(line.chat_line.parts) }}</span>
+      {%- elif line and line.chat %}<p class="reel-quiet">The message is no longer in the moment's chat: the line keeps its subtitles.</p>{% endif -%}
+    </div>
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-icon" aria-label="Show subtitles again" title="Shows this line as subtitles again" data-reel-chat-clear{% if not editable %} disabled{% endif %}>×</button>
+  </div>
+  <div class="reel-chat-picker" hidden data-reel-chat-picker></div>
+  {% endif %}
 </li>
 {%- endmacro %}
 {#- A hook's words as the reel shows them (reels.hook_pieces): emoji
@@ -344,17 +364,17 @@
         {% endif %}
         {% if reel.transcript %}
         {% set transcript = reel.transcript %}
-        <div class="reel-transcript" data-reel-transcript="{{ reel.transcript_url }}" data-length="{{ transcript.length }}" data-status-scope>
-          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out. A line ticked "In the reel" is not cut out of it, and one ticked "Cut out" is left out of it.</p>
+        <div class="reel-transcript" data-reel-transcript="{{ reel.transcript_url }}" data-length="{{ transcript.length }}"{% if reel.chat_url %} data-reel-chat-url="{{ reel.chat_url }}"{% endif %} data-status-scope>
+          <p class="ch-cap">What is said in the clip, a line at a time, with when in the clip's file. The reel's subtitles are made of it, and a new storyboard goes by it once it is put right. "A: " or "B: " in front of a line colours it for who says it, *a word* between stars stands out, and a line left empty is left out. A line ticked "In the reel" is not cut out of it, and one ticked "Cut out" is left out of it.{% if reel.chat_url %} "Chat" shows a message of chat in the reel in place of a line's subtitles, growing as it is read out.{% endif %}</p>
           {% if not reel.editable %}
           <p class="reel-note">A new storyboard is being made, and a transcript comes with it: until then this one cannot be changed.</p>
           {% elif transcript.edited %}
           <p class="reel-note">Put right by hand.</p>
           {% endif %}
           <ol class="reel-lines" data-reel-lines>
-            {% for line in transcript.lines %}{{ reel_line(line, reel.editable) }}{% endfor %}
+            {% for line in transcript.lines %}{{ reel_line(line, reel.editable, reel.chat_url) }}{% endfor %}
           </ol>
-          <template data-reel-line-template>{{ reel_line(none) }}</template>
+          <template data-reel-line-template>{{ reel_line(none, chat=reel.chat_url) }}</template>
           <div class="reel-transcript-foot">
             <button type="button" class="ch-btn ch-btn-compact" data-reel-line-add{% if not reel.editable %} disabled{% endif %}>Add a line</button>
             <button type="button" class="ch-btn ch-btn-primary" data-reel-transcript-save{% if not reel.editable %} disabled{% endif %}>Save</button>

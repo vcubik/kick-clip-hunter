@@ -456,3 +456,17 @@ class TestTheRestOfTheWay:
             "streamer": CHANNEL,
         }
         assert github.dispatches[-1] == ("feedback", {"tag": tag})
+
+    async def test_its_lines_are_not_offered_as_chat_nor_kept_so(self, reeling, github):
+        compilation_id = await added(reeling, clipped("moment_1.mp4"), clipped("moment_2.mp4", seconds=60))
+        await storyboard_back(reeling, github, compilation_id)
+
+        saved = await reeling.client.post(
+            f"/compilations/{compilation_id}/reel/transcript",
+            json={"lines": [{"start": 7.0, "end": 8.5, "text": "Not again!", "chat": "message-1"}]},
+        )
+        response = await reeling.client.get(f"/dashboard/reels/compilations/{compilation_id}")
+
+        assert saved.status_code == 400
+        assert "compilation" in saved.json()["detail"]
+        assert "data-reel-chat-pick" not in response.text

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -6393,6 +6394,60 @@ def _reel_context(
     )
 
 
+def _reel_chat(conn, row) -> list[dict]:
+    """A moment's chat as the review page shows it beside its clip (see
+    chat_trace.chat_lines), each line with the second of the moment's file
+    it belongs to (`second`): what a line of its reel's transcript can be
+    shown as. Nothing for a clip that cannot be placed against chat - an
+    imported one."""
+    _, lines = _chat_against_clip(conn, row, _chat_delay(conn, row["channel_slug"]))
+    before = row["context_before"] or 0.0
+    return [{**line, "second": float(line["at"]) + before} for line in lines if line.get("id")]
+
+
+# The page the messages of chat a reel shows are drawn from (see
+# reels.CHAT_PAGE): its stylesheet and font go in it, as the browser that
+# draws it has nothing else of the service's.
+REEL_CHAT_CSS = Path(__file__).parent / "static" / "reel_chat.css"
+REEL_CHAT_FONT = Path(__file__).parent / "static" / "fonts" / "Archivo-Variable.ttf"
+BADGES_DIR = Path(__file__).parent / "static" / "badges"
+
+
+def _data_url(path: Path, kind: str) -> str:
+    return f"data:{kind};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def _reel_chat_cards(
+    conn, row, transcript: list[subtitles.Line], chosen: dict[subtitles.Span, str], part: tuple[float, float] | None
+) -> tuple[str | None, list[dict]]:
+    """The messages of chat a moment's reel shows in place of some lines'
+    subtitles (see reels.CHAT_PAGE): the page they are drawn from, each in
+    a box named `card-1`, `card-2`, ..., as chat showed it - and when each is
+    shown, timed to what was sent (see reels.chat_times), with its box's
+    name (`card`). A message no longer found in the moment's chat is left
+    out, and its line keeps its subtitles; (None, []) where none is left."""
+    found = {line["id"]: line for line in _reel_chat(conn, row)}
+    times, cards = [], []
+    for shown in reels.chat_times(transcript, chosen, part):
+        line = found.get(shown.pop("message"))
+        if line is None:
+            continue
+        card = f"card-{len(cards) + 1}"
+        # The placeholder badges in the page itself, as the stylesheet is.
+        badges = [
+            {**badge, "image": badge["image"] or _data_url(BADGES_DIR / f"{badge['icon']}.svg", "image/svg+xml")}
+            for badge in line["badges"]
+        ]
+        cards.append({"id": card, "line": {**line, "badges": badges, "in_moment": False}})
+        times.append({**shown, "card": card})
+    if not cards:
+        return None, []
+    font = _data_url(REEL_CHAT_FONT, "font/ttf")
+    css = REEL_CHAT_CSS.read_text(encoding="utf-8").replace('url("fonts/Archivo-Variable.ttf")', f'url("{font}")')
+    page = templates.get_template("reel_chat.html").render(cards=cards, css=css, asset_version=_asset_version())
+    return page, times
+
+
 def _update_reel(reel_of: ReelOf, **fields) -> None:
     """Stores what became of a reel - unless its moment, or compilation,
     was removed meanwhile."""
@@ -6482,6 +6537,8 @@ async def _send_for_render(
     own: str = "",
     keep: list[dict] | None = None,
     cut: list[dict] | None = None,
+    chat_page: str | None = None,
+    chat_times: list[dict] | None = None,
 ) -> None:
     """Starts the render workflow for a moment's reel: with the transcript as
     its subtitles (`said`, as SubRip), or with the subtitles taken out of the
@@ -6489,16 +6546,25 @@ async def _send_for_render(
     comment on what to change in the variant, where one was written, the
     variant of one's own to build in its place, where one was, the lines of
     the transcript that have to be in the reel (`keep`) and those to be cut
-    out of it (`cut`), each timed to what was sent (see reels.marked_lines)."""
+    out of it (`cut`), each timed to what was sent (see reels.marked_lines),
+    and the messages of chat some lines are shown as in place of their
+    subtitles: the page they are drawn from (`chat_page`) and when each is
+    shown (`chat_times`, see _reel_chat_cards). A render without them
+    takes those of the one before out of the release."""
     release_tag = reel_of.tag
     try:
         release = await github.release(release_tag)
         if release is None:
             _reel_failed(reel_of, f"The {reel_of.kind}'s release is gone from GitHub. Make a new storyboard.")
             return
-        await github.remove_assets(release, [*reels.RENDER_ANSWERS, *([reels.SUBTITLES] if unsaid else [])])
+        gone = [*reels.RENDER_ANSWERS, *reels.CHAT_FILES, *([reels.SUBTITLES] if unsaid else [])]
+        await github.remove_assets(release, gone)
         if said is not None:
             await github.upload(release, reels.SUBTITLES, data=said.encode(subtitles.ENCODING))
+        if chat_page is not None and chat_times:
+            await github.upload(release, reels.CHAT_PAGE, data=chat_page.encode())
+            times = json.dumps(chat_times, ensure_ascii=False, indent=1)
+            await github.upload(release, reels.CHAT_TIMES, data=times.encode())
         await github.dispatch(
             "render",
             {
@@ -6520,7 +6586,8 @@ async def _send_for_render(
         _reel_failed(reel_of, "Something went wrong. The server log says what.")
         return
     logger.info(
-        "the reel of %s was asked for: variant %s%s, hook %r, subtitles %s%s, %d lines to keep, %d to cut out",
+        "the reel of %s was asked for: variant %s%s, hook %r, subtitles %s%s, %d lines to keep, %d to cut out,"
+        " %d shown as chat",
         reel_of,
         variant,
         " (one of your own built on it)" if own else "",
@@ -6529,6 +6596,7 @@ async def _send_for_render(
         ", with a comment" if comment else "",
         len(keep or []),
         len(cut or []),
+        len(chat_times or []) if chat_page is not None else 0,
     )
 
 
@@ -6664,6 +6732,7 @@ async def _take_storyboard(
         # transcript that is gone.
         fields["kept_lines"] = None
         fields["cut_lines"] = None
+        fields["chat_lines"] = None
     _update_reel(reel_of, **fields)
     logger.info("the storyboard of %s came back", reel_of)
     if _reel_answers(reel).get("render_now"):
@@ -6772,12 +6841,22 @@ def _reel_link(conn, row) -> dict:
 
 
 def _transcript_lines(
-    lines: list[subtitles.Line], kept: set[subtitles.Span] | None = None, cut: set[subtitles.Span] | None = None
+    lines: list[subtitles.Line],
+    kept: set[subtitles.Span] | None = None,
+    cut: set[subtitles.Span] | None = None,
+    chats: dict[subtitles.Span, str] | None = None,
+    chat: dict[str, dict] | None = None,
 ) -> list[dict]:
+    """A transcript's lines as the Reels page has them: each with whether
+    it is ticked to be in the reel or cut out of it, and the id of the
+    message of chat it is shown as (`chats`), with that message as chat
+    showed it where it is among `chat` (by id)."""
     return [
         {
             "keep": reels.is_marked(line, kept or set()),
             "cut": reels.is_marked(line, cut or set()),
+            "chat": reels.chat_of(line, chats or {}) or "",
+            "chat_line": (chat or {}).get(reels.chat_of(line, chats or {}) or ""),
             "start": dashboard_view.number_words(line.start, 3),
             "end": dashboard_view.number_words(line.end, 3),
             "start_words": reels.clock(line.start),
@@ -6959,11 +7038,21 @@ def _reel_questions(answers: dict, questions=REEL_QUESTIONS) -> dict:
     }
 
 
-def _reel_view(reel_of: ReelOf, reel, *, length: float | None, clip_url: str | None, questions: dict) -> dict:
+def _reel_view(
+    reel_of: ReelOf,
+    reel,
+    *,
+    length: float | None,
+    clip_url: str | None,
+    questions: dict,
+    chat: dict[str, dict] | None = None,
+) -> dict:
     """What the Reels page shows of a reel once it was asked for - its
     storyboard, the reel, its transcript - and the way to each step, of a
     moment's reel or a compilation's alike: `length` is how long the file
-    its times are of runs, `clip_url` where that file is played."""
+    its times are of runs, `clip_url` where that file is played. `chat` is
+    the chat the transcript's lines can be shown as (see _reel_chat), by
+    id - None where none can be: then no line is offered it."""
     state = reel["state"] if reel is not None else None
     storyboard = _stored_storyboard(reel)
     transcript = subtitles.read(reel["transcript"]) if reel is not None else None
@@ -6977,6 +7066,8 @@ def _reel_view(reel_of: ReelOf, reel, *, length: float | None, clip_url: str | N
         "ask_url": f"{reel_of.asked_url}/reel",
         "render_url": f"{reel_of.asked_url}/reel/render",
         "transcript_url": f"{reel_of.asked_url}/reel/transcript",
+        # Where the chat a line can be shown as is offered.
+        "chat_url": f"{reel_of.own_url}/chat" if chat is not None else None,
         "feedback_url": f"{reel_of.asked_url}/reel/feedback",
         "download_name": f"{reel_of.kind}_{reel_of.id}_reel.mp4",
         "state": state or "",
@@ -7032,7 +7123,11 @@ def _reel_view(reel_of: ReelOf, reel, *, length: float | None, clip_url: str | N
     if transcript is not None:
         view["transcript"] = {
             "lines": _transcript_lines(
-                transcript, reels.marked_read(reel["kept_lines"]), reels.marked_read(reel["cut_lines"])
+                transcript,
+                reels.marked_read(reel["kept_lines"]),
+                reels.marked_read(reel["cut_lines"]),
+                reels.chats_read(reel["chat_lines"]),
+                chat,
             ),
             "edited": bool(reel["transcript_edited"]),
             "length": dashboard_view.number_words(length, 3) if length is not None else "",
@@ -7049,12 +7144,15 @@ def _reel_workspace(conn, row, today: date) -> dict:
     reel = get_reel(conn, moment_id)
     clip = CLIPS_DIR / row["clip_path"] if row["clip_path"] else None
     has_clip = clip is not None and clip.exists()
+    chosen = reels.chats_read(reel["chat_lines"]) if reel is not None else {}
     view = _reel_view(
         _moment_reel(moment_id),
         reel,
         length=_file_length(row),
         clip_url=_clip_url(row["clip_path"], versioned=True) if has_clip else None,
         questions=_reel_questions(_reel_answers(reel)),
+        # The chat a line is shown as, looked up only where one is.
+        chat={line["id"]: line for line in _reel_chat(conn, row)} if chosen else {},
     )
     view.update(
         {
@@ -7282,6 +7380,34 @@ async def dashboard_reel(request: Request, moment_id: int):
     finally:
         conn.close()
     return templates.TemplateResponse(request, "_reel_workspace.html", {"reel": view})
+
+
+@app.get("/dashboard/reels/{moment_id}/chat", response_class=HTMLResponse)
+async def dashboard_reel_chat(request: Request, moment_id: int, start: float = 0.0, end: float | None = None):
+    """The chat a line of a moment's reel's transcript can be shown as -
+    the line from `start` to `end`, in seconds of the moment's file: what
+    was written from a while before it to a little after it (see
+    reels.CHAT_OFFERED_BEFORE), as chat showed it, each to be picked."""
+    if not settings.reels:
+        raise HTTPException(status_code=404, detail=REELS_NOT_SET_UP_WORDS)
+    end = start if end is None or end < start else end
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        lines = [
+            line
+            for line in _reel_chat(conn, row)
+            if start - reels.CHAT_OFFERED_BEFORE <= line["second"] <= end + reels.CHAT_OFFERED_AFTER
+        ]
+    finally:
+        conn.close()
+    for line in lines:
+        line["second_words"] = reels.clock(max(line["second"], 0.0))
+    return templates.TemplateResponse(
+        request, "_reel_chat_pick.html", {"lines": lines, "asset_version": _asset_version()}
+    )
 
 
 @app.get("/dashboard/reels/compilations/{compilation_id}", response_class=HTMLResponse)
@@ -7756,25 +7882,37 @@ async def _save_reel_transcript(reel_of: ReelOf, request: Request) -> dict:
         try:
             lines = reels.checked_transcript(asked.get("lines"), length)
             kept, cut = reels.marks_asked(asked.get("lines"), length)
+            chats = reels.chats_asked(asked.get("lines"), length)
         except ValueError as wrong:
             raise HTTPException(status_code=400, detail=str(wrong)) from None
+        if chats and reel_of.compilation:
+            raise HTTPException(status_code=400, detail="A compilation's lines cannot be shown as chat yet.")
         reel_of.put(
             conn,
             transcript=subtitles.stored(lines),
             transcript_edited=1,
             kept_lines=reels.marked_stored(kept),
             cut_lines=reels.marked_stored(cut),
+            chat_lines=reels.chats_stored(chats),
         )
     finally:
         conn.close()
     logger.info(
-        "the transcript of the reel of %s was put right: %d lines, %d to be in the reel, %d to be cut out",
+        "the transcript of the reel of %s was put right: %d lines, %d to be in the reel, %d to be cut out,"
+        " %d shown as chat",
         reel_of,
         len(lines),
         len(kept),
         len(cut),
+        len(chats),
     )
-    return {f"{reel_of.kind}_id": reel_of.id, "lines": len(lines), "kept": len(kept), "cut": len(cut)}
+    return {
+        f"{reel_of.kind}_id": reel_of.id,
+        "lines": len(lines),
+        "kept": len(kept),
+        "cut": len(cut),
+        "chat": len(chats),
+    }
 
 
 @app.post("/moments/{moment_id}/reel/render")
@@ -7897,6 +8035,10 @@ def _start_render(
     unsaid = transcript is not None and said is None
     keep = reels.marked_lines(transcript or [], reels.marked_read(reel["kept_lines"]), _reel_part(reel))
     cut = reels.marked_lines(transcript or [], reels.marked_read(reel["cut_lines"]), _reel_part(reel))
+    chat_page, chat_times = None, []
+    chosen = reels.chats_read(reel["chat_lines"])
+    if chosen and transcript and not reel_of.compilation and (row := get_moment(conn, reel_of.id)) is not None:
+        chat_page, chat_times = _reel_chat_cards(conn, row, transcript, chosen, _reel_part(reel))
     reel_of.put(
         conn,
         state=reels.RENDERING,
@@ -7911,7 +8053,11 @@ def _start_render(
         feedback_sent=0,
         error=None,
     )
-    _track_task(_send_for_render(github, reel_of, variant, hook, choice, said, unsaid, comment, own, keep, cut))
+    _track_task(
+        _send_for_render(
+            github, reel_of, variant, hook, choice, said, unsaid, comment, own, keep, cut, chat_page, chat_times
+        )
+    )
 
 
 async def _send_feedback(github: reels.GitHub, reel_of: ReelOf, record: dict) -> None:
