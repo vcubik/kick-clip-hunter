@@ -2481,7 +2481,8 @@
   // A line shown in the reel as a message of chat, in place of its
   // subtitles: the chat around it is fetched and offered under it, the
   // nearest message to where the line starts in view, and the one picked
-  // put under the line as chat had it.
+  // with a click put under the line as chat had it. Nothing in the list
+  // looks picked until one is: a message merely in view is not.
   async function toggleReelChat(button) {
     const line = button.closest("[data-reel-line]");
     const picker = one("[data-reel-chat-picker]", line);
@@ -2515,12 +2516,12 @@
     picker.innerHTML = markup;
     const options = all("[data-reel-chat-option]", picker);
     const chosen = one("[data-reel-chat]", line).dataset.reelChat;
+    for (const option of options) option.setAttribute("aria-pressed", String(option.dataset.reelChatOption === chosen));
     const near = options.find((option) => option.dataset.reelChatOption === chosen)
       || options.reduce((best, option) => (
         best && Math.abs(Number(best.dataset.second) - start) <= Math.abs(Number(option.dataset.second) - start) ? best : option
       ), null);
-    near?.scrollIntoView({ block: "center" });
-    near?.focus({ preventScroll: true });
+    if (near) picker.scrollTop = near.offsetTop - picker.offsetTop - (picker.clientHeight - near.offsetHeight) / 2;
   }
 
   function pickReelChat(option) {
@@ -2560,6 +2561,14 @@
         field.setAttribute("aria-invalid", "true");
         field.focus();
         say(editor, `Line ${number}: write when it starts and ends, like 0:07.4.`);
+        return false;
+      }
+      // The chat offered for a line and none of it picked: saving now would
+      // drop what was meant to be picked, so it says how to pick one.
+      const picker = one("[data-reel-chat-picker]", line);
+      if (picker && !picker.hidden && one("[data-reel-chat-option]", picker) && !one("[data-reel-chat]", line).dataset.reelChat) {
+        picker.scrollIntoView({ block: "nearest" });
+        say(editor, `Line ${number}: click the message in the chat list to pick it, or press Chat again to close the list.`);
         return false;
       }
       lines.push({

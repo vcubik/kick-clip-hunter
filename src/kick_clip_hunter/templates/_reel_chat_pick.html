@@ -5,10 +5,11 @@
     a button it is a span. -#}
 {% from "_chat_line.html" import chat_name, chat_text with context -%}
 {% if lines %}
+<p class="ch-cap reel-chat-pick-hint">Click the message the streamer reads out: the reel shows it in place of this line's subtitles. Save keeps it.</p>
 <ol class="reel-chat-pick">
   {% for line in lines %}
   <li>
-    <button type="button" class="reel-chat-option" data-reel-chat-option="{{ line.id }}" data-second="{{ line.second }}">
+    <button type="button" class="reel-chat-option" aria-pressed="false" data-reel-chat-option="{{ line.id }}" data-second="{{ line.second }}">
       <span class="reel-heard-time">{{ line.second_words }}</span>
       <span class="ch-chat">{{ chat_name(line) }} {{ chat_text(line.parts) }}</span>
     </button>
