@@ -117,6 +117,7 @@ from .db import (
     get_moment_times,
     get_notify_setup,
     get_recent_moments,
+    get_recent_tags,
     get_reel,
     get_reel_list,
     get_reels_in,
@@ -3388,6 +3389,7 @@ def _open_moment(conn, row, today: date) -> dict:
         # Tags of one's own, and every tag there is to pick from when another
         # is given.
         "tags": get_moment_tags(conn, row["id"]),
+        "quick_tags": _quick_tags(conn, row["id"]),
         "known_tags": [tag for tag, _count in get_tag_counts(conn)],
         "tag_max": dashboard_view.TAG_MAX_LENGTH,
         "title": row["title"] or "",
@@ -3462,6 +3464,15 @@ def _open_moment(conn, row, today: date) -> dict:
         # make it of.
         "reel": _reel_link(conn, row) if settings.reels and row["clip_path"] else None,
     }
+
+
+def _quick_tags(conn, moment_id: int) -> list[str]:
+    """The tags given last that the moment does not have yet: offered
+    beside the field a tag is typed in, to be given with a click. Asked for
+    a few more than are shown, as the moment may have some of them."""
+    have = set(get_moment_tags(conn, moment_id))
+    recent = get_recent_tags(conn, dashboard_view.QUICK_TAGS + len(have))
+    return [tag for tag in recent if tag not in have][: dashboard_view.QUICK_TAGS]
 
 
 def _tag_choices(conn, chosen: str) -> list[dict]:
@@ -8278,7 +8289,8 @@ async def set_moment_title(moment_id: int, request: Request):
 @app.post("/moments/{moment_id}/tags")
 async def add_tag(moment_id: int, request: Request):
     """Gives a moment a tag of one's own (`tag`, kept as
-    dashboard_view.tag_name has it); answers with every tag it has now."""
+    dashboard_view.tag_name has it); answers with every tag it has now, and
+    the tags given last it does not have (`quick`, see _quick_tags)."""
     data = await request.json()
     tag = dashboard_view.tag_name(str(data.get("tag") or ""))
     if not tag:
@@ -8294,15 +8306,16 @@ async def add_tag(moment_id: int, request: Request):
                 status_code=400, detail=f"A moment can have {dashboard_view.TAGS_PER_MOMENT} tags at the most."
             )
         add_moment_tag(conn, moment_id, tag)
-        tags = get_moment_tags(conn, moment_id)
+        tags, quick = get_moment_tags(conn, moment_id), _quick_tags(conn, moment_id)
     finally:
         conn.close()
-    return {"moment_id": moment_id, "tag": tag, "tags": tags}
+    return {"moment_id": moment_id, "tag": tag, "tags": tags, "quick": quick}
 
 
 @app.post("/moments/{moment_id}/tags/remove")
 async def remove_tag(moment_id: int, request: Request):
-    """Takes a tag away from a moment; answers with the tags it has left."""
+    """Takes a tag away from a moment; answers with the tags it has left,
+    and the tags given last it does not have (`quick`)."""
     data = await request.json()
     tag = dashboard_view.tag_name(str(data.get("tag") or ""))
 
@@ -8311,10 +8324,10 @@ async def remove_tag(moment_id: int, request: Request):
         if get_moment(conn, moment_id) is None:
             raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
         remove_moment_tag(conn, moment_id, tag)
-        tags = get_moment_tags(conn, moment_id)
+        tags, quick = get_moment_tags(conn, moment_id), _quick_tags(conn, moment_id)
     finally:
         conn.close()
-    return {"moment_id": moment_id, "tags": tags}
+    return {"moment_id": moment_id, "tags": tags, "quick": quick}
 
 
 @app.post("/moments/{moment_id}/notes")

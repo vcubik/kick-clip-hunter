@@ -1936,6 +1936,15 @@ class TestTagFilter:
         assert [option.attrs["value"] for option in names] == ["chat war", "funny"]
         assert article.one("input", class_="own-tag-add").attrs["maxlength"] == str(view.TAG_MAX_LENGTH)
 
+    async def test_the_tags_given_last_it_lacks_are_offered_to_be_picked(self, service):
+        def offered(article: Element) -> list[str]:
+            quick = article.one("span", class_="own-tag-quick").find("button")
+            return [button.attrs["data-own-tag-pick"] for button in quick]
+
+        assert offered(open_moment(await review(service, show="all", moment=self.plain))) == ["chat war", "funny"]
+        assert offered(open_moment(await review(service, show="all", moment=self.funny))) == ["chat war"]
+        assert offered(open_moment(await review(service, show="all", moment=self.both))) == []
+
     async def test_a_tag_is_text_on_the_page_not_markup(self, service):
         await service.client.post(f"/moments/{self.plain}/tags", json={"tag": "<b>bold</b>"})
 

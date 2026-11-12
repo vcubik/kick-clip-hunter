@@ -285,7 +285,8 @@ CREATE TABLE IF NOT EXISTS compilation_reels (
 
 -- Tags of one's own given to a moment on the review page, as many as
 -- wanted: a word or a few, kept in small letters, and the review queue
--- narrowed to the moments that have one.
+-- narrowed to the moments that have one. The rowid says which were given
+-- last, so those can be offered to be given again with a click.
 CREATE TABLE IF NOT EXISTS moment_tags (
     moment_id INTEGER NOT NULL,
     tag TEXT NOT NULL,
@@ -1833,6 +1834,17 @@ def add_moment_tag(conn: sqlite3.Connection, moment_id: int, tag: str) -> None:
 def remove_moment_tag(conn: sqlite3.Connection, moment_id: int, tag: str) -> None:
     conn.execute("DELETE FROM moment_tags WHERE moment_id = ? AND tag = ?", (moment_id, tag))
     conn.commit()
+
+
+def get_recent_tags(conn: sqlite3.Connection, limit: int) -> list[str]:
+    """The tags given last, the newest first, each once - what is offered to
+    be given again with a click. A tag no moment has any more is not among
+    them."""
+    rows = conn.execute(
+        "SELECT tag FROM moment_tags GROUP BY tag ORDER BY MAX(rowid) DESC LIMIT ?",
+        (limit,),
+    )
+    return [row[0] for row in rows]
 
 
 def get_tag_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:

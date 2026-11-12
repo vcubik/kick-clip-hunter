@@ -72,6 +72,9 @@ ON_DISK_FILTERS = {ON_DISK_ANY: None, ON_DISK_YES: True, ON_DISK_NO: False}
 TAG_MAX_LENGTH = 32
 # The most tags one moment can have.
 TAGS_PER_MOMENT = 20
+# How many of the tags given last are offered beside the field, to be
+# given again with a click.
+QUICK_TAGS = 8
 
 
 def tag_name(text: str) -> str:
