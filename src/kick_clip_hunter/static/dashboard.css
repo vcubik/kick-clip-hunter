@@ -467,6 +467,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .own-tag-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: var(--space-4); padding: 0; border: 0; border-radius: var(--radius-control); background: none; color: inherit; }
 .own-tag-x:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .own-tag-add { width: 160px; height: var(--h-compact); }
+.own-tag-quick { display: contents; }
 .moment-delete { margin-top: var(--space-12); }
 
 /* The way to a moment's reel, which is made on the Reels page. */

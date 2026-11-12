@@ -29,7 +29,9 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   tabs follow) - and, beside that, to the moments whose clip is on disk or to those that are
   only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). Under the moment's kind and stream kind
   are tags of one's own, as many as wanted (`moment_tags`): typed - or picked from the tags
-  there are - and added with Enter or "Add" (`POST /moments/{id}/tags`, `tag`), taken away with
+  there are - and added with Enter or "Add" (`POST /moments/{id}/tags`, `tag`), or added with a
+  click on one of the tags given last that the moment lacks, offered beside the field
+  (`dashboard_view.QUICK_TAGS` of them, newest first; both routes answer with them as `quick`); taken away with
   the cross (`POST /moments/{id}/tags/remove`), kept in small letters with single spaces
   (`dashboard_view.tag_name`). Once any moment has one, the queue can be narrowed to a tag
   (`?tag=`, the list offering every tag with how many moments have it). After it, "Add before" and "Add after" put that much more of

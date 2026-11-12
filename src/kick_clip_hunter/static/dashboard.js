@@ -246,8 +246,19 @@
     }
   }
 
-  // Tags of one's own: the chips the service says the moment has now.
-  function showOwnTags(group, tags) {
+  // Tags of one's own: the chips the service says the moment has now, and
+  // the tags given last it does not have, to be added with a click.
+  function showOwnTags(group, tags, quick) {
+    const pick = one("[data-quick-tag-template]", group).content.firstElementChild;
+    one("[data-own-tag-quick]", group).replaceChildren(
+      ...quick.map((tag) => {
+        const button = pick.cloneNode(true);
+        button.dataset.ownTagPick = tag;
+        button.title = `Add the tag ${tag}`;
+        one("span", button).textContent = tag;
+        return button;
+      }),
+    );
     const template = one("[data-own-tag-template]", group).content.firstElementChild;
     one("[data-own-tags]", group).replaceChildren(
       ...tags.map((tag) => {
@@ -269,28 +280,40 @@
     filter.append(option);
   }
 
-  async function addOwnTag(input) {
-    const article = input.closest(".moment");
-    if (!input.value.trim()) return;
-    const response = await post(`/moments/${article.dataset.moment}/tags`, { tag: input.value });
+  // Gives the open moment a tag; true once it has it.
+  async function giveTag(from, tag) {
+    const article = from.closest(".moment");
+    const response = await post(`/moments/${article.dataset.moment}/tags`, { tag });
     if (!response) {
       say(article, "Could not reach the service.");
-      return;
+      return false;
     }
     if (!response.ok) {
       say(article, await problem(response, "Could not add the tag. Try again."));
-      return;
+      return false;
     }
     const saved = await response.json();
-    input.value = "";
-    showOwnTags(input.closest(".own-tags"), saved.tags);
+    showOwnTags(from.closest(".own-tags"), saved.tags, saved.quick);
     knowTag(saved.tag);
     say(article, "");
+    return true;
+  }
+
+  async function addOwnTag(input) {
+    if (input.value.trim() && (await giveTag(input, input.value))) input.value = "";
+  }
+
+  // One of the tags given last, picked with a click. From the keyboard the
+  // focus goes to the field, as the button is gone once the moment has the
+  // tag; with the mouse it is left free for the review's keys.
+  async function pickOwnTag(button, event) {
+    const input = one("[data-own-tag-input]", button.closest(".own-tags"));
+    if ((await giveTag(button, button.dataset.ownTagPick)) && event.detail === 0) input.focus();
   }
 
   // From the keyboard the focus goes back to the field the next tag is
   // typed in, as the cross it was on is gone.
-  async function removeOwnTag(button) {
+  async function removeOwnTag(button, event) {
     const article = button.closest(".moment");
     const group = button.closest(".own-tags");
     const tag = button.closest("[data-own-tag]").dataset.ownTag;
@@ -299,8 +322,9 @@
       say(article, "Could not remove the tag. Try again.");
       return;
     }
-    showOwnTags(group, (await response.json()).tags);
-    one("[data-own-tag-input]", group).focus();
+    const left = await response.json();
+    showOwnTags(group, left.tags, left.quick);
+    if (event.detail === 0) one("[data-own-tag-input]", group).focus();
     say(article, "");
   }
 
@@ -4024,6 +4048,7 @@
     ["[data-rate]", (key) => rate(key.closest(".moment"), Number(key.dataset.rate))],
     ["[data-tag]", setTag],
     ["[data-own-tag-remove]", removeOwnTag],
+    ["[data-own-tag-pick]", pickOwnTag],
     ["[data-own-tag-add]", (button) => addOwnTag(one("[data-own-tag-input]", button.closest(".own-tags")))],
     ["[data-trim-open]", openTrim],
     ["[data-trim-close]", (button) => trimOf(button).close()],

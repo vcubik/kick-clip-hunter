@@ -199,12 +199,33 @@ class TestTags:
         await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "funny"})
         again = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "FUNNY"})
 
-        assert given.json() == {"moment_id": moment_id, "tag": "chat war", "tags": ["chat war"]}
+        assert given.json() == {"moment_id": moment_id, "tag": "chat war", "tags": ["chat war"], "quick": []}
         assert again.json()["tags"] == ["chat war", "funny"]
 
         taken = await service.client.post(f"/moments/{moment_id}/tags/remove", json={"tag": "Chat War"})
 
-        assert taken.json() == {"moment_id": moment_id, "tags": ["funny"]}
+        assert taken.json() == {"moment_id": moment_id, "tags": ["funny"], "quick": []}
+
+    async def test_the_tags_given_last_the_moment_lacks_come_back_to_be_picked(self, service):
+        other, moment_id = add_moment(), add_moment()
+        for tag in ("old", "rage", "funny"):
+            await service.client.post(f"/moments/{other}/tags", json={"tag": tag})
+
+        given = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "rage"})
+        taken = await service.client.post(f"/moments/{moment_id}/tags/remove", json={"tag": "rage"})
+
+        assert given.json()["quick"] == ["funny", "old"]
+        assert taken.json()["quick"] == ["funny", "rage", "old"]
+
+    async def test_only_so_many_of_the_tags_given_last_are_offered(self, service, monkeypatch):
+        monkeypatch.setattr(service.main.dashboard_view, "QUICK_TAGS", 2)
+        other, moment_id = add_moment(), add_moment()
+        for tag in ("a", "b", "c", "d"):
+            await service.client.post(f"/moments/{other}/tags", json={"tag": tag})
+
+        given = await service.client.post(f"/moments/{moment_id}/tags", json={"tag": "d"})
+
+        assert given.json()["quick"] == ["c", "b"]
 
     async def test_a_tag_with_no_word_in_it_is_refused(self, service):
         moment_id = add_moment()

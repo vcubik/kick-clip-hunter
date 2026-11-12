@@ -2398,6 +2398,18 @@ class TestMomentTags:
         assert db.get_moment_tags(conn, first) == []
         assert db.get_moment_tags(conn, second) == ["funny"]
 
+    def test_the_tags_given_last_come_first_each_once(self, conn):
+        first, second = store_moment(conn), store_moment(conn)
+        for moment_id, tag in ((first, "old"), (first, "funny"), (second, "rage"), (second, "funny"), (first, "new")):
+            db.add_moment_tag(conn, moment_id, tag)
+
+        assert db.get_recent_tags(conn, 10) == ["new", "funny", "rage", "old"]
+        assert db.get_recent_tags(conn, 2) == ["new", "funny"]
+
+        db.remove_moment_tag(conn, first, "old")
+
+        assert "old" not in db.get_recent_tags(conn, 10)
+
     def test_a_deleted_moment_takes_its_tags_with_it(self, conn):
         gone, kept = store_moment(conn), store_moment(conn)
         db.add_moment_tag(conn, gone, "funny")
