@@ -2845,6 +2845,30 @@ LONGER_SUFFIX = ".longer"
 FOOTAGE_BUSY_WORDS = "Footage is being added to this moment. Try again once that is done."
 
 
+# Footage fetched from a VOD - added to a moment's file, or a moment's clip
+# cut from it - one moment at a time, the others queued in the order they
+# were asked for: each fetches minutes of 1080p, which several at once would
+# have share the line and the disk for no sooner an end. Made when first
+# wanted, on the loop that wants it.
+_vod_fetch: asyncio.Lock | None = None
+
+
+@asynccontextmanager
+async def _vod_turn(queued: Callable[[], None]):
+    """Waits for this moment's turn to fetch from a VOD - `queued` is called
+    first where another moment's is going on - and holds it meanwhile.
+    Raises _GivenUp where the service is shutting down by the time it comes."""
+    global _vod_fetch
+    if _vod_fetch is None:
+        _vod_fetch = asyncio.Lock()
+    if _vod_fetch.locked():
+        queued()
+    async with _vod_fetch:
+        if _shutdown_requested:
+            raise _GivenUp
+        yield
+
+
 def _footage_busy(moment_id: int) -> bool:
     return _footage.get(moment_id, {}).get("state") in dashboard_view.FOOTAGE_BUSY
 
@@ -2921,8 +2945,10 @@ async def _add_footage_background(
 
     longer = clip.with_name(f"{clip.stem}{LONGER_SUFFIX}{clip.suffix}")
     try:
-        vod = await asyncio.to_thread(streams.vod_at, channel, first_at)
-        made = await asyncio.to_thread(vod_footage.lengthen, clip, first_at, vod, before, after, longer, progress)
+        async with _vod_turn(lambda: progress(dashboard_view.FOOTAGE_QUEUED, None)):
+            progress(dashboard_view.FOOTAGE_FINDING, None)
+            vod = await asyncio.to_thread(streams.vod_at, channel, first_at)
+            made = await asyncio.to_thread(vod_footage.lengthen, clip, first_at, vod, before, after, longer, progress)
     except _GivenUp:
         _footage.pop(moment_id, None)
         logger.info("[%s] adding footage to moment %d given up: shutting down", channel, moment_id)
@@ -3141,9 +3167,10 @@ async def _cut_from_vod_background(
     output = CLIPS_DIR / channel / f"moment_{moment_id}.mp4"
     try:
         await _wait_for_vod(moment_id, last + timedelta(seconds=vod_footage.VOD_BEHIND_SECONDS))
-        progress(dashboard_view.FOOTAGE_FINDING, None)
-        vod = await asyncio.to_thread(streams.vod_at, channel, clip_from)
-        made = await asyncio.to_thread(vod_footage.cut, vod, first, last, output, progress)
+        async with _vod_turn(lambda: progress(dashboard_view.FOOTAGE_QUEUED, None)):
+            progress(dashboard_view.FOOTAGE_FINDING, None)
+            vod = await asyncio.to_thread(streams.vod_at, channel, clip_from)
+            made = await asyncio.to_thread(vod_footage.cut, vod, first, last, output, progress)
     except _GivenUp:
         _vod_clips.pop(moment_id, None)
         logger.info("[%s] cutting the clip of moment %d given up: shutting down", channel, moment_id)

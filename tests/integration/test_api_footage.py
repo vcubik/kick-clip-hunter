@@ -21,6 +21,7 @@ from tests.support.hls import Segment
 from tests.support.html import parse
 from tests.support.kick_api import kick_video
 from tests.support.media import probe, require_ffmpeg
+from tests.support.waiting import async_wait_until
 
 pytestmark = [pytest.mark.anyio, pytest.mark.ffmpeg]
 
@@ -211,6 +212,32 @@ class TestAddingFootage:
         assert response.json()["words"] == "Fetching the footage from the VOD: 50 %."
         assert response.json()["busy"] is True
         assert not service.main._background_tasks
+
+
+class TestOneMomentAtATime:
+    async def test_while_another_moment_is_fetched_from_a_vod_it_is_queued_and_then_added(
+        self, service, vod, cut_moment
+    ):
+        async with service.main._vod_turn(lambda: None):
+            await ask(service, cut_moment, "after", 3)
+            await async_wait_until(
+                lambda: service.main._footage.get(cut_moment, {}).get("state") == dashboard_view.FOOTAGE_QUEUED,
+                "the footage to be queued",
+            )
+            state = await standing(service, cut_moment)
+            assert (state["busy"], state["words"]) == (
+                True,
+                "Queued: footage of another moment is being fetched from a VOD.",
+            )
+            # Queued, the file is as busy as being made longer.
+            response = await service.client.post(f"/moments/{cut_moment}/delete")
+            assert response.status_code == 409
+            assert vod.segment_requests() == []
+
+        await service.settle()
+
+        assert (await standing(service, cut_moment))["state"] == dashboard_view.FOOTAGE_DONE
+        assert moment(cut_moment)["context_after"] == pytest.approx(6, abs=TOLERANCE)
 
 
 class TestWhatCanBeAskedFor:

@@ -618,6 +618,70 @@ class TestItsClipCutWhenAskedFor:
         assert response.json()["words"] == "Fetching the moment's footage from the VOD: 50 %."
         assert not service.main._background_tasks
 
+    async def test_while_another_moment_is_fetched_from_a_vod_it_is_queued_and_then_cut(self, service, vod, asked_for):
+        async with service.main._vod_turn(lambda: None):
+            await self.ask(service, asked_for)
+            await async_wait_until(
+                lambda: service.main._vod_clips.get(asked_for, {}).get("state") == dashboard_view.FOOTAGE_QUEUED,
+                "the clip to be queued",
+            )
+            state = await self.standing(service, asked_for)
+            assert (state["busy"], state["words"]) == (
+                True,
+                "Queued: footage of another moment is being fetched from a VOD.",
+            )
+            assert vod.segment_requests() == []
+
+        await service.settle()
+
+        assert moment(asked_for)["clip_path"] == f"{CHANNEL}/moment_{asked_for}.mp4"
+
+    async def test_moments_are_cut_from_the_vod_one_at_a_time(self, service, vod, asked_for, monkeypatch):
+        other = add_moment(
+            CHANNEL,
+            broadcaster_user_id=USER_ID,
+            detected_at=START + timedelta(seconds=34),
+            reaction_seconds=4,
+            clip_on_request=1,
+            laughing=9,
+        )
+        cutting: list[int] = []
+        most = 0
+        cut = vod_footage.cut
+
+        def counted(vod, first, last, output, progress):
+            nonlocal most
+            cutting.append(1)
+            most = max(most, len(cutting))
+            try:
+                return cut(vod, first, last, output, progress)
+            finally:
+                cutting.pop()
+
+        monkeypatch.setattr(vod_footage, "cut", counted)
+
+        await self.ask(service, asked_for)
+        await self.ask(service, other)
+        await service.settle()
+
+        assert most == 1
+        assert moment(asked_for)["clip_path"] and moment(other)["clip_path"]
+
+    async def test_queued_it_gives_up_at_shutdown(self, service, vod, asked_for, monkeypatch):
+        async with service.main._vod_turn(lambda: None):
+            await self.ask(service, asked_for)
+            await async_wait_until(
+                lambda: service.main._vod_clips.get(asked_for, {}).get("state") == dashboard_view.FOOTAGE_QUEUED,
+                "the clip to be queued",
+            )
+            monkeypatch.setattr(service.main, "_shutdown_requested", True)
+
+        await service.settle()
+
+        assert asked_for not in service.main._vod_clips
+        assert moment(asked_for)["clip_path"] is None
+        assert vod.segment_requests() == []
+
     async def test_while_it_goes_on_the_moment_is_not_removed(self, service, vod, asked_for):
         service.main._vod_clips[asked_for] = {"state": dashboard_view.FOOTAGE_JOINING}
 

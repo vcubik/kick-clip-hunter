@@ -262,6 +262,7 @@ def _reset_module_state() -> None:
         main._recording_finds.clear()
         main._recording_chat_files.clear()
         main._replay_running = False
+        main._vod_fetch = None
         main._shutdown_requested = False
         main._heard = main._Heard()
         main._subscriptions = None

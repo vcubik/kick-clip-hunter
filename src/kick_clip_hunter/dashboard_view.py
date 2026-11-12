@@ -316,6 +316,8 @@ def transcript_part_words(spans: Iterable[tuple[float, float]], clip_seconds: fl
 # the footage, putting it together; done, or failed - and what the page
 # says of each. The three busy ones are vod_footage's own steps.
 FOOTAGE_NONE = "none"
+# Waiting for another moment's footage to be fetched from a VOD: one at a time.
+FOOTAGE_QUEUED = "queued"
 FOOTAGE_FINDING = "finding"
 FOOTAGE_FETCHING = "fetching"
 FOOTAGE_JOINING = "joining"
@@ -323,13 +325,14 @@ FOOTAGE_DONE = "done"
 FOOTAGE_FAILED = "failed"
 FOOTAGE_WORDS = {
     FOOTAGE_NONE: "",
+    FOOTAGE_QUEUED: "Queued: footage of another moment is being fetched from a VOD.",
     FOOTAGE_FINDING: "Looking for the moment in its stream's VOD.",
     FOOTAGE_FETCHING: "Fetching the footage from the VOD.",
     FOOTAGE_JOINING: "Putting the footage together.",
     FOOTAGE_DONE: "",
     FOOTAGE_FAILED: "The footage could not be added. The server log says why.",
 }
-FOOTAGE_BUSY = frozenset({FOOTAGE_FINDING, FOOTAGE_FETCHING, FOOTAGE_JOINING})
+FOOTAGE_BUSY = frozenset({FOOTAGE_QUEUED, FOOTAGE_FINDING, FOOTAGE_FETCHING, FOOTAGE_JOINING})
 # How much footage the page offers to add at a time, and what it starts at.
 FOOTAGE_CHOICES = (15, 30, 60, 120)
 FOOTAGE_DEFAULT_SECONDS = 30
@@ -386,6 +389,7 @@ VOD_CLIP_BUSY = FOOTAGE_BUSY | {VOD_CLIP_WAITING}
 VOD_CLIP_WORDS = {
     FOOTAGE_NONE: "",
     VOD_CLIP_WAITING: "Waiting for the stream's VOD to reach the end of the moment.",
+    FOOTAGE_QUEUED: "Queued: footage of another moment is being fetched from a VOD.",
     FOOTAGE_FINDING: "Looking for the moment in its stream's VOD.",
     FOOTAGE_FETCHING: "Fetching the moment's footage from the VOD.",
     FOOTAGE_JOINING: "Putting the clip together.",
