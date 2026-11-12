@@ -629,7 +629,6 @@ class TestLinesShownAsChat:
         posted = [
             {"start": 3.0, "end": 4.0, "text": "two", "chat": "message-2"},
             {"start": 1.0, "end": 2.0, "text": "one", "chat": ""},
-            {"start": 5.0, "end": 6.0, "text": "  ", "chat": "message-3"},
             {"start": 7.0, "end": 8.0, "text": "three"},
         ]
 
@@ -646,6 +645,7 @@ class TestLinesShownAsChat:
             ({"chat": "message-1", "cut": True}, "cut out"),
             ({"chat": 5}, "not a message"),
             ({"chat": "m" * (reels.CHAT_ID_MOST + 1)}, "not a message"),
+            ({"chat": "message-1", "text": "  "}, "no words"),
         ],
     )
     def test_what_cannot_be_shown_is_refused_saying_which_line(self, line, said):

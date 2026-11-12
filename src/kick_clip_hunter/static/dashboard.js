@@ -2481,7 +2481,8 @@
   // A line shown in the reel as a message of chat, in place of its
   // subtitles: the chat around it is fetched and offered under it, the
   // nearest message to where the line starts in view, and the one picked
-  // put under the line as chat had it.
+  // with a click put under the line as chat had it. Nothing in the list
+  // looks picked until one is: a message merely in view is not.
   async function toggleReelChat(button) {
     const line = button.closest("[data-reel-line]");
     const picker = one("[data-reel-chat-picker]", line);
@@ -2515,16 +2516,23 @@
     picker.innerHTML = markup;
     const options = all("[data-reel-chat-option]", picker);
     const chosen = one("[data-reel-chat]", line).dataset.reelChat;
+    for (const option of options) option.setAttribute("aria-pressed", String(option.dataset.reelChatOption === chosen));
     const near = options.find((option) => option.dataset.reelChatOption === chosen)
       || options.reduce((best, option) => (
         best && Math.abs(Number(best.dataset.second) - start) <= Math.abs(Number(option.dataset.second) - start) ? best : option
       ), null);
-    near?.scrollIntoView({ block: "center" });
-    near?.focus({ preventScroll: true });
+    if (near) picker.scrollTop = near.offsetTop - picker.offsetTop - (picker.clientHeight - near.offsetHeight) / 2;
   }
 
   function pickReelChat(option) {
     const line = option.closest("[data-reel-line]");
+    // A line with no words of its own would be left out when saved, and the
+    // message with it: it takes the message's words (emotes by name).
+    const words = one("[data-reel-text]", line);
+    const said = one(".ch-chat > span", option);
+    if (!words.value.trim() && said) {
+      words.value = [...said.childNodes].map((part) => (part.nodeName === "IMG" ? part.alt : part.textContent)).join("").trim();
+    }
     setReelChat(line, option.dataset.reelChatOption, true, one(".ch-chat", option));
     one("[data-reel-chat-pick]", line)?.focus();
   }
@@ -2562,13 +2570,29 @@
         say(editor, `Line ${number}: write when it starts and ends, like 0:07.4.`);
         return false;
       }
+      // The chat offered for a line and none of it picked: saving now would
+      // drop what was meant to be picked, so it says how to pick one.
+      const picker = one("[data-reel-chat-picker]", line);
+      if (picker && !picker.hidden && one("[data-reel-chat-option]", picker) && !one("[data-reel-chat]", line).dataset.reelChat) {
+        picker.scrollIntoView({ block: "nearest" });
+        say(editor, `Line ${number}: click the message in the chat list to pick it, or press Chat again to close the list.`);
+        return false;
+      }
+      const chat = one("[data-reel-chat]", line)?.dataset.reelChat || "";
+      if (chat && !text.trim()) {
+        const field = one("[data-reel-text]", line);
+        field.setAttribute("aria-invalid", "true");
+        field.focus();
+        say(editor, `Line ${number}: write what is said in it - a line with no words is left out, and its chat message with it.`);
+        return false;
+      }
       lines.push({
         start: start ?? 0,
         end: end ?? 0,
         text,
         keep: one("[data-reel-keep-line]", line).checked,
         cut: one("[data-reel-cut-line]", line).checked,
-        chat: one("[data-reel-chat]", line)?.dataset.reelChat || "",
+        chat,
       });
     }
     const save = one("[data-reel-transcript-save]", editor);

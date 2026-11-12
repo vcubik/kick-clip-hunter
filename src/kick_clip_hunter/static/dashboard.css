@@ -999,6 +999,8 @@ a.an-column:hover { background-image: linear-gradient(var(--veil), var(--veil));
 .reel-chat-option { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: var(--space-8); width: 100%; padding: var(--space-4) var(--space-8); border: 0; border-bottom: 1px solid var(--quiet); background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; }
 .reel-chat-option:hover, .reel-chat-option:focus-visible { background: var(--sunk); }
 .reel-chat-option .ch-chat { padding: 0; border: 0; }
+.reel-chat-option[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--lit); background: var(--sunk); }
+.reel-chat-pick-hint { position: sticky; top: 0; margin: 0; padding: var(--space-4) var(--space-8); background: var(--field); border-bottom: 1px solid var(--quiet); }
 
 /* ---- Narrow windows: the panes stack and the page scrolls ---------- */
 

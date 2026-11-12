@@ -654,6 +654,17 @@ class TestALineShownAsChat:
         assert [said for _, said in found] == ["asker is that a red car?", "fan xdddd"]
         assert all(message for message, _ in found)
 
+    async def test_nothing_offered_looks_picked_and_it_says_a_click_picks_one(self, reeling, github):
+        moment_id = clipped_moment()
+        add_chat(CHANNEL, "asker", "is that a red car?", T0 + timedelta(seconds=1))
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await reeling.client.get(f"/dashboard/reels/{moment_id}/chat", params={"start": 6, "end": 8})
+
+        offered_page = parse(response.text)
+        assert "Click the message" in offered_page.one(class_="reel-chat-pick-hint").text
+        assert [option.attrs["aria-pressed"] for option in offered_page.find(data_reel_chat_option=True)] == ["false"]
+
     async def test_chat_from_well_after_the_line_is_not_offered(self, reeling, github):
         moment_id = clipped_moment()
         add_chat(CHANNEL, "asker", "a question", T0)
@@ -775,6 +786,23 @@ class TestALineShownAsChat:
             [
                 {"start": 1.2, "end": 2.5, "text": "watch out"},
                 {"start": 3.0, "end": 4.6, "text": "a red now?", "cut": True, "chat": "message-1"},
+            ],
+        )
+
+        assert response.status_code == 400
+        assert "Line 2" in response.json()["detail"]
+        assert reel_of(moment_id)["chat_lines"] is None
+
+    async def test_a_line_with_no_words_shown_as_chat_is_refused_not_left_out_with_its_message(self, reeling, github):
+        moment_id = clipped_moment()
+        await storyboard_back(reeling, github, moment_id)
+
+        response = await save(
+            reeling,
+            moment_id,
+            [
+                {"start": 1.2, "end": 2.5, "text": "watch out"},
+                {"start": 3.0, "end": 4.6, "text": "", "chat": "message-1"},
             ],
         )
 
