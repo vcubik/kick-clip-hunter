@@ -1744,6 +1744,18 @@ class TestOrderedByLaughing:
         assert queued(first) + queued(second) == [self.most, self.more, self.few, self.uncounted]
         assert opened(first) == self.most
 
+    async def test_a_reaction_that_held_longer_comes_before_a_bigger_short_one(self, service):
+        held = add_moment(detected_at=T0 + minutes(4), laughing=12, reaction_seconds=60)
+
+        assert queued(await review(service, order="laughing"))[0] == held
+
+    async def test_the_order_is_offered_as_the_biggest_reaction_first(self, service):
+        (order,) = (await review(service)).find("select", id="order-filter")
+
+        assert {option.attrs["value"]: option.text for option in order.find("option")}["laughing"] == (
+            "Biggest reaction first"
+        )
+
     async def test_newest_first_is_what_the_list_is_otherwise(self, service):
         assert queued(await review(service)) == [self.more, self.uncounted]
         assert queued(await review(service, order="sideways")) == [self.more, self.uncounted]
@@ -1754,7 +1766,7 @@ class TestOrderedByLaughing:
         assert queue_rows(page)[0].attrs["href"] == f"/dashboard?order=laughing&moment={self.most}"
         paging = page.one("nav", class_="queue-pages")
         assert {link.text: link.attrs["href"] for link in paging.find("a", class_="ch-btn")} == {
-            "Less laughing": "/dashboard?order=laughing&offset=2"
+            "Smaller reactions": "/dashboard?order=laughing&offset=2"
         }
         tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
         assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["all"] == (
