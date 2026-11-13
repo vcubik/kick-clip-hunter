@@ -1020,6 +1020,16 @@ def _moment_filter(
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
+# How big a moment's reaction was, for ordering the review queue: the people
+# who laughed around it, squared, times how long the reaction held the moment
+# open (its window, in days - only the order matters). Both told a good clip
+# from a poor one on the rated moments, and together better than either: a
+# crowd laughing for a minute beats the same crowd for ten seconds, and a
+# bigger crowd beats a longer trickle. The power on the laughing barely
+# mattered between 1.5 and 4; 2 needs no maths functions SQLite may lack.
+_REACTION = "laughing * laughing * (julianday(window_end) - julianday(window_start))"
+
+
 def get_recent_moments(
     conn: sqlite3.Connection,
     limit: int = 50,
@@ -1031,17 +1041,18 @@ def get_recent_moments(
     downloaded: bool | None = None,
     on_disk: bool | None = None,
     tag: str | None = None,
-    most_laughing: bool = False,
+    biggest_reaction: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
     not rated yet, only those rated `min_rating` or higher, or only those
     downloaded or not, or with their clip on disk or not, or only those given
     a tag (see _moment_filter). With
-    `most_laughing`, the ones the most people laughed around come first
-    instead, those not counted last, and newest first among equals."""
+    `biggest_reaction`, the biggest reactions come first instead (see
+    _REACTION), those whose laughing was not counted last, and newest first
+    among equals."""
     conn.row_factory = sqlite3.Row
     where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag)
-    order = "laughing IS NULL, laughing DESC, " if most_laughing else ""
+    order = f"laughing IS NULL, {_REACTION} DESC, " if biggest_reaction else ""
     return conn.execute(
         f"""
         SELECT {_MOMENT_COLUMNS}
