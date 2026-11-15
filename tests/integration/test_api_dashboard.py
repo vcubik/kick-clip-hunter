@@ -1967,6 +1967,86 @@ class TestTagFilter:
         assert chip.find("b") == []
 
 
+class TestStreamDayFilter:
+    # A stream that went live at 22:30 and ran past midnight, and the next
+    # evening's stream.
+    DAY = date(2026, 11, 13)
+
+    @staticmethod
+    def at(day: date, hour: int, minute: int = 0) -> datetime:
+        return datetime(day.year, day.month, day.day, hour, minute).astimezone()
+
+    @pytest.fixture(autouse=True)
+    def two_evenings(self, service):
+        next_day = self.DAY + timedelta(days=1)
+        started = self.at(self.DAY, 22, 30)
+
+        def caught(when: datetime, live_since: datetime, **columns) -> int:
+            return add_moment(
+                detected_at=when, stream_elapsed_seconds=int((when - live_since).total_seconds()), **columns
+            )
+
+        self.before_midnight = caught(self.at(self.DAY, 23, 0), started)
+        self.after_midnight = caught(self.at(next_day, 1, 15), started, rating=4)
+        self.next_evening = caught(self.at(next_day, 20, 30), self.at(next_day, 20, 0))
+
+    def options(self, page: Element) -> list[tuple[str, str]]:
+        return [(option.attrs["value"], option.text) for option in page.one("select", id="day-filter").find("option")]
+
+    async def test_a_stream_past_midnight_keeps_its_moments_on_the_day_it_started(self, service):
+        assert queued(await review(service, show="all", day="2026-11-13")) == [
+            self.after_midnight,
+            self.before_midnight,
+        ]
+        assert queued(await review(service, show="all", day="2026-11-14")) == [self.next_evening]
+
+    async def test_every_day_a_stream_went_live_is_offered_the_latest_first(self, service, today):
+        def label(day: date) -> str:
+            return view.sentence_case(view.day_words(day, today))
+
+        assert self.options(await review(service)) == [
+            ("", "Any day"),
+            ("2026-11-14", label(date(2026, 11, 14))),
+            ("2026-11-13", label(self.DAY)),
+        ]
+
+    async def test_the_counts_on_the_tabs_are_of_the_narrowed_list(self, service):
+        assert tabs(await review(service, day="2026-11-13")) == ["Unrated 1", "All 2", "Best 1"]
+
+    async def test_the_choice_stays_while_moving_about_the_list(self, service):
+        page = await review(service, show="all", day="2026-11-13")
+
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?show=all&day=2026-11-13&moment={self.after_midnight}"
+        tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
+        assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["best"] == (
+            "/dashboard?show=best&day=2026-11-13"
+        )
+        (chosen,) = page.one("select", id="day-filter").find("option", selected=True)
+        assert chosen.attrs["value"] == "2026-11-13"
+        assert page.one("aside", class_="queue").attrs["data-day"] == "2026-11-13"
+
+    async def test_the_open_moment_says_which_stream_day_it_belongs_to(self, service):
+        article = open_moment(await review(service, show="all", moment=self.after_midnight))
+
+        assert article.attrs["data-stream-day"] == "2026-11-13"
+
+    async def test_a_day_without_streams_still_says_it_was_chosen(self, service, today):
+        page = await review(service, day="2026-11-01")
+
+        (chosen,) = page.one("select", id="day-filter").find("option", selected=True)
+        assert chosen.attrs["value"] == "2026-11-01"
+        assert page.one("p", class_="queue-empty").text == (
+            f"Nothing from streams of {view.day_words(date(2026, 11, 1), today)} here"
+        )
+
+    async def test_what_is_not_a_day_is_no_day(self, service):
+        assert queued(await review(service, show="all", day="yesterday")) == [
+            self.next_evening,
+            self.after_midnight,
+            self.before_midnight,
+        ]
+
+
 class TestChannelFilter:
     @pytest.fixture(autouse=True)
     def moments_of_two_channels(self, service):

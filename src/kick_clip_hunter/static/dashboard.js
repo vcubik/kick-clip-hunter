@@ -162,11 +162,12 @@
 
   // The counts on the queue's tabs are totals for the channel it is narrowed
   // to, and for the moments downloaded or the others, or on disk or the
-  // others, where it is narrowed to those - so they follow a moment only
-  // when it is one of them.
+  // others, or from one day's streams, where it is narrowed to those - so
+  // they follow a moment only when it is one of them.
   function inQueueCounts(article) {
     const queue = one("[data-queue]");
     if (!queue || (queue.dataset.channel && queue.dataset.channel !== article.dataset.channel)) return false;
+    if (queue.dataset.day && queue.dataset.day !== article.dataset.streamDay) return false;
     const downloaded = article.dataset.downloaded === "true";
     const onDisk = article.dataset.onDisk === "true";
     return (
@@ -1445,6 +1446,7 @@
     const queue = one("[data-queue]");
     if (!queue || !queue.dataset.downloaded) return;
     if (queue.dataset.channel && queue.dataset.channel !== article.dataset.channel) return;
+    if (queue.dataset.day && queue.dataset.day !== article.dataset.streamDay) return;
     if (queue.dataset.onDisk && (article.dataset.onDisk === "true") !== (queue.dataset.onDisk === "yes")) return;
     const by = queue.dataset.downloaded === "yes" ? 1 : -1;
     const rating = Number(article.dataset.rating);
