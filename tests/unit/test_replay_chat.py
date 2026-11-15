@@ -381,7 +381,8 @@ class TestReplay:
         stream.chatter(150)
         stream.burst(exact_crowd(), "xDDD")
         stream.chatter(20)
-        stream.burst(people(8, "second_wave"), "xDDD")
+        # Enough to be kept by itself (detector.KEEP_LAUGHING_FLOOR).
+        stream.burst(people(detector.KEEP_LAUGHING_FLOOR, "second_wave"), "xDDD")
         stream.chatter(60)
         refiring = with_detector(cooldown_seconds=15)
 
@@ -583,7 +584,7 @@ class TestReplay:
         stream.chatter(150)
         stream.say("viewer1", "xd")
         stream.chatter(150)
-        stream.burst(people(8), "xDDD")  # the log ends mid-reaction
+        stream.burst(people(detector.KEEP_LAUGHING_FLOOR), "xDDD")  # the log ends mid-reaction
 
         assert len(replayed()) == 1
 

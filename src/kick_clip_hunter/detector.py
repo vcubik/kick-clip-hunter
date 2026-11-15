@@ -61,7 +61,9 @@ qualify and get a short fixed-length clip. Once it has closed, a moment is
 only kept if enough people laughed around it (laughing_people,
 laughing_needed): a burst of three people is enough to fire, and a burst
 nobody else joined in was what most of the worst-rated moments were. How
-many it takes grows with the square root of the chat (KEEP_LAUGHING_PER_ROOT).
+many it takes grows with the square root of the chat (KEEP_LAUGHING_PER_ROOT),
+and is never fewer than a floor (KEEP_LAUGHING_FLOOR) unless the channel keeps
+its weaker moments - a small one, where the floor is most of the chat.
 
 State is per-process and not persisted - after a restart, a channel needs
 a warm-up period before it can trust its own baseline again (see the
@@ -172,6 +174,17 @@ MIN_REACTION_UNIQUE_CEILING = 12
 # than the firing floor (min_absolute_unique). 0 keeps every moment.
 KEEP_LAUGHING_PER_ROOT = 1.8
 KEEP_LAUGHING_MOST_SHARE = 0.5
+# However small the chat, a moment is kept only if at least this many people
+# laughed around it - unless the channel is set to keep its weaker moments
+# (`keep_weaker_moments`, for a small channel where this many is most of the
+# chat). Of ~1,120 moments rated since the service moved to the cloud, all
+# past the root rule above, the ones with fewer than 10 laughing were mostly
+# not worth a look: 10 dropped a fifth of all moments - 31 % of those rated
+# 1-2 - and 26 of the 251 rated 4-5, nearly all of those on the channels
+# whose chat is under about 30 people, the ones the switch is for. 8 dropped
+# too little to matter (7 of the 251, 17 % of the 1-2s), 12 a sixth of the
+# good ones.
+KEEP_LAUGHING_FLOOR = 10
 KEEP_LAUGHING_SECONDS = 60
 
 
@@ -544,6 +557,10 @@ class Settings:
     emote_other_weight: float
     emote_mention_laugh_weight: float
     emote_mention_other_weight: float
+    # Made by hand rather than by recommended(), a Settings keeps every
+    # moment the root rule keeps: no floor of its own.
+    keep_laughing_floor: int = 0
+    keep_weaker_moments: bool = False
     laugh_enabled: bool = True
     emotes_enabled: bool = True
     emote_mention_enabled: bool = True
@@ -566,6 +583,7 @@ def recommended() -> Settings:
         min_reaction_unique_fraction=MIN_REACTION_UNIQUE_FRACTION,
         min_reaction_unique_ceiling=MIN_REACTION_UNIQUE_CEILING,
         keep_laughing_per_root=KEEP_LAUGHING_PER_ROOT,
+        keep_laughing_floor=KEEP_LAUGHING_FLOOR,
         emote_spike_multiplier=EMOTE_SPIKE_MULTIPLIER,
         laugh_multiplier=LAUGH_MULTIPLIER,
         laugh_unique_sender_multiplier=LAUGH_UNIQUE_SENDER_MULTIPLIER,
@@ -924,14 +942,17 @@ def reaction_active(
 def laughing_needed(baseline_unique_senders: int, settings: Settings | None = None) -> int:
     """How many distinct people have to have laughed around a moment for it
     to be kept (see KEEP_LAUGHING_PER_ROOT), in a chat where this many
-    people chatted in the baseline window. 0 when the channel keeps every
-    moment."""
+    people chatted in the baseline window - and never fewer than the floor
+    (KEEP_LAUGHING_FLOOR), unless the channel keeps its weaker moments. 0
+    when the channel keeps every moment."""
     settings = settings or recommended()
     if settings.keep_laughing_per_root <= 0:
         return 0
     chatters = max(0, baseline_unique_senders)
+    floor = 0 if settings.keep_weaker_moments else settings.keep_laughing_floor
     return max(
         settings.min_absolute_unique,
+        floor,
         min(
             round(settings.keep_laughing_per_root * math.sqrt(chatters)),
             math.ceil(chatters * KEEP_LAUGHING_MOST_SHARE),

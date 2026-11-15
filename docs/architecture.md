@@ -25,7 +25,8 @@ Watchlist (streamers, each on its platform - see platforms.py)
        by streamlink on Twitch and YouTube; on TikTok one FLV download, cut into segments of
        its own as it arrives) -> a detected moment cuts a clip from that buffer, path
        stored back on the moment - once its session has closed, and only if enough
-       people laughed around it (a moment that falls short is removed)
+       people laughed around it, never fewer than a floor unless the channel keeps its
+       weaker moments (a moment that falls short is removed)
     -> a channel tracked for moments has no recorder: its moment is kept with a link to
        it in the stream's VOD and told of, and its clip is cut from the VOD
        (vod_footage.cut) only once it is asked for on the dashboard

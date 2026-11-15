@@ -20,7 +20,7 @@ from contextlib import suppress
 
 import pytest
 
-from kick_clip_hunter import db, recording_manager, stream_recording
+from kick_clip_hunter import db, detector, recording_manager, stream_recording
 from kick_clip_hunter.kick_client import NoSuchChannel
 from tests.support.data import add_stream_recording
 from tests.support.html import parse
@@ -257,7 +257,8 @@ class TestStreamTimeOfItsMoments:
         renamed_on_kick(service, owner)
         service.warm_up(NEW)
 
-        await service.crowd_laughs(NEW)
+        # Enough to be kept once it closes (detector.KEEP_LAUGHING_FLOOR).
+        await service.crowd_laughs(NEW, people=detector.KEEP_LAUGHING_FLOOR)
         await service.settle()
 
         (moment,) = service.moments()

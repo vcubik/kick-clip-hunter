@@ -589,7 +589,10 @@ class TestChatInBatches:
         service.warm_up(CHANNEL)
 
         await service.main._take_chats(
-            [batch_message(CHANNEL, user_id, f"fan{n}", "xDDD", n) for n in range(detector.MIN_ABSOLUTE_UNIQUE + 5)]
+            [
+                batch_message(CHANNEL, user_id, f"fan{n}", "xDDD", n)
+                for n in range(max(detector.MIN_ABSOLUTE_UNIQUE + 5, detector.KEEP_LAUGHING_FLOOR))
+            ]
         )
         await service.settle()
 
