@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kick_clip_hunter import db, detector, recorder, tuning
+from kick_clip_hunter import db, detector, promise, recorder, tuning
 from kick_clip_hunter.platforms import StreamUrlError
 from kick_clip_hunter.recorder import RecorderError
 from tests.support.webhook import chat_payload
@@ -331,6 +331,12 @@ class TestKeepingAMoment:
 
         (moment,) = service.moments()
         assert moment["laughing"] == keeps + 2
+        # And with how promising that makes it, in a chat of that many.
+        reaction = (
+            datetime.fromisoformat(moment["window_end"]) - datetime.fromisoformat(moment["window_start"])
+        ).total_seconds()
+        assert moment["chatters"] >= self.CHATTERS
+        assert moment["promise"] == pytest.approx(promise.promise(keeps + 2, reaction, moment["chatters"]))
 
     async def test_a_channel_that_keeps_every_moment_keeps_it(self, service):
         fires, _keeps = self.sizes()

@@ -46,6 +46,7 @@ def row(**overrides) -> dict:
         "title": None,
         "downloaded_at": None,
         "laughing": None,
+        "promise": None,
     }
     values.update(overrides)
     return values
@@ -547,14 +548,14 @@ class TestReviewUrl:
 
     def test_an_order_other_than_newest_first_is_spelled_out(self):
         assert view.review_url(order=view.ORDER_NEWEST) == "/dashboard"
-        assert view.review_url(view.SHOW_ALL, order=view.ORDER_LAUGHING, offset=50) == (
-            "/dashboard?show=all&order=laughing&offset=50"
+        assert view.review_url(view.SHOW_ALL, order=view.ORDER_PROMISE, offset=50) == (
+            "/dashboard?show=all&order=promise&offset=50"
         )
 
     def test_downloaded_or_not_is_spelled_out_when_chosen(self):
         assert view.review_url(downloaded=view.DOWNLOADED_ANY) == "/dashboard"
-        assert view.review_url(view.SHOW_ALL, order=view.ORDER_LAUGHING, downloaded=view.DOWNLOADED_NO, offset=50) == (
-            "/dashboard?show=all&order=laughing&downloaded=no&offset=50"
+        assert view.review_url(view.SHOW_ALL, order=view.ORDER_PROMISE, downloaded=view.DOWNLOADED_NO, offset=50) == (
+            "/dashboard?show=all&order=promise&downloaded=no&offset=50"
         )
 
     def test_on_disk_or_not_is_spelled_out_when_chosen(self):

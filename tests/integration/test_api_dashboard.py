@@ -1728,7 +1728,7 @@ class TestPaging:
         assert (await review(service)).find("nav", class_="queue-pages") == []
 
 
-class TestOrderedByLaughing:
+class TestOrderedByPromise:
     @pytest.fixture(autouse=True)
     def moments_laughed_at_more_and_less(self, service, monkeypatch):
         monkeypatch.setattr(service.main, "MOMENTS_PAGE_SIZE", 2)
@@ -1737,23 +1737,33 @@ class TestOrderedByLaughing:
         self.uncounted = add_moment(detected_at=T0 + minutes(2))
         self.more = add_moment(detected_at=T0 + minutes(3), laughing=8)
 
-    async def test_the_most_laughing_come_first_and_those_not_counted_last(self, service):
-        first = await review(service, order="laughing")
-        second = await review(service, order="laughing", offset=2)
+    async def test_without_a_promise_the_most_laughing_come_first_and_those_not_counted_last(self, service):
+        first = await review(service, order="promise")
+        second = await review(service, order="promise", offset=2)
 
         assert queued(first) + queued(second) == [self.most, self.more, self.few, self.uncounted]
         assert opened(first) == self.most
 
-    async def test_a_reaction_that_held_longer_comes_before_a_bigger_short_one(self, service):
-        held = add_moment(detected_at=T0 + minutes(4), laughing=12, reaction_seconds=60)
+    async def test_the_most_promising_come_first_before_those_without_a_promise(self, service):
+        # Fewer laughing, but in a small chat: the more promising of the two.
+        small_chat = add_moment(detected_at=T0 + minutes(4), laughing=6, chatters=9, promise=0.4)
+        big_chat = add_moment(detected_at=T0 + minutes(5), laughing=12, chatters=400, promise=0.2)
+        page = await review(service, order="promise")
 
-        assert queued(await review(service, order="laughing"))[0] == held
+        assert queued(page) == [small_chat, big_chat]
 
-    async def test_the_order_is_offered_as_the_biggest_reaction_first(self, service):
+    async def test_the_address_of_the_order_it_took_over_from_still_leads_to_it(self, service):
+        page = await review(service, order="laughing")
+
+        assert queued(page) == [self.most, self.more]
+        (order,) = page.find("select", id="order-filter")
+        assert [option.attrs["value"] for option in order.find("option", selected=True)] == ["promise"]
+
+    async def test_the_order_is_offered_as_the_most_promising_first(self, service):
         (order,) = (await review(service)).find("select", id="order-filter")
 
-        assert {option.attrs["value"]: option.text for option in order.find("option")}["laughing"] == (
-            "Biggest reaction first"
+        assert {option.attrs["value"]: option.text for option in order.find("option")}["promise"] == (
+            "Most promising first"
         )
 
     async def test_newest_first_is_what_the_list_is_otherwise(self, service):
@@ -1761,19 +1771,19 @@ class TestOrderedByLaughing:
         assert queued(await review(service, order="sideways")) == [self.more, self.uncounted]
 
     async def test_the_order_stays_while_moving_about_the_list(self, service):
-        page = await review(service, order="laughing")
+        page = await review(service, order="promise")
 
-        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?order=laughing&moment={self.most}"
+        assert queue_rows(page)[0].attrs["href"] == f"/dashboard?order=promise&moment={self.most}"
         paging = page.one("nav", class_="queue-pages")
         assert {link.text: link.attrs["href"] for link in paging.find("a", class_="ch-btn")} == {
-            "Smaller reactions": "/dashboard?order=laughing&offset=2"
+            "Less promising": "/dashboard?order=promise&offset=2"
         }
         tab_links = page.one("nav", class_="ch-tabs").find("a", class_="ch-tab")
         assert {tab.attrs["data-show"]: tab.attrs["href"] for tab in tab_links}["all"] == (
-            "/dashboard?show=all&order=laughing"
+            "/dashboard?show=all&order=promise"
         )
         (order,) = page.find("select", id="order-filter")
-        assert [option.attrs["value"] for option in order.find("option", selected=True)] == ["laughing"]
+        assert [option.attrs["value"] for option in order.find("option", selected=True)] == ["promise"]
 
     async def test_each_row_says_how_many_laughed_where_that_was_counted(self, service):
         page = await review(service)
@@ -1782,6 +1792,14 @@ class TestOrderedByLaughing:
         assert counted.one("span", class_="ch-laughing").text == "8"
         assert counted.one("span", class_="ch-laughing").attrs["title"] == "8 people laughed around it"
         assert uncounted.find("span", class_="ch-laughing") == []
+
+    async def test_a_row_with_a_promise_says_its_chance(self, service):
+        add_moment(detected_at=T0 + minutes(4), laughing=6, chatters=9, promise=0.344)
+
+        row = queue_rows(await review(service))[0]
+        assert row.one("span", class_="ch-laughing").attrs["title"] == (
+            "6 people laughed around it; about 34 % chance of a 4 or 5"
+        )
 
 
 class TestDownloadedFilter:

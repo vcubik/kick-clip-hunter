@@ -43,6 +43,7 @@ from . import (
     kick_client,
     notify,
     platforms,
+    promise,
     recorder,
     recording_manager,
     recording_moments,
@@ -168,6 +169,7 @@ from .db import (
     update_moment_heard_spans,
     update_moment_laughing,
     update_moment_notes,
+    update_moment_promise,
     update_moment_rating,
     update_moment_sound_embedding,
     update_moment_sound_events,
@@ -1824,6 +1826,13 @@ async def _run_moment_session(session: _MomentSession) -> None:
     try:
         update_moment_window_end(conn, session.moment_id, session.window_end.isoformat())
         update_moment_laughing(conn, session.moment_id, laughing)
+        reaction = (session.window_end - session.window_start).total_seconds()
+        update_moment_promise(
+            conn,
+            session.moment_id,
+            session.baseline_unique_senders,
+            promise.promise(laughing, reaction, session.baseline_unique_senders),
+        )
     finally:
         conn.close()
     logger.info(
@@ -3799,7 +3808,7 @@ async def dashboard(
     """The review page: a queue of moments and the one that is open.
 
     `show` picks the list (unrated, all, best), `channel` narrows it to one
-    channel, `order` says whether the newest or the biggest reactions come first,
+    channel, `order` says whether the newest or the most promising come first,
     `downloaded` keeps only the moments downloaded from Trim or only the
     others, `on_disk` only those whose clip is on disk or only the others
     (a link into the VOD and nothing more), `tag` only those given that tag,
@@ -3811,6 +3820,7 @@ async def dashboard(
     """
     show = show if show in dashboard_view.SHOWS else dashboard_view.SHOW_UNRATED
     channel = channel or None
+    order = dashboard_view.ORDER_ALIASES.get(order, order)
     order = order if order in dashboard_view.ORDERS else dashboard_view.ORDER_NEWEST
     downloaded = downloaded if downloaded in dashboard_view.DOWNLOADEDS else dashboard_view.DOWNLOADED_ANY
     taken = dashboard_view.DOWNLOADED_FILTERS[downloaded]
@@ -3841,7 +3851,7 @@ async def dashboard(
             on_disk=kept,
             tag=tag or None,
             stream_started=started,
-            biggest_reaction=order == dashboard_view.ORDER_LAUGHING,
+            most_promising=order == dashboard_view.ORDER_PROMISE,
             **SHOW_FILTERS[show],
         )
         activity = _queue_activity(conn, rows)
@@ -3946,10 +3956,10 @@ async def dashboard(
                         offset=other,
                     ),
                 ),
-                # The list's ends in its paging: newer and older, or bigger and smaller reactions.
+                # The list's ends in its paging: newer and older, or more and less promising.
                 "paging_words": (
-                    ("Bigger reactions", "Smaller reactions")
-                    if order == dashboard_view.ORDER_LAUGHING
+                    ("More promising", "Less promising")
+                    if order == dashboard_view.ORDER_PROMISE
                     else ("Newer", "Older")
                 ),
                 "moment": _open_moment(conn, opened, today) if opened is not None else None,
@@ -4780,6 +4790,9 @@ def _moment_from_recording(
             )
             if found.laughing is not None:
                 update_moment_laughing(conn, moment_id, found.laughing)
+                reaction = (found.window_end - found.window_start).total_seconds()
+                chatters = spike.baseline_unique_senders
+                update_moment_promise(conn, moment_id, chatters, promise.promise(found.laughing, reaction, chatters))
             clip = cut.with_name(f"moment_{moment_id}.mp4")
             try:
                 cut.replace(clip)

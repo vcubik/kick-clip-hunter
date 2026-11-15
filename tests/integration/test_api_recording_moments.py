@@ -21,7 +21,16 @@ from pathlib import Path
 import pytest
 
 from kick_clip_hunter import dashboard_view as view
-from kick_clip_hunter import db, detector, recorder, recording_manager, recording_moments, replay, stream_recording
+from kick_clip_hunter import (
+    db,
+    detector,
+    promise,
+    recorder,
+    recording_manager,
+    recording_moments,
+    replay,
+    stream_recording,
+)
 from kick_clip_hunter import tuning as tuning_module
 from tests.support.chat import StoredStream, exact_crowd, join_slowly, latecomers, people
 from tests.support.data import T0, add_moment, add_stream_recording, add_streamer, stream_recordings
@@ -535,6 +544,9 @@ class TestMakingAMomentOfOne:
         assert moment["rating"] is None and moment["stream_elapsed_seconds"] is None
         # Everyone in the crowd laughed, then the latecomers, and nobody else.
         assert moment["laughing"] == first.laughing == len(exact_crowd()) + len(latecomers())
+        assert moment["chatters"] == first.spike.baseline_unique_senders
+        reaction = (first.window_end - first.window_start).total_seconds()
+        assert moment["promise"] == pytest.approx(promise.promise(first.laughing, reaction, moment["chatters"]))
 
     async def test_its_file_is_cut_out_of_the_recording_clip_and_context_in_one(self, service, footage):
         stream_chat()
