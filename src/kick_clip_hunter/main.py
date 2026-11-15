@@ -3795,7 +3795,7 @@ async def dashboard(
     """The review page: a queue of moments and the one that is open.
 
     `show` picks the list (unrated, all, best), `channel` narrows it to one
-    channel, `order` says whether the newest or the most laughing come first,
+    channel, `order` says whether the newest or the biggest reactions come first,
     `downloaded` keeps only the moments downloaded from Trim or only the
     others, `on_disk` only those whose clip is on disk or only the others
     (a link into the VOD and nothing more), `tag` only those given that tag,
@@ -3830,7 +3830,7 @@ async def dashboard(
             downloaded=taken,
             on_disk=kept,
             tag=tag or None,
-            most_laughing=order == dashboard_view.ORDER_LAUGHING,
+            biggest_reaction=order == dashboard_view.ORDER_LAUGHING,
             **SHOW_FILTERS[show],
         )
         activity = _queue_activity(conn, rows)
@@ -3916,9 +3916,9 @@ async def dashboard(
                         show, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag, offset=other
                     ),
                 ),
-                # The list's ends in its paging: newer and older, or more and fewer laughing.
+                # The list's ends in its paging: newer and older, or bigger and smaller reactions.
                 "paging_words": (
-                    ("More laughing", "Less laughing")
+                    ("Bigger reactions", "Smaller reactions")
                     if order == dashboard_view.ORDER_LAUGHING
                     else ("Newer", "Older")
                 ),

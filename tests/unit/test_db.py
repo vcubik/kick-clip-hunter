@@ -1563,11 +1563,24 @@ class TestMoments:
                 db.update_moment_laughing(conn, moment_id, laughing)
         conn.commit()
 
-        ordered = db.get_recent_moments(conn, most_laughing=True)
+        ordered = db.get_recent_moments(conn, biggest_reaction=True)
 
         # Newest first among equals, as the list is otherwise.
         assert [(row["reason"], row["laughing"]) for row in ordered] == [("d", 9), ("a", 9), ("c", 3), ("b", None)]
-        assert [row["reason"] for row in db.get_recent_moments(conn, limit=1, offset=1, most_laughing=True)] == ["a"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, limit=1, offset=1, biggest_reaction=True)] == ["a"]
+
+    def test_the_biggest_reactions_weigh_the_laughing_with_how_long_it_held(self, conn):
+        # (reason, people laughing, seconds the reaction held the moment open)
+        for reason, laughing, seconds in [("short", 10, 10), ("long", 10, 60), ("trickle", 5, 60), ("crowd", 20, 10)]:
+            moment_id = store_moment(conn, reason=reason, window_start=(T0 - timedelta(seconds=seconds)).isoformat())
+            db.update_moment_laughing(conn, moment_id, laughing)
+        conn.commit()
+
+        ordered = db.get_recent_moments(conn, biggest_reaction=True)
+
+        # The same crowd laughing longer comes first, and a crowd twice the
+        # size before a trickle that went on as long.
+        assert [row["reason"] for row in ordered] == ["long", "crowd", "trickle", "short"]
 
     def test_the_moments_still_to_be_counted_are_the_detectors_without_a_count(self, conn):
         counted = store_moment(conn)
