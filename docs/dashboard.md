@@ -7,13 +7,16 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   best: rated 4 or higher) and the one that is open beside it, driven from the keyboard
   (1-5 rate and move on, J/K move, Space plays, Del and Del again deletes the open
   moment). Each row shows how many distinct people laughed around the moment (from 10s
-  before it fired to 60s after, `moments.laughing`), and the queue can be ordered by the
-  size of the reaction (`?order=laughing`, "Biggest reaction first") instead of newest
-  first: those laughing, squared, times how long the reaction held the moment open
-  (`db._REACTION`). Of everything measured on the rated moments the two told a good clip
-  from a poor one best, together better than either, and far better than the stored score
-  - the top half of that order held about 70 % of the moments rated 4-5. Moments without a count (imports, or ones from before it was kept until
-  `scripts/backfill_laughing.py` has been run) come last. Under the clip is the chat trace:
+  before it fired to 60s after, `moments.laughing`) - hovering it adds the moment's chance of
+  a 4 or 5 - and the queue can be ordered by that chance (`?order=promise`, "Most promising
+  first"; `?order=laughing`, the order it took over from, still leads to it) instead of
+  newest first. The chance (`moments.promise`, see `promise.py`) is worked out from the
+  chat when the moment closes: how many laughed, how many of the chat that was (against
+  `moments.chatters`, the people in the detector's baseline window), and how long the
+  reaction lasted - so a small channel's good moments are not buried under a big channel's
+  ordinary ones. Moments without one come after, by how many laughed; those without a count
+  either (imports, or ones from before it was kept until `scripts/backfill_laughing.py` and
+  then `scripts/backfill_promise.py` have been run) come last. Under the clip is the chat trace:
   messages a second and how many of them were laughing, on the clip's own time axis, from
   30s before the clip to 60s after it. It is also the scrubber - a timeline over the
   clip's file, which opens with the footage that led up to the clip and runs on into what

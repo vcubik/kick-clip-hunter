@@ -143,6 +143,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   - `backfill_laughing.py` — counts how many people laughed around each moment stored
     before the count was kept, from its stored chat (what the review queue can be ordered
     by); safe to re-run and to run while the service runs
+  - `backfill_promise.py` — gives each moment stored before it was kept its promise, the
+    chance from its chat that it is rated 4-5 (`promise.py`, what the queue is ordered by
+    "Most promising first"), counting the people who chatted before it from its stored
+    chat; run `backfill_laughing.py` first; safe to re-run and to run while the service
+    runs (slow on a small machine: minutes per thousand moments)
   - `backfill_taste.py [--limit N]` — fills in transcript/audio-event tags/frame
     embedding for any moment with a clip but missing one or more of them (imports
     don't go through the live pipeline's background tasks, so they start out missing

@@ -17,13 +17,14 @@ from pathlib import Path
 import pytest
 
 import backfill_laughing
+import backfill_promise
 import backfill_taste
 import check
 import import_clip
 import import_clips_dir
 import refresh_emotes
 import subscribe
-from kick_clip_hunter import audio_events, db, detector, frame_encoder, recorder, sound_events, transcriber
+from kick_clip_hunter import audio_events, db, detector, frame_encoder, promise, recorder, sound_events, transcriber
 from tests.support.data import T0, add_chat, add_moment, add_streamer, minutes, moment
 
 SCRIPTS = Path(import_clip.__file__).parent
@@ -317,6 +318,46 @@ class TestBackfillLaughing:
         assert moment(moment_id)["laughing"] is None
         # Run again, it is looked at again: chat stored late would still count.
         assert backfill_laughing.backfill(conn) == (0, 1)
+
+
+class TestBackfillPromise:
+    def test_a_moment_is_given_its_promise_from_the_people_who_chatted_before_it(self, conn):
+        held_until = T0 + timedelta(seconds=40)
+        moment_id = add_moment(detected_at=T0, laughing=6, window_end=held_until.isoformat())
+
+        def seconds(count: float) -> datetime:
+            return T0 + timedelta(seconds=count)
+
+        add_chat("some_channel", "too_early", "hi", seconds(-detector.BASELINE_WINDOW_SECONDS - 5))
+        add_chat("some_channel", "alice", "hi", seconds(-200))
+        add_chat("some_channel", "bob", "hello", seconds(-100))
+        add_chat("some_channel", "bob", "again", seconds(-90))
+        add_chat("some_channel", "nightbot", "!commands", seconds(-80))  # a bot, left out as it is live
+        add_chat("some_channel", "in_the_reaction", "xd", seconds(-5))
+
+        assert backfill_promise.backfill(conn) == 1
+        stored = moment(moment_id)
+        assert stored["chatters"] == 2
+        # Its window starts SHORT_WINDOW_SECONDS before it fired and ends where its reaction did.
+        reaction = 40 + detector.SHORT_WINDOW_SECONDS
+        assert stored["promise"] == pytest.approx(promise.promise(6, reaction, 2))
+
+    def test_a_count_of_chatters_already_kept_is_used(self, conn):
+        moment_id = add_moment(detected_at=T0, laughing=6, chatters=50)
+
+        assert backfill_promise.backfill(conn) == 1
+        assert moment(moment_id)["promise"] == pytest.approx(promise.promise(6, detector.SHORT_WINDOW_SECONDS, 50))
+
+    def test_what_has_no_laughing_counted_or_a_promise_already_is_left_alone(self, conn):
+        uncounted = add_moment(detected_at=T0)
+        given = add_moment(detected_at=T0, laughing=3, chatters=10, promise=0.5)
+        imported = add_moment(detected_at=T0, reason="manual_import", laughing=3)
+
+        assert backfill_promise.backfill(conn) == 0
+        assert moment(uncounted)["promise"] is None
+        assert moment(given)["promise"] == 0.5
+        assert moment(imported)["promise"] is None
+        assert backfill_promise.backfill(conn) == 0
 
 
 class TestWatchlistCommands:

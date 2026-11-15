@@ -31,16 +31,16 @@ SHOWS = (SHOW_UNRATED, SHOW_ALL, SHOW_BEST)
 SHOW_LABELS = {SHOW_UNRATED: "Unrated", SHOW_ALL: "All", SHOW_BEST: "Best"}
 # A clip rated this or higher is listed under "Best".
 BEST_RATING_MIN = 4
-# How a list is ordered: newest first, or the biggest reactions first - how
-# many people laughed around a moment, weighed together with how long the
-# reaction held it open (see db.get_recent_moments). On a thousand rated
-# moments, the top half of that order held about 70 % of those rated 4-5,
-# against about 64 % ordered by the laughing alone; the stored score told
-# nothing. Its address keeps the word "laughing", which links already use.
+# How a list is ordered: newest first, or the most promising first - by the
+# chance, from its chat, that a moment is rated 4 or 5 (`moments.promise`,
+# see promise.py): how many laughed, how many of the chat that was, and how
+# long the reaction lasted. "laughing", the address of the order it took
+# over from, still leads to it.
 ORDER_NEWEST = "newest"
-ORDER_LAUGHING = "laughing"
-ORDERS = (ORDER_NEWEST, ORDER_LAUGHING)
-ORDER_LABELS = {ORDER_NEWEST: "Newest first", ORDER_LAUGHING: "Biggest reaction first"}
+ORDER_PROMISE = "promise"
+ORDERS = (ORDER_NEWEST, ORDER_PROMISE)
+ORDER_LABELS = {ORDER_NEWEST: "Newest first", ORDER_PROMISE: "Most promising first"}
+ORDER_ALIASES = {"laughing": ORDER_PROMISE}
 # Whether a list keeps only the moments something cut out of them was
 # downloaded from (in Trim; see main.download_trim), only the others, or
 # both - which is what it does unless told otherwise.
@@ -804,7 +804,7 @@ def queue_groups(
     (imported clips, or Kick's API not answering at the time) are grouped by
     channel and day instead. Groups are in the order of their first moment,
     so the list as a whole still reads in the order it was given - newest
-    first, or the biggest reaction first with each stream where its best is.
+    first, or the most promising first with each stream where its best is.
     """
     groups: list[dict[str, Any]] = []
     for row in rows:
@@ -838,18 +838,22 @@ def queue_groups(
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
                 "laughing": row["laughing"],
-                "laughing_words": laughing_words(row["laughing"]),
+                "laughing_words": laughing_words(row["laughing"], row["promise"]),
             }
         )
     return groups
 
 
-def laughing_words(laughing: int | None) -> str | None:
-    """What a moment's count of people laughing says on hovering it, or
-    None where it was not counted."""
+def laughing_words(laughing: int | None, promise: float | None = None) -> str | None:
+    """What a moment's count of people laughing says on hovering it - with
+    its chance of a 4 or 5 where it has one (see promise.py) - or None where
+    it was not counted."""
     if laughing is None:
         return None
-    return f"{laughing} {'person' if laughing == 1 else 'people'} laughed around it"
+    words = f"{laughing} {'person' if laughing == 1 else 'people'} laughed around it"
+    if promise is not None:
+        words += f"; about {round(promise * 100)} % chance of a 4 or 5"
+    return words
 
 
 def empty_queue_words(

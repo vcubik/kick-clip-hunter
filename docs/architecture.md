@@ -304,6 +304,13 @@ Module map (`src/kick_clip_hunter/`):
   locked while the switch is off; on the page for all channels the bot's two come after
   detection's. The page's script sends only what is not locked, so saving them leaves
   alone the values a channel keeps for when it goes by its own again
+- `promise.py` — how promising a moment is: the chance, from its chat alone, that it is
+  rated 4 or 5 - a logistic fit on the rated moments over how many laughed, how many of
+  the chat that was and how long the reaction lasted. Worked out when a moment closes
+  (`main`'s moment session, and moments found in a recording) and kept in
+  `moments.promise` with `moments.chatters`; the review queue is ordered by it. The
+  docstring says what was measured and what was tried and left out (burst shape,
+  latecomers, a fit per channel). `scripts/backfill_promise.py` fills in older moments
 - `replay.py` — a channel's stored chat fed through the detector and the moment-session
   rule on the messages' own clock, under a given `Tuning`. Behind `scripts/replay_chat.py`,
   the Settings page's trial (`POST /tuning/trial`, `POST /channels/{slug}/tuning/trial`

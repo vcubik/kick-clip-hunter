@@ -117,7 +117,7 @@ class TestSchema:
             "transcript", "audio_events", "frame_embedding", "stream_type", "moment_type",
             "sound_events", "sound_embedding", "clip_start", "clip_duration", "title",
             "context_before", "context_after", "downloaded_at", "subtitles", "subtitles_heard", "laughing",
-            "clip_on_request", "watch_url",
+            "chatters", "promise", "clip_on_request", "watch_url",
         }  # fmt: skip
 
     def test_chat_can_be_found_by_channel_and_arrival_time_without_reading_all_of_it(self, conn):
@@ -1563,24 +1563,36 @@ class TestMoments:
                 db.update_moment_laughing(conn, moment_id, laughing)
         conn.commit()
 
-        ordered = db.get_recent_moments(conn, biggest_reaction=True)
+        ordered = db.get_recent_moments(conn, most_promising=True)
 
         # Newest first among equals, as the list is otherwise.
         assert [(row["reason"], row["laughing"]) for row in ordered] == [("d", 9), ("a", 9), ("c", 3), ("b", None)]
-        assert [row["reason"] for row in db.get_recent_moments(conn, limit=1, offset=1, biggest_reaction=True)] == ["a"]
+        assert [row["reason"] for row in db.get_recent_moments(conn, limit=1, offset=1, most_promising=True)] == ["a"]
 
-    def test_the_biggest_reactions_weigh_the_laughing_with_how_long_it_held(self, conn):
-        # (reason, people laughing, seconds the reaction held the moment open)
-        for reason, laughing, seconds in [("short", 10, 10), ("long", 10, 60), ("trickle", 5, 60), ("crowd", 20, 10)]:
-            moment_id = store_moment(conn, reason=reason, window_start=(T0 - timedelta(seconds=seconds)).isoformat())
+    def test_the_most_promising_come_first_then_those_without_a_promise(self, conn):
+        # (reason, people laughing, promise)
+        for reason, laughing, chance in [("unsure", 30, None), ("likely", 5, 0.6), ("unlikely", 20, 0.1)]:
+            moment_id = store_moment(conn, reason=reason)
             db.update_moment_laughing(conn, moment_id, laughing)
-        conn.commit()
+            if chance is not None:
+                db.update_moment_promise(conn, moment_id, 40, chance)
 
-        ordered = db.get_recent_moments(conn, biggest_reaction=True)
+        ordered = db.get_recent_moments(conn, most_promising=True)
 
-        # The same crowd laughing longer comes first, and a crowd twice the
-        # size before a trickle that went on as long.
-        assert [row["reason"] for row in ordered] == ["long", "crowd", "trickle", "short"]
+        assert [row["reason"] for row in ordered] == ["likely", "unlikely", "unsure"]
+        assert (ordered[0]["chatters"], ordered[0]["promise"]) == (40, 0.6)
+
+    def test_the_moments_still_without_a_promise_are_the_counted_ones(self, conn):
+        given = store_moment(conn, reason="given")
+        db.update_moment_laughing(conn, given, 5)
+        db.update_moment_promise(conn, given, 12, 0.3)
+        waiting = store_moment(conn, reason="waiting")
+        db.update_moment_laughing(conn, waiting, 5)
+        store_moment(conn, reason="uncounted")
+        imported = store_moment(conn, reason="manual_import")
+        db.update_moment_laughing(conn, imported, 5)
+
+        assert [row["id"] for row in db.get_moments_without_promise(conn)] == [waiting]
 
     def test_moments_can_be_kept_to_the_streams_that_went_live_in_a_span(self, conn):
         live = datetime(2026, 11, 13, 21, 30, tzinfo=timezone.utc)

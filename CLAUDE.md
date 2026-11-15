@@ -82,7 +82,7 @@ Read these on demand, not up front:
   to re-run, repairs a dropped subscription), `refresh_emotes.py`, `replay_chat.py` (replay
   stored chat through the detector to check a threshold change - read-only), `check.py` (what CI
   runs), `list_watchlist.py`, `list_moments.py`, `import_clip.py`, `import_clips_dir.py`,
-  `create_clip.py`, `backfill_taste.py`, `backfill_laughing.py`, `join_context_clips.py`,
+  `create_clip.py`, `backfill_taste.py`, `backfill_laughing.py`, `backfill_promise.py`, `join_context_clips.py`,
   `telegram_chats.py`, `twitch_login.py`, `kick_login.py`. See docs/setup.md.
 - Logs: console and `data/logs/kick_clip_hunter.log` (rotated) - check the file first after
   something went wrong unattended.
@@ -136,6 +136,7 @@ Module map (`src/kick_clip_hunter/`; each module's docstring is the source of tr
 - `detector.py` — the heuristic engine; its docstring is how detection works
 - `tuning.py` — everything the Settings page can set, globally and per channel (pure); also clip
   commands and the bot's switches, messages and commands
+- `promise.py` — a moment's chance, from its chat, of being rated 4-5; what the queue is ordered by
 - `replay.py` — stored chat replayed through the detector (behind `replay_chat.py`, the Settings
   trial and moments in a recording)
 - `main.py` — the FastAPI app: webhook receiver, chat intake, dashboard routes, background tasks

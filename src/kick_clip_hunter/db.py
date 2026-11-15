@@ -460,6 +460,16 @@ def get_connection() -> sqlite3.Connection:
     # imported clip, or one stored before it was (scripts/backfill_laughing.py).
     if "laughing" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN laughing INTEGER")
+    # How many people chatted in the detector's baseline window before the
+    # moment fired (detector's baseline_unique_senders), and the chance from
+    # its chat that it is rated 4 or 5 (see promise.py) - what the queue is
+    # ordered by when the most promising come first. Both kept when the
+    # moment closes; NULL where they were not: an imported clip, or one
+    # stored before they were (scripts/backfill_promise.py).
+    if "chatters" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN chatters INTEGER")
+    if "promise" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN promise REAL")
 
     # A moment of a channel tracked for moments: no clip is cut of it as it
     # is found, only from its stream's VOD once it is asked for (see
@@ -980,7 +990,7 @@ _MOMENT_COLUMNS = """
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
     context_before, context_after, downloaded_at,
     rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles,
-    subtitles_heard, laughing, clip_on_request, watch_url
+    subtitles_heard, laughing, chatters, promise, clip_on_request, watch_url
 """
 
 
@@ -1032,16 +1042,6 @@ def _moment_filter(
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
-# How big a moment's reaction was, for ordering the review queue: the people
-# who laughed around it, squared, times how long the reaction held the moment
-# open (its window, in days - only the order matters). Both told a good clip
-# from a poor one on the rated moments, and together better than either: a
-# crowd laughing for a minute beats the same crowd for ten seconds, and a
-# bigger crowd beats a longer trickle. The power on the laughing barely
-# mattered between 1.5 and 4; 2 needs no maths functions SQLite may lack.
-_REACTION = "laughing * laughing * (julianday(window_end) - julianday(window_start))"
-
-
 def get_recent_moments(
     conn: sqlite3.Connection,
     limit: int = 50,
@@ -1054,18 +1054,18 @@ def get_recent_moments(
     on_disk: bool | None = None,
     tag: str | None = None,
     stream_started: tuple[str, str] | None = None,
-    biggest_reaction: bool = False,
+    most_promising: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
     not rated yet, only those rated `min_rating` or higher, or only those
     downloaded or not, or with their clip on disk or not, or only those given
     a tag (see _moment_filter). With
-    `biggest_reaction`, the biggest reactions come first instead (see
-    _REACTION), those whose laughing was not counted last, and newest first
-    among equals."""
+    `most_promising`, the most promising come first instead (`promise`, see
+    promise.py), then those not yet given one by how many laughed around
+    them, those with neither last, and newest first among equals."""
     conn.row_factory = sqlite3.Row
     where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag, stream_started)
-    order = f"laughing IS NULL, {_REACTION} DESC, " if biggest_reaction else ""
+    order = "promise IS NULL, promise DESC, laughing IS NULL, laughing DESC, " if most_promising else ""
     return conn.execute(
         f"""
         SELECT {_MOMENT_COLUMNS}
@@ -1826,6 +1826,28 @@ def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_en
 def update_moment_laughing(conn: sqlite3.Connection, moment_id: int, laughing: int) -> None:
     conn.execute("UPDATE moments SET laughing = ? WHERE id = ?", (laughing, moment_id))
     conn.commit()
+
+
+def update_moment_promise(conn: sqlite3.Connection, moment_id: int, chatters: int, promise: float) -> None:
+    """Records how many people chatted before a moment fired and the chance,
+    from that, its laughing and its length, that it is rated 4 or 5 (see
+    promise.py)."""
+    conn.execute("UPDATE moments SET chatters = ?, promise = ? WHERE id = ?", (chatters, promise, moment_id))
+    conn.commit()
+
+
+def get_moments_without_promise(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Moments the detector made whose laughing was counted but which have no
+    promise yet - stored before it was kept. See scripts/backfill_promise.py."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        """
+        SELECT id, broadcaster_user_id, channel_slug, window_start, window_end, laughing, chatters
+        FROM moments
+        WHERE promise IS NULL AND laughing IS NOT NULL AND reason != 'manual_import'
+        ORDER BY id
+        """
+    ).fetchall()
 
 
 def update_moment_watch_url(conn: sqlite3.Connection, moment_id: int, watch_url: str) -> None:
