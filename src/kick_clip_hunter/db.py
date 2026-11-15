@@ -984,6 +984,12 @@ _MOMENT_COLUMNS = """
 """
 
 
+# When a moment's stream went live, as a julian day: when it was detected,
+# less how far into the stream it was - or just when it was detected, where
+# that was not recorded (an imported clip, or Kick's API not answering).
+_STREAM_STARTED = "(julianday(detected_at) - COALESCE(stream_elapsed_seconds, 0) / 86400.0)"
+
+
 def _moment_filter(
     channel_slug: str | None,
     unrated: bool,
@@ -991,6 +997,7 @@ def _moment_filter(
     downloaded: bool | None = None,
     on_disk: bool | None = None,
     tag: str | None = None,
+    stream_started: tuple[str, str] | None = None,
 ) -> tuple[str, list]:
     """The WHERE clause (empty when nothing is filtered) and its parameters
     for the ways the dashboard narrows the list of moments down. `downloaded`
@@ -999,7 +1006,9 @@ def _moment_filter(
     is kept here (True) or only those without one - a moment of a channel
     tracked for moments whose clip was never cut from the VOD, or one whose
     recording failed (False). None keeps both. `tag` keeps only the moments
-    given that tag."""
+    given that tag. `stream_started` keeps only the moments whose stream went
+    live from the first time up to the second (UTC, "YYYY-MM-DDTHH:MM:SS"),
+    so a stream that ran past midnight keeps all its moments on one day."""
     conditions: list[str] = []
     params: list = []
     if channel_slug:
@@ -1017,6 +1026,9 @@ def _moment_filter(
     if tag:
         conditions.append("id IN (SELECT moment_id FROM moment_tags WHERE tag = ?)")
         params.append(tag)
+    if stream_started:
+        conditions.append(f"{_STREAM_STARTED} >= julianday(?) AND {_STREAM_STARTED} < julianday(?)")
+        params.extend(stream_started)
     return ("WHERE " + " AND ".join(conditions) if conditions else ""), params
 
 
@@ -1041,6 +1053,7 @@ def get_recent_moments(
     downloaded: bool | None = None,
     on_disk: bool | None = None,
     tag: str | None = None,
+    stream_started: tuple[str, str] | None = None,
     biggest_reaction: bool = False,
 ) -> list[sqlite3.Row]:
     """Moments newest first, optionally only one channel's, only the ones
@@ -1051,7 +1064,7 @@ def get_recent_moments(
     _REACTION), those whose laughing was not counted last, and newest first
     among equals."""
     conn.row_factory = sqlite3.Row
-    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag, stream_started)
     order = f"laughing IS NULL, {_REACTION} DESC, " if biggest_reaction else ""
     return conn.execute(
         f"""
@@ -1079,9 +1092,21 @@ def count_moments(
     downloaded: bool | None = None,
     on_disk: bool | None = None,
     tag: str | None = None,
+    stream_started: tuple[str, str] | None = None,
 ) -> int:
-    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag)
+    where, params = _moment_filter(channel_slug, unrated, min_rating, downloaded, on_disk, tag, stream_started)
     return conn.execute(f"SELECT COUNT(*) FROM moments {where}", params).fetchone()[0]
+
+
+def get_stream_starts(conn: sqlite3.Connection, channel_slug: str | None = None) -> list[str]:
+    """When the streams moments were found in went live (UTC,
+    "YYYY-MM-DDTHH:MM:SSZ"; see _STREAM_STARTED), each once - all channels',
+    or one's."""
+    where, params = ("WHERE channel_slug = ?", [channel_slug]) if channel_slug else ("", [])
+    rows = conn.execute(
+        f"SELECT DISTINCT strftime('%Y-%m-%dT%H:%M:%SZ', {_STREAM_STARTED}) FROM moments {where}", params
+    )
+    return [started for (started,) in rows if started]
 
 
 def count_moments_between(conn: sqlite3.Connection, since: str, until: str) -> dict[str, int]:

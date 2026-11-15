@@ -7,7 +7,7 @@
 {% block title %}Review{% endblock %}
 {% block main %}
 <main class="review">
-<aside class="queue" aria-label="Moments" data-queue data-channel="{{ selected_channel or '' }}" data-downloaded="{{ downloaded }}" data-on-disk="{{ on_disk }}" data-best-from="{{ best_rating_min }}">
+<aside class="queue" aria-label="Moments" data-queue data-channel="{{ selected_channel or '' }}" data-downloaded="{{ downloaded }}" data-on-disk="{{ on_disk }}" data-day="{{ day }}" data-best-from="{{ best_rating_min }}">
   <div class="queue-head">
     <nav class="ch-tabs" aria-label="Which moments to list">
       {% for tab in tabs %}
@@ -45,6 +45,15 @@
         <option value=""{% if not tag %} selected{% endif %}>Any tag</option>
         {% for option in tags %}
         <option value="{{ option.tag }}"{% if option.tag == tag %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      {#- Only the moments from streams that went live on one day - a stream that ran past midnight keeps its later moments on the day it started. -#}
+      {% if days %}
+      <select class="ch-select" id="day-filter" name="day" aria-label="Stream day" data-submit-on-change>
+        <option value=""{% if not day %} selected{% endif %}>Any day</option>
+        {% for option in days %}
+        <option value="{{ option.day }}"{% if option.day == day %} selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
       </select>
       {% endif %}

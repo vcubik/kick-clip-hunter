@@ -11,7 +11,7 @@ clock, so nothing here depends on which zone the suite runs in.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -1428,3 +1428,61 @@ class TestTagName:
 
         assert len(cut) <= view.TAG_MAX_LENGTH
         assert cut == cut.strip()
+
+
+class TestStreamDay:
+    def test_a_moment_belongs_to_the_day_its_stream_went_live(self):
+        after_midnight = row(detected_at=local(1, 15).isoformat(), stream_elapsed_seconds=3 * 3600)
+
+        assert view.stream_started(after_midnight) == local(22, 15, days_ago=1)
+        assert view.stream_day(after_midnight) == TODAY - timedelta(days=1)
+
+    def test_without_how_far_into_its_stream_it_is_the_day_it_was_caught(self):
+        unknown = row(detected_at=local(1, 15).isoformat(), stream_elapsed_seconds=None)
+
+        assert view.stream_started(unknown) is None
+        assert view.stream_day(unknown) == TODAY
+
+    @pytest.mark.parametrize(
+        ("text", "day"),
+        [("2026-11-14", date(2026, 11, 14)), ("", None), (None, None), ("yesterday", None), ("2026-02-30", None)],
+    )
+    def test_a_day_is_read_from_the_address(self, text, day):
+        assert view.parse_day(text) == day
+
+    def test_a_day_runs_from_local_midnight_to_the_next(self):
+        start, end = view.day_bounds(TODAY)
+
+        def utc(moment: datetime) -> str:
+            return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+        assert start == utc(local(0, 0))
+        assert end == utc(local(0, 0, days_ago=-1))
+
+    def test_the_days_offered_are_those_streams_went_live_on_the_latest_first(self):
+        starts = [
+            local(22, 30, days_ago=1).astimezone(timezone.utc).isoformat(),
+            local(20, 0).astimezone(timezone.utc).isoformat(),
+            local(23, 0, days_ago=1).astimezone(timezone.utc).isoformat(),
+        ]
+
+        assert view.day_choices(starts, None, TODAY) == [
+            {"day": TODAY.isoformat(), "label": "Today"},
+            {"day": (TODAY - timedelta(days=1)).isoformat(), "label": "Yesterday"},
+        ]
+
+    def test_a_chosen_day_without_streams_is_still_offered(self):
+        chosen = date(2026, 10, 1)
+
+        assert view.day_choices([], chosen, TODAY) == [{"day": "2026-10-01", "label": "Thursday 1 October"}]
+
+    def test_the_review_address_keeps_the_day(self):
+        assert view.review_url(view.SHOW_ALL, day=date(2026, 11, 13), offset=50) == (
+            "/dashboard?show=all&day=2026-11-13&offset=50"
+        )
+
+    def test_an_empty_list_of_one_day_says_so(self):
+        words = view.empty_queue_words(view.SHOW_UNRATED, "some_channel", local(2, 14), TODAY, day=date(2026, 10, 8))
+
+        assert words["queue"] == "Nothing from streams of yesterday here"
+        assert words["heading"] == "No clips from some_channel from streams of yesterday here"

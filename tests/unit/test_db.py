@@ -1582,6 +1582,32 @@ class TestMoments:
         # size before a trickle that went on as long.
         assert [row["reason"] for row in ordered] == ["long", "crowd", "trickle", "short"]
 
+    def test_moments_can_be_kept_to_the_streams_that_went_live_in_a_span(self, conn):
+        live = datetime(2026, 11, 13, 21, 30, tzinfo=timezone.utc)
+        before = store_moment(conn, reason="before")
+        after = store_moment(conn, reason="after")
+        unknown = store_moment(conn, reason="unknown")
+        for moment_id, caught, elapsed in [
+            (before, live + timedelta(minutes=30), 1800),
+            (after, live + timedelta(hours=3), 3 * 3600),
+            # Not known how far into its stream: the time it was caught counts.
+            (unknown, datetime(2026, 11, 14, 0, 30, tzinfo=timezone.utc), None),
+        ]:
+            conn.execute(
+                "UPDATE moments SET detected_at = ?, stream_elapsed_seconds = ? WHERE id = ?",
+                (caught.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z", elapsed, moment_id),
+            )
+        conn.commit()
+
+        span = ("2026-11-13T00:00:00", "2026-11-14T00:00:00")
+        kept = db.get_recent_moments(conn, stream_started=span)
+
+        assert [row["reason"] for row in kept] == ["after", "before"]
+        assert db.count_moments(conn, stream_started=span) == 2
+        assert db.count_moments(conn, stream_started=("2026-11-14T00:00:00", "2026-11-15T00:00:00")) == 1
+        assert sorted(db.get_stream_starts(conn)) == ["2026-11-13T21:30:00Z", "2026-11-14T00:30:00Z"]
+        assert db.get_stream_starts(conn, "another_channel") == []
+
     def test_the_moments_still_to_be_counted_are_the_detectors_without_a_count(self, conn):
         counted = store_moment(conn)
         db.update_moment_laughing(conn, counted, 0)

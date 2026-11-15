@@ -124,6 +124,7 @@ from .db import (
     get_stream_recording,
     get_stream_recording_offset,
     get_stream_recordings,
+    get_stream_starts,
     get_streamer_by_id,
     get_streamer_by_slug,
     get_streamers,
@@ -3336,6 +3337,8 @@ def _open_moment(conn, row, today: date) -> dict:
     return {
         "id": row["id"],
         "channel": row["channel_slug"],
+        # The day its stream went live, which the queue may be narrowed to.
+        "stream_day": dashboard_view.stream_day(row).isoformat(),
         "when": dashboard_view.when_words(to_local_datetime(row["detected_at"]), today),
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"], versioned=True) if row["clip_path"] else None,
@@ -3789,6 +3792,7 @@ async def dashboard(
     downloaded: str = dashboard_view.DOWNLOADED_ANY,
     on_disk: str = dashboard_view.ON_DISK_ANY,
     tag: str = "",
+    day: str = "",
     offset: int = 0,
     moment: int | None = None,
 ):
@@ -3799,7 +3803,9 @@ async def dashboard(
     `downloaded` keeps only the moments downloaded from Trim or only the
     others, `on_disk` only those whose clip is on disk or only the others
     (a link into the VOD and nothing more), `tag` only those given that tag,
-    and `offset` pages through it. `moment` is the one to open; left
+    `day` ("2026-11-14") only those from streams that went live that day -
+    a stream that ran past midnight keeps its later moments on the day it
+    started - and `offset` pages through it. `moment` is the one to open; left
     out, it is the first of the list, and with an empty list the page says
     what the service is doing instead.
     """
@@ -3811,12 +3817,16 @@ async def dashboard(
     on_disk = on_disk if on_disk in dashboard_view.ON_DISKS else dashboard_view.ON_DISK_ANY
     kept = dashboard_view.ON_DISK_FILTERS[on_disk]
     tag = dashboard_view.tag_name(tag)
+    stream_day = dashboard_view.parse_day(day)
+    started = dashboard_view.day_bounds(stream_day) if stream_day is not None else None
     today = _today()
 
     conn = get_connection()
     try:
         counts = {
-            name: count_moments(conn, channel_slug=channel, downloaded=taken, on_disk=kept, tag=tag, **filters)
+            name: count_moments(
+                conn, channel_slug=channel, downloaded=taken, on_disk=kept, tag=tag, stream_started=started, **filters
+            )
             for name, filters in SHOW_FILTERS.items()
         }
         # A list gets shorter as its moments are rated, so a page that was
@@ -3830,6 +3840,7 @@ async def dashboard(
             downloaded=taken,
             on_disk=kept,
             tag=tag or None,
+            stream_started=started,
             biggest_reaction=order == dashboard_view.ORDER_LAUGHING,
             **SHOW_FILTERS[show],
         )
@@ -3845,6 +3856,7 @@ async def dashboard(
                     downloaded=downloaded,
                     on_disk=on_disk,
                     tag=tag,
+                    day=stream_day,
                     offset=offset,
                     moment=item["id"],
                 )
@@ -3868,6 +3880,7 @@ async def dashboard(
                 downloaded,
                 on_disk,
                 tag,
+                stream_day,
             )
 
         context = _page_context(conn, "review")
@@ -3880,7 +3893,13 @@ async def dashboard(
                         "label": dashboard_view.SHOW_LABELS[name],
                         "count": counts[name],
                         "href": dashboard_view.review_url(
-                            name, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag
+                            name,
+                            channel,
+                            order=order,
+                            downloaded=downloaded,
+                            on_disk=on_disk,
+                            tag=tag,
+                            day=stream_day,
                         ),
                         "current": name == show,
                     }
@@ -3906,6 +3925,10 @@ async def dashboard(
                 # Every tag there is, and the chosen one even where no moment
                 # has it any more, so the list still says what was chosen.
                 "tags": _tag_choices(conn, tag),
+                # Every day a stream with a moment went live, the channel's
+                # where one is chosen.
+                "day": stream_day.isoformat() if stream_day is not None else "",
+                "days": dashboard_view.day_choices(get_stream_starts(conn, channel), stream_day, today),
                 "groups": groups,
                 "empty": empty,
                 "paging": dashboard_view.pages(
@@ -3913,7 +3936,14 @@ async def dashboard(
                     MOMENTS_PAGE_SIZE,
                     counts[show],
                     lambda other: dashboard_view.review_url(
-                        show, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag, offset=other
+                        show,
+                        channel,
+                        order=order,
+                        downloaded=downloaded,
+                        on_disk=on_disk,
+                        tag=tag,
+                        day=stream_day,
+                        offset=other,
                     ),
                 ),
                 # The list's ends in its paging: newer and older, or bigger and smaller reactions.
@@ -3926,7 +3956,13 @@ async def dashboard(
                 # Offered from an empty list when there is something to go through elsewhere.
                 "rated_href": (
                     dashboard_view.review_url(
-                        dashboard_view.SHOW_ALL, channel, order=order, downloaded=downloaded, on_disk=on_disk, tag=tag
+                        dashboard_view.SHOW_ALL,
+                        channel,
+                        order=order,
+                        downloaded=downloaded,
+                        on_disk=on_disk,
+                        tag=tag,
+                        day=stream_day,
                     )
                     if show != dashboard_view.SHOW_ALL and counts[dashboard_view.SHOW_ALL]
                     else None

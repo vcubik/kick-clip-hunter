@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -637,11 +637,12 @@ def review_url(
     downloaded: str = DOWNLOADED_ANY,
     on_disk: str = ON_DISK_ANY,
     tag: str = "",
+    day: date | None = None,
     offset: int = 0,
     moment: int | None = None,
 ) -> str:
     """The review page for one list, channel, order, downloaded or not, on
-    disk or not, tag, page and open moment. Whatever is at its default is
+    disk or not, tag, stream day, page and open moment. Whatever is at its default is
     left out, so the plain address is the unrated list, newest first."""
     query: dict[str, Any] = {}
     if show != SHOW_UNRATED:
@@ -656,6 +657,8 @@ def review_url(
         query["on_disk"] = on_disk
     if tag:
         query["tag"] = tag
+    if day is not None:
+        query["day"] = day.isoformat()
     if offset:
         query["offset"] = offset
     if moment is not None:
@@ -729,6 +732,60 @@ def pages(offset: int, size: int, total: int, href: Callable[[int], str]) -> dic
     }
 
 
+# -- the day of a stream ------------------------------------------------------
+#
+# The queue can be narrowed to one day's streams. A moment belongs to the day
+# its stream went live, not the day it was caught: a stream that started at
+# 22:00 keeps its moments from after midnight on the day it started.
+
+
+def stream_started(row: Row) -> datetime | None:
+    """When the stream a moment was found in went live (local time), or
+    None where how far into it the moment was is not known."""
+    elapsed = row["stream_elapsed_seconds"]
+    if elapsed is None:
+        return None
+    return to_local_datetime(row["detected_at"]) - timedelta(seconds=elapsed)
+
+
+def stream_day(row: Row) -> date:
+    """The day a moment belongs to: the day its stream went live, or the day
+    it was caught where that is not known."""
+    return (stream_started(row) or to_local_datetime(row["detected_at"])).date()
+
+
+def parse_day(text: str | None) -> date | None:
+    """A day as the review page's address gives it ("2026-11-14"), or None
+    for none or one that is not a date."""
+    try:
+        return date.fromisoformat(text) if text else None
+    except ValueError:
+        return None
+
+
+def day_bounds(day: date) -> tuple[str, str]:
+    """A local day as the UTC times it runs from and up to
+    ("YYYY-MM-DDTHH:MM:SS") - 23 or 25 hours on the days the clocks change."""
+
+    def midnight(of: date) -> str:
+        return datetime.combine(of, time()).astimezone().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    return midnight(day), midnight(day + timedelta(days=1))
+
+
+def day_choices(stream_starts: Iterable[str], chosen: date | None, today: date) -> list[dict[str, str]]:
+    """What the queue can be narrowed to by day: every day a stream with a
+    moment went live (from UTC times, see db.get_stream_starts), the latest
+    first - and the chosen one even where it has none, so the list still says
+    what was chosen."""
+    days = {to_local_datetime(started).date() for started in stream_starts}
+    if chosen is not None:
+        days.add(chosen)
+    return [
+        {"day": day.isoformat(), "label": sentence_case(day_words(day, today))} for day in sorted(days, reverse=True)
+    ]
+
+
 def _same_stream(group: dict[str, Any], started: datetime | None, day: date) -> bool:
     if group["started"] is None or started is None:
         return group["started"] is None and started is None and group["day"] == day
@@ -753,8 +810,8 @@ def queue_groups(
     for row in rows:
         detected = to_local_datetime(row["detected_at"])
         elapsed = row["stream_elapsed_seconds"]
-        started = detected - timedelta(seconds=elapsed) if elapsed is not None else None
-        day = (started or detected).date()
+        started = stream_started(row)
+        day = stream_day(row)
 
         group = next(
             (g for g in groups if g["channel"] == row["channel_slug"] and _same_stream(g, started, day)),
@@ -803,6 +860,7 @@ def empty_queue_words(
     downloaded: str = DOWNLOADED_ANY,
     on_disk: str = ON_DISK_ANY,
     tag: str = "",
+    day: date | None = None,
 ) -> dict[str, str]:
     """What to say when the chosen list has nothing in it: a few words for
     the queue, a heading for the rest of the page and, where the state of the
@@ -810,8 +868,15 @@ def empty_queue_words(
     `newest` is when the last moment of any rating was detected (on that
     channel, if one is chosen), or None if there has never been one. A list
     narrowed to downloaded moments or the others, or to those on disk or the
-    others, or to a tag, says that is what left it empty."""
+    others, or to a tag, or to one day's streams, says that is what left it
+    empty."""
     of_channel = f" from {channel}" if channel else ""
+    if newest is not None and day is not None:
+        return {
+            "queue": f"Nothing from streams of {day_words(day, today)} here",
+            "heading": f"No clips{of_channel} from streams of {day_words(day, today)} here",
+            "lead": "A moment belongs to the day its stream went live, even when it was caught after midnight.",
+        }
     if newest is not None and tag:
         return {
             "queue": f"Nothing tagged '{tag}' here",

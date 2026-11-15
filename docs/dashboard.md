@@ -36,7 +36,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   (`dashboard_view.QUICK_TAGS` of them, newest first; both routes answer with them as `quick`); taken away with
   the cross (`POST /moments/{id}/tags/remove`), kept in small letters with single spaces
   (`dashboard_view.tag_name`). Once any moment has one, the queue can be narrowed to a tag
-  (`?tag=`, the list offering every tag with how many moments have it). After it, "Add before" and "Add after" put that much more of
+  (`?tag=`, the list offering every tag with how many moments have it). The queue can also be
+  narrowed to one day's streams (`?day=2026-11-14`, "Any day" or each day a stream with a moment
+  went live, the latest first): a moment belongs to the day its stream went live - its detection
+  less `stream_elapsed_seconds`, `db._STREAM_STARTED` - so a stream that ran past midnight keeps
+  its later moments on the day it started; one without that offset counts on the day it was
+  caught. After it, "Add before" and "Add after" put that much more of
   the stream into the moment's file - 15 s to 2 min, chosen in the list in front of them, which
   the script remembers - ahead of its first frame or after its last, from the stream's own
   recording: its VOD on Kick and Twitch, days later too, and on YouTube the stream wound back
