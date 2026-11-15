@@ -197,6 +197,7 @@ class TestMomentSession:
         service.quiet_seconds = 5.0
         service.max_open_seconds = 1.0
         service.watch(CHANNEL)
+        await keep_every_moment(service)
         service.warm_up(CHANNEL)
         await service.crowd_laughs(CHANNEL, people=crowd_needed())
         await service.clock_tick()
@@ -364,6 +365,53 @@ class TestKeepingAMoment:
         assert moment["reason"] == "laugh"
         # Counted all the same, for the queue to be ordered by.
         assert moment["laughing"] == fires
+
+
+class TestTheFloorOfPeopleLaughing:
+    """However small the chat, a moment is kept only if at least
+    detector.KEEP_LAUGHING_FLOOR people laughed around it - unless the
+    channel is switched to keep its weaker moments, when the rule by the
+    size of its chat alone holds."""
+
+    CHATTERS = 12
+
+    def by_the_chat(self) -> int:
+        """How many have to laugh in this chat by its size alone."""
+        weaker = replace(detector.recommended(), keep_weaker_moments=True)
+        needed = detector.laughing_needed(self.CHATTERS, weaker)
+        assert needed < detector.laughing_needed(self.CHATTERS) == detector.KEEP_LAUGHING_FLOOR
+        return needed
+
+    async def laugh(self, service) -> None:
+        service.quiet_seconds = 0.5
+        service.warm_up(CHANNEL, chatters=self.CHATTERS)
+        await service.crowd_laughs(CHANNEL, people=self.by_the_chat())
+        await service.settle()
+
+    async def test_fewer_than_the_floor_laughing_in_a_small_chat_is_dropped(self, service):
+        service.watch(CHANNEL)
+
+        await self.laugh(service)
+
+        assert service.moments() == []
+
+    async def test_a_channel_that_keeps_its_weaker_moments_keeps_it(self, service):
+        service.watch(CHANNEL)
+        await set_up(service, keep_weaker=True)
+
+        await self.laugh(service)
+
+        (moment,) = service.moments()
+        assert moment["laughing"] == self.by_the_chat()
+
+    async def test_the_switch_is_the_channels_own_whatever_it_goes_by_in_the_rest(self, service):
+        service.watch(CHANNEL)
+        response = await service.client.post(f"/channels/{CHANNEL}/tuning", json={"values": {"keep_weaker": True}})
+        assert response.status_code == 200, response.text
+
+        await self.laugh(service)
+
+        assert len(service.moments()) == 1
 
 
 @pytest.fixture

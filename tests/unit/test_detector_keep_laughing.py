@@ -5,7 +5,8 @@ A moment fires on a ten-second burst; most of the worst-rated ones were a
 burst of three people that nobody else joined. The bar grows with the square
 root of the chat, so a small chat is asked for a bigger part of itself than a
 big one, but never for more than half of it, nor for fewer people than fire a
-moment.
+moment - and, as recommended, never for fewer than a floor however small the
+chat, unless the channel keeps its weaker moments.
 """
 
 from __future__ import annotations
@@ -19,10 +20,17 @@ from tests.support.chat import ChatSim, native_emote, people
 PER_ROOT = detector.KEEP_LAUGHING_PER_ROOT
 MOST_SHARE = detector.KEEP_LAUGHING_MOST_SHARE
 LEAST = detector.MIN_ABSOLUTE_UNIQUE
+FLOOR = detector.KEEP_LAUGHING_FLOOR
 
 
 def settings(**changed) -> detector.Settings:
     return replace(detector.recommended(), **changed)
+
+
+# The rule by the size of the chat alone, as a channel that keeps its weaker
+# moments goes by.
+def by_the_chat() -> detector.Settings:
+    return settings(keep_weaker_moments=True)
 
 
 def by_the_root(chatters: int, per_root: float = PER_ROOT) -> int:
@@ -36,7 +44,7 @@ class TestHowManyHaveToLaugh:
     def test_the_bar_grows_with_the_root_of_the_chat(self):
         assert self.ROOTED
         for chatters in self.ROOTED:
-            assert detector.laughing_needed(chatters) == by_the_root(chatters)
+            assert detector.laughing_needed(chatters, by_the_chat()) == by_the_root(chatters)
 
     def test_a_big_chat_is_asked_for_a_smaller_part_of_itself(self):
         small, big = self.ROOTED[0], self.ROOTED[-1]
@@ -44,9 +52,9 @@ class TestHowManyHaveToLaugh:
         assert detector.laughing_needed(big) > detector.laughing_needed(small)
         assert detector.laughing_needed(big) / big < detector.laughing_needed(small) / small
 
-    def test_a_small_chat_is_never_asked_for_more_than_half_of_itself(self):
+    def test_by_the_chat_a_small_one_is_never_asked_for_more_than_half_of_itself(self):
         for chatters in range(1, 200):
-            needed = detector.laughing_needed(chatters)
+            needed = detector.laughing_needed(chatters, by_the_chat())
             assert needed <= max(LEAST, math.ceil(chatters * MOST_SHARE))
 
     def test_nor_for_fewer_people_than_fire_a_moment(self):
@@ -54,7 +62,7 @@ class TestHowManyHaveToLaugh:
             assert detector.laughing_needed(chatters) >= LEAST
 
     def test_nor_than_its_own_firing_floor_where_it_has_one(self):
-        own = settings(min_absolute_unique=2)
+        own = settings(min_absolute_unique=2, keep_weaker_moments=True)
 
         assert detector.laughing_needed(4, own) == 2
 
@@ -67,6 +75,44 @@ class TestHowManyHaveToLaugh:
 
     def test_at_zero_every_moment_is_kept(self):
         assert detector.laughing_needed(500, settings(keep_laughing_per_root=0)) == 0
+        assert detector.laughing_needed(5, settings(keep_laughing_per_root=0)) == 0
+
+
+class TestTheFloor:
+    def test_as_recommended_however_small_the_chat_never_fewer_than_the_floor(self):
+        for chatters in (0, 1, 5, 12, 20):
+            assert detector.laughing_needed(chatters) == max(FLOOR, detector.laughing_needed(chatters, by_the_chat()))
+            assert detector.laughing_needed(chatters) >= FLOOR
+
+    def test_where_the_chat_asks_for_more_the_floor_changes_nothing(self):
+        big = next(chatters for chatters in range(1, 5000) if by_the_root(chatters) > FLOOR)
+
+        assert detector.laughing_needed(big) == detector.laughing_needed(big, by_the_chat())
+
+    def test_a_channel_that_keeps_its_weaker_moments_goes_by_the_chat_alone(self):
+        small = 9
+
+        assert detector.laughing_needed(small, by_the_chat()) < FLOOR
+        assert detector.laughing_needed(small, by_the_chat()) == max(
+            LEAST, min(by_the_root(small), math.ceil(small * MOST_SHARE))
+        )
+
+    def test_the_floor_can_be_set(self):
+        assert detector.laughing_needed(5, settings(keep_laughing_floor=FLOOR + 5)) == FLOOR + 5
+        assert detector.laughing_needed(5, settings(keep_laughing_floor=0)) == detector.laughing_needed(
+            5, by_the_chat()
+        )
+
+    def test_a_settings_made_by_hand_has_no_floor(self):
+        made = detector.Settings(
+            **{
+                name: value
+                for name, value in vars(detector.recommended()).items()
+                if name not in ("keep_laughing_floor", "keep_weaker_moments")
+            }
+        )
+
+        assert made.keep_laughing_floor == 0 and not made.keep_weaker_moments
 
     def test_as_recommended_it_asks_more_than_it_takes_to_fire_in_a_usual_chat(self):
         # Firing is a ten-second burst; what was measured to tell a usable

@@ -269,9 +269,10 @@ TEXT_MAX_LENGTH = 500
 LIST_PROMPTS = {WORDS: "Part of an emote's name", PHRASES: "A whole message", NAMES: "An account's name"}
 
 # The sections of the page, in the order they come: key, heading, and what is
-# said under it. The first is on a channel's page only (see
+# said under it. The first and the fourth are on a channel's page only (see
 # Setting.per_channel).
 MOMENTS = "moments"
+WEAKER = "weaker"
 SIGNALS = "signals"
 CLIPS = "clips"
 COMMANDS = "commands"
@@ -298,6 +299,12 @@ GROUPS = (
         "Each message in words of your own. Left empty, it is the bot's own, shown in its field. A word in braces "
         "is filled in as the message goes out; a brace by itself is written twice. What a channel is given of its "
         "own here holds whether or not it goes by its own settings in the rest.",
+    ),
+    (
+        WEAKER,
+        "A small channel's moments",
+        "A moment is kept only if enough people laughed around it, and never fewer than a floor however small the "
+        "chat. Each channel has its own here, whether or not it goes by its own settings in the rest.",
     ),
     (
         MOMENTS,
@@ -391,6 +398,24 @@ SETTINGS: tuple[Setting, ...] = (
         "never fewer than the least above. Higher means fewer moments; at 0 every moment is kept.",
         (DETECTOR + "keep_laughing_per_root",),
         least=0, most=20,
+    ),
+    Setting(
+        "laughing_floor", MOMENTS, WHOLE,
+        "People laughing to keep a moment, at least",
+        "However small the chat, a moment is kept only if at least this many people laughed around it - in a "
+        "small chat, fewer were mostly not worth a look. A channel can be set to keep its weaker moments all "
+        "the same (on its own page).",
+        (DETECTOR + "keep_laughing_floor",),
+        least=0, most=200,
+    ),
+    Setting(
+        "keep_weaker", WEAKER, SWITCH,
+        "Keep weaker moments",
+        "On, a moment is kept without the floor of people laughing set under \"How big a reaction has to be\" - "
+        "for a channel whose chat is so small that the floor is most of it. The rule by the size of the chat "
+        "still holds. More moments, more of them not worth a look.",
+        (DETECTOR + "keep_weaker_moments",),
+        per_channel=True,
     ),
     Setting(
         "lull_seconds", MOMENTS, WHOLE,

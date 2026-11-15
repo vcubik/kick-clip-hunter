@@ -222,7 +222,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   field beside it (Add, or Enter; checked there as the service would) and taken out by its
   cross, and what is typed but not added goes in with the save. The last tab, "Try on stored
   chat", replays a channel's newest chat under the saved settings and under the form's,
-  without saving anything. The page for all channels has, before it, a tab for what is the
+  without saving anything. A moment is kept only if enough people laughed around it, and
+  never fewer than "People laughing to keep a moment, at least" (`detector.KEEP_LAUGHING_FLOOR`)
+  however small the chat; a channel's page has, among what is its own either way, "A small
+  channel's moments" with the switch "Keep weaker moments" (`keep_weaker`), which lifts that
+  floor for the channel alone - the rule by the size of its chat still holds. The page for all channels has, before it, a tab for what is the
   service's: Notifications - where they go (a Telegram bot and its chat, with "Find chats" to
   pick it among those that wrote to the bot; a Discord webhook; the dashboard's address for
   their links), which kinds go out (clips, the clips themselves as videos, moments of channels

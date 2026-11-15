@@ -453,6 +453,7 @@ class TestWhatIsAChannelsAlone:
         assert tuning.PER_CHANNEL == {
             "clip_commands",
             "clip_command_from_anyone",
+            "keep_weaker",
             "record_commands",
             "stop_commands",
             "status_commands",
@@ -681,7 +682,7 @@ class TestOnThePage:
         ]
 
     def test_what_holds_of_a_channels_own_either_way_comes_first_in_it_as_sections_of_their_own(self):
-        commands, bot, messages, *others = self.form(own={})
+        commands, bot, messages, weaker, *others = self.form(own={})
 
         assert (commands["key"], commands["title"]) == (tuning.COMMANDS, "A clip on command")
         assert [field["name"] for field in commands["fields"]] == ["clip_commands", "clip_command_from_anyone"]
@@ -707,7 +708,8 @@ class TestOnThePage:
             "bot_repeat_message",
             "bot_repeat_minutes",
         ]
-        assert commands["either_way"] is bot["either_way"] is messages["either_way"] is True
+        assert (weaker["key"], [field["name"] for field in weaker["fields"]]) == (tuning.WEAKER, ["keep_weaker"])
+        assert commands["either_way"] is bot["either_way"] is messages["either_way"] is weaker["either_way"] is True
         assert [section["either_way"] for section in others] == [False] * len(others)
 
     def test_what_is_a_channels_alone_is_not_in_the_form_for_all_channels_at_all(self):
@@ -715,7 +717,7 @@ class TestOnThePage:
 
         # The bot's sections come after detection's there.
         assert [section["key"] for section in form] == [
-            *(key for key, _title, _lead in tuning.GROUPS[3:]),
+            *(key for key, _title, _lead in tuning.GROUPS[4:]),
             tuning.BOT,
             tuning.MESSAGES,
         ]
