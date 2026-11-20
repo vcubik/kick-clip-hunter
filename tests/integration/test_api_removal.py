@@ -17,7 +17,7 @@ import pytest
 
 from kick_clip_hunter import dashboard_view as view
 from kick_clip_hunter import db, recorder, recording_manager, stream_recording, tuning
-from tests.support.data import T0, add_chat, add_moment, add_stream_recording, stream_recordings
+from tests.support.data import T0, add_chat, add_moment, add_stream_recording, moment, stream_recordings
 from tests.support.html import parse
 
 pytestmark = pytest.mark.anyio
@@ -153,6 +153,88 @@ class TestDeletingAMoment:
         confirm = control.one("span", data_delete_confirm=True)
         assert "hidden" in confirm.attrs
         assert confirm.one("button", data_delete_go=True).attrs["data-delete-go"] == f"/moments/{moment_id}/delete"
+
+
+class TestDeletingOnlyAMomentsClip:
+    async def test_its_files_go_and_the_moment_stays_without_them(self, service):
+        moment_id, files = clip_moment(
+            rating=4,
+            notes="keep this",
+            clip_start=T0.isoformat(),
+            clip_duration=30.0,
+            context_before=20.0,
+            context_after=20.0,
+            subtitles="[]",
+        )
+        kept, kept_files = clip_moment()
+
+        response = await service.client.post(f"/moments/{moment_id}/clip/delete")
+
+        assert response.json() == {"moment_id": moment_id, "clip_deleted": True}
+        assert moment_ids() == [moment_id, kept]
+        assert not any(file.exists() for file in files)
+        assert all(file.exists() for file in kept_files)
+        row = moment(moment_id)
+        assert (row["rating"], row["notes"]) == (4, "keep this")
+        for column in ("clip_path", "clip_start", "clip_duration", "context_before", "context_after", "subtitles"):
+            assert row[column] is None
+
+    async def test_a_moment_tracked_for_moments_can_have_its_clip_cut_again(self, service):
+        moment_id, _files = clip_moment(clip_on_request=1, laughing=12)
+
+        await service.client.post(f"/moments/{moment_id}/clip/delete")
+        page = parse((await service.client.get(f"/dashboard/moments/{moment_id}")).text)
+
+        assert moment(moment_id)["clip_path"] is None
+        assert page.find("button", data_delete_go=f"/moments/{moment_id}/clip/delete") == []
+        assert page.one("div", data_vod_clip=f"/moments/{moment_id}/clip")
+
+    async def test_a_moment_without_a_clip_on_the_disk_is_refused(self, service):
+        moment_id = add_moment()
+
+        response = await service.client.post(f"/moments/{moment_id}/clip/delete")
+
+        assert response.status_code == 409
+        assert moment_ids() == [moment_id]
+
+    async def test_an_unknown_moment_is_a_404(self, service):
+        assert (await service.client.post("/moments/999/clip/delete")).status_code == 404
+
+    async def test_not_while_a_stretch_of_it_is_being_cut_out(self, service):
+        moment_id, files = clip_moment()
+        service.main._trims[moment_id] = {"state": view.TRIM_CUTTING}
+
+        response = await service.client.post(f"/moments/{moment_id}/clip/delete")
+
+        assert response.status_code == 409
+        assert all(file.exists() for file in files)
+        assert moment(moment_id)["clip_path"] is not None
+
+    async def test_a_file_that_can_not_be_removed_leaves_the_clip_where_it_is(self, service, monkeypatch):
+        moment_id, _files = clip_moment()
+        real_unlink = Path.unlink
+
+        def held_open(path, *args, **kwargs):
+            if path.name == f"moment_{moment_id}.mp4":
+                raise PermissionError(13, "The process cannot access the file because it is being used", str(path))
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", held_open)
+
+        response = await service.client.post(f"/moments/{moment_id}/clip/delete")
+
+        assert response.status_code == 409
+        assert moment(moment_id)["clip_path"] is not None
+
+    async def test_the_open_moment_offers_it_beside_deleting_the_moment(self, service):
+        moment_id, _files = clip_moment()
+
+        page = parse((await service.client.get(f"/dashboard/moments/{moment_id}")).text)
+
+        controls = page.find("span", data_delete=True)
+        assert [control.attrs["data-delete-then"] for control in controls] == ["moment", "reload"]
+        go = controls[1].one("button", data_delete_go=True)
+        assert go.attrs["data-delete-go"] == f"/moments/{moment_id}/clip/delete"
 
 
 async def remove(service, slug: str = CHANNEL, everything: bool = False):

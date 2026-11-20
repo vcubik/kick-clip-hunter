@@ -1739,6 +1739,24 @@ def update_moment_clip_path(
     conn.commit()
 
 
+def clear_moment_clip(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Forgets a moment's file and what was tied to its seconds - the
+    stretch of the broadcast it held and its transcript (`subtitles`) - and
+    keeps everything else of the moment: its chat figures, rating, notes,
+    title, tags and where it is watched in its VOD. A moment of a channel
+    tracked for moments can then have its clip cut from the VOD anew."""
+    conn.execute(
+        """
+        UPDATE moments
+        SET clip_path = NULL, clip_start = NULL, clip_duration = NULL, context_before = NULL,
+            context_after = NULL, subtitles = NULL, subtitles_heard = NULL
+        WHERE id = ?
+        """,
+        (moment_id,),
+    )
+    conn.commit()
+
+
 def update_moment_context(
     conn: sqlite3.Connection, moment_id: int, clip_duration: float, context_before: float, context_after: float
 ) -> None:

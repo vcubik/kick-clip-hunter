@@ -113,7 +113,12 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   beside its clip - the cut, its chat video and record, old context clips - but not while a
   stretch of it is being cut, it is being transcribed or footage is being added to it; one whose
   clip is still being cut has
-  that clip thrown away when it arrives. `GET /dashboard/channels` has the
+  that clip thrown away when it arrives. Beside it, on a moment with a clip, "Delete the clip"
+  asks the same way and removes only the files (`POST /moments/{id}/clip/delete`,
+  `db.clear_moment_clip`): the clip, the cut and its chat video and record, old context clips
+  - and the transcript, which is timed to the file. Its rating, notes, tags, title, chat and
+  reel stay, and the page shows it anew; a moment of a channel tracked for moments offers to
+  cut its clip from the VOD again, any other's is gone for good. `GET /dashboard/channels` has the
   watchlist and the per-clip analysis switches; shutting the service down is the button
   at the right end of every page's bar, which asks once more in a dialog. Beside each channel are its
   Tracking - Off, Chat, Moments or Clips, one of them lit (`POST /channels/{slug}/tracking`,
