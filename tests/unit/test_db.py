@@ -2331,6 +2331,55 @@ class TestReelsFromBeforeTranscripts:
         finally:
             connection.close()
 
+    def test_a_moment_kept_to_make_a_reel_of_is_listed_unsent_until_its_reel_is_asked_for(self):
+        connection = db.get_connection()
+        try:
+            kept = store_moment(connection)
+            asked = store_moment(connection)
+            db.keep_reel_draft(connection, kept)
+            db.keep_reel_draft(connection, asked)
+            db.put_reel(connection, asked, state="done", asked_at="2000-01-01T00:00:00+00:00")
+
+            listed = {row["moment_id"]: row for row in db.get_reel_list(connection)}
+
+            assert set(listed) == {kept, asked}
+            assert listed[kept]["state"] is None
+            assert listed[kept]["asked_at"] is not None
+            # Once asked for, the reel's own row says where it stands and when.
+            assert (listed[asked]["state"], listed[asked]["asked_at"]) == ("done", "2000-01-01T00:00:00+00:00")
+            assert db.is_reel_draft(connection, kept)
+        finally:
+            connection.close()
+
+    def test_keeping_a_moment_again_keeps_when_it_was_first_kept(self):
+        connection = db.get_connection()
+        try:
+            kept = store_moment(connection)
+            db.keep_reel_draft(connection, kept)
+            first = db.get_reel_list(connection)[0]["asked_at"]
+
+            db.keep_reel_draft(connection, kept)
+
+            assert [row["asked_at"] for row in db.get_reel_list(connection)] == [first]
+        finally:
+            connection.close()
+
+    def test_a_kept_moment_is_forgotten_when_taken_out_or_its_reel_is(self):
+        connection = db.get_connection()
+        try:
+            taken_out = store_moment(connection)
+            deleted = store_moment(connection)
+            db.keep_reel_draft(connection, taken_out)
+            db.keep_reel_draft(connection, deleted)
+
+            db.forget_reel_draft(connection, taken_out)
+            db.delete_reel(connection, deleted)
+
+            assert db.get_reel_list(connection) == []
+            assert not db.is_reel_draft(connection, deleted)
+        finally:
+            connection.close()
+
 
 class TestCompilations:
     @staticmethod

@@ -9,6 +9,15 @@
 {% block main %}
 <main class="reels">
 <aside class="queue" aria-label="Reels">
+  {#- All reels, those not made yet (not sent, being made, waiting for a
+      choice, failed) or those that are. -#}
+  <div class="queue-head">
+    <nav class="ch-tabs" aria-label="Which reels to list">
+      {% for tab in reel_tabs %}
+      <a class="ch-tab" href="{{ tab.href }}"{% if tab.current %} aria-current="true"{% endif %}>{{ tab.label }} <span>{{ tab.count }}</span></a>
+      {% endfor %}
+    </nav>
+  </div>
   <div class="queue-list">
     {% for item in reel_list %}
     <a class="rec-row" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %} data-reel-row="{{ item.key }}">
@@ -17,7 +26,7 @@
       <span class="rec-when">{% if item.title %}{{ item.title }}, {% endif %}{{ item.when }}</span>
     </a>
     {% else %}
-    <p class="queue-empty">No reels yet</p>
+    <p class="queue-empty">{{ "No reels yet" if reel_show == "all" else "None here" }}</p>
     {% endfor %}
   </div>
 </aside>

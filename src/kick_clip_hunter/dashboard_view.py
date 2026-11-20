@@ -676,15 +676,43 @@ def recordings_url(recording: int | None = None, *, offset: int = 0) -> str:
     return "/dashboard/recordings" + (f"?{urlencode(query)}" if query else "")
 
 
-def reels_url(moment: int | None = None) -> str:
-    """The Reels page with one moment's reel open."""
-    return "/dashboard/reels" + (f"?{urlencode({'moment': moment})}" if moment is not None else "")
+# Which reels the Reels page lists: all of them, those not made yet - not
+# sent, being made, waiting for a choice or failed - or those that are.
+REELS_ALL = "all"
+REELS_UNFINISHED = "unfinished"
+REELS_READY = "ready"
+REELS_SHOWS = (REELS_ALL, REELS_UNFINISHED, REELS_READY)
+REELS_SHOW_LABELS = {REELS_ALL: "All", REELS_UNFINISHED: "Unfinished", REELS_READY: "Ready"}
 
 
-def compilation_url(compilation: int) -> str:
+def reels_show(show: str | None) -> str:
+    """Which reels to list, from the page's address - all, where it says
+    nothing that is known."""
+    return show if show in REELS_SHOWS else REELS_ALL
+
+
+def reel_shown(show: str, ready: bool) -> bool:
+    """Whether a reel - `ready` where it was made - is listed under `show`."""
+    return show == REELS_ALL or (show == REELS_READY) == ready
+
+
+def reels_url(moment: int | None = None, *, show: str = REELS_ALL) -> str:
+    """The Reels page with one moment's reel open, listing `show`."""
+    query: dict[str, Any] = {}
+    if moment is not None:
+        query["moment"] = moment
+    if show != REELS_ALL:
+        query["show"] = show
+    return "/dashboard/reels" + (f"?{urlencode(query)}" if query else "")
+
+
+def compilation_url(compilation: int, *, show: str = REELS_ALL) -> str:
     """The Reels page with a compilation open: several moments' clips made
     into one reel (see reels.py)."""
-    return f"/dashboard/reels?{urlencode({'compilation': compilation})}"
+    query: dict[str, Any] = {"compilation": compilation}
+    if show != REELS_ALL:
+        query["show"] = show
+    return f"/dashboard/reels?{urlencode(query)}"
 
 
 # How many pages on either side of the one that is open are numbered in a
