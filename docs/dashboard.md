@@ -265,9 +265,14 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   queue is the normal state, so that page then says what the service is doing instead.
 - Reels: `GET /dashboard/reels` (in the bar where the service is set up for reels, see
   `reels.py` below) has every reel that was asked for, the one asked for last first, with where
-  it stands in a word ("Storyboard", "Choose", "Rendering", "Ready", "Failed"), and the one that
+  it stands in a word ("Not sent", "Storyboard", "Choose", "Rendering", "Ready", "Failed"), and the one that
   is open beside it - `?moment=` opens a moment's, one that has none yet too, which is how the
-  review page leads here. Above "Make a reel" (later "New storyboard") is the stretch of the
+  review page leads here. A moment opened so (with a clip) stays in the list as "Not sent", to
+  be come back to later, until its reel is asked for (`db.keep_reel_draft`); "Remove from the
+  list" under it takes it out again, the moment staying (`POST /moments/{id}/reel/forget`). Tabs
+  above the list narrow it (`?show=`): All, Unfinished (everything not ready - not sent, being
+  made, waiting for a choice, failed) and Ready, each with how many; the list's links keep to
+  the tab. Above "Make a reel" (later "New storyboard") is the stretch of the
   moment's file that is sent - all of it to begin with, then the one sent last - typed in
   seconds of the file or set where the player under the transcript is ("Start here", "End
   here"; "Whole file" puts it back): less to transcribe and for Claude to look through where

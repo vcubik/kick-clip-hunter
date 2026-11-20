@@ -200,7 +200,9 @@ class TestNotSetUp:
         assert review.find(data_reel_link=True) == []
         assert reels_page.find(data_reel=True) == []
         assert "not set up" in reels_page.one("main").text
-        assert all(link.attrs["href"] != "/dashboard/reels" for link in reels_page.one("nav").find("a"))
+        assert all(
+            link.attrs["href"] != "/dashboard/reels" for link in reels_page.one("nav", class_="bar-nav").find("a")
+        )
         assert response.status_code == 409
         assert "REELS_REPO" in response.json()["detail"]
 
@@ -234,7 +236,7 @@ class TestTheWayThere:
 
         listed = await page(reeling, "/dashboard/reels")
 
-        assert any(link.attrs["href"] == "/dashboard/reels" for link in listed.one("nav").find("a"))
+        assert any(link.attrs["href"] == "/dashboard/reels" for link in listed.one("nav", class_="bar-nav").find("a"))
         rows = listed.find("a", class_="rec-row")
         assert [row.attrs["data-reel-row"] for row in rows] == [str(second), str(first)]
         assert [row.one(data_reel_row_words=True).text for row in rows] == ["Storyboard", "Choose"]
@@ -242,6 +244,82 @@ class TestTheWayThere:
         # The last asked for is open, and its row is marked.
         assert rows[0].attrs.get("aria-current") == "true"
         assert listed.one(data_reel=True).attrs["data-reel-id"] == str(second)
+
+    async def test_a_moment_opened_to_make_a_reel_of_stays_in_the_list_to_come_back_to(self, reeling, github):
+        moment_id = clipped_moment()
+        await page(reeling, f"/dashboard/reels?moment={moment_id}")
+
+        listed = await page(reeling, "/dashboard/reels")
+
+        row = listed.one("a", class_="rec-row")
+        assert row.attrs["data-reel-row"] == str(moment_id)
+        assert row.one(data_reel_row_words=True).text == "Not sent"
+        opened = listed.one(data_reel=True)
+        assert opened.attrs["data-reel-id"] == str(moment_id)
+        assert opened.one(data_reel_forget=True).attrs["data-reel-forget"] == f"/moments/{moment_id}/reel/forget"
+
+    async def test_a_moment_with_no_clip_is_not_kept(self, reeling, github):
+        moment_id = add_moment(CHANNEL)
+        await page(reeling, f"/dashboard/reels?moment={moment_id}")
+
+        listed = await page(reeling, "/dashboard/reels")
+
+        assert listed.find("a", class_="rec-row") == []
+
+    async def test_a_kept_moment_can_be_taken_out_of_the_list_and_stays_a_moment(self, reeling, github):
+        moment_id = clipped_moment()
+        await page(reeling, f"/dashboard/reels?moment={moment_id}")
+
+        response = await reeling.client.post(f"/moments/{moment_id}/reel/forget")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["url"] == "/dashboard/reels"
+        assert (await page(reeling, "/dashboard/reels")).find("a", class_="rec-row") == []
+        assert (await page(reeling, f"/dashboard/moments/{moment_id}")).one(data_reel_link=True)
+
+    async def test_a_moment_whose_reel_was_asked_for_is_not_taken_out(self, reeling, github):
+        moment_id = clipped_moment()
+        await page(reeling, f"/dashboard/reels?moment={moment_id}")
+        await asked_for_storyboard(reeling, github, moment_id)
+
+        response = await reeling.client.post(f"/moments/{moment_id}/reel/forget")
+        opened = (await page(reeling, "/dashboard/reels")).one(data_reel=True)
+
+        assert response.status_code == 409
+        assert opened.find(data_reel_forget=True) == []
+
+    async def test_taking_out_an_unknown_moment_is_refused(self, reeling, github):
+        assert (await reeling.client.post("/moments/999/reel/forget")).status_code == 404
+
+    async def test_the_list_can_be_narrowed_to_unfinished_or_ready_reels(self, reeling, github):
+        kept = clipped_moment("moment_1.mp4")
+        failed = clipped_moment("moment_2.mp4")
+        ready = clipped_moment("moment_3.mp4")
+        await page(reeling, f"/dashboard/reels?moment={kept}")
+        set_reel(failed, state=reels.FAILED, asked_at="2026-01-01T10:00:00+00:00")
+        set_reel(ready, state=reels.DONE, asked_at="2026-01-02T10:00:00+00:00")
+
+        def listed(html) -> list[str]:
+            return [row.attrs["data-reel-row"] for row in html.find("a", class_="rec-row")]
+
+        everything = await page(reeling, "/dashboard/reels")
+        unfinished = await page(reeling, "/dashboard/reels?show=unfinished")
+        done = await page(reeling, "/dashboard/reels?show=ready")
+
+        assert listed(everything) == [str(kept), str(ready), str(failed)]
+        assert listed(unfinished) == [str(kept), str(failed)]
+        assert listed(done) == [str(ready)]
+        tabs = unfinished.one("nav", class_="ch-tabs").find("a")
+        assert [(tab.text.split()[0], tab.one("span").text) for tab in tabs] == [
+            ("All", "3"),
+            ("Unfinished", "2"),
+            ("Ready", "1"),
+        ]
+        assert [tab.attrs.get("aria-current") for tab in tabs] == [None, "true", None]
+        # What is listed keeps to the list it was opened from, and the first is open.
+        first_row = unfinished.find("a", class_="rec-row")[0]
+        assert first_row.attrs["href"] == f"/dashboard/reels?moment={kept}&show=unfinished"
+        assert done.one(data_reel=True).attrs["data-reel-id"] == str(ready)
 
     async def test_a_moment_that_is_gone_is_said_to_be(self, reeling, github):
         listed = await page(reeling, "/dashboard/reels?moment=999")

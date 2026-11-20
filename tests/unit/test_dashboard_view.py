@@ -1414,6 +1414,22 @@ class TestReelsUrl:
         assert view.reels_url(7) == "/dashboard/reels?moment=7"
         assert view.compilation_url(3) == "/dashboard/reels?compilation=3"
 
+    def test_a_list_other_than_all_is_kept_in_the_address(self):
+        assert view.reels_url(show=view.REELS_ALL) == "/dashboard/reels"
+        assert view.reels_url(7, show=view.REELS_UNFINISHED) == "/dashboard/reels?moment=7&show=unfinished"
+        assert view.compilation_url(3, show=view.REELS_READY) == "/dashboard/reels?compilation=3&show=ready"
+
+
+class TestReelsShow:
+    def test_anything_unknown_lists_all(self):
+        assert view.reels_show(None) == view.REELS_ALL
+        assert view.reels_show("nonsense") == view.REELS_ALL
+        assert view.reels_show(view.REELS_READY) == view.REELS_READY
+
+    def test_unfinished_and_ready_split_the_reels_and_all_has_both(self):
+        assert [view.reel_shown(show, True) for show in view.REELS_SHOWS] == [True, False, True]
+        assert [view.reel_shown(show, False) for show in view.REELS_SHOWS] == [True, True, False]
+
 
 class TestTagName:
     def test_a_tag_is_kept_in_small_letters_with_single_spaces(self):

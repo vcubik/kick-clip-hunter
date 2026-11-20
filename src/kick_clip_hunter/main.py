@@ -7258,6 +7258,11 @@ def _reel_workspace(conn, row, today: date) -> dict:
             ),
             # The stretch of the file to send: the one sent last, or all of it.
             "part": _reel_part_view(row, reel) if has_clip else None,
+            # Kept in the list to come back to, nothing sent yet: the way
+            # to take it out of the list again.
+            "forget_url": f"/moments/{moment_id}/reel/forget"
+            if reel is None and db.is_reel_draft(conn, moment_id)
+            else None,
         }
     )
     return view
@@ -7370,9 +7375,11 @@ def _stored_storyboard_version(reel) -> str:
     return hashlib.sha1(f"{reel['storyboard'] or ''}|{reel['transcript'] is not None}".encode()).hexdigest()[:12]
 
 
-def _reel_rows(conn, today: date, opened: ReelOf | None) -> list[dict]:
-    """The Reels page's list: every moment's reel that was asked for and
-    every compilation, the one asked for (or begun) last first."""
+def _reel_rows(conn, today: date, show: str = dashboard_view.REELS_ALL) -> list[dict]:
+    """The Reels page's list: every moment's reel that was asked for, every
+    moment kept to make one of later (see db.keep_reel_draft) and every
+    compilation, the one asked for (or begun) last first - each with
+    whether its reel is `ready`. Links keep listing `show`."""
     rows = [
         {
             "key": str(row["moment_id"]),
@@ -7380,9 +7387,10 @@ def _reel_rows(conn, today: date, opened: ReelOf | None) -> list[dict]:
             "channel": row["channel_slug"],
             "title": row["title"] or "",
             "when": dashboard_view.since_words(to_local_datetime(row["detected_at"]), today),
-            "words": reels.row_words(row["state"]),
-            "href": dashboard_view.reels_url(row["moment_id"]),
-            "current": opened == _moment_reel(row["moment_id"]),
+            "words": reels.row_words(row["state"]) or "Not sent",
+            "href": dashboard_view.reels_url(row["moment_id"], show=show),
+            "ready": row["state"] == reels.DONE,
+            "current": False,
         }
         for row in get_reel_list(conn)
     ]
@@ -7396,27 +7404,51 @@ def _reel_rows(conn, today: date, opened: ReelOf | None) -> list[dict]:
                 to_local_datetime(row["asked_at"] or row["created_at"]), today
             ),
             "words": reels.row_words(row["state"]) or "Not sent",
-            "href": dashboard_view.compilation_url(row["id"]),
-            "current": opened == _compilation_reel(row["id"]),
+            "href": dashboard_view.compilation_url(row["id"], show=show),
+            "ready": row["state"] == reels.DONE,
+            "current": False,
         }
         for row in db.get_compilation_list(conn)
     ]
     return sorted(rows, key=lambda row: row["at"] or "", reverse=True)
 
 
+def _reel_tabs(rows: list[dict], show: str) -> list[dict]:
+    """The Reels page's tabs: which reels to list, each with how many."""
+    return [
+        {
+            "show": tab,
+            "label": dashboard_view.REELS_SHOW_LABELS[tab],
+            "count": sum(dashboard_view.reel_shown(tab, row["ready"]) for row in rows),
+            "href": dashboard_view.reels_url(show=tab),
+            "current": tab == show,
+        }
+        for tab in dashboard_view.REELS_SHOWS
+    ]
+
+
 @app.get("/dashboard/reels", response_class=HTMLResponse)
-async def dashboard_reels(request: Request, moment: int | None = None, compilation: int | None = None):
-    """The Reels page: every reel that was asked for, and every compilation,
-    the last first, and the one that is open - its storyboard, the choice of
-    a variant and a hook, its transcript to put right, the reel itself.
-    `moment` is the moment whose reel to open - one that has none yet too,
-    to make one of it - or `compilation` the compilation; left out, the
-    first of the list."""
+async def dashboard_reels(
+    request: Request, moment: int | None = None, compilation: int | None = None, show: str | None = None
+):
+    """The Reels page: every reel that was asked for, every moment kept to
+    make one of later, and every compilation, the last first - all of them,
+    or only those `show` says (unfinished or ready) - and the one that is
+    open: its storyboard, the choice of a variant and a hook, its
+    transcript to put right, the reel itself. `moment` is the moment whose
+    reel to open - one that has none yet too, to make one of it, which keeps
+    it in the list to come back to - or `compilation` the compilation; left
+    out, the first of the list."""
     today = _today()
+    show = dashboard_view.reels_show(show)
     conn = get_connection()
     try:
-        rows = _reel_rows(conn, today, None)
         opened_moment = get_moment(conn, moment) if moment is not None else None
+        if settings.reels and opened_moment is not None and opened_moment["clip_path"]:
+            db.keep_reel_draft(conn, opened_moment["id"])
+        every_row = _reel_rows(conn, today, show)
+        tabs = _reel_tabs(every_row, show)
+        rows = [row for row in every_row if dashboard_view.reel_shown(show, row["ready"])]
         opened_compilation = db.get_compilation(conn, compilation) if compilation is not None else None
         if moment is None and compilation is None and rows:
             first = rows[0]
@@ -7431,8 +7463,9 @@ async def dashboard_reels(request: Request, moment: int | None = None, compilati
             if opened_moment is not None
             else None
         )
+        opened_key = None if opened is None else f"c{opened.id}" if opened.compilation else str(opened.id)
         for row in rows:
-            row["current"] = opened is not None and row["href"] == opened.url
+            row["current"] = row["key"] == opened_key
         view = None
         if settings.reels and opened_compilation is not None:
             view = _compilation_workspace(conn, opened_compilation, today)
@@ -7442,6 +7475,8 @@ async def dashboard_reels(request: Request, moment: int | None = None, compilati
         context.update(
             {
                 "reel_list": rows,
+                "reel_tabs": tabs,
+                "reel_show": show,
                 "reel": view,
                 "missing": (moment is not None and opened_moment is None)
                 or (compilation is not None and opened_compilation is None),
@@ -7511,6 +7546,22 @@ async def dashboard_compilation(request: Request, compilation_id: int):
     finally:
         conn.close()
     return templates.TemplateResponse(request, "_reel_workspace.html", {"reel": view})
+
+
+@app.post("/moments/{moment_id}/reel/forget")
+async def forget_reel_draft(moment_id: int):
+    """Takes a moment kept to make a reel of later out of the Reels page's
+    list. A moment whose reel was asked for stays: that is the reel's."""
+    conn = get_connection()
+    try:
+        if get_moment(conn, moment_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        if get_reel(conn, moment_id) is not None:
+            raise HTTPException(status_code=409, detail="This moment's reel was asked for: it stays in the list.")
+        db.forget_reel_draft(conn, moment_id)
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "forgotten": True, "url": dashboard_view.reels_url()}
 
 
 @app.post("/moments/{moment_id}/reel")

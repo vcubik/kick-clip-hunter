@@ -2335,6 +2335,19 @@
     window.location.assign((await response.json()).url);
   }
 
+  // A moment kept in the Reels page's list to make a reel of later, nothing
+  // sent yet, taken out of the list again - the moment itself stays.
+  async function forgetReelDraft(button) {
+    button.disabled = true;
+    const response = await post(button.dataset.reelForget);
+    if (!response || !response.ok) {
+      button.disabled = false;
+      say(button, response ? await problem(response, "Could not take it out of the list. Try again.") : "Could not reach the service.");
+      return;
+    }
+    window.location.assign((await response.json()).url);
+  }
+
   // On the review page: the moment's clip added to the compilation, and the
   // way to it in place of the button.
   async function addToCompilation(button) {
@@ -4114,6 +4127,7 @@
     ["[data-part-move]", moveCompilationPart],
     ["[data-part-remove]", removeCompilationPart],
     ["[data-compilation-delete]", deleteCompilation],
+    ["[data-reel-forget]", forgetReelDraft],
     ["[data-switch] button", flip],
     ["[data-choice] button", choose],
     ['[data-setting][data-kind="switch"] button', chooseSetting],

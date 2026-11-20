@@ -231,6 +231,10 @@
     {% endif %}
     <button type="button" class="ch-btn{{ ' ch-btn-primary' if not reel.state else '' }}" title="Sends the {{ 'clips' if reel.compilation else 'clip' }} to GitHub, where a storyboard of the reel is made in a few minutes" data-reel-ask="{{ reel.ask_url }}"{% if reel.busy %} disabled{% endif %}>{{ "New storyboard" if reel.state else "Make a reel" }}</button>
     {% endif %}
+    {#- Kept in the list to come back to later; nothing sent yet. -#}
+    {% if reel.forget_url %}
+    <button type="button" class="ch-btn ch-btn-compact ch-btn-quiet" title="Takes the moment out of this list. Nothing was sent yet; the moment stays." data-reel-forget="{{ reel.forget_url }}">Remove from the list</button>
+    {% endif %}
     <p class="status-line" role="status" data-status>
       {%- if reel.words %}{{ reel.words }}
       {%- elif reel.compilation and reel.has_clip %}Each clip - the stretch of its file above - goes to GitHub, where they are joined into one, transcribed, and a storyboard is made of them: a few minutes.
