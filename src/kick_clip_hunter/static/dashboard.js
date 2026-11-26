@@ -3090,6 +3090,8 @@
     const response = await post(button.dataset.deleteGo);
     if (response && response.ok) {
       if (then === "moment") removeMoment(button.closest(".moment"));
+      // Only the moment's file: the moment stays, shown anew without it.
+      else if (then === "reload") location.reload();
       else location.assign(then);
       return;
     }
@@ -3140,7 +3142,7 @@
   // Del asks to delete the open moment, and Del again deletes it; Escape
   // backs out.
   function deleteKey(key) {
-    const group = one(".moment [data-delete]");
+    const group = one('.moment [data-delete][data-delete-then="moment"]');
     if (!group || loading) return false;
     const asking = !one("[data-delete-confirm]", group).hidden;
     if (key === "delete") {

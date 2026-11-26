@@ -3352,6 +3352,8 @@ def _open_moment(conn, row, today: date) -> dict:
         "stream_time": dashboard_view.stream_time_words(row["stream_elapsed_seconds"]),
         "clip_url": _clip_url(row["clip_path"], versioned=True) if row["clip_path"] else None,
         "clip_state": _clip_state(row, _tuning(conn, row["broadcaster_user_id"])),
+        # Its clip is cut from the VOD, so it can be cut again once deleted.
+        "clip_on_request": bool(row["clip_on_request"]),
         # Of a moment of a channel tracked for moments that has no clip yet:
         # where asking for it is, and where that stands.
         "on_request": (
@@ -5727,6 +5729,44 @@ async def remove_moment(moment_id: int):
         conn.close()
     logger.info("[%s] moment %d deleted", row["channel_slug"], moment_id)
     return {"deleted": moment_id}
+
+
+@app.post("/moments/{moment_id}/clip/delete")
+async def remove_moment_clip(moment_id: int):
+    """Removes a moment's file from the disk - the clip with the footage
+    around it, whatever was cut out of it and its chat video - and keeps the
+    moment itself (see db.clear_moment_clip). Its reel, if it has one, is
+    kept too. A moment of a channel tracked for moments can then have its
+    clip cut from the VOD again; any other's clip is gone for good."""
+    conn = get_connection()
+    try:
+        row = get_moment(conn, moment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+        if not row["clip_path"]:
+            raise HTTPException(status_code=409, detail="The moment has no clip on the disk.")
+        if (busy := _moment_busy(moment_id)) is not None:
+            raise HTTPException(status_code=409, detail=busy)
+        reel_files = set(_reel_files(moment_id))
+        try:
+            for file in _moment_files(row):
+                if file not in reel_files:
+                    file.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("the clip of moment %d could not be removed", moment_id, exc_info=True)
+            raise HTTPException(
+                status_code=409, detail="The clip could not be removed. Something may still have its file open."
+            ) from None
+        db.clear_moment_clip(conn, moment_id)
+    finally:
+        conn.close()
+    _trims.pop(moment_id, None)
+    _transcripts.pop(moment_id, None)
+    _cuts_heard.discard(moment_id)
+    _footage.pop(moment_id, None)
+    _vod_clips.pop(moment_id, None)
+    logger.info("[%s] clip of moment %d deleted, the moment kept", row["channel_slug"], moment_id)
+    return {"moment_id": moment_id, "clip_deleted": True}
 
 
 async def _asked_trim(request: Request) -> dict:

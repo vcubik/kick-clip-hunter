@@ -252,6 +252,11 @@
   {#- Del on the keyboard asks the same, and Del again deletes. -#}
   <div class="moment-delete">
     {{ delete("/moments/%d/delete" % moment.id, "Removes the moment, its clip and what was cut out of it, for good.", "moment") }}
+    {#- Or only its file, to free the disk or cut it again from the VOD:
+        its rating, notes, tags and chat stay. -#}
+    {% if moment.clip_url %}
+    {{ delete("/moments/%d/clip/delete" % moment.id, ("Removes the clip and what was cut out of it from the disk; the moment stays, and its clip can be cut from the VOD again." if moment.clip_on_request else "Removes the clip and what was cut out of it from the disk, for good; the moment stays."), "reload", "Delete the clip") }}
+    {% endif %}
   </div>
 
   {% if moment.analysis %}
