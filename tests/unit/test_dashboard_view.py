@@ -45,6 +45,7 @@ def row(**overrides) -> dict:
         "rating": None,
         "title": None,
         "downloaded_at": None,
+        "watched_at": None,
         "laughing": None,
         "promise": None,
     }
@@ -423,6 +424,7 @@ class TestQueueGroups:
             "unnamed": "Laughing",
             "has_clip": True,
             "downloaded": False,
+            "watched": False,
             "rating": 4,
             "rating_words": "rated 4 of 5",
             "laughing": 9,

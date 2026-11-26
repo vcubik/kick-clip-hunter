@@ -448,6 +448,11 @@ def get_connection() -> sqlite3.Connection:
     if "downloaded_at" not in columns:
         conn.execute("ALTER TABLE moments ADD COLUMN downloaded_at TEXT")
 
+    # When a moment was first watched - its clip played, or its stream's VOD
+    # opened - which the queue shows by a row's shade. NULL until then.
+    if "watched_at" not in columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN watched_at TEXT")
+
     # What is said in a moment's footage, line by line with its times, as
     # the reviewer corrected it (see subtitles.py) - JSON, made only when it
     # is asked for on the review page. Not the `transcript` above, which is
@@ -996,7 +1001,7 @@ _MOMENT_COLUMNS = """
     id, broadcaster_user_id, channel_slug, detected_at, window_start, window_end, reason, score,
     message_count, baseline_message_rate, current_message_rate,
     emote_count, keyword_hits, stream_elapsed_seconds, clip_path, clip_start, clip_duration,
-    context_before, context_after, downloaded_at,
+    context_before, context_after, downloaded_at, watched_at,
     rating, notes, title, transcript, audio_events, sound_events, stream_type, moment_type, subtitles,
     subtitles_heard, laughing, chatters, promise, clip_on_request, watch_url
 """
@@ -1842,6 +1847,17 @@ def update_moment_rating(conn: sqlite3.Connection, moment_id: int, rating: int |
 def update_moment_downloaded(conn: sqlite3.Connection, moment_id: int, downloaded_at: str) -> None:
     conn.execute("UPDATE moments SET downloaded_at = ? WHERE id = ?", (downloaded_at, moment_id))
     conn.commit()
+
+
+def mark_moment_watched(conn: sqlite3.Connection, moment_id: int, watched_at: str) -> bool:
+    """Notes that a moment has been watched, keeping when it first was.
+    False where there is no such moment."""
+    cursor = conn.execute(
+        "UPDATE moments SET watched_at = COALESCE(watched_at, ?) WHERE id = ?",
+        (watched_at, moment_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def update_moment_window_end(conn: sqlite3.Connection, moment_id: int, window_end: str) -> None:

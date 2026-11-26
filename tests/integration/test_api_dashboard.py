@@ -1853,6 +1853,40 @@ class TestDownloadedFilter:
         assert "hidden" in left.one("span", class_="moment-taken").attrs
 
 
+class TestWatched:
+    @pytest.fixture(autouse=True)
+    def one_moment(self, service):
+        self.moment = add_moment(detected_at=T0)
+
+    async def test_a_moment_starts_out_unwatched(self, service):
+        page = await review(service, show="all", moment=self.moment)
+
+        assert "is-watched" not in queue_rows(page)[0].attrs["class"]
+        assert open_moment(page).attrs["data-watched"] == "false"
+
+    async def test_marking_it_watched_is_kept_and_shades_its_row(self, service):
+        response = await service.client.post(f"/moments/{self.moment}/watched")
+
+        assert response.status_code == 200
+        page = await review(service, show="all", moment=self.moment)
+        assert "is-watched" in queue_rows(page)[0].attrs["class"]
+        assert open_moment(page).attrs["data-watched"] == "true"
+
+    async def test_marking_it_again_keeps_when_it_was_first_watched(self, service):
+        await service.client.post(f"/moments/{self.moment}/watched")
+        first = service.moments()[0]["watched_at"]
+
+        await service.client.post(f"/moments/{self.moment}/watched")
+
+        assert first is not None
+        assert service.moments()[0]["watched_at"] == first
+
+    async def test_an_unknown_moment_is_refused(self, service):
+        response = await service.client.post(f"/moments/{self.moment + 1}/watched")
+
+        assert response.status_code == 404
+
+
 class TestOnDiskFilter:
     @pytest.fixture(autouse=True)
     def moments_on_disk_and_not(self, service):

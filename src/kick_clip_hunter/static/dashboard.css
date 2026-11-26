@@ -33,6 +33,7 @@
   --field: #585858;       /* what everything is laid out on */
   --quiet: #4D4D4D;       /* resting fills, hairlines between rows */
   --inset: #434343;       /* what is typed or pressed into; the top bar */
+  --watched: #474747;     /* a queue row whose moment has been watched */
   --line: #3A3A3A;        /* between panes, around inputs */
   --sunk: #2B2B2B;        /* where you are */
   --raise: #6E6E6E;       /* buttons that act */
@@ -243,6 +244,7 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-row { display: grid; grid-template-columns: 58px 64px minmax(0, 1fr) auto 12px auto; align-items: center; column-gap: 10px; height: var(--h-row); padding: 0 var(--space-12) 0 10px; border-top: 1px solid var(--quiet); border-left: 2px solid transparent; color: var(--text); font-size: 13px; text-decoration: none; }
 .ch-row:hover { background-image: linear-gradient(var(--veil), var(--veil)); }
 .ch-row:focus-visible, .ch-tab:focus-visible, .bar-nav a:focus-visible { outline-offset: -2px; }
+.ch-row.is-watched { background-color: var(--watched); }
 .ch-row[aria-current="true"] { background-color: var(--sunk); border-left-color: var(--lit); }
 .ch-row .ch-time { font-size: 14px; font-stretch: var(--width-compact); font-variant-numeric: tabular-nums; }
 .ch-row .ch-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -253,7 +255,7 @@ button.ch-tab { border-width: 0 0 2px; border-style: solid; border-color: transp
 .ch-row .ch-taken[hidden] { display: none; }
 .ch-row .ch-meter { grid-column: 6; }
 .ch-row.is-unrated .ch-time, .ch-row.is-unrated .ch-what { font-weight: 700; }
-.ch-row[aria-current="true"] .ch-meter i:not(.is-lit) { background: var(--quiet); }
+.ch-row[aria-current="true"] .ch-meter i:not(.is-lit), .ch-row.is-watched .ch-meter i:not(.is-lit) { background: var(--quiet); }
 /* The shape of chat around the moment, in a well: all messages in `lit`,
    laughing in `pen-dark`. Every spark on a page is drawn to one scale. */
 .ch-spark { display: block; height: 18px; background: var(--inset); }

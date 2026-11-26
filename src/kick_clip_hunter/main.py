@@ -138,6 +138,7 @@ from .db import (
     insert_stream_recording,
     iter_channel_chat,
     iter_channel_chat_between,
+    mark_moment_watched,
     put_compilation_reel,
     put_reel,
     recordings_saved_between,
@@ -3395,6 +3396,8 @@ def _open_moment(conn, row, today: date) -> dict:
         "rating_words": dashboard_view.rating_words(row["rating"]),
         # Something cut out of it has been downloaded from Trim.
         "downloaded": row["downloaded_at"] is not None,
+        # Its clip has been played, or its stream's VOD opened.
+        "watched": row["watched_at"] is not None,
         # Its clip is kept here, not only a link into the VOD.
         "on_disk": row["clip_path"] is not None,
         "stream_type": row["stream_type"],
@@ -5648,6 +5651,19 @@ async def set_moment_rating(moment_id: int, value: int = 0):
     finally:
         conn.close()
     return {"moment_id": moment_id, "rating": value or None}
+
+
+@app.post("/moments/{moment_id}/watched")
+async def set_moment_watched(moment_id: int):
+    """Notes that a moment has been watched, which shades its row in the
+    review queue. Asking again changes nothing."""
+    conn = get_connection()
+    try:
+        if not mark_moment_watched(conn, moment_id, datetime.now(timezone.utc).isoformat()):
+            raise HTTPException(status_code=404, detail=f"unknown moment {moment_id}")
+    finally:
+        conn.close()
+    return {"moment_id": moment_id, "watched": True}
 
 
 def _moment_files(row) -> list[Path]:
