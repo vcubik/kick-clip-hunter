@@ -73,7 +73,7 @@
     <section class="queue-group">
       <h2 class="ch-group"><b>{{ group.channel }}</b> <span>{{ group.when }}</span></h2>
       {% for row in group.rows %}
-      <a class="ch-row{% if row.rating is none %} is-unrated{% endif %}" href="{{ row.href }}" data-moment="{{ row.id }}"{% if moment and row.id == moment.id %} aria-current="true"{% endif %}>
+      <a class="ch-row{% if row.rating is none %} is-unrated{% endif %}{% if row.watched %} is-watched{% endif %}" href="{{ row.href }}" data-moment="{{ row.id }}"{% if moment and row.id == moment.id %} aria-current="true"{% endif %}>
         <span class="ch-time" title="{{ row.time_title }}">{{ row.time }}</span>
         <span class="ch-spark" aria-hidden="true">
           {%- if row.spark -%}

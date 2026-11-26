@@ -863,6 +863,7 @@ def queue_groups(
                 "unnamed": queue_label(row, (reactions or {}).get(row["id"]), named=False),
                 "has_clip": bool(row["clip_path"]),
                 "downloaded": row["downloaded_at"] is not None,
+                "watched": row["watched_at"] is not None,
                 "rating": row["rating"],
                 "rating_words": rating_words(row["rating"]),
                 "laughing": row["laughing"],

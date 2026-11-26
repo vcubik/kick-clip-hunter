@@ -32,7 +32,11 @@ Moved out of CLAUDE.md so that it is read only when needed. Where it says a modu
   rating, and beside when it was in the open moment (`moments.downloaded_at`), and the queue
   can be narrowed to those moments or to the others (`?downloaded=yes|no`; the counts on its
   tabs follow) - and, beside that, to the moments whose clip is on disk or to those that are
-  only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). Under the moment's kind and stream kind
+  only a link into the VOD (`?on_disk=yes|no`, by `moments.clip_path`). A moment that has been
+  watched has a slightly darker row in the queue (`moments.watched_at`, `POST
+  /moments/{id}/watched`): noted as its VOD is opened, by the link or on the page, or once its
+  clip has really played for `WATCHED_AFTER_SECONDS` in `dashboard.js`, so a clip skipped past
+  with J, K or a rating does not count. Under the moment's kind and stream kind
   are tags of one's own, as many as wanted (`moment_tags`): typed - or picked from the tags
   there are - and added with Enter or "Add" (`POST /moments/{id}/tags`, `tag`), or added with a
   click on one of the tags given last that the moment lacks, offered beside the field

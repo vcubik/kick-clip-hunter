@@ -1440,6 +1440,31 @@
     if (!before) recountDownloaded(article);
   }
 
+  // A moment is watched once its VOD is opened, or once its clip has really
+  // played for a few seconds: moving on with J, K or a rating starts each
+  // clip by itself, and one skipped straight past has not been seen.
+  const WATCHED_AFTER_SECONDS = 3;
+
+  async function markWatched(article) {
+    if (!article || article.dataset.watched === "true") return;
+    article.dataset.watched = "true";
+    const row = one(`a.ch-row[data-moment="${article.dataset.moment}"]`);
+    row?.classList.add("is-watched");
+    const response = await post(`/moments/${article.dataset.moment}/watched`);
+    if (response?.ok) return;
+    // Not noted, so the row does not claim it was; the next play asks again.
+    article.dataset.watched = "false";
+    row?.classList.remove("is-watched");
+  }
+
+  function noteClipPlayed(video) {
+    const article = video.closest(".moment");
+    if (!article || article.dataset.watched === "true") return;
+    let seconds = 0;
+    for (let i = 0; i < video.played.length; i += 1) seconds += video.played.end(i) - video.played.start(i);
+    if (seconds >= WATCHED_AFTER_SECONDS) markWatched(article);
+  }
+
   // A list narrowed to the moments downloaded or to the others counts only
   // those, so a moment that is downloaded now moves from one to the other.
   function recountDownloaded(article) {
@@ -2747,6 +2772,7 @@
 
     const { video, hls } = player;
     const article = box.closest(".moment");
+    markWatched(article);
     // Until it has got to where it starts, the transport is not shown and
     // nothing is painted from it.
     video.dataset.clip = "";
@@ -4175,6 +4201,8 @@
     ["[data-clip]", (video) => video.controls || togglePlay(video)],
     // Anywhere in the box the VOD would play in, until it does.
     ["[data-vod-watch]", (box) => watchVod(box)],
+    // The link to the VOD on its platform still opens by itself.
+    ["[data-watch]", (link) => markWatched(link.closest(".moment"))],
     ["[data-shutdown-open]", () => askToShutDown(true)],
     ["[data-shutdown-cancel]", () => askToShutDown(false)],
     ["[data-shutdown-go]", shutDown],
@@ -4190,6 +4218,12 @@
       if (event.detail > 0 && element.matches("a, button")) element.blur();
       return;
     }
+  });
+
+  // A middle click opens the link to the VOD too, and is no "click".
+  document.addEventListener("auxclick", (event) => {
+    const link = event.target.closest("[data-watch]");
+    if (link && event.button === 1) markWatched(link.closest(".moment"));
   });
 
   // Pressing on the strip goes there, and so does dragging along it; a
@@ -4489,6 +4523,7 @@
     }
   };
   onMedia("[data-clip]", paint);
+  document.addEventListener("timeupdate", (event) => event.target.matches?.("[data-clip]") && noteClipPlayed(event.target), true);
   onMedia("[data-trim-clip]", trimTick);
   // The box of chat over the picture follows the picture's shape and size.
   document.addEventListener(
