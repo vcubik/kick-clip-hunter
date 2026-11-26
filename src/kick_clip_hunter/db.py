@@ -230,6 +230,14 @@ CREATE TABLE IF NOT EXISTS reels (
     chat_lines TEXT
 );
 
+-- Moments opened on the Reels page to make a reel of, kept in its list
+-- before anything was sent - to be come back to later. A moment whose reel
+-- was asked for is listed by its row in `reels` instead.
+CREATE TABLE IF NOT EXISTS reel_drafts (
+    moment_id INTEGER PRIMARY KEY,
+    added_at TEXT NOT NULL
+);
+
 -- Several moments' clips made into one reel (see reels.py): a compilation,
 -- `theme` what ties them together, in a few words written on the Reels
 -- page. Its parts are in the order they go up in, each a stretch of its
@@ -2313,22 +2321,50 @@ def put_compilation_reel(conn: sqlite3.Connection, compilation_id: int, **fields
 
 
 def get_reel_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every reel with the moment it is of, the one asked for last first:
-    the Reels page's list."""
+    """Every reel with the moment it is of, and every moment kept to make a
+    reel of later that none was asked for yet (`state` None, `asked_at`
+    when it was kept), the one asked for last first: the Reels page's
+    list."""
     conn.row_factory = sqlite3.Row
     return conn.execute(
         """
-        SELECT reels.moment_id, reels.state, reels.asked_at, reels.error,
+        SELECT moments.id AS moment_id, reels.state,
+               COALESCE(reels.asked_at, reel_drafts.added_at) AS asked_at, reels.error,
                moments.channel_slug, moments.title, moments.detected_at
-        FROM reels JOIN moments ON moments.id = reels.moment_id
-        ORDER BY reels.asked_at DESC, reels.moment_id DESC
+        FROM moments
+        LEFT JOIN reels ON reels.moment_id = moments.id
+        LEFT JOIN reel_drafts ON reel_drafts.moment_id = moments.id
+        WHERE reels.moment_id IS NOT NULL OR reel_drafts.moment_id IS NOT NULL
+        ORDER BY asked_at DESC, moments.id DESC
         """
     ).fetchall()
 
 
+def keep_reel_draft(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Keeps a moment in the Reels page's list to make a reel of later -
+    when it was first kept, where it already is."""
+    conn.execute(
+        "INSERT OR IGNORE INTO reel_drafts (moment_id, added_at) VALUES (?, ?)",
+        (moment_id, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def is_reel_draft(conn: sqlite3.Connection, moment_id: int) -> bool:
+    return conn.execute("SELECT 1 FROM reel_drafts WHERE moment_id = ?", (moment_id,)).fetchone() is not None
+
+
+def forget_reel_draft(conn: sqlite3.Connection, moment_id: int) -> None:
+    """Takes a moment kept to make a reel of out of the Reels page's list."""
+    conn.execute("DELETE FROM reel_drafts WHERE moment_id = ?", (moment_id,))
+    conn.commit()
+
+
 def delete_reel(conn: sqlite3.Connection, moment_id: int) -> None:
-    """Forgets a moment's reel - its files are the caller's to remove."""
+    """Forgets a moment's reel, and that it was kept to make one of - its
+    files are the caller's to remove."""
     conn.execute("DELETE FROM reels WHERE moment_id = ?", (moment_id,))
+    conn.execute("DELETE FROM reel_drafts WHERE moment_id = ?", (moment_id,))
     conn.commit()
 
 
