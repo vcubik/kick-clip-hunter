@@ -45,6 +45,7 @@ def row(**overrides) -> dict:
         "rating": None,
         "title": None,
         "downloaded_at": None,
+        "watched_at": None,
         "laughing": None,
         "promise": None,
     }
