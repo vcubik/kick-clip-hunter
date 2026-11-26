@@ -424,6 +424,7 @@ class TestQueueGroups:
             "unnamed": "Laughing",
             "has_clip": True,
             "downloaded": False,
+            "watched": False,
             "rating": 4,
             "rating_words": "rated 4 of 5",
             "laughing": 9,
